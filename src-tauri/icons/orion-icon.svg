@@ -1,0 +1,33 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="95" y1="40" x2="901" y2="984" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#17223B"/>
+      <stop offset=".5" stop-color="#0B1020"/>
+      <stop offset="1" stop-color="#070A11"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="208" y1="142" x2="817" y2="870" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D5DAFF"/>
+      <stop offset=".48" stop-color="#8798FF"/>
+      <stop offset="1" stop-color="#E8B879"/>
+    </linearGradient>
+    <radialGradient id="gold">
+      <stop stop-color="#FFFDF4"/>
+      <stop offset=".34" stop-color="#F4DCB7"/>
+      <stop offset="1" stop-color="#B87B36"/>
+    </radialGradient>
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="14" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect x="28" y="28" width="968" height="968" rx="228" fill="url(#bg)"/>
+  <rect x="45" y="45" width="934" height="934" rx="211" stroke="white" stroke-opacity=".08" stroke-width="4"/>
+  <path d="M794 276C907 407 842 638 649 776C455 915 205 905 109 768C12 631 103 423 309 292C516 160 686 151 794 276Z" stroke="url(#ring)" stroke-width="31"/>
+  <path d="M260 179C381 107 602 219 727 427C852 635 825 847 688 906C552 966 365 840 250 638C136 435 132 254 260 179Z" stroke="url(#ring)" stroke-opacity=".36" stroke-width="19"/>
+  <path d="M222 598L414 514L586 444L787 366" stroke="#CAD2FF" stroke-opacity=".34" stroke-width="13" stroke-dasharray="25 33"/>
+  <circle cx="414" cy="514" r="54" fill="url(#gold)" filter="url(#glow)"/>
+  <circle cx="586" cy="444" r="43" fill="#ABB6FF" filter="url(#glow)"/>
+  <circle cx="222" cy="598" r="29" fill="#8598FF" filter="url(#glow)"/>
+  <circle cx="787" cy="366" r="29" fill="#E9B978" filter="url(#glow)"/>
+  <circle cx="414" cy="514" r="92" stroke="#E9B978" stroke-opacity=".16" stroke-width="8"/>
+</svg>

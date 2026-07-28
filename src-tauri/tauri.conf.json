@@ -1,0 +1,68 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Orion",
+  "version": "0.3.2",
+  "identifier": "app.orion.knowledge",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Orion",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 680,
+        "center": true,
+        "resizable": true,
+        "maximizable": true,
+        "minimizable": true,
+        "closable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 18,
+          "y": 18
+        },
+        "acceptFirstMouse": true,
+        "backgroundColor": "#090A0F"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "macOS": {
+      "signingIdentity": "-",
+      "minimumSystemVersion": "13.3",
+      "frameworks": [
+        "./vendor/whisper.framework"
+      ],
+      "files": {
+        "MacOS/orion-whisper": "./binaries/orion-whisper-aarch64-apple-darwin",
+        "MacOS/yt-dlp": "./binaries/yt-dlp-macos",
+        "MacOS/deno": "./binaries/deno",
+        "Resources/models/ggml-base.bin": "./resources/models/ggml-base.bin",
+        "Resources/THIRD_PARTY_NOTICES.md": "./resources/THIRD_PARTY_NOTICES.md",
+        "Resources/licenses": "./resources/licenses"
+      }
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}
