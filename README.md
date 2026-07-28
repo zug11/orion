@@ -68,6 +68,9 @@ Import parsing happens locally in the renderer. In AI mode, Orion sends the sele
 
 ## Prerequisites
 
+- [Git LFS](https://git-lfs.com/) 3.x to fetch the bundled Whisper model,
+  `yt-dlp`, and Deno assets from a source checkout (`git lfs install` once per
+  machine, then `git lfs pull` inside the repository).
 - Node.js `^20.19.0`, `^22.12.0`, or `>=24.0.0` and npm.
 - A stable Rust toolchain with Cargo.
 - The native dependencies required by [Tauri 2](https://v2.tauri.app/start/prerequisites/):
@@ -95,6 +98,7 @@ This snapshot has been verified with Node `25.9.0`, npm `11.12.1`, and Rust/Carg
 From this directory:
 
 ```bash
+git lfs pull
 npm ci
 npm run tauri dev
 ```
