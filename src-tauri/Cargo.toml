@@ -1,6 +1,6 @@
 [package]
 name = "orion"
-version = "0.3.2"
+version = "0.3.5"
 description = "Orion — an AI-organized personal knowledge atlas"
 authors = ["Orion"]
 edition = "2021"
@@ -20,9 +20,11 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+tauri-plugin-deep-link = "2"
 tauri-plugin-opener = "2"
-tauri-plugin-single-instance = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "stream", "rustls-tls"] }
+fs2 = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"

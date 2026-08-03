@@ -22,11 +22,10 @@ import {
   LoaderCircle,
   PenLine,
   Plus,
-  Sparkles,
   Trash2,
   UploadCloud,
   X,
-} from "lucide-react";
+} from "../lib/icons";
 import { nanoid } from "nanoid";
 import clsx from "clsx";
 import {
@@ -40,11 +39,16 @@ import {
   transcribeMediaFiles,
   transcribeYouTube,
 } from "../lib/storage";
+import {
+  isSelectedAIConfigured,
+  selectedAIProviderName,
+} from "../lib/ai";
 import { transcriptToParsedImport } from "../lib/transcription";
 import type {
   AppSnapshot,
   Concept,
   EntityId,
+  ExistingNoteContext,
   Note,
   NoteKind,
   OrganizeContentResult,
@@ -62,6 +66,7 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_AI_CHARS_PER_SOURCE = 60_000;
 const MAX_MANUAL_CHARS_PER_SOURCE = 200_000;
 const MAX_NOTES_PER_SOURCE = 8;
+const MAX_WIKI_ARTICLES_PER_SOURCE = 20;
 const MAX_TOTAL_GENERATED_NOTES = 30;
 const MEDIA_ACCEPT =
   ".flac,.m4a,.mp3,.mp4,.mpeg,.mpga,.ogg,.wav,.webm,audio/*,video/mp4,video/webm";
@@ -249,6 +254,9 @@ function wikiArticleBody(
   article: OrganizedWikiArticle,
   spaceName: string,
 ): string {
+  if (article.body.trim()) {
+    return article.body.trim();
+  }
   const details = unique(article.sourceGroundedDetails)
     .map((detail) => `- ${detail}`)
     .join("\n");
@@ -260,7 +268,7 @@ function wikiArticleBody(
     article.overview.trim(),
     `## In ${spaceName.trim() || "this Space"}`,
     article.spaceRelevance.trim(),
-    details ? "## From the imported material" : "",
+    details ? "## Details" : "",
     details,
     uncertainties ? "## Uncertainties" : "",
     uncertainties,
@@ -273,28 +281,13 @@ function mergeWikiArticle(
   note: Note,
   article: OrganizedWikiArticle,
   sourceId: EntityId,
-  sourceTitle: string,
   spaceName: string,
   now: string,
 ): Note {
-  const marker = `<!-- orion-source:${sourceId} -->`;
-  const details = unique(article.sourceGroundedDetails)
-    .map((detail) => `- ${detail}`)
-    .join("\n");
-  const supplement = [
-    marker,
-    `## Context from ${sourceTitle}`,
-    article.spaceRelevance.trim(),
-    details,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
   const currentBody = note.body.trim();
-  const body = !currentBody
-    ? wikiArticleBody(article, spaceName)
-    : currentBody.includes(marker)
-      ? currentBody
-      : `${currentBody}\n\n${supplement}`;
+  const body =
+    article.body.trim() ||
+    (!currentBody ? wikiArticleBody(article, spaceName) : currentBody);
   return {
     ...note,
     summary: note.summary.trim() || article.summary.trim(),
@@ -326,7 +319,11 @@ export function buildImportPayload(
   const resolveExistingWikiArticle = (title: string) => {
     const key = normalize(title);
     const canonical = snapshot.concepts
-      .filter((concept) => normalize(concept.label) === key)
+      .filter(
+        (concept) =>
+          normalize(concept.label) === key ||
+          concept.aliases.some((alias) => normalize(alias) === key),
+      )
       .map((concept) =>
         concept.canonicalNoteId
           ? snapshot.notes.find(
@@ -384,7 +381,8 @@ export function buildImportPayload(
       });
     });
 
-    for (const article of result?.wikiArticles.slice(0, 8) ?? []) {
+    for (const article of
+      result?.wikiArticles.slice(0, MAX_WIKI_ARTICLES_PER_SOURCE) ?? []) {
       const title = article.title.trim();
       const key = normalize(title);
       if (!key) {
@@ -396,7 +394,6 @@ export function buildImportPayload(
           context.note,
           article,
           sourceId,
-          parsed.title,
           snapshot.workspace.name,
           now,
         );
@@ -428,7 +425,6 @@ export function buildImportPayload(
             base,
             article,
             sourceId,
-            parsed.title,
             snapshot.workspace.name,
             now,
           ),
@@ -614,6 +610,8 @@ export function ImportStudio({
   onClose,
   onApply,
 }: ImportStudioProps) {
+  const aiConfigured = isSelectedAIConfigured(snapshot.settings);
+  const aiProviderName = selectedAIProviderName(snapshot.settings);
   const rawId = useId().replace(/:/g, "");
   const titleId = `import-studio-title-${rawId}`;
   const descriptionId = `import-studio-description-${rawId}`;
@@ -630,7 +628,7 @@ export function ImportStudio({
   >(null);
   const [transcriptionError, setTranscriptionError] = useState("");
   const [mode, setMode] = useState<ImportMode>(
-    snapshot.settings.apiKeyConfigured ? "ai" : "manual",
+    aiConfigured ? "ai" : "manual",
   );
   const [dragActive, setDragActive] = useState(false);
   const [progressIndex, setProgressIndex] = useState(0);
@@ -648,7 +646,7 @@ export function ImportStudio({
     setYoutubeUrl("");
     setTranscribing(null);
     setTranscriptionError("");
-    setMode(snapshot.settings.apiKeyConfigured ? "ai" : "manual");
+    setMode(aiConfigured ? "ai" : "manual");
     setDragActive(false);
     setProgressIndex(0);
     setProgressLabel("");
@@ -927,7 +925,7 @@ export function ImportStudio({
     }
 
     const effectiveMode: ImportMode =
-      mode === "ai" && snapshot.settings.apiKeyConfigured ? "ai" : "manual";
+      mode === "ai" && aiConfigured ? "ai" : "manual";
     setStage("organizing");
     setProgressIndex(0);
     setOrganizeIssues([]);
@@ -938,8 +936,16 @@ export function ImportStudio({
 
     const organizedSources: OrganizedSource[] = [];
     const issues: OrganizeIssue[] = [];
-    const existingNotes = snapshot.settings.includeExistingNotesInAIContext
-      ? snapshot.notes.slice(0, 80).map((note) => ({
+    const existingNotes: ExistingNoteContext[] | undefined =
+      snapshot.settings.includeExistingNotesInAIContext
+      ? [...snapshot.notes]
+          .sort(
+            (left, right) =>
+              Number(right.kind === "wiki") -
+              Number(left.kind === "wiki"),
+          )
+          .slice(0, 80)
+          .map((note) => ({
           id: note.id,
           title: note.title,
           aliases: [...note.aliases],
@@ -948,7 +954,7 @@ export function ImportStudio({
           ...(note.kind === "wiki"
             ? { body: note.body.slice(0, 6_000) }
             : {}),
-        }))
+          }))
       : undefined;
 
     for (let index = 0; index < selected.length; index += 1) {
@@ -976,13 +982,52 @@ export function ImportStudio({
           existingNotes,
           model: snapshot.settings.model,
           effort: snapshot.settings.reasoningEffort,
-          organizationInstructions:
+          organizationInstructions: [
+            "Import-refresh requirement: return every existing canonical wiki article that this source can meaningfully enrich, even when it already has a body. Rewrite each returned wikiArticles.body as one coherent integrated article, preserving worthwhile existing knowledge and weaving new material into the relevant explanation; never append “Context from” or other provenance/change-log sections. Return new definitional canonical wiki articles for other durable concepts in the source. Infer concepts from meaning, roles, relationships, and aliases rather than keyword frequency. Do not include unrelated articles or rely on lexical overlap alone. Preserve explicit actions and next steps in project-note bodies as Markdown '- [ ]' tasks without inventing work.",
             snapshot.settings.organizationInstructions,
+          ]
+            .filter((instruction) => instruction.trim())
+            .join("\n\n"),
         });
         if (organized.notes.length === 0) {
           throw new Error("The organizer did not return any notes.");
         }
         organizedSources.push({ item, result: organized });
+        if (existingNotes) {
+          for (const article of organized.wikiArticles) {
+            const key = normalize(article.title);
+            const revisedBody =
+              article.body.trim() ||
+              wikiArticleBody(article, snapshot.workspace.name);
+            const existingIndex = existingNotes.findIndex(
+              (note) =>
+                normalize(note.title) === key ||
+                note.aliases.some((alias) => normalize(alias) === key),
+            );
+            if (existingIndex >= 0) {
+              existingNotes[existingIndex] = {
+                ...existingNotes[existingIndex],
+                summary:
+                  article.summary.trim() ||
+                  existingNotes[existingIndex].summary,
+                kind: "wiki",
+                body: revisedBody,
+              };
+            } else {
+              if (existingNotes.length >= 80) {
+                existingNotes.pop();
+              }
+              existingNotes.push({
+                id: `pending-wiki:${key}`,
+                title: article.title.trim(),
+                aliases: [...article.aliases],
+                summary: article.summary.trim(),
+                kind: "wiki",
+                body: revisedBody,
+              });
+            }
+          }
+        }
         if (parsed.text.length > MAX_AI_CHARS_PER_SOURCE) {
           issues.push({
             itemId: item.id,
@@ -1107,7 +1152,7 @@ export function ImportStudio({
         <header className="import-studio__header">
           <div className="import-studio__brand">
             <span className="import-studio__brand-mark" aria-hidden="true">
-              <Sparkles size={16} strokeWidth={1.8} />
+              <Files size={16} strokeWidth={1.8} />
             </span>
             <div>
               <span className="import-studio__eyebrow">Orion workflow</span>
@@ -1490,7 +1535,7 @@ export function ImportStudio({
                       mode === "ai" && "import-studio__mode--selected",
                     )}
                     type="button"
-                    disabled={!snapshot.settings.apiKeyConfigured}
+                    disabled={!aiConfigured}
                     onClick={() => setMode("ai")}
                   >
                     <span className="import-studio__mode-icon" aria-hidden="true">
@@ -1524,7 +1569,7 @@ export function ImportStudio({
                     <span className="import-studio__mode-radio" aria-hidden="true" />
                   </button>
 
-                  {!snapshot.settings.apiKeyConfigured && (
+                  {!aiConfigured && (
                     <div className="import-studio__key-note">
                       <AlertTriangle aria-hidden="true" size={15} />
                       <span>
@@ -1534,10 +1579,10 @@ export function ImportStudio({
                     </div>
                   )}
 
-                  {mode === "ai" && snapshot.settings.apiKeyConfigured && (
+                  {mode === "ai" && aiConfigured && (
                     <div className="import-studio__privacy-note">
-                      <Sparkles aria-hidden="true" size={14} />
-                      Selected source text will be sent to OpenAI using your
+                      <Bot aria-hidden="true" size={14} />
+                      Selected source text will be sent to {aiProviderName} using your
                       configured key.
                     </div>
                   )}
@@ -1554,13 +1599,10 @@ export function ImportStudio({
             >
               <div className="import-studio__organizing-visual" aria-hidden="true">
                 <span className="import-studio__organizing-core">
-                  <Sparkles size={21} strokeWidth={1.6} />
+                  <Bot size={21} strokeWidth={1.6} />
                 </span>
                 <span className="import-studio__orbit import-studio__orbit--one" />
                 <span className="import-studio__orbit import-studio__orbit--two" />
-                <i className="import-studio__star import-studio__star--one" />
-                <i className="import-studio__star import-studio__star--two" />
-                <i className="import-studio__star import-studio__star--three" />
               </div>
               <span className="import-studio__eyebrow">
                 {mode === "ai" ? "Finding structure" : "Preparing local drafts"}
@@ -1734,9 +1776,9 @@ export function ImportStudio({
                 disabled={readyItems.length === 0}
                 onClick={() => void organize()}
               >
-                {mode === "ai" && snapshot.settings.apiKeyConfigured ? (
+                {mode === "ai" && aiConfigured ? (
                   <>
-                    <Sparkles aria-hidden="true" size={15} />
+                    <Bot aria-hidden="true" size={15} />
                     Organize with AI
                   </>
                 ) : (

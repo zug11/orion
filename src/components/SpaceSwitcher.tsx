@@ -4,7 +4,7 @@ import {
   Layers3,
   Plus,
   X,
-} from "lucide-react";
+} from "../lib/icons";
 import {
   useEffect,
   useMemo,

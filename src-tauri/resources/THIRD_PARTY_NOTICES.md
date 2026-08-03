@@ -3,6 +3,18 @@
 Orion includes the following components so media transcription works
 without separately installed software or a local server.
 
+## React Bits visual effects
+
+- Project: https://www.reactbits.dev/
+- Component adapted in Orion: Line Waves
+- License: MIT + Commons Clause (`licenses/react-bits-LICENSE`)
+
+## Radiant visual effects
+
+- Project: https://github.com/pbakaus/radiant
+- Component adapted in Orion: Signal Decay
+- License: MIT (`licenses/radiant-LICENSE`)
+
 ## whisper.cpp 1.9.1
 
 - Project: https://github.com/ggml-org/whisper.cpp

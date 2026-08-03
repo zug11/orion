@@ -5,21 +5,29 @@ import {
   Italic,
   Link2,
   List,
+  ListTodo,
   ListOrdered,
   Quote,
   Redo2,
   Undo2,
-} from "lucide-react";
+  Unlink,
+} from "../lib/icons";
 import { useRef, type KeyboardEvent, type MouseEvent } from "react";
+import { findConceptByPhrase } from "../lib/concepts";
+import type { Concept, EntityId } from "../types";
 
 interface EditorToolbarProps {
   editor: Editor;
+  concepts: readonly Concept[];
   onOpenLink: () => void;
+  onUnlink: (conceptId?: EntityId) => void;
 }
 
 export function EditorToolbar({
   editor,
+  concepts,
   onOpenLink,
+  onUnlink,
 }: EditorToolbarProps) {
   const toolbarRef = useRef<HTMLDivElement>(null);
   const state = useEditorState({
@@ -31,20 +39,40 @@ export function EditorToolbar({
           italic: false,
           bulletList: false,
           orderedList: false,
+          taskList: false,
           blockquote: false,
           link: false,
           heading: "0",
           canUndo: false,
           canRedo: false,
+          unlinkConceptId: undefined,
+          canUnlink: false,
         };
       }
+      const { from, to } = current.state.selection;
+      const selectedText =
+        from === to
+          ? ""
+          : current.state.doc.textBetween(from, to, " ").trim();
+      const linkHref = String(
+        current.getAttributes("link").href ?? "",
+      );
+      const explicitConceptId = linkHref.startsWith("orion-concept://")
+        ? linkHref.slice("orion-concept://".length)
+        : undefined;
+      const selectedConceptId = selectedText
+        ? findConceptByPhrase(concepts, selectedText)?.id
+        : undefined;
+      const unlinkConceptId = explicitConceptId ?? selectedConceptId;
+      const link = current.isActive("link");
       return {
         bold: current.isActive("bold"),
         italic: current.isActive("italic"),
         bulletList: current.isActive("bulletList"),
         orderedList: current.isActive("orderedList"),
+        taskList: current.isActive("taskList"),
         blockquote: current.isActive("blockquote"),
-        link: current.isActive("link"),
+        link,
         heading:
           current.isActive("heading", { level: 2 })
             ? "2"
@@ -53,6 +81,8 @@ export function EditorToolbar({
               : "0",
         canUndo: current.can().undo(),
         canRedo: current.can().redo(),
+        unlinkConceptId,
+        canUnlink: link || Boolean(unlinkConceptId),
       };
     },
   });
@@ -167,6 +197,17 @@ export function EditorToolbar({
       </button>
       <button
         type="button"
+        className={state.taskList ? "active" : ""}
+        aria-label="To-do list"
+        aria-pressed={state.taskList}
+        title="To-do list"
+        onMouseDown={preserveSelection}
+        onClick={() => editor.chain().focus().toggleTaskList().run()}
+      >
+        <ListTodo size={16} />
+      </button>
+      <button
+        type="button"
         className={state.blockquote ? "active" : ""}
         aria-label="Quote"
         aria-pressed={state.blockquote}
@@ -191,6 +232,18 @@ export function EditorToolbar({
       >
         <Link2 size={15} />
         <span>Link</span>
+      </button>
+      <button
+        type="button"
+        className="unlink-tool"
+        aria-label="Unlink selected text"
+        title="Unlink selected text"
+        disabled={!state.canUnlink}
+        onMouseDown={preserveSelection}
+        onClick={() => onUnlink(state.unlinkConceptId)}
+      >
+        <Unlink size={15} />
+        <span>Unlink</span>
       </button>
 
       <span className="editor-toolbar-spacer" />

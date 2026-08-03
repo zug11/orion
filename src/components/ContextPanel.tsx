@@ -6,7 +6,7 @@ import {
   Network,
   PanelRightClose,
   Quote,
-} from "lucide-react";
+} from "../lib/icons";
 import { markdownToPlainText } from "../lib/wiki";
 import type { AppSnapshot, Note } from "../types";
 

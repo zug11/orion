@@ -9,9 +9,8 @@ import {
   ArrowRight,
   CornerUpLeft,
   Link2,
-  Sparkles,
   X,
-} from "lucide-react";
+} from "../lib/icons";
 import clsx from "clsx";
 import type {
   Concept,
@@ -206,7 +205,7 @@ export function ConnectionCanvas({
             style={{ "--connection-accent": concept.color } as CSSProperties}
             aria-hidden="true"
           >
-            <Sparkles size={15} strokeWidth={1.8} />
+            <Link2 size={15} strokeWidth={1.8} />
           </span>
           <div>
             <span className="connections-canvas__eyebrow">Connected by</span>

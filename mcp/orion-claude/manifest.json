@@ -1,0 +1,80 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/mcpb/main/schemas/mcpb-manifest-v0.4.schema.json",
+  "manifest_version": "0.4",
+  "name": "orion-knowledge-atlas",
+  "display_name": "Orion",
+  "version": "0.3.5",
+  "description": "Search, cite, and edit your local Orion Spaces from Claude.",
+  "long_description": "A local bridge between Claude Desktop and Orion. Browse and search one Space at a time, open citation links in Orion, retrieve bounded source evidence, and directly create, edit, or delete notes without cloud sync or an API key.",
+  "author": {
+    "name": "Orion"
+  },
+  "icon": "icon.png",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/orion-mcp",
+    "mcp_config": {
+      "command": "${__dirname}/server/orion-mcp",
+      "args": [],
+      "env": {
+        "ORION_VAULT_PATH": "${user_config.vault_file}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "orion_list_spaces",
+      "description": "List Orion Spaces and content counts."
+    },
+    {
+      "name": "orion_browse_space",
+      "description": "Browse note metadata in one explicit Space."
+    },
+    {
+      "name": "orion_search",
+      "description": "Search notes and concepts within one Space."
+    },
+    {
+      "name": "orion_get_note",
+      "description": "Read a note with its concepts, sources, and connections."
+    },
+    {
+      "name": "orion_get_source",
+      "description": "Read bounded extracted text from a source."
+    },
+    {
+      "name": "orion_create_note",
+      "description": "Create and immediately save an ordinary note in one Space."
+    },
+    {
+      "name": "orion_update_note",
+      "description": "Directly edit supplied fields on an existing note."
+    },
+    {
+      "name": "orion_delete_note",
+      "description": "Delete a note and clean its Space-scoped references."
+    }
+  ],
+  "tools_generated": false,
+  "keywords": [
+    "knowledge",
+    "notes",
+    "wiki",
+    "local"
+  ],
+  "compatibility": {
+    "claude_desktop": ">=1.0.0",
+    "platforms": [
+      "darwin"
+    ]
+  },
+  "user_config": {
+    "vault_file": {
+      "type": "file",
+      "title": "Orion vault",
+      "description": "Orion's local vault.json. The default is correct for a standard Orion installation.",
+      "required": true,
+      "default": "${HOME}/Library/Application Support/app.orion.knowledge/vault.json"
+    }
+  }
+}

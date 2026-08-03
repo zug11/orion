@@ -8,7 +8,7 @@ import {
   Search,
   Sheet,
   Video,
-} from "lucide-react";
+} from "../lib/icons";
 import { useMemo, useState } from "react";
 import type { Source } from "../types";
 

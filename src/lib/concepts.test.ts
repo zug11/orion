@@ -178,6 +178,37 @@ describe("registerConceptPhrase", () => {
     expect(result.notes[0].conceptIds).toContain(linkable[0].id);
     expect(result.notes[1].conceptIds).toContain(linkable[0].id);
   });
+
+  it("preserves an unlink choice and re-enables it when taught again", () => {
+    const initial = reconcileConceptVocabulary(
+      [makeNote("note-sql", "SQL", { kind: "wiki" })],
+      [],
+    );
+    const concept = initial.concepts.find(
+      (candidate) => candidate.canonicalNoteId === "note-sql",
+    )!;
+    const disabled = reconcileConceptVocabulary(initial.notes, [
+      { ...concept, autoLink: false },
+    ]);
+
+    expect(
+      disabled.concepts.find((candidate) => candidate.id === concept.id)
+        ?.autoLink,
+    ).toBe(false);
+
+    const relinked = registerConceptPhrase(
+      disabled.notes,
+      disabled.concepts,
+      {
+        phrase: "SQL",
+        noteIds: ["note-sql"],
+      },
+    );
+    expect(
+      relinked.concepts.find((candidate) => candidate.id === concept.id)
+        ?.autoLink,
+    ).toBe(true);
+  });
 });
 
 describe("ensureCanonicalConceptPhrase", () => {

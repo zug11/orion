@@ -1,10 +1,18 @@
-import type { AppSnapshot, OrionVault, Settings } from "../types";
+import type {
+  AppSnapshot,
+  HomeAtmosphere,
+  HomeAtmosphereMotion,
+  HomeAtmosphereTone,
+  OrionVault,
+  Settings,
+} from "../types";
 import { createEmptyStudio } from "../lib/studio";
 
 export const defaultSettings: Settings = {
   model: "gpt-5.6-sol",
   reasoningEffort: "low",
   apiKeyConfigured: false,
+  anthropicApiKeyConfigured: false,
   autoLink: true,
   showHoverPreviews: true,
   includeExistingNotesInAIContext: true,
@@ -12,7 +20,50 @@ export const defaultSettings: Settings = {
     "Prefer durable, concise wiki notes. Preserve uncertainty, cite the source, and connect ideas only when the source supports the connection.",
   whisperLanguage: "",
   theme: "dark",
+  homeAtmosphere: "field",
+  homeAtmosphereTone: "signature",
+  homeAtmosphereMotion: "calm",
 };
+
+export function normalizeHomeAtmosphere(value: unknown): HomeAtmosphere {
+  if (
+    value === "signal-decay" ||
+    value === "line-waves" ||
+    value === "field"
+  ) {
+    return value;
+  }
+  if (value === "antigravity" || value === "constellation") {
+    return "signal-decay";
+  }
+  if (value === "aurora" || value === "liquid-ether") {
+    return "line-waves";
+  }
+  return defaultSettings.homeAtmosphere;
+}
+
+export function normalizeHomeAtmosphereTone(
+  value: unknown,
+): HomeAtmosphereTone {
+  if (
+    value === "signature" ||
+    value === "violet" ||
+    value === "mint" ||
+    value === "gold"
+  ) {
+    return value;
+  }
+  return defaultSettings.homeAtmosphereTone;
+}
+
+export function normalizeHomeAtmosphereMotion(
+  value: unknown,
+): HomeAtmosphereMotion {
+  if (value === "still" || value === "calm" || value === "alive") {
+    return value;
+  }
+  return defaultSettings.homeAtmosphereMotion;
+}
 
 export function createEmptySnapshot(
   name = "Orion",

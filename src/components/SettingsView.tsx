@@ -1,10 +1,12 @@
 import {
   Bot,
+  Cable,
   Check,
   ChevronRight,
   Database,
   Eye,
   EyeOff,
+  ExternalLink,
   KeyRound,
   Link2,
   LoaderCircle,
@@ -13,15 +15,24 @@ import {
   Palette,
   RefreshCw,
   ShieldCheck,
-  Sparkles,
   Trash2,
-} from "lucide-react";
-import { useEffect, useState } from "react";
+} from "../lib/icons";
+import { useEffect, useState, type CSSProperties } from "react";
+import {
+  atmosphereMotionOptions,
+  atmosphereToneOptions,
+  resolveAtmospherePalette,
+} from "../lib/homeAtmosphere";
 import {
   checkTranscriptionSetup,
   isTauriRuntime,
+  openClaudeConnector,
 } from "../lib/storage";
-import type { ReasoningEffort, Settings } from "../types";
+import type {
+  HomeAtmosphere,
+  ReasoningEffort,
+  Settings,
+} from "../types";
 
 interface SettingsViewProps {
   settings: Settings;
@@ -29,6 +40,9 @@ interface SettingsViewProps {
   onSaveApiKey: (apiKey: string) => Promise<void>;
   onDeleteApiKey: () => Promise<void>;
   onTestApiKey: () => Promise<{ valid: boolean; message: string }>;
+  onSaveAnthropicApiKey: (apiKey: string) => Promise<void>;
+  onDeleteAnthropicApiKey: () => Promise<void>;
+  onTestAnthropicApiKey: () => Promise<{ valid: boolean; message: string }>;
   onOpenDataLocation: () => void;
   onEraseVault: () => void;
 }
@@ -37,20 +51,66 @@ const models = [
   {
     id: "gpt-5.6-sol",
     name: "GPT-5.6 Sol",
+    provider: "OpenAI",
     description: "Frontier quality for the most nuanced source material.",
     badge: "Best quality",
   },
   {
     id: "gpt-5.6-terra",
     name: "GPT-5.6 Terra",
+    provider: "OpenAI",
     description: "A strong balance of intelligence, speed, and cost.",
     badge: "Balanced",
   },
   {
     id: "gpt-5.6-luna",
     name: "GPT-5.6 Luna",
+    provider: "OpenAI",
     description: "Efficient for large, straightforward collections.",
     badge: "Efficient",
+  },
+  {
+    id: "claude-fable-5",
+    name: "Claude Fable 5",
+    provider: "Anthropic",
+    description: "Highest capability for long-running synthesis and research.",
+    badge: "Most capable",
+  },
+  {
+    id: "claude-opus-5",
+    name: "Claude Opus 5",
+    provider: "Anthropic",
+    description: "Deep reasoning for complex projects and difficult material.",
+    badge: "Deep work",
+  },
+  {
+    id: "claude-sonnet-5",
+    name: "Claude Sonnet 5",
+    provider: "Anthropic",
+    description: "Fast frontier intelligence with a balanced cost profile.",
+    badge: "Balanced",
+  },
+];
+
+const atmosphereOptions: Array<{
+  id: HomeAtmosphere;
+  name: string;
+  description: string;
+}> = [
+  {
+    id: "line-waves",
+    name: "Line Waves",
+    description: "Fine contours flow through a quiet warped field.",
+  },
+  {
+    id: "signal-decay",
+    name: "Signal Decay",
+    description: "Clean harmonics loosen into warm, responsive noise.",
+  },
+  {
+    id: "field",
+    name: "Field",
+    description: "A precise dot matrix that responds to movement.",
   },
 ];
 
@@ -60,6 +120,9 @@ export function SettingsView({
   onSaveApiKey,
   onDeleteApiKey,
   onTestApiKey,
+  onSaveAnthropicApiKey,
+  onDeleteAnthropicApiKey,
+  onTestAnthropicApiKey,
   onOpenDataLocation,
   onEraseVault,
 }: SettingsViewProps) {
@@ -67,16 +130,33 @@ export function SettingsView({
   const [revealKey, setRevealKey] = useState(false);
   const [keyBusy, setKeyBusy] = useState(false);
   const [keyMessage, setKeyMessage] = useState<string | null>(null);
+  const [anthropicApiKey, setAnthropicApiKey] = useState("");
+  const [revealAnthropicKey, setRevealAnthropicKey] = useState(false);
+  const [anthropicKeyBusy, setAnthropicKeyBusy] = useState(false);
+  const [anthropicKeyMessage, setAnthropicKeyMessage] = useState<string | null>(
+    null,
+  );
   const [setupBusy, setSetupBusy] = useState(false);
   const [setupMessage, setSetupMessage] = useState<string | null>(null);
+  const [connectorBusy, setConnectorBusy] = useState(false);
+  const [connectorMessage, setConnectorMessage] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<
-    "intelligence" | "transcription" | "linking" | "appearance" | "data"
+    | "intelligence"
+    | "claude"
+    | "transcription"
+    | "linking"
+    | "appearance"
+    | "data"
   >("intelligence");
   const desktopRuntime = isTauriRuntime();
 
   useEffect(() => {
     setKeyMessage(null);
   }, [settings.apiKeyConfigured]);
+
+  useEffect(() => {
+    setAnthropicKeyMessage(null);
+  }, [settings.anthropicApiKeyConfigured]);
 
   function patch(patchValue: Partial<Settings>) {
     onChange({ ...settings, ...patchValue });
@@ -114,6 +194,42 @@ export function SettingsView({
     }
   }
 
+  async function saveClaudeKey() {
+    if (!anthropicApiKey.trim()) return;
+    setAnthropicKeyBusy(true);
+    setAnthropicKeyMessage(null);
+    try {
+      await onSaveAnthropicApiKey(anthropicApiKey.trim());
+      setAnthropicApiKey("");
+      setAnthropicKeyMessage(
+        desktopRuntime
+          ? "Saved securely in your system keychain."
+          : "Available for this browser tab only; reload clears it.",
+      );
+    } catch (error) {
+      setAnthropicKeyMessage(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setAnthropicKeyBusy(false);
+    }
+  }
+
+  async function testClaudeKey() {
+    setAnthropicKeyBusy(true);
+    setAnthropicKeyMessage(null);
+    try {
+      const result = await onTestAnthropicApiKey();
+      setAnthropicKeyMessage(result.message);
+    } catch (error) {
+      setAnthropicKeyMessage(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setAnthropicKeyBusy(false);
+    }
+  }
+
   async function checkLocalTools() {
     setSetupBusy(true);
     setSetupMessage(null);
@@ -124,6 +240,23 @@ export function SettingsView({
       setSetupMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setSetupBusy(false);
+    }
+  }
+
+  async function installClaudeConnector() {
+    setConnectorBusy(true);
+    setConnectorMessage(null);
+    try {
+      await openClaudeConnector();
+      setConnectorMessage(
+        "Claude Desktop should now ask you to install the Orion extension.",
+      );
+    } catch (error) {
+      setConnectorMessage(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setConnectorBusy(false);
     }
   }
 
@@ -144,7 +277,14 @@ export function SettingsView({
             className={activeSection === "intelligence" ? "active" : ""}
             onClick={() => setActiveSection("intelligence")}
           >
-            <Sparkles size={15} /> Intelligence
+            <Bot size={15} /> Intelligence
+          </a>
+          <a
+            href="#claude"
+            className={activeSection === "claude" ? "active" : ""}
+            onClick={() => setActiveSection("claude")}
+          >
+            <Cable size={15} /> Claude
           </a>
           <a
             href="#transcription"
@@ -296,7 +436,7 @@ export function SettingsView({
             <div className="setting-card">
               <div className="setting-row vertical">
                 <span>
-                  <strong>Organisation model</strong>
+                  <strong>Intelligence model</strong>
                   <small>
                     Choose the trade-off you prefer. You can change this any time.
                   </small>
@@ -314,7 +454,9 @@ export function SettingsView({
                       </i>
                       <span>
                         <strong>{model.name}</strong>
-                        <small>{model.description}</small>
+                        <small>
+                          {model.provider} · {model.description}
+                        </small>
                       </span>
                       <em>{model.badge}</em>
                     </button>
@@ -378,6 +520,194 @@ export function SettingsView({
                 rows={4}
               />
             </label>
+          </section>
+
+          <section className="settings-section" id="claude">
+            <div className="settings-section-title">
+              <span className="settings-icon indigo">
+                <Cable size={18} />
+              </span>
+              <span>
+                <h2>Claude connector</h2>
+                <p>Let Claude read and write directly in your Orion Spaces.</p>
+              </span>
+            </div>
+
+            <div className="setting-card api-key-card">
+              <div className="setting-row">
+                <span>
+                  <strong>Anthropic API key</strong>
+                  <small>
+                    {settings.anthropicApiKeyConfigured
+                      ? "One saved key can use Fable 5, Opus 5, or Sonnet 5."
+                      : "Add one key to use Orion’s Claude 5 model choices."}
+                  </small>
+                </span>
+                <span
+                  className={
+                    settings.anthropicApiKeyConfigured
+                      ? "status-pill success"
+                      : "status-pill"
+                  }
+                >
+                  {settings.anthropicApiKeyConfigured ? (
+                    <>
+                      <Check size={12} /> Connected
+                    </>
+                  ) : (
+                    "Not configured"
+                  )}
+                </span>
+              </div>
+              <div className="api-key-input-row">
+                <label>
+                  <KeyRound size={15} />
+                  <input
+                    type={revealAnthropicKey ? "text" : "password"}
+                    aria-label="Anthropic API key"
+                    value={anthropicApiKey}
+                    onChange={(event) =>
+                      setAnthropicApiKey(event.target.value)
+                    }
+                    placeholder={
+                      settings.anthropicApiKeyConfigured
+                        ? "Enter a new key to replace it"
+                        : "sk-ant-api03-…"
+                    }
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setRevealAnthropicKey((value) => !value)
+                    }
+                    aria-label={
+                      revealAnthropicKey
+                        ? "Hide Anthropic API key"
+                        : "Show Anthropic API key"
+                    }
+                  >
+                    {revealAnthropicKey ? (
+                      <EyeOff size={15} />
+                    ) : (
+                      <Eye size={15} />
+                    )}
+                  </button>
+                </label>
+                <button
+                  className="button primary compact"
+                  type="button"
+                  onClick={saveClaudeKey}
+                  disabled={!anthropicApiKey.trim() || anthropicKeyBusy}
+                >
+                  {anthropicKeyBusy ? (
+                    <LoaderCircle size={14} className="spin" />
+                  ) : (
+                    <LockKeyhole size={14} />
+                  )}
+                  Save key
+                </button>
+              </div>
+              <div className="api-key-actions">
+                <span>
+                  <ShieldCheck size={13} />
+                  {desktopRuntime
+                    ? "Stored separately from your OpenAI key in macOS Keychain."
+                    : "Browser preview keeps the key in memory only, until reload."}
+                </span>
+                {settings.anthropicApiKeyConfigured && (
+                  <span>
+                    <button
+                      type="button"
+                      onClick={testClaudeKey}
+                      disabled={anthropicKeyBusy}
+                    >
+                      Test connection
+                    </button>
+                    <button
+                      type="button"
+                      className="danger-text"
+                      onClick={async () => {
+                        setAnthropicKeyBusy(true);
+                        setAnthropicKeyMessage(null);
+                        try {
+                          await onDeleteAnthropicApiKey();
+                          setAnthropicKeyMessage(
+                            "The saved Anthropic API key was removed.",
+                          );
+                        } catch (error) {
+                          setAnthropicKeyMessage(
+                            error instanceof Error
+                              ? error.message
+                              : String(error),
+                          );
+                        } finally {
+                          setAnthropicKeyBusy(false);
+                        }
+                      }}
+                      disabled={anthropicKeyBusy}
+                    >
+                      Remove
+                    </button>
+                  </span>
+                )}
+              </div>
+              {anthropicKeyMessage && (
+                <p className="setting-message">{anthropicKeyMessage}</p>
+              )}
+            </div>
+
+            <div className="setting-card claude-connector-card">
+              <div className="claude-connector-intro">
+                <span>
+                  <strong>Your atlas, available in conversation</strong>
+                  <small>
+                    Claude can find Spaces, search concepts, and read the notes
+                    or source passages you ask about. It can also create, edit,
+                    and delete notes directly in the Space you choose.
+                  </small>
+                </span>
+                <span className="status-pill success">
+                  <ShieldCheck size={12} /> Full access
+                </span>
+              </div>
+
+              <div className="claude-connector-capabilities">
+                <span>Space-aware search</span>
+                <span>Direct note editing</span>
+                <span>Clickable citations</span>
+                <span>Bounded source evidence</span>
+              </div>
+
+              <div className="claude-connector-actions">
+                <small>
+                  Installs as a local Claude Desktop extension. Search stays in
+                  the active Space unless you explicitly choose another one.
+                </small>
+                <button
+                  className="button primary compact"
+                  type="button"
+                  disabled={!desktopRuntime || connectorBusy}
+                  onClick={installClaudeConnector}
+                >
+                  {connectorBusy ? (
+                    <LoaderCircle size={14} className="spin" />
+                  ) : (
+                    <ExternalLink size={14} />
+                  )}
+                  Install in Claude
+                </button>
+              </div>
+              {!desktopRuntime && (
+                <p className="setting-message">
+                  Connector installation is available in the Orion desktop app.
+                </p>
+              )}
+              {connectorMessage && (
+                <p className="setting-message">{connectorMessage}</p>
+              )}
+            </div>
           </section>
 
           <section className="settings-section" id="transcription">
@@ -472,30 +802,17 @@ export function SettingsView({
               </span>
               <span>
                 <h2>Link behaviour</h2>
-                <p>Control how recognized concepts appear while reading.</p>
+                <p>Known concepts stay connected while writing and reading.</p>
               </span>
             </div>
             <div className="setting-card">
-              <label className="setting-row">
-                <span>
-                  <strong>Recognize concepts automatically</strong>
-                  <small>
-                    Recognizes known terms without changing what you wrote.
-                  </small>
-                </span>
-                <input
-                  className="switch"
-                  type="checkbox"
-                  checked={settings.autoLink}
-                  onChange={(event) => patch({ autoLink: event.target.checked })}
-                />
-              </label>
-              <div className="setting-row divided">
+              <div className="setting-row">
                 <span>
                   <strong>Canonical wiki articles</strong>
                   <small>
-                    Known terms open their named Space article directly.
-                    Genuinely ambiguous terms open the connections canvas.
+                    Known terms become links without changing what you wrote and
+                    open their named Space article directly. Unlink any phrase
+                    from the editor when it should remain plain text.
                   </small>
                 </span>
               </div>
@@ -529,6 +846,130 @@ export function SettingsView({
                 </button>
               ))}
             </div>
+            <div className="setting-card atmosphere-setting">
+              <div className="setting-row vertical">
+                <span>
+                  <strong>Home atmosphere</strong>
+                  <small>
+                    Choose the living backdrop for Orion’s opening view.
+                  </small>
+                </span>
+                <div
+                  className="atmosphere-options"
+                  role="radiogroup"
+                  aria-label="Home atmosphere"
+                >
+                  {atmosphereOptions.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={settings.homeAtmosphere === option.id}
+                      aria-label={`${option.name}: ${option.description}`}
+                      className={
+                        settings.homeAtmosphere === option.id ? "active" : ""
+                      }
+                      onClick={() =>
+                        patch({ homeAtmosphere: option.id })
+                      }
+                    >
+                      <span
+                        className={`atmosphere-preview ${option.id}`}
+                        aria-hidden="true"
+                      >
+                        <i />
+                        <i />
+                        <i />
+                      </span>
+                      <span>
+                        <strong>{option.name}</strong>
+                        <small>{option.description}</small>
+                      </span>
+                      <i className="atmosphere-selection">
+                        {settings.homeAtmosphere === option.id && (
+                          <Check size={12} />
+                        )}
+                      </i>
+                    </button>
+                  ))}
+                </div>
+                <div
+                  className="atmosphere-tuner"
+                  aria-label="Atmosphere tuning"
+                >
+                  <div className="atmosphere-tuner-row">
+                    <span>
+                      <strong>Accent</strong>
+                      <small>
+                        {
+                          resolveAtmospherePalette(
+                            settings.homeAtmosphere,
+                            settings.homeAtmosphereTone,
+                          ).primary
+                        }
+                      </small>
+                    </span>
+                    <div
+                      className="atmosphere-tone-options"
+                      aria-label="Atmosphere accent"
+                    >
+                      {atmosphereToneOptions.map((option) => {
+                        const color = resolveAtmospherePalette(
+                          settings.homeAtmosphere,
+                          option.id,
+                        ).primary;
+                        return (
+                          <button
+                            key={option.id}
+                            type="button"
+                            aria-label={`${option.name} accent, ${color}`}
+                            aria-pressed={
+                              settings.homeAtmosphereTone === option.id
+                            }
+                            title={`${option.name} · ${color}`}
+                            style={
+                              {
+                                "--atmosphere-tone": color,
+                              } as CSSProperties
+                            }
+                            onClick={() =>
+                              patch({ homeAtmosphereTone: option.id })
+                            }
+                          >
+                            <i aria-hidden="true" />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className="atmosphere-tuner-row">
+                    <span>
+                      <strong>Motion</strong>
+                      <small>Pointer response stays on</small>
+                    </span>
+                    <div
+                      className="atmosphere-motion-options"
+                      aria-label="Atmosphere motion"
+                    >
+                      {atmosphereMotionOptions.map((option) => (
+                        <button
+                          key={option.id}
+                          type="button"
+                          aria-pressed={
+                            settings.homeAtmosphereMotion === option.id
+                          }
+                          onClick={() =>
+                            patch({ homeAtmosphereMotion: option.id })
+                          }
+                        >
+                          {option.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </section>
 
           <section className="settings-section" id="data">
@@ -549,8 +990,8 @@ export function SettingsView({
                   <small>
                     Notes, relationships, and sources stay in Orion’s application
                     data folder. AI Import sends selected material; Chat sends
-                    bounded context from the current Space. OpenAI response
-                    storage is disabled.
+                    bounded context from the current Space through only the AI
+                    provider and model you select.
                   </small>
                 </span>
               </div>

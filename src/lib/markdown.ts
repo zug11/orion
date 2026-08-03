@@ -27,6 +27,38 @@ export function restoreMarkdownFrontmatter(
   return prefix ? `${prefix}${content}` : content;
 }
 
+export function stripOrionNoteMarkers(markdown: string): string {
+  return markdown
+    .replace(
+      /^[ \t]*(?:\\?<!--|&lt;!--)[ \t]*orion-note:[^ \t\r\n>]+:(?:start|end)[ \t]*(?:-->|--&gt;)[ \t]*(?:\r?\n)?/gim,
+      "",
+    )
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+export function stripOrionLinksToTargets(
+  markdown: string,
+  targets: {
+    noteIds?: readonly string[];
+    conceptIds?: readonly string[];
+  },
+): string {
+  const noteIds = new Set(targets.noteIds ?? []);
+  const conceptIds = new Set(targets.conceptIds ?? []);
+  if (noteIds.size === 0 && conceptIds.size === 0) {
+    return markdown;
+  }
+
+  return markdown.replace(
+    /\[((?:\\.|[^\]\\])*)\]\(orion-(note|concept):\/\/([^) \t\r\n]+)\)/g,
+    (link, label: string, kind: string, id: string) => {
+      const remove =
+        kind === "note" ? noteIds.has(id) : conceptIds.has(id);
+      return remove ? label : link;
+    },
+  );
+}
+
 export function expandOrionWikiLinks(
   body: string,
   notes: readonly Note[],

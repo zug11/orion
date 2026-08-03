@@ -36,6 +36,8 @@ export interface RegisterConceptPhraseInput {
 export interface RegisterWikiLinkInput {
   phrase: string;
   destinationNoteIds: readonly EntityId[];
+  articleMode: "ai" | "blank";
+  articleInstructions?: string;
   description?: string;
 }
 
@@ -236,7 +238,6 @@ export function reconcileConceptVocabulary(
       canonical.description = note.summary || canonical.description;
       canonical.noteIds = [note.id];
       canonical.canonicalNoteId = note.id;
-      canonical.autoLink = true;
       canonical.color = note.color ?? canonical.color;
     }
 
@@ -300,7 +301,15 @@ export function registerConceptPhrase(
 
   const normalized = normalizeConceptPhrase(phrase);
   const concepts = inputConcepts.map(cloneConcept);
-  let concept = findConceptByPhrase(concepts, normalized);
+  let concept =
+    findConceptByPhrase(concepts, normalized) ??
+    concepts.find(
+      (candidate) =>
+        normalizeConceptPhrase(candidate.label) === normalized ||
+        candidate.aliases.some(
+          (alias) => normalizeConceptPhrase(alias) === normalized,
+        ),
+    );
 
   if (!concept) {
     const usedIds = new Map(concepts.map((candidate) => [candidate.id, candidate]));

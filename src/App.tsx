@@ -1,8 +1,9 @@
-import { CheckCircle2, X } from "lucide-react";
+import { CheckCircle2, X } from "./lib/icons";
 import { nanoid } from "nanoid";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -29,6 +30,9 @@ import {
   createEmptySnapshot,
   createEmptyVault,
   defaultSettings,
+  normalizeHomeAtmosphere,
+  normalizeHomeAtmosphereMotion,
+  normalizeHomeAtmosphereTone,
   slugifyTitle,
 } from "./data/defaults";
 import {
@@ -38,16 +42,19 @@ import {
   type RegisterWikiLinkInput,
 } from "./lib/concepts";
 import {
-  apiKeyStatus,
   chatWithOrion,
+  deleteAnthropicApiKey,
   deleteApiKey,
   exportMarkdown,
   clearBrowserSnapshot,
   isTauriRuntime,
   loadSnapshot,
   openDataDirectory,
+  organizeWithAI,
+  saveAnthropicApiKey,
   saveApiKey,
   saveSnapshot,
+  testAnthropicKey,
   testOpenAIKey,
 } from "./lib/storage";
 import {
@@ -56,10 +63,34 @@ import {
   ChatRequestRegistry,
 } from "./lib/chat";
 import {
+  applyLinkedArticleResult,
+  buildLinkedArticleRequest,
+  deleteLinkedArticleDraft,
+  isLinkedArticlePlaceholder,
+  LinkedArticleRequestRegistry,
+  linkedArticleProgressForElapsed,
+  linkedArticleStageForProgress,
+  waitForLinkedArticle,
+  type LinkedArticleJob,
+} from "./lib/linkedArticle";
+import {
+  applyWikiEnrichmentResult,
+  buildWikiEnrichmentRequest,
+  hasSubstantiveKnowledgeNote,
+} from "./lib/wikiEnrichment";
+import { setTaskChecked, type NoteTask } from "./lib/tasks";
+import {
   getConceptReferences,
   resolveConceptDestination,
 } from "./lib/wiki";
+import { deleteNoteFromSnapshot } from "./lib/noteDeletion";
+import { parseOrionNoteLink } from "./lib/orionLinks";
 import { normalizeStudio } from "./lib/studio";
+import { resetScrollPosition } from "./lib/navigation";
+import {
+  isSelectedAIConfigured,
+  selectedAIProviderName,
+} from "./lib/ai";
 import type {
   AppSnapshot,
   ChatResult,
@@ -140,14 +171,23 @@ function App() {
   const [chatBusySpaceIds, setChatBusySpaceIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [linkedArticleJobs, setLinkedArticleJobs] = useState<
+    LinkedArticleJob[]
+  >([]);
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const saveTimer = useRef<number | null>(null);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const pendingSaveCount = useRef(0);
+  const persistedVaultUpdatedAt = useRef<string | null>(null);
+  const skipAutosaveVault = useRef<OrionVault | null>(null);
   const closingRef = useRef(false);
   const toastTimer = useRef<number | null>(null);
   const chatRequests = useRef(new ChatRequestRegistry());
+  const linkedArticleRequests = useRef(new LinkedArticleRequestRegistry());
+  const wikiEnrichmentRequests = useRef(new Set<string>());
   const snapshotBeforeImport = useRef<AppSnapshot | null>(null);
+  const workspaceContentRef = useRef<HTMLElement | null>(null);
   const snapshotRef = useRef(snapshot);
   const vaultRef = useRef(vault);
   const persistenceEnabledRef = useRef(persistenceEnabled);
@@ -180,6 +220,11 @@ function App() {
     [connectionOriginNoteId, snapshot.notes],
   );
 
+  useLayoutEffect(() => {
+    if (screen !== "note" || !snapshot.activeNoteId) return;
+    resetScrollPosition(workspaceContentRef.current);
+  }, [screen, snapshot.activeNoteId]);
+
   const showToast = useCallback(
     (
       title: string,
@@ -194,9 +239,16 @@ function App() {
   );
 
   const queueSnapshotSave = useCallback((nextVault: OrionVault) => {
+    pendingSaveCount.current += 1;
     const queued = saveQueue.current
       .catch(() => undefined)
-      .then(() => saveSnapshot(nextVault));
+      .then(async () => {
+        await saveSnapshot(nextVault, persistedVaultUpdatedAt.current);
+        persistedVaultUpdatedAt.current = nextVault.updatedAt;
+      })
+      .finally(() => {
+        pendingSaveCount.current = Math.max(0, pendingSaveCount.current - 1);
+      });
     saveQueue.current = queued;
     return queued;
   }, []);
@@ -206,9 +258,10 @@ function App() {
     setHydrated(false);
     setPersistenceEnabled(false);
     setVaultLoadError(null);
-    Promise.all([loadSnapshot(), apiKeyStatus().catch(() => ({ configured: false }))])
-      .then(([saved, keyStatus]) => {
+    loadSnapshot()
+      .then((saved) => {
         if (cancelled) return;
+        persistedVaultUpdatedAt.current = saved?.updatedAt ?? null;
         const baseVault = saved ?? createEmptyVault();
         const spaces = baseVault.spaces.map((savedSpace) => {
           const base = isRetiredStarterVault(savedSpace)
@@ -233,7 +286,25 @@ function App() {
             settings: {
               ...defaultSettings,
               ...base.settings,
-              apiKeyConfigured: keyStatus.configured,
+              // The desktop app deliberately trusts this non-secret status
+              // flag at launch. Reading the API key itself here makes macOS
+              // show a Keychain password prompt before the user invokes any
+              // AI feature, especially when upgrading from an ad-hoc build.
+              apiKeyConfigured: isTauriRuntime()
+                ? base.settings.apiKeyConfigured
+                : false,
+              anthropicApiKeyConfigured: isTauriRuntime()
+                ? (base.settings.anthropicApiKeyConfigured ?? false)
+                : false,
+              homeAtmosphere: normalizeHomeAtmosphere(
+                base.settings.homeAtmosphere,
+              ),
+              homeAtmosphereTone: normalizeHomeAtmosphereTone(
+                base.settings.homeAtmosphereTone,
+              ),
+              homeAtmosphereMotion: normalizeHomeAtmosphereMotion(
+                base.settings.homeAtmosphereMotion,
+              ),
             },
           };
         });
@@ -271,8 +342,15 @@ function App() {
 
   useEffect(() => {
     if (!hydrated || !persistenceEnabled || closing) return;
+    if (skipAutosaveVault.current === vault) {
+      skipAutosaveVault.current = null;
+      return;
+    }
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
-    saveTimer.current = window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
+      if (saveTimer.current === timer) {
+        saveTimer.current = null;
+      }
       void queueSnapshotSave(vault).catch((error) =>
         showToast(
           "Couldn’t save",
@@ -280,8 +358,12 @@ function App() {
         ),
       );
     }, 420);
+    saveTimer.current = timer;
     return () => {
-      if (saveTimer.current) window.clearTimeout(saveTimer.current);
+      if (saveTimer.current === timer) {
+        window.clearTimeout(timer);
+        saveTimer.current = null;
+      }
     };
   }, [
     hydrated,
@@ -309,6 +391,55 @@ function App() {
     return () => {
       window.removeEventListener("beforeunload", flushBrowserVault);
       window.removeEventListener("pagehide", flushBrowserVault);
+    };
+  }, [hydrated, persistenceEnabled]);
+
+  useEffect(() => {
+    if (!hydrated || !persistenceEnabled || !isTauriRuntime()) {
+      return undefined;
+    }
+    let disposed = false;
+    let refreshing = false;
+
+    const refreshExternalVault = async () => {
+      if (
+        disposed ||
+        refreshing ||
+        closingRef.current ||
+        saveTimer.current !== null ||
+        pendingSaveCount.current > 0
+      ) {
+        return;
+      }
+      refreshing = true;
+      try {
+        const latest = await loadSnapshot();
+        if (disposed || !latest) return;
+        const latestTime = Date.parse(latest.updatedAt);
+        const currentTime = Date.parse(vaultRef.current.updatedAt);
+        if (
+          Number.isFinite(latestTime) &&
+          (!Number.isFinite(currentTime) || latestTime > currentTime)
+        ) {
+          persistedVaultUpdatedAt.current = latest.updatedAt;
+          skipAutosaveVault.current = latest;
+          vaultRef.current = latest;
+          setVault(latest);
+        }
+      } catch {
+        // A foreground refresh is opportunistic. Normal saves and explicit
+        // citation opens still surface actionable persistence errors.
+      } finally {
+        refreshing = false;
+      }
+    };
+
+    window.addEventListener("focus", refreshExternalVault);
+    document.addEventListener("visibilitychange", refreshExternalVault);
+    return () => {
+      disposed = true;
+      window.removeEventListener("focus", refreshExternalVault);
+      document.removeEventListener("visibilitychange", refreshExternalVault);
     };
   }, [hydrated, persistenceEnabled]);
 
@@ -542,6 +673,100 @@ function App() {
     [closeConnections, historyIndex],
   );
 
+  const openOrionCitation = useCallback(
+    async (rawUrl: string) => {
+      const link = parseOrionNoteLink(rawUrl);
+      if (!link) return;
+      const { spaceId, noteId } = link;
+
+      const latest = await loadSnapshot();
+      const space = latest?.spaces.find(
+        (candidate) => candidate.workspace.id === spaceId,
+      );
+      const note = space?.notes.find((candidate) => candidate.id === noteId);
+      if (!latest || !space || !note) {
+        showToast(
+          "Note unavailable",
+          "That Orion citation no longer resolves in its original Space.",
+        );
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const nextVault: OrionVault = {
+        ...latest,
+        activeSpaceId: spaceId,
+        spaces: latest.spaces.map((candidate) =>
+          candidate.workspace.id === spaceId
+            ? {
+                ...candidate,
+                activeNoteId: noteId,
+                updatedAt: now,
+              }
+            : candidate,
+        ),
+        updatedAt: now,
+      };
+      persistedVaultUpdatedAt.current = latest.updatedAt;
+      vaultRef.current = nextVault;
+      setVault(nextVault);
+      setScreen("note");
+      closeConnections();
+      setContextOpen(true);
+      setHistory([noteId]);
+      setHistoryIndex(0);
+    },
+    [closeConnections, showToast],
+  );
+
+  useEffect(() => {
+    if (!hydrated || !isTauriRuntime()) {
+      return undefined;
+    }
+    let disposed = false;
+    let stopListening: (() => void) | undefined;
+    const seen = new Set<string>();
+    const openUrls = (urls: readonly string[]) => {
+      for (const url of urls) {
+        if (seen.has(url)) continue;
+        seen.add(url);
+        void openOrionCitation(url).catch((error) => {
+          showToast(
+            "Couldn’t open citation",
+            error instanceof Error ? error.message : String(error),
+          );
+        });
+      }
+    };
+
+    void import("@tauri-apps/plugin-deep-link")
+      .then(async ({ getCurrent, onOpenUrl }) => {
+        const current = await getCurrent();
+        if (!disposed && current) {
+          openUrls(current);
+        }
+        const unlisten = await onOpenUrl((urls) => {
+          if (!disposed) openUrls(urls);
+        });
+        if (disposed) {
+          unlisten();
+        } else {
+          stopListening = unlisten;
+        }
+      })
+      .catch((error) => {
+        showToast(
+          "Citation links unavailable",
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+
+    return () => {
+      disposed = true;
+      stopListening?.();
+    };
+  }, [hydrated, openOrionCitation, showToast]);
+
   const followConcept = useCallback(
     (conceptId: string, originNoteId: string | null = null) => {
       const current = snapshotRef.current;
@@ -652,22 +877,600 @@ function App() {
     });
   }, []);
 
+  const toggleHomeTask = useCallback(
+    (task: NoteTask, checked: boolean) => {
+      const note = snapshotRef.current.notes.find(
+        (candidate) => candidate.id === task.noteId,
+      );
+      if (!note) return;
+      const body = setTaskChecked(note.body, task.lineIndex, checked);
+      if (body === note.body) return;
+      updateNote({
+        ...note,
+        body,
+        updatedAt: new Date().toISOString(),
+      });
+    },
+    [updateNote],
+  );
+
+  const refreshWikiFromNote = useCallback(
+    async (noteId: EntityId) => {
+      const workspaceId = vaultRef.current.activeSpaceId;
+      const workspace = vaultRef.current.spaces.find(
+        (space) => space.workspace.id === workspaceId,
+      );
+      const originNote = workspace?.notes.find(
+        (note) => note.id === noteId,
+      );
+      if (
+        !workspace ||
+        !originNote ||
+        !isSelectedAIConfigured(workspace.settings) ||
+        !hasSubstantiveKnowledgeNote(originNote)
+      ) {
+        return;
+      }
+
+      const requestKey = `${workspaceId}:${noteId}`;
+      if (wikiEnrichmentRequests.current.has(requestKey)) {
+        return;
+      }
+      wikiEnrichmentRequests.current.add(requestKey);
+      showToast(
+        "Updating Space wiki",
+        `Looking for articles that “${originNote.title}” can enrich.`,
+      );
+
+      try {
+        const result = await organizeWithAI(
+          buildWikiEnrichmentRequest(workspace, originNote),
+        );
+        const liveSpace = vaultRef.current.spaces.find(
+          (space) => space.workspace.id === workspaceId,
+        );
+        const liveOrigin = liveSpace?.notes.find(
+          (note) => note.id === noteId,
+        );
+        if (
+          !liveSpace ||
+          !liveOrigin ||
+          liveOrigin.updatedAt !== originNote.updatedAt
+        ) {
+          throw new Error(
+            "The note changed while Orion was reading it, so this refresh was skipped.",
+          );
+        }
+
+        if (result.wikiArticles.length === 0) {
+          showToast(
+            "Space wiki is current",
+            `“${originNote.title}” did not add reliable context to another article.`,
+          );
+          return;
+        }
+
+        const now = new Date().toISOString();
+        const applied = applyWikiEnrichmentResult(
+          liveSpace,
+          liveOrigin,
+          result,
+          now,
+        );
+        setVault((current) => {
+          const currentSpace = current.spaces.find(
+            (space) => space.workspace.id === workspaceId,
+          );
+          const currentOrigin = currentSpace?.notes.find(
+            (note) => note.id === noteId,
+          );
+          if (
+            !currentSpace ||
+            !currentOrigin ||
+            currentOrigin.updatedAt !== originNote.updatedAt
+          ) {
+            return current;
+          }
+          return {
+            ...current,
+            spaces: current.spaces.map((space) =>
+              space.workspace.id === workspaceId
+                ? applied.snapshot
+                : space,
+            ),
+            updatedAt: now,
+          };
+        });
+        const changedCount =
+          applied.updatedNoteIds.length + applied.createdNoteIds.length;
+        showToast(
+          changedCount > 0 ? "Space wiki updated" : "Space wiki is current",
+          changedCount > 0
+            ? `${changedCount} ${
+                changedCount === 1 ? "article was" : "articles were"
+              } revised with ideas from “${originNote.title}”.`
+            : `“${originNote.title}” did not add reliable context to another article.`,
+        );
+      } catch (error) {
+        showToast(
+          "Wiki refresh paused",
+          error instanceof Error ? error.message : String(error),
+        );
+      } finally {
+        wikiEnrichmentRequests.current.delete(requestKey);
+      }
+    },
+    [showToast],
+  );
+
+  const generateLinkedArticle = useCallback(
+    async (
+      workspace: AppSnapshot,
+      articleId: EntityId,
+      originNoteId: EntityId,
+      phrase: string,
+      instructions = "",
+    ) => {
+      const requestKey = `${workspace.workspace.id}:${articleId}`;
+      const article = workspace.notes.find((note) => note.id === articleId);
+      const originNote = workspace.notes.find(
+        (note) => note.id === originNoteId,
+      );
+      if (!article || !originNote) {
+        console.warn("[linked-article] request skipped", {
+          requestKey,
+          reason: !article ? "missing-article" : "missing-origin",
+        });
+        return;
+      }
+      if (!isLinkedArticlePlaceholder(article, phrase)) {
+        console.warn("[linked-article] request skipped", {
+          requestKey,
+          reason: "article-is-not-an-empty-draft",
+        });
+        return;
+      }
+      if (linkedArticleRequests.current.has(requestKey)) {
+        console.info("[linked-article] request already active", {
+          requestKey,
+        });
+        return;
+      }
+      const revealArticle = () => {
+        if (vaultRef.current.activeSpaceId === workspace.workspace.id) {
+          openNote(articleId);
+          return;
+        }
+        switchSpace(workspace.workspace.id);
+        window.setTimeout(() => openNote(articleId), 0);
+      };
+
+      const jobId = `linked-article-${nanoid(10)}`;
+      const initialJob: LinkedArticleJob = {
+        id: jobId,
+        workspaceId: workspace.workspace.id,
+        noteId: articleId,
+        originNoteId,
+        title: phrase,
+        originTitle: originNote.title,
+        progress: isSelectedAIConfigured(workspace.settings) ? 12 : 0,
+        stage: isSelectedAIConfigured(workspace.settings)
+          ? "gathering"
+          : "error",
+        ...(instructions.trim()
+          ? { instructions: instructions.trim().slice(0, 1_250) }
+          : {}),
+        ...(!isSelectedAIConfigured(workspace.settings)
+          ? {
+              error: `Add an ${selectedAIProviderName(workspace.settings)} key in Settings to draft this article.`,
+            }
+          : {}),
+      };
+      setLinkedArticleJobs((current) => [
+        initialJob,
+        ...current.filter(
+          (job) =>
+            !(
+              job.workspaceId === workspace.workspace.id &&
+              job.noteId === articleId
+            ),
+        ),
+      ]);
+
+      if (!isSelectedAIConfigured(workspace.settings)) {
+        console.info("[linked-article] request paused", {
+          requestKey,
+          reason: "missing-api-key",
+        });
+        showToast(
+          "Article link created",
+          `Add an ${selectedAIProviderName(workspace.settings)} key in Settings to populate “${phrase}”.`,
+          {
+            label: "Open draft",
+            run: revealArticle,
+          },
+        );
+        return;
+      }
+
+      if (!linkedArticleRequests.current.begin(requestKey, jobId)) {
+        console.info("[linked-article] request already active", {
+          requestKey,
+        });
+        return;
+      }
+      console.info("[linked-article] request started", {
+        requestKey,
+        attemptId: jobId,
+        originNoteId,
+      });
+      const startedAt = Date.now();
+      const progressTimer = window.setInterval(() => {
+        setLinkedArticleJobs((current) =>
+          current.map((job) => {
+            if (job.id !== jobId || job.stage === "error") {
+              return job;
+            }
+            const progress = linkedArticleProgressForElapsed(
+              Date.now() - startedAt,
+            );
+            return {
+              ...job,
+              progress,
+              stage: linkedArticleStageForProgress(progress),
+            };
+          }),
+        );
+      }, 700);
+
+      try {
+        const result = await waitForLinkedArticle(
+          organizeWithAI(
+            buildLinkedArticleRequest(
+              workspace,
+              originNote,
+              phrase,
+              instructions,
+            ),
+          ),
+        );
+        if (!linkedArticleRequests.current.owns(requestKey, jobId)) {
+          return;
+        }
+        const liveSpace = vaultRef.current.spaces.find(
+          (space) => space.workspace.id === workspace.workspace.id,
+        );
+        const liveArticle = liveSpace?.notes.find(
+          (note) => note.id === articleId,
+        );
+        if (
+          !liveArticle ||
+          !isLinkedArticlePlaceholder(liveArticle, phrase)
+        ) {
+          throw new Error(
+            "This article changed while Orion was drafting. Your edits were kept.",
+          );
+        }
+        const now = new Date().toISOString();
+        const generatedArticle = applyLinkedArticleResult(
+          article,
+          result,
+          phrase,
+          workspace.workspace.name,
+          now,
+        );
+        setVault((current) => {
+          const spaces = current.spaces.map((space) => {
+            if (space.workspace.id !== workspace.workspace.id) {
+              return space;
+            }
+            const currentArticle = space.notes.find(
+              (note) => note.id === articleId,
+            );
+            if (
+              !currentArticle ||
+              !isLinkedArticlePlaceholder(currentArticle, phrase)
+            ) {
+              return space;
+            }
+            const notes = space.notes.map((note) =>
+              note.id === articleId
+                ? {
+                    ...generatedArticle,
+                    conceptIds: [...currentArticle.conceptIds],
+                    sourceIds: [
+                      ...new Set([
+                        ...currentArticle.sourceIds,
+                        ...generatedArticle.sourceIds,
+                      ]),
+                    ],
+                  }
+                : note,
+            );
+            const vocabulary = reconcileConceptVocabulary(
+              notes,
+              space.concepts,
+            );
+            return {
+              ...space,
+              notes: vocabulary.notes,
+              concepts: vocabulary.concepts,
+              updatedAt: now,
+            };
+          });
+          return {
+            ...current,
+            spaces,
+            updatedAt: now,
+          };
+        });
+        setLinkedArticleJobs((current) =>
+          current.map((job) =>
+            job.id === jobId
+              ? { ...job, progress: 100, stage: "complete", error: undefined }
+              : job,
+          ),
+        );
+        console.info("[linked-article] request completed", {
+          requestKey,
+          attemptId: jobId,
+        });
+        window.setTimeout(() => {
+          setLinkedArticleJobs((current) =>
+            current.filter((job) => job.id !== jobId),
+          );
+        }, 1_800);
+        showToast(
+          "Wiki article ready",
+          `“${phrase}” was drafted from ${originNote.title} and its Space context.`,
+          {
+            label: "Open article",
+            run: revealArticle,
+          },
+        );
+      } catch (error) {
+        if (!linkedArticleRequests.current.owns(requestKey, jobId)) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn("[linked-article] request paused", {
+          requestKey,
+          attemptId: jobId,
+          reason: message,
+        });
+        setLinkedArticleJobs((current) =>
+          current.map((job) =>
+            job.id === jobId
+              ? {
+                  ...job,
+                  progress: Math.max(job.progress, 12),
+                  stage: "error",
+                  error: message,
+                }
+              : job,
+          ),
+        );
+        showToast("Article draft paused", message, {
+          label: "Open draft",
+          run: revealArticle,
+        });
+      } finally {
+        window.clearInterval(progressTimer);
+        linkedArticleRequests.current.finish(requestKey, jobId);
+      }
+    },
+    [openNote, showToast, switchSpace],
+  );
+
+  const restartLinkedArticle = useCallback(
+    (job: LinkedArticleJob) => {
+      const workspace = vaultRef.current.spaces.find(
+        (space) => space.workspace.id === job.workspaceId,
+      );
+      const article = workspace?.notes.find(
+        (note) => note.id === job.noteId,
+      );
+      const originNote = workspace?.notes.find(
+        (note) => note.id === job.originNoteId,
+      );
+      if (
+        !workspace ||
+        !article ||
+        !originNote ||
+        !isLinkedArticlePlaceholder(article, job.title)
+      ) {
+        const message =
+          "This draft or its source note changed, so Orion cannot safely restart it.";
+        setLinkedArticleJobs((current) =>
+          current.map((candidate) =>
+            candidate.id === job.id
+              ? { ...candidate, stage: "error", error: message }
+              : candidate,
+          ),
+        );
+        showToast("Draft could not restart", message);
+        return;
+      }
+
+      linkedArticleRequests.current.cancel(
+        `${job.workspaceId}:${job.noteId}`,
+      );
+      console.info("[linked-article] restart requested", {
+        requestKey: `${job.workspaceId}:${job.noteId}`,
+        previousAttemptId: job.id,
+      });
+      void generateLinkedArticle(
+        workspace,
+        job.noteId,
+        job.originNoteId,
+        job.title,
+        job.instructions,
+      );
+    },
+    [generateLinkedArticle, showToast],
+  );
+
+  const deletePausedLinkedArticle = useCallback(
+    (job: LinkedArticleJob) => {
+      if (
+        !window.confirm(
+          `Delete the paused “${job.title}” wiki draft? The link phrase will stop auto-linking until you create it again.`,
+        )
+      ) {
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const requestKey = `${job.workspaceId}:${job.noteId}`;
+      const liveSpace = vaultRef.current.spaces.find(
+        (space) => space.workspace.id === job.workspaceId,
+      );
+      const preview = liveSpace
+        ? deleteLinkedArticleDraft(liveSpace, job, now)
+        : null;
+      linkedArticleRequests.current.cancel(requestKey);
+      console.info("[linked-article] draft deleted", {
+        requestKey,
+        jobId: job.id,
+      });
+      setVault((current) => ({
+        ...current,
+        spaces: current.spaces.map((space) =>
+          space.workspace.id === job.workspaceId
+            ? deleteLinkedArticleDraft(space, job, now).snapshot
+            : space,
+        ),
+        updatedAt: now,
+      }));
+      setLinkedArticleJobs((current) =>
+        current.filter(
+          (candidate) =>
+            candidate.workspaceId !== job.workspaceId ||
+            candidate.noteId !== job.noteId,
+        ),
+      );
+      if (
+        preview?.deleted &&
+        vaultRef.current.activeSpaceId === job.workspaceId
+      ) {
+        const fallbackNoteId = preview.snapshot.activeNoteId;
+        setHistory(fallbackNoteId ? [fallbackNoteId] : []);
+        setHistoryIndex(fallbackNoteId ? 0 : -1);
+      }
+      showToast(
+        "Draft deleted",
+        `“${job.title}” and its unfinished automatic link were removed.`,
+      );
+    },
+    [showToast],
+  );
+
+  const deleteNote = useCallback(
+    (noteId: EntityId) => {
+      const workspaceId = vaultRef.current.activeSpaceId;
+      const workspace = vaultRef.current.spaces.find(
+        (space) => space.workspace.id === workspaceId,
+      );
+      const note = workspace?.notes.find(
+        (candidate) => candidate.id === noteId,
+      );
+      if (!workspace || !note) {
+        return;
+      }
+      if (
+        !window.confirm(
+          `Delete “${note.title}”? Its links, backlinks, and source references will be cleaned up. This cannot be undone.`,
+        )
+      ) {
+        return;
+      }
+
+      const now = new Date().toISOString();
+      for (const job of linkedArticleJobs) {
+        if (
+          job.workspaceId === workspaceId &&
+          (job.noteId === noteId || job.originNoteId === noteId)
+        ) {
+          linkedArticleRequests.current.cancel(
+            `${job.workspaceId}:${job.noteId}`,
+          );
+        }
+      }
+      wikiEnrichmentRequests.current.delete(`${workspaceId}:${noteId}`);
+      setLinkedArticleJobs((current) =>
+        current.flatMap((job) => {
+          if (job.workspaceId !== workspaceId) {
+            return [job];
+          }
+          if (job.noteId === noteId || job.stage === "complete") {
+            return [];
+          }
+          if (job.originNoteId === noteId) {
+            return [
+              {
+                ...job,
+                stage: "error" as const,
+                error:
+                  "The source note was deleted. Delete this empty draft, or create the link again from another note.",
+              },
+            ];
+          }
+          return [job];
+        }),
+      );
+      setVault((current) => ({
+        ...current,
+        spaces: current.spaces.map((space) =>
+          space.workspace.id === workspaceId
+            ? deleteNoteFromSnapshot(space, noteId, now).snapshot
+            : space,
+        ),
+        updatedAt: now,
+      }));
+      setScreen("notes");
+      closeConnections();
+      setHistory([]);
+      setHistoryIndex(-1);
+      showToast("Note deleted", `“${note.title}” was removed from this Space.`);
+    },
+    [closeConnections, linkedArticleJobs, showToast],
+  );
+
   const registerLinkConcept = useCallback(
-    (input: RegisterWikiLinkInput): EntityId => {
+    (
+      input: RegisterWikiLinkInput,
+      originNoteId: EntityId,
+    ): EntityId => {
       const now = new Date().toISOString();
       const phrase = input.phrase.trim().replace(/\s+/g, " ");
+      const currentSnapshot = snapshotRef.current;
+      const originNote = currentSnapshot.notes.find(
+        (note) => note.id === originNoteId,
+      );
+      const shouldDraftWithAI =
+        input.destinationNoteIds.length === 0 &&
+        input.articleMode === "ai";
       const candidateArticle: Note = {
         id: `note-${nanoid(10)}`,
         title: phrase,
         slug: slugifyTitle(phrase) || `article-${nanoid(5)}`,
-        summary: `A Space article for ${phrase}.`,
-        body: "",
+        summary: shouldDraftWithAI
+          ? `Orion is preparing a Space article for ${phrase}.`
+          : "",
+        body: shouldDraftWithAI
+          ? [
+              "<!-- orion-link-draft -->",
+              `> Orion is drafting this article from “${originNote?.title ?? "the current note"}”, its sources, and the active Space.`,
+            ].join("\n\n")
+          : "",
         aliases: [],
-        tags: ["wiki-article"],
+        tags: shouldDraftWithAI
+          ? ["wiki-article", "orion-link-draft"]
+          : ["wiki-article"],
         kind: "wiki",
         status: "draft",
         conceptIds: [],
-        sourceIds: [],
+        sourceIds: [...(originNote?.sourceIds ?? [])],
         createdAt: now,
         updatedAt: now,
         color: "#8798ff",
@@ -685,8 +1488,8 @@ function App() {
               description: input.description,
             });
       const preview = register(
-        snapshotRef.current.notes,
-        snapshotRef.current.concepts,
+        currentSnapshot.notes,
+        currentSnapshot.concepts,
       );
       setSnapshot((current) => {
         const result = register(current.notes, current.concepts);
@@ -697,9 +1500,48 @@ function App() {
           updatedAt: new Date().toISOString(),
         };
       });
+      if (shouldDraftWithAI && originNote) {
+        const concept = preview.concepts.find(
+          (candidate) => candidate.id === preview.conceptId,
+        );
+        const articleId = concept?.canonicalNoteId;
+        const article = articleId
+          ? preview.notes.find((note) => note.id === articleId)
+          : undefined;
+        if (
+          articleId &&
+          article &&
+          isLinkedArticlePlaceholder(article, phrase)
+        ) {
+          void generateLinkedArticle(
+            {
+              ...currentSnapshot,
+              notes: preview.notes,
+              concepts: preview.concepts,
+              updatedAt: now,
+            },
+            articleId,
+            originNoteId,
+            phrase,
+            input.articleInstructions,
+          );
+        }
+      } else if (input.destinationNoteIds.length === 0) {
+        const concept = preview.concepts.find(
+          (candidate) => candidate.id === preview.conceptId,
+        );
+        const blankArticleId = concept?.canonicalNoteId;
+        if (blankArticleId) {
+          window.setTimeout(() => openNote(blankArticleId), 0);
+        }
+        showToast(
+          "Blank article created",
+          `“${phrase}” is ready for you to write.`,
+        );
+      }
       return preview.conceptId;
     },
-    [],
+    [generateLinkedArticle, openNote, showToast],
   );
 
   const updateSettings = useCallback((settings: Settings) => {
@@ -714,6 +1556,32 @@ function App() {
       updatedAt: now,
     }));
   }, []);
+
+  const disableConceptAutoLink = useCallback(
+    (conceptId: EntityId) => {
+      const concept = snapshotRef.current.concepts.find(
+        (candidate) => candidate.id === conceptId,
+      );
+      if (!concept) {
+        return;
+      }
+      const now = new Date().toISOString();
+      setSnapshot((current) => ({
+        ...current,
+        concepts: current.concepts.map((candidate) =>
+          candidate.id === conceptId
+            ? { ...candidate, autoLink: false }
+            : candidate,
+        ),
+        updatedAt: now,
+      }));
+      showToast(
+        "Phrase unlinked",
+        `“${concept.label}” will no longer link automatically. Its article was kept.`,
+      );
+    },
+    [setSnapshot, showToast],
+  );
 
   const sendChatMessage = useCallback(
     async (prompt: string): Promise<ChatResult> => {
@@ -932,6 +1800,22 @@ function App() {
     updateSettings({ ...snapshot.settings, apiKeyConfigured: false });
   }
 
+  async function handleSaveAnthropicKey(apiKey: string) {
+    await saveAnthropicApiKey(apiKey);
+    updateSettings({
+      ...snapshot.settings,
+      anthropicApiKeyConfigured: true,
+    });
+  }
+
+  async function handleDeleteAnthropicKey() {
+    await deleteAnthropicApiKey();
+    updateSettings({
+      ...snapshot.settings,
+      anthropicApiKeyConfigured: false,
+    });
+  }
+
   function eraseCurrentSpace() {
     if (
       !window.confirm(
@@ -941,6 +1825,11 @@ function App() {
       return;
     }
     chatRequests.current.invalidate(snapshot.workspace.id);
+    setLinkedArticleJobs((current) =>
+      current.filter(
+        (job) => job.workspaceId !== snapshot.workspace.id,
+      ),
+    );
     const empty = createEmptySnapshot(
       snapshot.workspace.name,
       new Date().toISOString(),
@@ -967,8 +1856,16 @@ function App() {
             followConcept(conceptId, activeNote.id)
           }
           onUpdateNote={updateNote}
-          onRegisterConcept={registerLinkConcept}
-          autoLinkEnabled={snapshot.settings.autoLink}
+          onDeleteNote={deleteNote}
+          onFinishEditing={(noteId) => {
+            void refreshWikiFromNote(noteId);
+          }}
+          onRegisterConcept={(input) =>
+            registerLinkConcept(input, activeNote.id)
+          }
+          onDisableConceptAutoLink={disableConceptAutoLink}
+          aiArticleDraftingEnabled={isSelectedAIConfigured(snapshot.settings)}
+          aiProviderName={selectedAIProviderName(snapshot.settings)}
         />
       );
     }
@@ -997,6 +1894,9 @@ function App() {
           onSaveApiKey={handleSaveKey}
           onDeleteApiKey={handleDeleteKey}
           onTestApiKey={testOpenAIKey}
+          onSaveAnthropicApiKey={handleSaveAnthropicKey}
+          onDeleteAnthropicApiKey={handleDeleteAnthropicKey}
+          onTestAnthropicApiKey={testAnthropicKey}
           onOpenDataLocation={() => {
             void openDataDirectory().catch((error) =>
               showToast(
@@ -1017,6 +1917,7 @@ function App() {
         onNewNote={createNote}
         onImport={() => setImportOpen(true)}
         onOpenNotes={() => openView("notes")}
+        onToggleTask={toggleHomeTask}
       />
     );
   }
@@ -1035,11 +1936,16 @@ function App() {
         spaces={vault.spaces}
         activeSpaceId={vault.activeSpaceId}
         activeNoteId={screen === "note" ? snapshot.activeNoteId : null}
+        linkedArticleJobs={linkedArticleJobs.filter(
+          (job) => job.workspaceId === snapshot.workspace.id,
+        )}
         onViewChange={openView}
         onOpenNote={openNote}
         onNewNote={createNote}
         onCreateSpace={createSpace}
         onSwitchSpace={switchSpace}
+        onRestartLinkedArticle={restartLinkedArticle}
+        onDeleteLinkedArticle={deletePausedLinkedArticle}
       />
       <div className="workspace-shell">
         <Topbar
@@ -1070,7 +1976,9 @@ function App() {
               : undefined
           }
         />
-        <main className="workspace-content">{renderScreen()}</main>
+        <main ref={workspaceContentRef} className="workspace-content">
+          {renderScreen()}
+        </main>
       </div>
       {!connectionConcept && contextOpen && screen === "note" && (
         <ContextPanel

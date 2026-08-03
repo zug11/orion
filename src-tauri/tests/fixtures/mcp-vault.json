@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 2,
+  "activeSpaceId": "space-alpha",
+  "updatedAt": "2026-07-31T00:00:00.000Z",
+  "spaces": [
+    {
+      "schemaVersion": 1,
+      "workspace": {
+        "id": "space-alpha",
+        "name": "Alpha",
+        "description": "Active test project",
+        "createdAt": "2026-07-30T00:00:00.000Z"
+      },
+      "notes": [
+        {
+          "id": "note-comte",
+          "title": "Auguste Comte",
+          "slug": "auguste-comte",
+          "summary": "A philosopher of positivism.",
+          "body": "Comte developed positivism and a hierarchy of sciences.",
+          "aliases": [
+            "Comte"
+          ],
+          "tags": [
+            "sociology"
+          ],
+          "kind": "person",
+          "status": "ready",
+          "conceptIds": [
+            "concept-comte"
+          ],
+          "sourceIds": [
+            "source-lecture"
+          ],
+          "createdAt": "2026-07-30T00:00:00.000Z",
+          "updatedAt": "2026-07-31T00:00:00.000Z"
+        }
+      ],
+      "sources": [
+        {
+          "id": "source-lecture",
+          "title": "Lecture",
+          "kind": "text",
+          "importedAt": "2026-07-31T00:00:00.000Z",
+          "text": "The lecture discusses Comte and positivism.",
+          "noteIds": [
+            "note-comte"
+          ]
+        }
+      ],
+      "concepts": [
+        {
+          "id": "concept-comte",
+          "label": "Auguste Comte",
+          "aliases": [
+            "Comte"
+          ],
+          "description": "French philosopher",
+          "noteIds": [
+            "note-comte"
+          ],
+          "canonicalNoteId": "note-comte",
+          "color": "#ffffff",
+          "autoLink": true
+        }
+      ],
+      "relationships": [],
+      "importDrafts": [],
+      "studio": {},
+      "settings": {},
+      "activeNoteId": "note-comte",
+      "updatedAt": "2026-07-31T00:00:00.000Z"
+    },
+    {
+      "schemaVersion": 1,
+      "workspace": {
+        "id": "space-private",
+        "name": "Private",
+        "description": "Separate test project",
+        "createdAt": "2026-07-30T00:00:00.000Z"
+      },
+      "notes": [
+        {
+          "id": "note-secret",
+          "title": "Secluded topic",
+          "slug": "secluded-topic",
+          "summary": "Only in the second Space.",
+          "body": "purple-capybara",
+          "aliases": [],
+          "tags": [],
+          "kind": "article",
+          "status": "ready",
+          "conceptIds": [],
+          "sourceIds": [],
+          "createdAt": "2026-07-30T00:00:00.000Z",
+          "updatedAt": "2026-07-31T00:00:00.000Z"
+        }
+      ],
+      "sources": [],
+      "concepts": [],
+      "relationships": [],
+      "importDrafts": [],
+      "studio": {},
+      "settings": {},
+      "activeNoteId": "note-secret",
+      "updatedAt": "2026-07-31T00:00:00.000Z"
+    }
+  ]
+}

@@ -5,7 +5,8 @@ import {
   Link2,
   Quote,
   Star,
-} from "lucide-react";
+  Trash2,
+} from "../lib/icons";
 import {
   Children,
   cloneElement,
@@ -27,7 +28,9 @@ import {
   restoreMarkdownFrontmatter,
   splitMarkdownFrontmatter,
   stripDuplicateTitleHeading,
+  stripOrionNoteMarkers,
 } from "../lib/markdown";
+import { collectTasksFromNote, setTaskChecked } from "../lib/tasks";
 import { decorateAutoLinks } from "../lib/wiki";
 import type { Concept, Note } from "../types";
 
@@ -44,8 +47,12 @@ interface NoteViewProps {
   onOpenNote: (noteId: string) => void;
   onOpenConcept: (conceptId: string) => void;
   onUpdateNote: (note: Note) => void;
+  onDeleteNote: (noteId: string) => void;
+  onFinishEditing?: (noteId: string) => void;
   onRegisterConcept: (input: RegisterWikiLinkInput) => string;
-  autoLinkEnabled?: boolean;
+  onDisableConceptAutoLink: (conceptId: string) => void;
+  aiArticleDraftingEnabled?: boolean;
+  aiProviderName?: string;
 }
 
 function headingAnchor(children: ReactNode): string {
@@ -89,8 +96,12 @@ export function NoteView({
   onOpenNote,
   onOpenConcept,
   onUpdateNote,
+  onDeleteNote,
+  onFinishEditing,
   onRegisterConcept,
-  autoLinkEnabled = true,
+  onDisableConceptAutoLink,
+  aiArticleDraftingEnabled = false,
+  aiProviderName,
 }: NoteViewProps) {
   const [editing, setEditing] = useState(note.title === "Untitled note");
   const [savedPulse, setSavedPulse] = useState(false);
@@ -100,7 +111,10 @@ export function NoteView({
     () => {
       const document = splitMarkdownFrontmatter(note.body);
       const content = expandOrionWikiLinks(
-        stripDuplicateTitleHeading(document.content, note.title),
+        stripDuplicateTitleHeading(
+          stripOrionNoteMarkers(document.content),
+          note.title,
+        ),
         notes,
         concepts,
       );
@@ -112,6 +126,19 @@ export function NoteView({
     () => splitMarkdownFrontmatter(markdown).content,
     [markdown],
   );
+  const readTaskByVisibleLine = useMemo(() => {
+    const storedTasks = collectTasksFromNote(note, concepts);
+    const visibleTasks = collectTasksFromNote(
+      { ...note, body: visibleMarkdown },
+      concepts,
+    );
+    return new Map(
+      visibleTasks.map((task, index) => [
+        task.lineIndex,
+        storedTasks[index] ?? task,
+      ]),
+    );
+  }, [concepts, note, visibleMarkdown]);
   const linkableConcepts = useMemo(
     () =>
       concepts
@@ -161,7 +188,7 @@ export function NoteView({
       if (typeof child === "string") {
         return decorateAutoLinks(
           child,
-          autoLinkEnabled ? linkableConcepts : [],
+          linkableConcepts,
         ).map((segment, index) => {
           if (segment.type === "text") {
             return segment.text;
@@ -225,9 +252,44 @@ export function NoteView({
     p: ({ children }: { children?: ReactNode }) => (
       <p>{renderLinkedChildren(children)}</p>
     ),
-    li: ({ children }: { children?: ReactNode }) => (
-      <li>{renderLinkedChildren(children)}</li>
-    ),
+    li: ({
+      children,
+      className,
+      node,
+    }: {
+      children?: ReactNode;
+      className?: string;
+      node?: { position?: { start?: { line?: number } } };
+    }) => {
+      const visibleLine = (node?.position?.start?.line ?? 0) - 1;
+      const task = className?.includes("task-list-item")
+        ? readTaskByVisibleLine.get(visibleLine)
+        : undefined;
+      const renderedChildren = renderLinkedChildren(children);
+      const taskChildren = task
+        ? Children.map(renderedChildren, (child) =>
+            isValidElement(child) && child.type === "input" ? (
+              <input
+                type="checkbox"
+                checked={task.checked}
+                aria-label={`${task.checked ? "Mark incomplete" : "Complete"} ${task.text}`}
+                onChange={(event) =>
+                  update({
+                    body: setTaskChecked(
+                      note.body,
+                      task.lineIndex,
+                      event.currentTarget.checked,
+                    ),
+                  })
+                }
+              />
+            ) : (
+              child
+            ),
+          )
+        : renderedChildren;
+      return <li className={className}>{taskChildren}</li>;
+    },
     h1: ({ children }: { children?: ReactNode }) => (
       <h1>{renderLinkedChildren(children)}</h1>
     ),
@@ -327,6 +389,7 @@ export function NoteView({
               onClick={() => {
                 if (editing) {
                   setEditing(false);
+                  onFinishEditing?.(note.id);
                   window.requestAnimationFrame(() =>
                     editButtonRef.current?.focus(),
                   );
@@ -345,6 +408,15 @@ export function NoteView({
               onClick={() => update({ pinned: !note.pinned })}
             >
               <Star size={17} fill={note.pinned ? "currentColor" : "none"} />
+            </button>
+            <button
+              type="button"
+              className="icon-button danger"
+              aria-label="Delete note"
+              title="Delete note"
+              onClick={() => onDeleteNote(note.id)}
+            >
+              <Trash2 size={16} />
             </button>
           </div>
         </div>
@@ -389,6 +461,9 @@ export function NoteView({
             concepts={concepts}
             onChange={(body) => update({ body })}
             onRegisterConcept={onRegisterConcept}
+            onDisableConceptAutoLink={onDisableConceptAutoLink}
+            aiArticleDraftingEnabled={aiArticleDraftingEnabled}
+            aiProviderName={aiProviderName}
           />
         </Suspense>
       ) : (
