@@ -28,8 +28,11 @@ These product decisions are intentional:
   the surviving prose around a removed link.
 - Durable link phrases resolve to one canonical wiki article or note inside the
   active Space. Clicking a canonical concept navigates directly to that article.
-- Opening a note through a link or navigation control resets the central reading
-  pane to the top; scroll position must never leak from the previous note.
+- Opening a note through a link or ordinary navigation control resets the
+  central reading pane to the top; scroll position must never leak from the
+  previous note. Back and Forward are the intentional exception: each history
+  entry captures its own reading position when left and restores that exact
+  position when revisited.
 - The right-hand connections canvas is a compatibility surface only for an
   unresolved legacy concept with several valid targets and no canonical article.
   Do not route normal concept navigation through it or add reference-hover UI.

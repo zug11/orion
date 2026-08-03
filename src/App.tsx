@@ -87,7 +87,16 @@ import {
 import { deleteNoteFromSnapshot } from "./lib/noteDeletion";
 import { parseOrionNoteLink } from "./lib/orionLinks";
 import { normalizeStudio } from "./lib/studio";
-import { resetScrollPosition } from "./lib/navigation";
+import {
+  createNoteHistoryEntry,
+  moveNoteHistory,
+  pushNoteHistory,
+  readScrollPosition,
+  resetScrollPosition,
+  restoreScrollPosition,
+  type NoteHistoryEntry,
+  type ScrollPosition,
+} from "./lib/navigation";
 import {
   isSelectedAIConfigured,
   selectedAIProviderName,
@@ -175,7 +184,7 @@ function App() {
   const [linkedArticleJobs, setLinkedArticleJobs] = useState<
     LinkedArticleJob[]
   >([]);
-  const [history, setHistory] = useState<string[]>([]);
+  const [history, setHistory] = useState<NoteHistoryEntry[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const saveTimer = useRef<number | null>(null);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
@@ -189,12 +198,32 @@ function App() {
   const wikiEnrichmentRequests = useRef(new Set<string>());
   const snapshotBeforeImport = useRef<AppSnapshot | null>(null);
   const workspaceContentRef = useRef<HTMLElement | null>(null);
+  const historyRef = useRef<NoteHistoryEntry[]>([]);
+  const historyIndexRef = useRef(-1);
+  const pendingScrollRestore = useRef<{
+    noteId: EntityId;
+    position: ScrollPosition;
+  } | null>(null);
+  const screenRef = useRef(screen);
   const snapshotRef = useRef(snapshot);
   const vaultRef = useRef(vault);
   const persistenceEnabledRef = useRef(persistenceEnabled);
   snapshotRef.current = snapshot;
   vaultRef.current = vault;
   persistenceEnabledRef.current = persistenceEnabled;
+  historyRef.current = history;
+  historyIndexRef.current = historyIndex;
+  screenRef.current = screen;
+
+  const replaceHistory = useCallback(
+    (entries: NoteHistoryEntry[], index: number) => {
+      historyRef.current = entries;
+      historyIndexRef.current = index;
+      setHistory(entries);
+      setHistoryIndex(index);
+    },
+    [],
+  );
 
   const activeNote = useMemo(
     () =>
@@ -223,6 +252,15 @@ function App() {
 
   useLayoutEffect(() => {
     if (screen !== "note" || !snapshot.activeNoteId) return;
+    const restoration = pendingScrollRestore.current;
+    pendingScrollRestore.current = null;
+    if (restoration?.noteId === snapshot.activeNoteId) {
+      restoreScrollPosition(
+        workspaceContentRef.current,
+        restoration.position,
+      );
+      return;
+    }
     resetScrollPosition(workspaceContentRef.current);
   }, [screen, snapshot.activeNoteId]);
 
@@ -317,8 +355,10 @@ function App() {
         const nextSpace = activeSpace(nextVault);
         setVault(nextVault);
         if (nextSpace.activeNoteId && saved) {
-          setHistory([nextSpace.activeNoteId]);
-          setHistoryIndex(0);
+          replaceHistory(
+            [createNoteHistoryEntry(nextSpace.activeNoteId)],
+            0,
+          );
         }
         setPersistenceEnabled(true);
         setHydrated(true);
@@ -334,7 +374,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [loadAttempt]);
+  }, [loadAttempt, replaceHistory]);
 
   useEffect(() => {
     if (!hydrated || !persistenceEnabled || closing) return;
@@ -572,10 +612,14 @@ function App() {
       setContextOpen(true);
       closeConnections();
       snapshotBeforeImport.current = null;
-      setHistory(space.activeNoteId ? [space.activeNoteId] : []);
-      setHistoryIndex(space.activeNoteId ? 0 : -1);
+      replaceHistory(
+        space.activeNoteId
+          ? [createNoteHistoryEntry(space.activeNoteId)]
+          : [],
+        space.activeNoteId ? 0 : -1,
+      );
     },
-    [closeConnections],
+    [closeConnections, replaceHistory],
   );
 
   const switchSpace = useCallback(
@@ -649,7 +693,11 @@ function App() {
       noteId: string,
       trackHistory = true,
       preserveConnections = false,
+      restorePosition?: ScrollPosition,
     ) => {
+      pendingScrollRestore.current = restorePosition
+        ? { noteId, position: restorePosition }
+        : null;
       setSnapshot((current) => ({
         ...current,
         activeNoteId: noteId,
@@ -661,16 +709,18 @@ function App() {
         setContextOpen(true);
       }
       if (trackHistory) {
-        setHistory((currentHistory) => {
-          const nextBase = currentHistory.slice(0, historyIndex + 1);
-          if (nextBase[nextBase.length - 1] === noteId) return nextBase;
-          const next = [...nextBase, noteId].slice(-40);
-          setHistoryIndex(next.length - 1);
-          return next;
-        });
+        const next = pushNoteHistory(
+          historyRef.current,
+          historyIndexRef.current,
+          noteId,
+          screenRef.current === "note"
+            ? readScrollPosition(workspaceContentRef.current)
+            : null,
+        );
+        replaceHistory(next.entries, next.index);
       }
     },
-    [closeConnections, historyIndex],
+    [closeConnections, replaceHistory],
   );
 
   const openOrionCitation = useCallback(
@@ -719,10 +769,9 @@ function App() {
       setScreen("note");
       closeConnections();
       setContextOpen(true);
-      setHistory([noteId]);
-      setHistoryIndex(0);
+      replaceHistory([createNoteHistoryEntry(noteId)], 0);
     },
-    [closeConnections, showToast],
+    [closeConnections, replaceHistory, showToast],
   );
 
   useEffect(() => {
@@ -794,13 +843,23 @@ function App() {
 
   const navigateHistory = useCallback(
     (direction: -1 | 1) => {
-      const nextIndex = historyIndex + direction;
-      const noteId = history[nextIndex];
-      if (!noteId || nextIndex < 0 || nextIndex >= history.length) return;
-      setHistoryIndex(nextIndex);
-      openNote(noteId, false);
+      const next = moveNoteHistory(
+        historyRef.current,
+        historyIndexRef.current,
+        direction,
+        screenRef.current === "note"
+          ? readScrollPosition(workspaceContentRef.current)
+          : null,
+      );
+      if (!next) return;
+      const entry = next.entries[next.index];
+      replaceHistory(next.entries, next.index);
+      openNote(entry.noteId, false, false, {
+        scrollLeft: entry.scrollLeft,
+        scrollTop: entry.scrollTop,
+      });
     },
-    [history, historyIndex, openNote],
+    [openNote, replaceHistory],
   );
 
   const createNote = useCallback(() => {
@@ -1360,15 +1419,17 @@ function App() {
         vaultRef.current.activeSpaceId === job.workspaceId
       ) {
         const fallbackNoteId = preview.snapshot.activeNoteId;
-        setHistory(fallbackNoteId ? [fallbackNoteId] : []);
-        setHistoryIndex(fallbackNoteId ? 0 : -1);
+        replaceHistory(
+          fallbackNoteId ? [createNoteHistoryEntry(fallbackNoteId)] : [],
+          fallbackNoteId ? 0 : -1,
+        );
       }
       showToast(
         "Draft deleted",
         `“${job.title}” and its unfinished automatic link were removed.`,
       );
     },
-    [showToast],
+    [replaceHistory, showToast],
   );
 
   const deleteNote = useCallback(
@@ -1435,11 +1496,10 @@ function App() {
       }));
       setScreen("notes");
       closeConnections();
-      setHistory([]);
-      setHistoryIndex(-1);
+      replaceHistory([], -1);
       showToast("Note deleted", `“${note.title}” was removed from this Space.`);
     },
-    [closeConnections, linkedArticleJobs, showToast],
+    [closeConnections, linkedArticleJobs, replaceHistory, showToast],
   );
 
   const registerLinkConcept = useCallback(
