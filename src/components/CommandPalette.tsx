@@ -8,8 +8,8 @@ import {
   Plus,
   Search,
   Settings,
-  Sparkles,
-} from "lucide-react";
+  Tags,
+} from "../lib/icons";
 import {
   useEffect,
   useMemo,
@@ -41,7 +41,7 @@ type PaletteResult = {
 
 const typeIcons = {
   note: BookOpen,
-  concept: Sparkles,
+  concept: Tags,
   source: FileText,
   action: ArrowRight,
 };

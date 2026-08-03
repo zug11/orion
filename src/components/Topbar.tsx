@@ -5,7 +5,7 @@ import {
   Download,
   PanelRight,
   Search,
-} from "lucide-react";
+} from "../lib/icons";
 
 interface TopbarProps {
   workspaceName: string;
@@ -52,9 +52,9 @@ export function Topbar({
       </div>
 
       <div className="workspace-crumb" data-tauri-drag-region>
-        <span className="workspace-pulse" />
-        <span>{workspaceName}</span>
-        <small>Local</small>
+        <span className="workspace-pulse" data-tauri-drag-region />
+        <span data-tauri-drag-region>{workspaceName}</span>
+        <small data-tauri-drag-region>Local</small>
       </div>
 
       <button

@@ -1,15 +1,21 @@
 import {
   ArrowRight,
   BookOpen,
+  Check,
   Clock3,
   FilePlus2,
   Link2,
+  ListTodo,
   Plus,
-  Sparkles,
   Tags,
-} from "lucide-react";
-import orionField from "../assets/orion-field.png";
+} from "../lib/icons";
+import {
+  collectNoteTasks,
+  type NoteTask,
+} from "../lib/tasks";
 import type { AppSnapshot, Note } from "../types";
+import BorderGlow from "./BorderGlow";
+import HomeAtmosphere from "./HomeAtmosphere";
 
 interface HomeViewProps {
   snapshot: AppSnapshot;
@@ -18,6 +24,7 @@ interface HomeViewProps {
   onNewNote: () => void;
   onImport: () => void;
   onOpenNotes: () => void;
+  onToggleTask: (task: NoteTask, checked: boolean) => void;
 }
 
 function NoteCard({
@@ -28,7 +35,13 @@ function NoteCard({
   onOpen: (noteId: string) => void;
 }) {
   return (
-    <button className="recent-note-card" type="button" onClick={() => onOpen(note.id)}>
+    <BorderGlow
+      as="button"
+      className="recent-note-card"
+      type="button"
+      glowColor={note.color ?? "#a8b3ff"}
+      onClick={() => onOpen(note.id)}
+    >
       <div className="recent-note-meta">
         <span
           className="note-kind-mark"
@@ -51,7 +64,7 @@ function NoteCard({
         </span>
         <ArrowRight size={14} />
       </div>
-    </button>
+    </BorderGlow>
   );
 }
 
@@ -62,6 +75,7 @@ export function HomeView({
   onNewNote,
   onImport,
   onOpenNotes,
+  onToggleTask,
 }: HomeViewProps) {
   const recent = [...snapshot.notes]
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -71,18 +85,26 @@ export function HomeView({
     .sort((a, b) => b.noteIds.length - a.noteIds.length)
     .slice(0, 4);
   const isEmpty = snapshot.notes.length === 0;
+  const openTasks = collectNoteTasks(
+    snapshot.notes,
+    snapshot.concepts,
+  ).filter((task) => !task.checked);
 
   return (
     <div className="view home-view">
       <section className="home-hero">
-        <img src={orionField} alt="" className="home-hero-art" />
+        <HomeAtmosphere
+          atmosphere={snapshot.settings.homeAtmosphere}
+          tone={snapshot.settings.homeAtmosphereTone}
+          motion={snapshot.settings.homeAtmosphereMotion}
+        />
         <div className="home-hero-shade" />
         <div className="home-hero-content">
-          <span className="eyebrow">
-            <Sparkles size={13} />
-            Your living knowledge atlas
-          </span>
-          <h1>Everything you know,<br />in context.</h1>
+          <h1 aria-label="Everything you know, in context.">
+            Everything you know,
+            <br />
+            in context.
+          </h1>
           <p>
             Bring scattered material into one calm, connected wiki. Orion finds
             the concepts, preserves the sources, and leaves the final say to you.
@@ -126,7 +148,12 @@ export function HomeView({
             </span>
           </div>
           <div className="home-empty-options">
-            <button type="button" onClick={onImport}>
+            <BorderGlow
+              as="button"
+              type="button"
+              glowColor="#a8b3ff"
+              onClick={onImport}
+            >
               <span className="home-empty-option-icon violet">
                 <FilePlus2 size={20} />
               </span>
@@ -135,8 +162,13 @@ export function HomeView({
                 <small>Markdown, text, PDF, DOCX, JSON, CSV, or HTML</small>
               </span>
               <ArrowRight size={16} />
-            </button>
-            <button type="button" onClick={onImport}>
+            </BorderGlow>
+            <BorderGlow
+              as="button"
+              type="button"
+              glowColor="#7bc9b0"
+              onClick={onImport}
+            >
               <span className="home-empty-option-icon mint">
                 <BookOpen size={20} />
               </span>
@@ -145,8 +177,13 @@ export function HomeView({
                 <small>Drop in research, transcripts, fragments, or ideas</small>
               </span>
               <ArrowRight size={16} />
-            </button>
-            <button type="button" onClick={onNewNote}>
+            </BorderGlow>
+            <BorderGlow
+              as="button"
+              type="button"
+              glowColor="#d8b675"
+              onClick={onNewNote}
+            >
               <span className="home-empty-option-icon gold">
                 <Plus size={20} />
               </span>
@@ -155,13 +192,13 @@ export function HomeView({
                 <small>Write naturally while Orion connects your ideas</small>
               </span>
               <ArrowRight size={16} />
-            </button>
+            </BorderGlow>
           </div>
-          <div className="home-linking-promise">
+          <BorderGlow className="home-linking-promise">
             <span className="home-linking-promise__mark">
-              <Sparkles size={18} />
+              <Link2 size={18} />
             </span>
-            <span>
+            <span className="home-linking-promise__copy">
               <strong>Hyperlinks emerge intelligently</strong>
               <p>
                 Orion identifies recurring names and concepts as it organizes
@@ -170,7 +207,7 @@ export function HomeView({
                 ambiguous terms ask you to choose in the connections canvas.
               </p>
             </span>
-          </div>
+          </BorderGlow>
         </section>
       ) : (
         <>
@@ -192,7 +229,7 @@ export function HomeView({
           </section>
 
           <section className="home-lower-grid">
-            <div className="connection-panel">
+            <BorderGlow className="connection-panel">
               <div className="section-heading compact">
                 <div>
                   <span className="eyebrow neutral">Emerging connections</span>
@@ -230,41 +267,66 @@ export function HomeView({
                   </button>
                 ))}
               </div>
-            </div>
+            </BorderGlow>
 
-            <div className="inbox-panel">
+            <BorderGlow
+              className="task-panel"
+              glowColor="#7bc9b0"
+              secondaryColor="#a8b3ff"
+            >
               <div className="section-heading compact">
                 <div>
-                  <span className="eyebrow neutral">Import studio</span>
-                  <h2>Make sense of anything</h2>
+                  <span className="eyebrow neutral">Across this Space</span>
+                  <h2>To do</h2>
                 </div>
-                <Sparkles size={18} />
-              </div>
-              <p>
-                Drop in Markdown, text, PDF, DOCX, JSON, CSV, or HTML. Review
-                every draft before it joins your atlas.
-              </p>
-              <div className="inbox-steps">
-                <span>
-                  <i>1</i> Read sources
-                </span>
-                <span>
-                  <i>2</i> Find concepts
-                </span>
-                <span>
-                  <i>3</i> Connect notes
+                <span className="task-panel-count">
+                  {openTasks.length}
+                  <ListTodo size={15} />
                 </span>
               </div>
-              <button className="button soft" type="button" onClick={onImport}>
-                <FilePlus2 size={15} />
-                Open Import Studio
-                <ArrowRight size={14} />
-              </button>
-              <div className="privacy-line">
-                <Link2 size={12} />
-                Local by default · selected sources are sent only for AI import
+              <div className="home-task-list" aria-label="Open tasks">
+                {openTasks.length === 0 ? (
+                  <div className="home-task-empty">
+                    <span><Check size={15} /></span>
+                    <strong>Nothing waiting</strong>
+                    <p>
+                      Add a to-do list inside any note and its open items will
+                      gather here.
+                    </p>
+                  </div>
+                ) : (
+                  openTasks.map((task) => (
+                    <div className="home-task-row" key={task.id}>
+                      <input
+                        type="checkbox"
+                        checked={false}
+                        aria-label={`Complete ${task.text}`}
+                        onChange={() => onToggleTask(task, true)}
+                      />
+                      <button
+                        type="button"
+                        className="home-task-copy"
+                        onClick={() => onOpenNote(task.noteId)}
+                      >
+                        <strong>{task.text}</strong>
+                        <small>
+                          <span>{task.noteTitle}</span>
+                        </small>
+                      </button>
+                      {task.conceptId && task.conceptLabel && (
+                        <button
+                          type="button"
+                          className="home-task-concept"
+                          onClick={() => onOpenConcept(task.conceptId!)}
+                        >
+                          {task.conceptLabel}
+                        </button>
+                      )}
+                    </div>
+                  ))
+                )}
               </div>
-            </div>
+            </BorderGlow>
           </section>
         </>
       )}

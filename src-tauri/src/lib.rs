@@ -1,8 +1,9 @@
+use fs2::FileExt;
 use reqwest::{Client, Response, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::{BufReader, Write},
     path::{Path, PathBuf},
     process::Command,
@@ -20,9 +21,14 @@ use zeroize::{Zeroize, Zeroizing};
 
 const KEYCHAIN_SERVICE: &str = "app.orion.knowledge";
 const KEYCHAIN_ACCOUNT: &str = "openai-api-key";
+const ANTHROPIC_KEYCHAIN_ACCOUNT: &str = "anthropic-api-key";
 const VAULT_FILENAME: &str = "vault.json";
+const VAULT_LOCK_FILENAME: &str = "vault.lock";
+const VAULT_CONFLICT_PREFIX: &str = "ORION_VAULT_CONFLICT";
 const OPENAI_MODELS_URL: &str = "https://api.openai.com/v1/models";
 const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
+const ANTHROPIC_MODELS_URL: &str = "https://api.anthropic.com/v1/models";
+const ANTHROPIC_MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
 const DEFAULT_OPENAI_MODEL: &str = "gpt-5.6-sol";
 const MAX_MEDIA_FILES: usize = 8;
 const MAX_MEDIA_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -31,6 +37,7 @@ const BUNDLED_WHISPER_MODEL_NAME: &str = "ggml-base.bin";
 const BUNDLED_WHISPER_MODEL_LABEL: &str = "Whisper base · multilingual";
 const BUNDLED_YT_DLP_NAME: &str = "yt-dlp";
 const BUNDLED_DENO_NAME: &str = "deno";
+const BUNDLED_CLAUDE_CONNECTOR_NAME: &str = "Orion-Claude-Connector.mcpb";
 const MIN_BUNDLED_MODEL_BYTES: u64 = 100 * 1024 * 1024;
 const MEDIA_EXTENSIONS: &[&str] = &[
     "flac", "m4a", "mp3", "mp4", "mpeg", "mpga", "ogg", "wav", "webm",
@@ -46,24 +53,33 @@ decisions, claims, and useful context. Prefer focused notes with descriptive tit
 over one large summary. Preserve important nuance and uncertainty; do not invent
 facts.
 
-Write project notes in readable Markdown and choose aliases only when they name the
-whole note. Separately create canonical wiki articles for the durable people,
+Write faithful project notes for the imported material in readable Markdown and
+choose aliases only when they name the whole note. When the material contains
+explicit actions, obligations, or next steps, preserve them as Markdown task
+items using `- [ ]`; do not invent tasks. Separately create canonical wiki
+articles for the durable people,
 places, technologies, methods, organizations, and ideas that should become
 reusable hyperlinks. A phrase such as SQL must use one article titled exactly SQL
 inside the active Space. Reuse an existing exact article title when supplied; do
-not create a suffixed duplicate. Write concept names as ordinary prose in note
-bodies. Never emit Obsidian or wiki bracket syntax such as [[SQL]], because Orion
-creates the visible hyperlinks from the concept catalog. Express explicit
-relationships through the links arrays instead.
+not create a suffixed duplicate. Return every supplied existing canonical wiki
+article that the new material can meaningfully enrich, even when it already has
+a body. Omit unrelated articles and superficial keyword matches. Write concept
+names as ordinary prose in note bodies. Never emit Obsidian or wiki bracket
+syntax such as [[SQL]], because Orion creates the visible hyperlinks from the
+concept catalog. Express explicit relationships through the links arrays instead.
 
-Each wiki article needs a concise high-confidence overview, an explanation of why
-the subject matters in this Space, details grounded in the supplied material, and
-explicit uncertainties. The overview may use stable general knowledge needed to
-explain the subject, but never invent citations, quotations, dates, statistics,
-current facts, or contested specifics. Space relevance and source-grounded details
-must follow from the supplied source and Space context. Do not claim completeness.
+Each wiki article's body is the complete ready-to-display article. For an existing
+article, preserve its worthwhile knowledge but rewrite the whole body as one
+coherent integrated revision, placing new context where it naturally belongs.
+Never append provenance-style sections named "Context from", "From the imported
+material", "From the new note", or "From the linked source". Never emit Orion
+marker comments or a change log. Explain the subject definitionally, then
+integrate why it matters in this Space and any grounded detail or uncertainty
+with natural editorial flow. Never invent citations, quotations, dates,
+statistics, current facts, or contested specifics.
 
-Return a concept catalog for the canonical articles. Each concept's canonicalTitle
+Return a concept catalog inferred from meaning, relationships, roles, and aliases,
+not merely repeated keywords. Each concept's canonicalTitle
 must exactly match one returned wiki article or one existing note. relatedTitles
 contain contextual project notes, never alternative hyperlink destinations. Use
 3–10 precise concepts rather than generic topic words. For a genuinely polysemous
@@ -154,6 +170,8 @@ struct OrganizeRequest {
     effort: Option<String>,
     #[serde(default)]
     organization_instructions: Option<String>,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -179,6 +197,7 @@ struct OrganizedNote {
 struct OrganizedWikiArticle {
     title: String,
     summary: String,
+    body: String,
     overview: String,
     space_relevance: String,
     source_grounded_details: Vec<String>,
@@ -344,6 +363,20 @@ fn vault_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|error| format!("Orion could not locate its application data folder: {error}"))
 }
 
+fn vault_lock_file(path: &Path) -> Result<File, String> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| "Orion could not resolve the vault folder.".to_string())?;
+    fs::create_dir_all(directory)
+        .map_err(|error| format!("Orion could not create its vault folder: {error}"))?;
+    OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(directory.join(VAULT_LOCK_FILENAME))
+        .map_err(|error| format!("Orion could not open the shared vault lock: {error}"))
+}
+
 fn read_vault_file(path: &Path) -> Result<Option<Value>, String> {
     if !path.exists() {
         return Ok(None);
@@ -391,6 +424,31 @@ fn write_vault_file(path: &Path, vault: &Value) -> Result<(), String> {
     Ok(())
 }
 
+fn write_vault_file_if_current(
+    path: &Path,
+    vault: &Value,
+    expected_updated_at: Option<&str>,
+) -> Result<(), String> {
+    let current = read_vault_file(path)?;
+    let current_updated_at = current
+        .as_ref()
+        .and_then(|value| value.get("updatedAt"))
+        .and_then(Value::as_str);
+    let revision_matches = match (current.as_ref(), current_updated_at, expected_updated_at) {
+        (None, None, None) => true,
+        (Some(_), Some(current), Some(expected)) => current == expected,
+        _ => false,
+    };
+
+    if !revision_matches {
+        return Err(format!(
+            "{VAULT_CONFLICT_PREFIX}: Orion changed outside this window. Reload the latest vault before saving."
+        ));
+    }
+
+    write_vault_file(path, vault)
+}
+
 #[cfg(unix)]
 fn sync_directory(directory: &Path) -> Result<(), String> {
     File::open(directory)
@@ -406,9 +464,14 @@ fn sync_directory(_directory: &Path) -> Result<(), String> {
 #[tauri::command]
 async fn load_vault(app: AppHandle) -> Result<Option<Value>, String> {
     let path = vault_path(&app)?;
-    tauri::async_runtime::spawn_blocking(move || read_vault_file(&path))
-        .await
-        .map_err(|error| format!("The vault read task could not finish: {error}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        let lock = vault_lock_file(&path)?;
+        lock.lock_shared()
+            .map_err(|error| format!("Orion could not lock the vault for reading: {error}"))?;
+        read_vault_file(&path)
+    })
+    .await
+    .map_err(|error| format!("The vault read task could not finish: {error}"))?
 }
 
 #[tauri::command]
@@ -416,6 +479,7 @@ async fn save_vault(
     app: AppHandle,
     write_lock: State<'_, VaultWriteLock>,
     vault: Value,
+    expected_updated_at: Option<String>,
 ) -> Result<(), String> {
     let path = vault_path(&app)?;
     let write_lock = Arc::clone(&write_lock.0);
@@ -423,7 +487,10 @@ async fn save_vault(
         let _guard = write_lock
             .lock()
             .map_err(|_| "Orion's vault save queue was interrupted.".to_string())?;
-        write_vault_file(&path, &vault)
+        let lock = vault_lock_file(&path)?;
+        lock.lock_exclusive()
+            .map_err(|error| format!("Orion could not lock the vault for saving: {error}"))?;
+        write_vault_file_if_current(&path, &vault, expected_updated_at.as_deref())
     })
     .await
     .map_err(|error| format!("The vault save task could not finish: {error}"))?
@@ -444,8 +511,32 @@ async fn open_data_directory(app: AppHandle) -> Result<String, String> {
     Ok(display_path)
 }
 
+#[tauri::command]
+async fn open_claude_connector(app: AppHandle) -> Result<String, String> {
+    let connector = app
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("Orion could not locate its bundled resources: {error}"))?
+        .join(BUNDLED_CLAUDE_CONNECTOR_NAME);
+    let metadata = fs::metadata(&connector)
+        .map_err(|_| "Orion's Claude connector is missing. Reinstall Orion.".to_string())?;
+    if !metadata.is_file() || metadata.len() < 1_024 {
+        return Err("Orion's Claude connector is incomplete. Reinstall Orion.".to_string());
+    }
+    let display_path = connector.to_string_lossy().into_owned();
+    app.opener()
+        .open_path(display_path.clone(), None::<String>)
+        .map_err(|error| format!("Orion could not open its Claude connector: {error}"))?;
+    Ok(display_path)
+}
+
 fn keychain_entry() -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
+        .map_err(|error| format!("Orion could not access the operating system keychain: {error}"))
+}
+
+fn anthropic_keychain_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(KEYCHAIN_SERVICE, ANTHROPIC_KEYCHAIN_ACCOUNT)
         .map_err(|error| format!("Orion could not access the operating system keychain: {error}"))
 }
 
@@ -453,7 +544,7 @@ fn normalize_api_key(mut api_key: String) -> Result<Zeroizing<String>, String> {
     let trimmed = api_key.trim();
     if trimmed.is_empty() {
         api_key.zeroize();
-        return Err("Enter an OpenAI API key before saving.".to_string());
+        return Err("Enter an API key before saving.".to_string());
     }
     if trimmed.len() > 1024 || trimmed.chars().any(char::is_control) {
         api_key.zeroize();
@@ -476,6 +567,17 @@ fn read_api_key_from_keychain() -> Result<Option<Zeroizing<String>>, String> {
     }
 }
 
+fn read_anthropic_api_key_from_keychain() -> Result<Option<Zeroizing<String>>, String> {
+    match anthropic_keychain_entry()?.get_password() {
+        Ok(password) if password.trim().is_empty() => Ok(None),
+        Ok(password) => Ok(Some(Zeroizing::new(password))),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(format!(
+            "Orion could not read the Anthropic API key from the operating system keychain: {error}"
+        )),
+    }
+}
+
 #[tauri::command]
 async fn save_api_key(api_key: String) -> Result<(), String> {
     let api_key = normalize_api_key(api_key)?;
@@ -493,6 +595,22 @@ async fn save_api_key(api_key: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn save_anthropic_api_key(api_key: String) -> Result<(), String> {
+    let api_key = normalize_api_key(api_key)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        anthropic_keychain_entry()?
+            .set_password(api_key.as_str())
+            .map_err(|error| {
+                format!(
+                    "Orion could not save the Anthropic API key in the operating system keychain: {error}"
+                )
+            })
+    })
+    .await
+    .map_err(|error| format!("The secure Anthropic key save task could not finish: {error}"))?
+}
+
+#[tauri::command]
 async fn api_key_status() -> Result<ApiKeyStatus, String> {
     tauri::async_runtime::spawn_blocking(|| {
         read_api_key_from_keychain().map(|key| ApiKeyStatus {
@@ -501,6 +619,17 @@ async fn api_key_status() -> Result<ApiKeyStatus, String> {
     })
     .await
     .map_err(|error| format!("The secure key status task could not finish: {error}"))?
+}
+
+#[tauri::command]
+async fn anthropic_api_key_status() -> Result<ApiKeyStatus, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        read_anthropic_api_key_from_keychain().map(|key| ApiKeyStatus {
+            configured: key.is_some(),
+        })
+    })
+    .await
+    .map_err(|error| format!("The secure Anthropic key status task could not finish: {error}"))?
 }
 
 #[tauri::command]
@@ -515,10 +644,28 @@ async fn delete_api_key() -> Result<(), String> {
     .map_err(|error| format!("The secure key deletion task could not finish: {error}"))?
 }
 
+#[tauri::command]
+async fn delete_anthropic_api_key() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(|| match anthropic_keychain_entry()?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(format!(
+            "Orion could not delete the Anthropic API key from the operating system keychain: {error}"
+        )),
+    })
+    .await
+    .map_err(|error| format!("The secure Anthropic key deletion task could not finish: {error}"))?
+}
+
 async fn stored_api_key() -> Result<Option<Zeroizing<String>>, String> {
     tauri::async_runtime::spawn_blocking(read_api_key_from_keychain)
         .await
         .map_err(|error| format!("The secure key read task could not finish: {error}"))?
+}
+
+async fn stored_anthropic_api_key() -> Result<Option<Zeroizing<String>>, String> {
+    tauri::async_runtime::spawn_blocking(read_anthropic_api_key_from_keychain)
+        .await
+        .map_err(|error| format!("The secure Anthropic key read task could not finish: {error}"))?
 }
 
 #[tauri::command]
@@ -570,6 +717,56 @@ async fn test_openai_key(client: State<'_, OpenAiClient>) -> Result<KeyTestResul
     })
 }
 
+#[tauri::command]
+async fn test_anthropic_key(client: State<'_, OpenAiClient>) -> Result<KeyTestResult, String> {
+    let Some(api_key) = stored_anthropic_api_key().await? else {
+        return Ok(KeyTestResult {
+            valid: false,
+            message: "Add an Anthropic API key in Settings first.".to_string(),
+        });
+    };
+
+    let response = client
+        .0
+        .get(ANTHROPIC_MODELS_URL)
+        .header("x-api-key", api_key.as_str())
+        .header("anthropic-version", "2023-06-01")
+        .header(reqwest::header::ACCEPT, "application/json")
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|error| format!("Orion could not reach Anthropic: {error}"))?;
+
+    let status = response.status();
+    if status.is_success() {
+        return Ok(KeyTestResult {
+            valid: true,
+            message: "Anthropic accepted the key. Claude models are ready.".to_string(),
+        });
+    }
+
+    let message = match status {
+        StatusCode::UNAUTHORIZED => {
+            "Anthropic rejected this key. Replace it in Settings and try again."
+        }
+        StatusCode::FORBIDDEN => {
+            "The key was recognized, but it does not have access to this Anthropic resource."
+        }
+        StatusCode::TOO_MANY_REQUESTS => {
+            "The key reached an Anthropic rate or usage limit. Try again shortly."
+        }
+        _ if status.is_server_error() => {
+            "Anthropic is temporarily unavailable. Your saved key was not changed."
+        }
+        _ => "Anthropic could not validate this key.",
+    };
+
+    Ok(KeyTestResult {
+        valid: false,
+        message: message.to_string(),
+    })
+}
+
 fn normalize_model(model: Option<String>) -> Result<String, String> {
     let model = model
         .unwrap_or_else(|| DEFAULT_OPENAI_MODEL.to_string())
@@ -581,9 +778,13 @@ fn normalize_model(model: Option<String>) -> Result<String, String> {
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || ".:_-".contains(character))
     {
-        return Err("Choose a valid OpenAI model identifier.".to_string());
+        return Err("Choose a valid AI model identifier.".to_string());
     }
     Ok(model)
+}
+
+fn is_anthropic_model(model: &str) -> bool {
+    model.starts_with("claude-")
 }
 
 fn normalize_effort(effort: Option<String>) -> Result<Option<String>, String> {
@@ -654,6 +855,10 @@ fn organizer_schema() -> Value {
                             "description": "The canonical article title, such as SQL."
                         },
                         "summary": { "type": "string" },
+                        "body": {
+                            "type": "string",
+                            "description": "The complete coherent wiki article in readable Markdown, integrating existing and new context without provenance headings."
+                        },
                         "overview": {
                             "type": "string",
                             "description": "A concise, high-confidence general explanation."
@@ -692,7 +897,7 @@ fn organizer_schema() -> Value {
                         }
                     },
                     "required": [
-                        "title", "summary", "overview", "spaceRelevance",
+                        "title", "summary", "body", "overview", "spaceRelevance",
                         "sourceGroundedDetails", "uncertainties", "tags",
                         "aliases", "links"
                     ],
@@ -813,6 +1018,33 @@ fn extract_output_text(response: &Value, activity: &str) -> Result<String, Strin
     ))
 }
 
+fn extract_anthropic_output_text(response: &Value, activity: &str) -> Result<String, String> {
+    match response.get("stop_reason").and_then(Value::as_str) {
+        Some("refusal") => return Err(format!("Anthropic declined to {activity}.")),
+        Some("max_tokens") => {
+            return Err(format!(
+                "Anthropic could not {activity} before its output limit."
+            ))
+        }
+        _ => {}
+    }
+
+    let output_text = response
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect::<String>();
+    if !output_text.is_empty() {
+        return Ok(output_text);
+    }
+    Err(format!(
+        "Anthropic returned no result for {activity}. Try again."
+    ))
+}
+
 fn sanitize_remote_message(message: &str) -> String {
     let mut sanitized = String::with_capacity(message.len().min(500));
     for character in message.chars().take(500) {
@@ -861,6 +1093,43 @@ async fn openai_error(response: Response, activity: &str) -> String {
     }
 }
 
+async fn anthropic_error(response: Response, activity: &str) -> String {
+    let status = response.status();
+    let detail = response
+        .json::<Value>()
+        .await
+        .ok()
+        .and_then(|body| {
+            body.pointer("/error/message")
+                .and_then(Value::as_str)
+                .map(sanitize_remote_message)
+        })
+        .filter(|message| !message.is_empty());
+
+    match status {
+        StatusCode::UNAUTHORIZED => {
+            "Anthropic rejected the saved API key. Replace it in Settings and try again."
+                .to_string()
+        }
+        StatusCode::FORBIDDEN => {
+            "The saved API key does not have permission to use the selected Claude model."
+                .to_string()
+        }
+        StatusCode::TOO_MANY_REQUESTS => {
+            "Anthropic rate or usage limits were reached. Try again shortly or check your account."
+                .to_string()
+        }
+        _ if status.is_server_error() => {
+            "Anthropic is temporarily unavailable. Your Orion data remains unchanged.".to_string()
+        }
+        _ => detail
+            .map(|message| format!("Anthropic could not {activity}: {message}"))
+            .unwrap_or_else(|| {
+                format!("Anthropic could not {activity} (HTTP {}).", status.as_u16())
+            }),
+    }
+}
+
 #[tauri::command]
 async fn organize_content(
     client: State<'_, OpenAiClient>,
@@ -870,10 +1139,21 @@ async fn organize_content(
         return Err("Add or import some content before asking Orion to organize it.".to_string());
     }
 
+    let request_timeout =
+        Duration::from_millis(request.timeout_ms.unwrap_or(240_000).clamp(1_000, 240_000));
     let model = normalize_model(request.model)?;
+    let use_anthropic = is_anthropic_model(&model);
     let effort = normalize_effort(request.effort)?;
-    let Some(api_key) = stored_api_key().await? else {
-        return Err("Add an OpenAI API key in Settings before using AI organize.".to_string());
+    let stored_key = if use_anthropic {
+        stored_anthropic_api_key().await?
+    } else {
+        stored_api_key().await?
+    };
+    let Some(api_key) = stored_key else {
+        return Err(format!(
+            "Add an {} API key in Settings before using AI organize.",
+            if use_anthropic { "Anthropic" } else { "OpenAI" }
+        ));
     };
 
     let source_name = request
@@ -931,6 +1211,63 @@ async fn organize_content(
         "sourceContent": bounded_text(&request.content, 100_000)
     });
 
+    if use_anthropic {
+        let mut output_config = json!({
+            "format": {
+                "type": "json_schema",
+                "schema": organizer_schema()
+            }
+        });
+        if let Some(effort) = effort {
+            output_config
+                .as_object_mut()
+                .expect("the Anthropic output config is an object")
+                .insert("effort".to_string(), json!(effort));
+        }
+        let body = json!({
+            "model": model,
+            "max_tokens": 12_000,
+            "system": instructions,
+            "messages": [{
+                "role": "user",
+                "content": source_payload.to_string()
+            }],
+            "output_config": output_config
+        });
+        let response = client
+            .0
+            .post(ANTHROPIC_MESSAGES_URL)
+            .header("x-api-key", api_key.as_str())
+            .header("anthropic-version", "2023-06-01")
+            .header(reqwest::header::ACCEPT, "application/json")
+            .json(&body)
+            .timeout(request_timeout)
+            .send()
+            .await
+            .map_err(|error| {
+                if error.is_timeout() {
+                    format!(
+                        "Anthropic did not respond within {} seconds.",
+                        request_timeout.as_secs()
+                    )
+                } else {
+                    format!("Orion could not reach Anthropic: {error}")
+                }
+            })?;
+
+        if !response.status().is_success() {
+            return Err(anthropic_error(response, "organize this import").await);
+        }
+        let response = response
+            .json::<Value>()
+            .await
+            .map_err(|error| format!("Orion could not read Anthropic's response: {error}"))?;
+        let output_text = extract_anthropic_output_text(&response, "organize this material")?;
+        return serde_json::from_str::<OrganizeResult>(&output_text).map_err(|_| {
+            "Anthropic returned notes Orion could not read. Try the import again.".to_string()
+        });
+    }
+
     let mut body = json!({
         "model": model,
         "store": false,
@@ -959,9 +1296,19 @@ async fn organize_content(
         .bearer_auth(api_key.as_str())
         .header(reqwest::header::ACCEPT, "application/json")
         .json(&body)
+        .timeout(request_timeout)
         .send()
         .await
-        .map_err(|error| format!("Orion could not reach OpenAI: {error}"))?;
+        .map_err(|error| {
+            if error.is_timeout() {
+                format!(
+                    "OpenAI did not respond within {} seconds.",
+                    request_timeout.as_secs()
+                )
+            } else {
+                format!("Orion could not reach OpenAI: {error}")
+            }
+        })?;
 
     if !response.status().is_success() {
         return Err(openai_error(response, "organize this import").await);
@@ -992,9 +1339,18 @@ async fn chat(client: State<'_, OpenAiClient>, request: ChatRequest) -> Result<C
     }
 
     let model = normalize_model(request.model)?;
+    let use_anthropic = is_anthropic_model(&model);
     let effort = normalize_effort(request.effort)?;
-    let Some(api_key) = stored_api_key().await? else {
-        return Err("Add an OpenAI API key in Settings before using Chat.".to_string());
+    let stored_key = if use_anthropic {
+        stored_anthropic_api_key().await?
+    } else {
+        stored_api_key().await?
+    };
+    let Some(api_key) = stored_key else {
+        return Err(format!(
+            "Add an {} API key in Settings before using Chat.",
+            if use_anthropic { "Anthropic" } else { "OpenAI" }
+        ));
     };
 
     let notes = request
@@ -1054,6 +1410,53 @@ async fn chat(client: State<'_, OpenAiClient>, request: ChatRequest) -> Result<C
         "sources": sources,
         "concepts": concepts
     });
+
+    if use_anthropic {
+        let mut output_config = json!({
+            "format": {
+                "type": "json_schema",
+                "schema": chat_schema()
+            }
+        });
+        if let Some(effort) = effort {
+            output_config
+                .as_object_mut()
+                .expect("the Anthropic output config is an object")
+                .insert("effort".to_string(), json!(effort));
+        }
+        let body = json!({
+            "model": model,
+            "max_tokens": 6_000,
+            "system": CHAT_INSTRUCTIONS.trim(),
+            "messages": [{
+                "role": "user",
+                "content": chat_payload.to_string()
+            }],
+            "output_config": output_config
+        });
+        let response = client
+            .0
+            .post(ANTHROPIC_MESSAGES_URL)
+            .header("x-api-key", api_key.as_str())
+            .header("anthropic-version", "2023-06-01")
+            .header(reqwest::header::ACCEPT, "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| format!("Orion could not reach Anthropic: {error}"))?;
+
+        if !response.status().is_success() {
+            return Err(anthropic_error(response, "complete this Chat response").await);
+        }
+        let response = response
+            .json::<Value>()
+            .await
+            .map_err(|error| format!("Orion could not read Anthropic's response: {error}"))?;
+        let output_text = extract_anthropic_output_text(&response, "complete this Chat response")?;
+        return serde_json::from_str::<ChatResult>(&output_text).map_err(|_| {
+            "Anthropic returned a Chat reply Orion could not read. Try again.".to_string()
+        });
+    }
 
     let mut body = json!({
         "model": model,
@@ -1772,16 +2175,22 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             load_vault,
             save_vault,
             open_data_directory,
+            open_claude_connector,
             save_api_key,
             api_key_status,
             delete_api_key,
             test_openai_key,
+            save_anthropic_api_key,
+            anthropic_api_key_status,
+            delete_anthropic_api_key,
+            test_anthropic_key,
             organize_content,
             chat,
             transcribe_media_files,
@@ -1889,6 +2298,7 @@ mod tests {
             "wikiArticles": [{
                 "title": "Warm evidence",
                 "summary": "A canonical Space article.",
+                "body": "## Overview\n\nEvidence gathered through trusted relationships shapes the project's outreach strategy.",
                 "overview": "Evidence gathered through trusted relationships.",
                 "spaceRelevance": "It shapes the project's outreach strategy.",
                 "sourceGroundedDetails": ["Introductions improve context."],
@@ -1924,6 +2334,26 @@ mod tests {
         assert_eq!(result.wiki_articles[0].title, "Warm evidence");
         assert_eq!(result.concepts[0].label, "warm evidence");
         assert_eq!(result.concepts[0].canonical_title, "Warm evidence");
+    }
+
+    #[test]
+    fn routes_and_extracts_anthropic_models() {
+        assert!(is_anthropic_model("claude-fable-5"));
+        assert!(is_anthropic_model("claude-opus-5"));
+        assert!(is_anthropic_model("claude-sonnet-5"));
+        assert!(!is_anthropic_model("gpt-5.6-sol"));
+
+        let response = json!({
+            "content": [{
+                "type": "text",
+                "text": "{\"reply\":\"Grounded in this Space.\"}"
+            }],
+            "stop_reason": "end_turn"
+        });
+        assert_eq!(
+            extract_anthropic_output_text(&response, "finish Chat").unwrap(),
+            "{\"reply\":\"Grounded in this Space.\"}"
+        );
     }
 
     #[test]
@@ -1974,6 +2404,49 @@ mod tests {
 
         write_vault_file(&path, &vault).unwrap();
         assert_eq!(read_vault_file(&path).unwrap(), Some(vault));
+    }
+
+    #[test]
+    fn rejects_a_stale_vault_save_without_overwriting_external_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(VAULT_FILENAME);
+        let external = json!({
+            "updatedAt": "2026-08-01T12:08:54.897813Z",
+            "notes": [{"title": "Created by Claude"}]
+        });
+        let stale = json!({
+            "updatedAt": "2026-08-01T12:09:00.000Z",
+            "notes": []
+        });
+        write_vault_file(&path, &external).unwrap();
+
+        let error = write_vault_file_if_current(&path, &stale, Some("2026-08-01T12:00:00.000Z"))
+            .unwrap_err();
+
+        assert!(error.starts_with(VAULT_CONFLICT_PREFIX));
+        assert_eq!(read_vault_file(&path).unwrap(), Some(external));
+    }
+
+    #[test]
+    fn saves_a_vault_when_its_expected_revision_is_current() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(VAULT_FILENAME);
+        let current = json!({
+            "updatedAt": "2026-08-01T12:08:54.897813Z",
+            "notes": [{"title": "Created by Claude"}]
+        });
+        let next = json!({
+            "updatedAt": "2026-08-01T12:10:00.000Z",
+            "notes": [
+                {"title": "Created by Claude"},
+                {"title": "Created in Orion"}
+            ]
+        });
+        write_vault_file(&path, &current).unwrap();
+
+        write_vault_file_if_current(&path, &next, Some("2026-08-01T12:08:54.897813Z")).unwrap();
+
+        assert_eq!(read_vault_file(&path).unwrap(), Some(next));
     }
 
     #[test]

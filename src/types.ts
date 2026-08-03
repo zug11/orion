@@ -125,16 +125,33 @@ export type ReasoningEffort =
   | "xhigh"
   | "max";
 
+export type HomeAtmosphere =
+  | "signal-decay"
+  | "line-waves"
+  | "field";
+
+export type HomeAtmosphereTone =
+  | "signature"
+  | "violet"
+  | "mint"
+  | "gold";
+
+export type HomeAtmosphereMotion = "still" | "calm" | "alive";
+
 export interface Settings {
   model: string;
   reasoningEffort: ReasoningEffort;
   apiKeyConfigured: boolean;
+  anthropicApiKeyConfigured: boolean;
   autoLink: boolean;
   showHoverPreviews: boolean;
   includeExistingNotesInAIContext: boolean;
   organizationInstructions: string;
   whisperLanguage: string;
   theme: "dark" | "light" | "system";
+  homeAtmosphere: HomeAtmosphere;
+  homeAtmosphereTone: HomeAtmosphereTone;
+  homeAtmosphereMotion: HomeAtmosphereMotion;
 }
 
 export interface WorkspaceInfo {
@@ -341,6 +358,7 @@ export interface OrganizeContentRequest {
   model?: string;
   effort?: ReasoningEffort;
   organizationInstructions?: string;
+  timeoutMs?: number;
 }
 
 export interface OrganizedLink {
@@ -360,6 +378,7 @@ export interface OrganizedNote {
 export interface OrganizedWikiArticle {
   title: string;
   summary: string;
+  body: string;
   overview: string;
   spaceRelevance: string;
   sourceGroundedDetails: string[];

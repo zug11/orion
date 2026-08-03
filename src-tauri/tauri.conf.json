@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Orion",
-  "version": "0.3.2",
+  "version": "0.3.5",
   "identifier": "app.orion.knowledge",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:desktop",
     "frontendDist": "../dist"
   },
   "app": {
@@ -39,6 +39,13 @@
       "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'"
     }
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["orion"]
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
@@ -53,6 +60,7 @@
         "MacOS/yt-dlp": "./binaries/yt-dlp-macos",
         "MacOS/deno": "./binaries/deno",
         "Resources/models/ggml-base.bin": "./resources/models/ggml-base.bin",
+        "Resources/Orion-Claude-Connector.mcpb": "./resources/Orion-Claude-Connector.mcpb",
         "Resources/THIRD_PARTY_NOTICES.md": "./resources/THIRD_PARTY_NOTICES.md",
         "Resources/licenses": "./resources/licenses"
       }

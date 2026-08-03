@@ -27,6 +27,9 @@ interface RichNoteEditorProps {
   concepts: readonly Concept[];
   onChange: (markdown: string) => void;
   onRegisterConcept: (input: RegisterWikiLinkInput) => EntityId;
+  onDisableConceptAutoLink: (conceptId: EntityId) => void;
+  aiArticleDraftingEnabled?: boolean;
+  aiProviderName?: string;
 }
 
 interface LinkDraft {
@@ -44,6 +47,9 @@ export function RichNoteEditor({
   concepts,
   onChange,
   onRegisterConcept,
+  onDisableConceptAutoLink,
+  aiArticleDraftingEnabled = false,
+  aiProviderName,
 }: RichNoteEditorProps) {
   const initialDocumentRef = useRef(splitMarkdownFrontmatter(markdown));
   const conceptsRef = useRef(concepts);
@@ -184,7 +190,7 @@ export function RichNoteEditor({
       selectedText,
       initialPhrase: selectedText,
       initialDestinationIds:
-        existingConcept?.noteIds.length
+        existingConcept?.noteIds.length && !existingConcept.canonicalNoteId
           ? [...existingConcept.noteIds]
           : [],
     });
@@ -195,13 +201,22 @@ export function RichNoteEditor({
     );
   }
 
-  function applyConceptLink(phrase: string, destinationIds: EntityId[]) {
+  function applyConceptLink(
+    phrase: string,
+    destinationIds: EntityId[],
+    options: {
+      articleMode: "ai" | "blank";
+      articleInstructions?: string;
+    },
+  ) {
     if (!linkDraft) {
       return;
     }
     const conceptId = onRegisterConcept({
       phrase,
       destinationNoteIds: destinationIds,
+      articleMode: options.articleMode,
+      articleInstructions: options.articleInstructions,
     });
     const href = `orion-concept://${conceptId}`;
     const linkMark = {
@@ -263,13 +278,42 @@ export function RichNoteEditor({
     );
   }
 
+  function unlinkSelection(conceptId?: EntityId) {
+    const explicitLink = editor.isActive("link");
+    if (explicitLink) {
+      editor
+        .chain()
+        .focus()
+        .extendMarkRange("link")
+        .unsetLink()
+        .run();
+    }
+    if (conceptId) {
+      const concept = concepts.find(
+        (candidate) => candidate.id === conceptId,
+      );
+      onDisableConceptAutoLink(conceptId);
+      setAnnouncement(
+        `${concept?.label ?? "This phrase"} is no longer an automatic link. Its article was kept.`,
+      );
+      return;
+    }
+    setAnnouncement(
+      explicitLink
+        ? "Link removed. The words were kept."
+        : "Select linked words before choosing Unlink.",
+    );
+  }
+
   return (
     <div className="rich-note-editor">
       <div className="editor-toolbar-shell">
-        <EditorToolbar editor={editor} onOpenLink={openLinkComposer} />
-        <span className="editor-toolbar-caption">
-          Select words to teach Orion a reusable link
-        </span>
+        <EditorToolbar
+          editor={editor}
+          concepts={concepts}
+          onOpenLink={openLinkComposer}
+          onUnlink={unlinkSelection}
+        />
       </div>
       <EditorContent
         editor={editor}
@@ -287,6 +331,8 @@ export function RichNoteEditor({
           initialDestinationIds={linkDraft.initialDestinationIds}
           currentNoteId={noteId}
           notes={notes}
+          aiArticleDraftingEnabled={aiArticleDraftingEnabled}
+          aiProviderName={aiProviderName}
           onCancel={() => {
             setLinkDraft(null);
             setAnnouncement("Link creation cancelled.");

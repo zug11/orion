@@ -1,11 +1,11 @@
 import {
   ArrowUp,
+  Bot,
   BookOpenText,
   MessageCircle,
   Plus,
   Settings2,
-  Sparkles,
-} from "lucide-react";
+} from "../lib/icons";
 import {
   useEffect,
   useRef,
@@ -16,6 +16,10 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { AppSnapshot, ChatResult } from "../types";
+import {
+  isSelectedAIConfigured,
+  selectedAIProviderName,
+} from "../lib/ai";
 
 interface ChatViewProps {
   snapshot: AppSnapshot;
@@ -49,7 +53,8 @@ export function ChatView({
     snapshot.notes.length > 0 ||
     snapshot.sources.length > 0 ||
     snapshot.concepts.length > 0;
-  const canSend = snapshot.settings.apiKeyConfigured;
+  const canSend = isSelectedAIConfigured(snapshot.settings);
+  const providerName = selectedAIProviderName(snapshot.settings);
   const isSending = busy || submitting;
 
   useEffect(() => {
@@ -65,7 +70,7 @@ export function ChatView({
       return;
     }
     if (!canSend) {
-      setError("Add an OpenAI API key in Settings to start chatting.");
+      setError(`Add an ${providerName} API key in Settings to start chatting.`);
       return;
     }
 
@@ -154,7 +159,7 @@ export function ChatView({
           {messages.length === 0 && !pendingPrompt ? (
             <div className="chat-welcome">
               <span className="chat-welcome__mark" aria-hidden="true">
-                <Sparkles size={23} />
+                <BookOpenText size={23} />
               </span>
               <span className="eyebrow">Orion is listening</span>
               <h2>Think with your whole Space.</h2>
@@ -171,7 +176,7 @@ export function ChatView({
                   onClick={onOpenSettings}
                 >
                   <Settings2 size={14} />
-                  Configure OpenAI key
+                  Configure {providerName} key
                 </button>
               ) : (
                 <div className="chat-welcome__prompts">
@@ -199,7 +204,7 @@ export function ChatView({
                   {message.role === "assistant" ? (
                     <>
                       <span className="chat-message__avatar" aria-hidden="true">
-                        <Sparkles size={12} />
+                        <Bot size={12} />
                       </span>
                       <span>Orion</span>
                     </>
@@ -252,7 +257,7 @@ export function ChatView({
               aria-label="Orion is thinking"
             >
               <span className="chat-message__avatar" aria-hidden="true">
-                <Sparkles size={12} />
+                <Bot size={12} />
               </span>
               <span>Reading your Space</span>
               <span className="chat-thinking-dots" aria-hidden="true">
@@ -284,7 +289,7 @@ export function ChatView({
               placeholder={
                 canSend
                   ? `Ask about ${snapshot.workspace.name}…`
-                  : "Add an OpenAI key to start chatting…"
+                  : `Add an ${providerName} key to start chatting…`
               }
               aria-label="Message Orion"
               rows={2}

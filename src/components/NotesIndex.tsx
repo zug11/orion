@@ -1,6 +1,7 @@
-import { ArrowUpRight, BookOpen, Grid2X2, List, Search } from "lucide-react";
+import { ArrowUpRight, BookOpen, Grid2X2, List, Search } from "../lib/icons";
 import { useMemo, useState, type CSSProperties } from "react";
 import type { Note } from "../types";
+import BorderGlow from "./BorderGlow";
 
 interface NotesIndexProps {
   notes: Note[];
@@ -64,10 +65,12 @@ export function NotesIndex({ notes, onOpenNote }: NotesIndexProps) {
 
       <div className={`notes-collection ${layout}`}>
         {filtered.map((note) => (
-          <button
+          <BorderGlow
+            as="button"
             key={note.id}
             type="button"
             className="note-index-card"
+            glowColor={note.color ?? "#a8b3ff"}
             onClick={() => onOpenNote(note.id)}
             style={
               {
@@ -98,7 +101,7 @@ export function NotesIndex({ notes, onOpenNote }: NotesIndexProps) {
                 }).format(new Date(note.updatedAt))}
               </span>
             </div>
-          </button>
+          </BorderGlow>
         ))}
         {filtered.length === 0 && (
           <div className="collection-empty">

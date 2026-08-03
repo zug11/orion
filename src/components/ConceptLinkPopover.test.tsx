@@ -8,15 +8,17 @@ import { ConceptLinkPopover } from "./ConceptLinkPopover";
 const NOW = "2026-07-28T10:00:00.000Z";
 
 describe("ConceptLinkPopover", () => {
-  it("submits an empty destination list to create or reuse the named article", () => {
+  it("creates a blank named article without invoking AI", () => {
     const onSubmit = vi.fn();
     renderPopover(onSubmit);
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Create article link" }),
+      screen.getByRole("button", { name: "Create blank article" }),
     );
 
-    expect(onSubmit).toHaveBeenCalledWith("SQL", []);
+    expect(onSubmit).toHaveBeenCalledWith("SQL", [], {
+      articleMode: "blank",
+    });
   });
 
   it("round-trips explicit destinations for a legacy branched link", () => {
@@ -27,13 +29,43 @@ describe("ConceptLinkPopover", () => {
       screen.getByRole("button", { name: "Create branched link" }),
     );
 
-    expect(onSubmit).toHaveBeenCalledWith("SQL", ["note-current"]);
+    expect(onSubmit).toHaveBeenCalledWith("SQL", ["note-current"], {
+      articleMode: "blank",
+    });
+  });
+
+  it("makes source-aware AI drafting explicit before article creation", () => {
+    const onSubmit = vi.fn();
+    renderPopover(onSubmit, [], true);
+
+    fireEvent.change(
+      screen.getByPlaceholderText(
+        "What should this page explain or emphasize?",
+      ),
+      { target: { value: "Focus on joins and relational algebra." } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Generate article" }),
+    );
+
+    expect(onSubmit).toHaveBeenCalledWith("SQL", [], {
+      articleMode: "ai",
+      articleInstructions: "Focus on joins and relational algebra.",
+    });
   });
 });
 
 function renderPopover(
-  onSubmit: (phrase: string, destinationIds: string[]) => void,
+  onSubmit: (
+    phrase: string,
+    destinationIds: string[],
+    options: {
+      articleMode: "ai" | "blank";
+      articleInstructions?: string;
+    },
+  ) => void,
   initialDestinationIds: readonly string[] = [],
+  aiArticleDraftingEnabled = false,
 ) {
   render(
     <ConceptLinkPopover
@@ -41,6 +73,7 @@ function renderPopover(
       initialDestinationIds={initialDestinationIds}
       currentNoteId="note-current"
       notes={[makeNote("note-current", "Project notes")]}
+      aiArticleDraftingEnabled={aiArticleDraftingEnabled}
       onCancel={vi.fn()}
       onSubmit={onSubmit}
     />,

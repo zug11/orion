@@ -1,11 +1,13 @@
 {
   "name": "orion",
   "private": true,
-  "version": "0.3.2",
+  "version": "0.3.5",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:mcp": "bash ./script/build_mcp_connector.sh",
+    "build:desktop": "npm run build && npm run build:mcp",
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "vite preview",
@@ -14,6 +16,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-deep-link": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "@tiptap/extension-image": "^3.29.1",
     "@tiptap/extension-link": "^3.29.1",
@@ -29,6 +32,7 @@
     "lucide-react": "^1.27.0",
     "mammoth": "^1.12.0",
     "nanoid": "^5.1.16",
+    "ogl": "^1.0.11",
     "pdfjs-dist": "^6.1.200",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

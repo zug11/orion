@@ -9,10 +9,13 @@ import {
 import type { AppSnapshot } from "../types";
 import {
   apiKeyStatus,
+  anthropicApiKeyStatus,
   clearBrowserSnapshot,
+  deleteAnthropicApiKey,
   deleteApiKey,
   loadSnapshot,
   parseChatResult,
+  saveAnthropicApiKey,
   saveApiKey,
   saveSnapshot,
 } from "./storage";
@@ -26,6 +29,7 @@ describe("browser persistence fallback", () => {
     window.localStorage.clear();
     clearBrowserSnapshot();
     await deleteApiKey();
+    await deleteAnthropicApiKey();
   });
 
   it("round-trips a vault snapshot through localStorage", async () => {
@@ -68,14 +72,25 @@ describe("browser persistence fallback", () => {
 
   it("tracks API key state without putting the key in the snapshot", async () => {
     expect(await apiKeyStatus()).toEqual({ configured: false });
+    expect(await anthropicApiKeyStatus()).toEqual({ configured: false });
 
     await saveApiKey("sk-test-secret");
+    await saveAnthropicApiKey("sk-ant-test-secret");
     expect(await apiKeyStatus()).toEqual({ configured: true });
+    expect(await anthropicApiKeyStatus()).toEqual({ configured: true });
     expect(JSON.stringify(await loadSnapshot())).not.toContain("sk-test-secret");
+    expect(JSON.stringify(await loadSnapshot())).not.toContain(
+      "sk-ant-test-secret",
+    );
     expect(JSON.stringify(window.localStorage)).not.toContain("sk-test-secret");
+    expect(JSON.stringify(window.localStorage)).not.toContain(
+      "sk-ant-test-secret",
+    );
 
     await deleteApiKey();
+    await deleteAnthropicApiKey();
     expect(await apiKeyStatus()).toEqual({ configured: false });
+    expect(await anthropicApiKeyStatus()).toEqual({ configured: false });
   });
 
   it("rejects a corrupt snapshot instead of treating it as a new vault", async () => {
@@ -102,6 +117,19 @@ describe("browser persistence fallback", () => {
           concepts: [{ id: "concept-test" }],
         },
       ],
+    });
+  });
+
+  it("accepts a vault saved before home atmosphere preferences existed", async () => {
+    const legacy = mutablePopulatedSnapshot();
+    delete legacy.settings.homeAtmosphere;
+    delete legacy.settings.homeAtmosphereTone;
+    delete legacy.settings.homeAtmosphereMotion;
+    window.localStorage.setItem("orion:vault:v1", JSON.stringify(legacy));
+
+    await expect(loadSnapshot()).resolves.toMatchObject({
+      schemaVersion: 2,
+      spaces: [{ workspace: { id: "workspace-test-vault" } }],
     });
   });
 
@@ -259,6 +287,24 @@ describe("browser persistence fallback", () => {
       "unsupported theme",
       (snapshot: MutableSnapshot) => {
         snapshot.settings.theme = "sepia";
+      },
+    ],
+    [
+      "unsupported home atmosphere",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.homeAtmosphere = "galaxy";
+      },
+    ],
+    [
+      "unsupported atmosphere accent",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.homeAtmosphereTone = "ultraviolet";
+      },
+    ],
+    [
+      "unsupported atmosphere motion",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.homeAtmosphereMotion = "chaotic";
       },
     ],
   ])("rejects settings with an %s", async (_name, corrupt) => {

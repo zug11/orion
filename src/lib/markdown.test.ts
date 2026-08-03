@@ -7,6 +7,8 @@ import {
   expandOrionWikiLinks,
   restoreMarkdownFrontmatter,
   splitMarkdownFrontmatter,
+  stripOrionLinksToTargets,
+  stripOrionNoteMarkers,
 } from "./markdown";
 import type { Concept, Note } from "../types";
 
@@ -32,6 +34,30 @@ describe("Markdown frontmatter preservation", () => {
     const split = splitMarkdownFrontmatter(markdown);
 
     expect(split).toEqual({ content: markdown, prefix: "" });
+  });
+
+  it("hides raw and editor-escaped Orion note markers", () => {
+    const markdown = [
+      "## Context from Lecture",
+      "",
+      "Source-grounded detail.",
+      "",
+      "<!-- orion-note:note-tlXRJO_2S8:end -->",
+      "",
+      "&lt;!-- orion-note:note-other:start --&gt;",
+      "",
+      "Visible prose.",
+    ].join("\n");
+
+    expect(stripOrionNoteMarkers(markdown)).toBe(
+      [
+        "## Context from Lecture",
+        "",
+        "Source-grounded detail.",
+        "",
+        "Visible prose.",
+      ].join("\n"),
+    );
   });
 
   it("round-trips images and rich formatting through the visual editor", () => {
@@ -139,6 +165,20 @@ describe("visual wiki links", () => {
         "[[Positivism]]",
         "```",
       ].join("\n"),
+    );
+  });
+
+  it("removes deleted Orion destinations without deleting their words", () => {
+    const markdown =
+      "[Positivism](orion-concept://concept-positivism) and [its article](orion-note://note-positivism) remain readable beside [Comte](orion-note://note-comte).";
+
+    expect(
+      stripOrionLinksToTargets(markdown, {
+        conceptIds: ["concept-positivism"],
+        noteIds: ["note-positivism"],
+      }),
+    ).toBe(
+      "Positivism and its article remain readable beside [Comte](orion-note://note-comte).",
     );
   });
 });

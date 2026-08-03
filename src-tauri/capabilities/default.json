@@ -6,6 +6,8 @@
   "permissions": [
     "core:default",
     "core:window:allow-destroy",
+    "core:window:allow-start-dragging",
+    "deep-link:default",
     "opener:default",
     "dialog:allow-open"
   ]

@@ -12,7 +12,7 @@ import { buildImportPayload } from "./ImportStudio";
 const TEST_NOW = "2026-07-27T10:00:00.000Z";
 
 describe("buildImportPayload", () => {
-  it("reuses one canonical wiki article across sources without replacing its body", () => {
+  it("reuses one canonical wiki article and applies the latest integrated body", () => {
     const snapshot = createEmptySnapshot("Research Space", TEST_NOW);
     const originalBody =
       "# SQL\n\n## Existing knowledge\n\nKeep this carefully edited paragraph.";
@@ -73,14 +73,8 @@ describe("buildImportPayload", () => {
     const sqlNotes = payload.notes.filter((note) => note.id === "note-sql");
     expect(sqlNotes).toHaveLength(1);
     expect(sqlNotes[0].createdAt).toBe(TEST_NOW);
-    expect(sqlNotes[0].body.startsWith(originalBody)).toBe(true);
-    expect(sqlNotes[0].body).toContain(
-      "## Context from Architecture interview",
-    );
-    expect(sqlNotes[0].body).toContain(
-      "SQL supports the service's durable records.",
-    );
-    expect(sqlNotes[0].body).toContain("## Context from Migration memo");
+    expect(sqlNotes[0].body.startsWith(originalBody)).toBe(false);
+    expect(sqlNotes[0].body).not.toContain("Context from");
     expect(sqlNotes[0].body).toContain(
       "SQL remains the reporting interface after migration.",
     );
@@ -200,6 +194,7 @@ function makeWikiArticle(
   return {
     title,
     summary: "Structured Query Language.",
+    body: `## Overview\n\nSQL is a language for relational data.\n\n## In this Space\n\n${detail}`,
     overview: "SQL is a language for relational data.",
     spaceRelevance: "It is part of the imported system design.",
     sourceGroundedDetails: [detail],
