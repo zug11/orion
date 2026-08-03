@@ -244,7 +244,7 @@ WAV, and WebM, up to 2 GiB each and eight native picker selections at once.
 
 ## Offline transcription contract
 
-Orion 0.3.5 is self-contained on Apple Silicon macOS 13.3 or later. It bundles:
+Orion 0.3.6 is self-contained on Apple Silicon macOS 13.3 or later. It bundles:
 
 - `whisper.cpp` 1.9.1 as `Contents/Frameworks/whisper.framework`;
 - the custom `Contents/MacOS/orion-whisper` sidecar;

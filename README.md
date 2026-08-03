@@ -18,7 +18,7 @@ Every Space also has **Chat**, one persistent AI conversation grounded in bounde
 
 ## Download
 
-[Download Orion for Apple Silicon](https://github.com/zug11/orion/releases/latest/download/Orion-0.3.5-Apple-Silicon.dmg). This build requires macOS 13.3 or later and includes the offline Whisper model, `yt-dlp`, and Deno.
+[Download Orion for Apple Silicon](https://github.com/zug11/orion/releases/latest/download/Orion-0.3.6-Apple-Silicon.dmg). This build requires macOS 13.3 or later and includes the offline Whisper model, `yt-dlp`, and Deno.
 
 ## What is included
 

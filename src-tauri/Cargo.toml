@@ -1,6 +1,6 @@
 [package]
 name = "orion"
-version = "0.3.5"
+version = "0.3.6"
 description = "Orion — an AI-organized personal knowledge atlas"
 authors = ["Orion"]
 edition = "2021"
