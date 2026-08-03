@@ -3,12 +3,49 @@ import type { Concept, Note } from "../types";
 import {
   ensureCanonicalConceptPhrase,
   reconcileConceptVocabulary,
+  reconcileSnapshotConceptVocabulary,
   registerConceptPhrase,
 } from "./concepts";
+import { createEmptySnapshot } from "../data/defaults";
+import { decorateAutoLinks } from "./wiki";
 
 const NOW = "2026-07-27T10:00:00.000Z";
 
 describe("reconcileConceptVocabulary", () => {
+  it("makes externally written character-page titles linkable in existing prose", () => {
+    const snapshot = createEmptySnapshot("Story", NOW, "space-story");
+    snapshot.notes = [
+      makeNote("note-story", "Main story", {
+        body: "Mara crossed the courtyard before sunrise.",
+      }),
+      makeNote("note-mara", "Mara", {
+        kind: "person",
+        body: "Mara is the story's central courier.",
+      }),
+    ];
+
+    const reconciled = reconcileSnapshotConceptVocabulary(snapshot);
+    const mara = reconciled.concepts.find(
+      (concept) => concept.label === "Mara",
+    );
+    const linked = decorateAutoLinks(
+      reconciled.notes[0].body,
+      reconciled.concepts,
+    ).find((segment) => segment.type === "concept");
+
+    expect(mara).toMatchObject({
+      noteIds: ["note-mara"],
+      canonicalNoteId: "note-mara",
+      autoLink: true,
+    });
+    expect(reconciled.notes[1].conceptIds).toContain(mara?.id);
+    expect(linked).toMatchObject({
+      text: "Mara",
+      conceptId: mara?.id,
+      targetNoteIds: ["note-mara"],
+    });
+  });
+
   it("repairs a pooled shared alias without swallowing note titles", () => {
     const notes = [
       makeNote("note-tracker", "VibeDB outreach tracker", {

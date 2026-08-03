@@ -165,7 +165,9 @@ cross-process locking and revision protocol. The renderer reloads a newer
 external vault when Orion returns to the foreground, and opening an MCP citation
 reloads before navigation so the cited note is visible immediately. Autosave
 timer references must be cleared after firing so they cannot permanently block
-that foreground refresh.
+that foreground refresh. Every externally loaded Space must reconcile its note
+titles and aliases into the concept vocabulary before entering renderer state,
+so an MCP-created page becomes an automatic-link destination immediately.
 
 Preserve these trust boundaries:
 

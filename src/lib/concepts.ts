@@ -1,4 +1,4 @@
-import type { Concept, EntityId, Note } from "../types";
+import type { AppSnapshot, Concept, EntityId, Note } from "../types";
 
 export const CONCEPT_COLORS = [
   "#8ea4ff",
@@ -276,6 +276,25 @@ export function reconcileConceptVocabulary(
     concepts: concepts.filter(
       (concept) => concept.noteIds.length > 0 || concept.aliases.length > 0,
     ),
+  };
+}
+
+/**
+ * Restores the derived title-and-alias vocabulary after a Space is written by
+ * an external client such as Orion's MCP connector. External writers persist
+ * ordinary notes, while the renderer owns automatic-link reconciliation.
+ */
+export function reconcileSnapshotConceptVocabulary(
+  snapshot: AppSnapshot,
+): AppSnapshot {
+  const vocabulary = reconcileConceptVocabulary(
+    snapshot.notes,
+    snapshot.concepts,
+  );
+  return {
+    ...snapshot,
+    notes: vocabulary.notes,
+    concepts: vocabulary.concepts,
   };
 }
 

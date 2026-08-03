@@ -38,6 +38,7 @@ import {
 import {
   ensureCanonicalConceptPhrase,
   reconcileConceptVocabulary,
+  reconcileSnapshotConceptVocabulary,
   registerConceptPhrase,
   type RegisterWikiLinkInput,
 } from "./lib/concepts";
@@ -274,14 +275,9 @@ function App() {
                 settings: { ...savedSpace.settings },
               }
             : savedSpace;
-          const vocabulary = reconcileConceptVocabulary(
-            base.notes,
-            base.concepts,
-          );
+          const reconciled = reconcileSnapshotConceptVocabulary(base);
           return {
-            ...base,
-            notes: vocabulary.notes,
-            concepts: vocabulary.concepts,
+            ...reconciled,
             studio: normalizeStudio(base.studio),
             settings: {
               ...defaultSettings,
@@ -421,10 +417,14 @@ function App() {
           Number.isFinite(latestTime) &&
           (!Number.isFinite(currentTime) || latestTime > currentTime)
         ) {
+          const reconciledLatest: OrionVault = {
+            ...latest,
+            spaces: latest.spaces.map(reconcileSnapshotConceptVocabulary),
+          };
           persistedVaultUpdatedAt.current = latest.updatedAt;
-          skipAutosaveVault.current = latest;
-          vaultRef.current = latest;
-          setVault(latest);
+          skipAutosaveVault.current = reconciledLatest;
+          vaultRef.current = reconciledLatest;
+          setVault(reconciledLatest);
         }
       } catch {
         // A foreground refresh is opportunistic. Normal saves and explicit
@@ -680,11 +680,17 @@ function App() {
       const { spaceId, noteId } = link;
 
       const latest = await loadSnapshot();
-      const space = latest?.spaces.find(
+      const reconciledLatest = latest
+        ? {
+            ...latest,
+            spaces: latest.spaces.map(reconcileSnapshotConceptVocabulary),
+          }
+        : null;
+      const space = reconciledLatest?.spaces.find(
         (candidate) => candidate.workspace.id === spaceId,
       );
       const note = space?.notes.find((candidate) => candidate.id === noteId);
-      if (!latest || !space || !note) {
+      if (!latest || !reconciledLatest || !space || !note) {
         showToast(
           "Note unavailable",
           "That Orion citation no longer resolves in its original Space.",
@@ -694,9 +700,9 @@ function App() {
 
       const now = new Date().toISOString();
       const nextVault: OrionVault = {
-        ...latest,
+        ...reconciledLatest,
         activeSpaceId: spaceId,
-        spaces: latest.spaces.map((candidate) =>
+        spaces: reconciledLatest.spaces.map((candidate) =>
           candidate.workspace.id === spaceId
             ? {
                 ...candidate,
