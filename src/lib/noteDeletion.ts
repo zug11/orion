@@ -90,6 +90,16 @@ export function deleteNoteFromSnapshot(
           (candidateId) => candidateId !== noteId,
         ),
       })),
+      ...(snapshot.spaceOverview
+        ? {
+            spaceOverview: {
+              ...snapshot.spaceOverview,
+              relatedNoteIds: snapshot.spaceOverview.relatedNoteIds.filter(
+                (candidateId) => candidateId !== noteId,
+              ),
+            },
+          }
+        : {}),
       activeNoteId:
         snapshot.activeNoteId === noteId
           ? fallbackNoteId

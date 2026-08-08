@@ -59,7 +59,7 @@ fi
 codesign --verify --strict --verbose=2 "$RELEASE_BINARY"
 "$RELEASE_BINARY" --version
 node "$ROOT_DIR/script/test_mcp_connector.mjs" \
-  "$RELEASE_BINARY" "$FIXTURE_VAULT"
+  "$RELEASE_BINARY" "$FIXTURE_VAULT" "$MANIFEST_DIR/manifest.json"
 
 (
   set -euo pipefail
@@ -93,7 +93,8 @@ node "$ROOT_DIR/script/test_mcp_connector.mjs" \
     "$verification_dir/server/orion-mcp"
   "$verification_dir/server/orion-mcp" --version
   node "$ROOT_DIR/script/test_mcp_connector.mjs" \
-    "$verification_dir/server/orion-mcp" "$FIXTURE_VAULT"
+    "$verification_dir/server/orion-mcp" "$FIXTURE_VAULT" \
+    "$verification_dir/manifest.json"
 
   /bin/cp "$staged_package" "$staged_resource"
   mv "$staged_resource" "$RESOURCE_PACKAGE"

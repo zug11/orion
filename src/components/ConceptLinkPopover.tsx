@@ -16,7 +16,7 @@ interface ConceptLinkPopoverProps {
   initialDestinationIds: readonly string[];
   currentNoteId: string;
   notes: readonly Note[];
-  aiArticleDraftingEnabled?: boolean;
+  aiArticleWritingEnabled?: boolean;
   aiProviderName?: string;
   onCancel: () => void;
   onSubmit: (
@@ -34,7 +34,7 @@ export function ConceptLinkPopover({
   initialDestinationIds,
   currentNoteId,
   notes,
-  aiArticleDraftingEnabled = false,
+  aiArticleWritingEnabled = false,
   aiProviderName = "AI provider",
   onCancel,
   onSubmit,
@@ -47,7 +47,7 @@ export function ConceptLinkPopover({
     () => new Set(initialDestinationIds),
   );
   const [articleMode, setArticleMode] = useState<"ai" | "blank">(
-    aiArticleDraftingEnabled ? "ai" : "blank",
+    aiArticleWritingEnabled ? "ai" : "blank",
   );
   const [articleInstructions, setArticleInstructions] = useState("");
   const visibleNotes = useMemo(() => {
@@ -170,15 +170,15 @@ export function ConceptLinkPopover({
               className={articleMode === "ai" ? "selected" : ""}
               role="radio"
               aria-checked={articleMode === "ai"}
-              disabled={!aiArticleDraftingEnabled}
+              disabled={!aiArticleWritingEnabled}
               onClick={() => setArticleMode("ai")}
             >
               <FileText size={15} />
               <span>
                 <strong>Write with AI</strong>
                 <small>
-                  {aiArticleDraftingEnabled
-                    ? "Draft from this note and Space"
+                  {aiArticleWritingEnabled
+                    ? "Write from this note and Space"
                     : `Add an ${aiProviderName} key in Settings`}
                 </small>
               </span>

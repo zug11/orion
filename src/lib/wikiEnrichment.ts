@@ -16,6 +16,49 @@ import {
 
 const MAX_NOTE_CHARS = 48_000;
 const MAX_EXISTING_NOTES = 80;
+const TASK_LINE = /^\s*[-+*]\s+\[[ xX]\]\s+(.+?)\s*$/;
+const COMPANION_TITLE_WORDS = new Set([
+  "agenda",
+  "checklist",
+  "journal",
+  "list",
+  "log",
+  "note",
+  "notes",
+  "overview",
+  "plan",
+  "summary",
+  "task",
+  "tasks",
+  "todo",
+  "todos",
+]);
+const TITLE_GLUE_WORDS = new Set(["a", "an", "go", "my", "our", "the"]);
+const CONTENT_STOP_WORDS = new Set([
+  "about",
+  "after",
+  "also",
+  "and",
+  "are",
+  "article",
+  "for",
+  "from",
+  "has",
+  "have",
+  "into",
+  "its",
+  "note",
+  "notes",
+  "that",
+  "the",
+  "their",
+  "this",
+  "through",
+  "was",
+  "were",
+  "wiki",
+  "with",
+]);
 
 export interface WikiEnrichmentApplyResult {
   snapshot: AppSnapshot;
@@ -53,7 +96,7 @@ export function buildWikiEnrichmentRequest(
           title: candidate.title,
           aliases: [...candidate.aliases],
           summary: candidate.summary,
-          kind: candidate.kind,
+          reference: candidate.kind === "wiki",
           ...(candidate.kind === "wiki"
             ? { body: candidate.body.slice(0, 6_000) }
             : {}),
@@ -62,14 +105,10 @@ export function buildWikiEnrichmentRequest(
   const task = [
     "Knowledge-refresh task: this is an already-saved project note, so return an empty notes array.",
     "Return a wikiArticles entry for every durable person, place, technology, method, organization, or idea in this note that gains meaningful new context.",
-    "Include every supplied existing canonical wiki article that should be enriched by this note, even when that article already has a body. Also return a canonical article for a clearly important durable concept that does not exist yet.",
+    "Include every supplied existing canonical wiki article that should be enriched by this note, even when that article already has a body. Return a new canonical article only for a clearly important durable subject, never for a relabelled version, summary, plan, list, checklist, or paraphrase of this source note.",
     "For each returned existing article, rewrite wikiArticles.body as a complete coherent revision that preserves worthwhile existing knowledge and cross-pollinates the new material into the sections where it naturally belongs. Never append a provenance section named “Context from”, “From the new note”, “From the imported material”, or similar.",
-    "Infer concepts from meaning, relationships, and aliases rather than keyword frequency. Do not return generic topic words, unrelated articles, or concepts supported only by lexical overlap. Source-grounded details must come from this note. Use ordinary prose and never [[wiki-link]] brackets.",
+    "Keep every action and Markdown task in this project note; never copy its task list into a wiki article. Infer concepts from meaning, relationships, and aliases rather than keyword frequency. Do not return generic topic words, unrelated articles, or concepts supported only by lexical overlap. Source-grounded details must come from this note. Use ordinary prose and never [[wiki-link]] brackets.",
   ].join(" ");
-  const userInstructions = snapshot.settings.organizationInstructions
-    .trim()
-    .slice(0, 1_250);
-
   return {
     content: [
       `New note title: ${note.title}`,
@@ -84,9 +123,8 @@ export function buildWikiEnrichmentRequest(
     existingNotes,
     model: snapshot.settings.model,
     effort: snapshot.settings.reasoningEffort,
-    organizationInstructions: [task, userInstructions]
-      .filter(Boolean)
-      .join("\n\n"),
+    taskInstructions: task,
+    organizationInstructions: snapshot.settings.organizationInstructions,
   };
 }
 
@@ -106,16 +144,23 @@ export function applyWikiEnrichmentResult(
     const title = article.title.trim();
     if (!title) continue;
 
+    const preparedArticle = withoutDerivedTasks(article, originNote);
     const existing = resolveCanonicalArticle(
       { ...snapshot, notes },
       title,
     );
     if (existing) {
+      // An automatic refresh can enrich a dedicated canonical article, but it
+      // must never reinterpret or overwrite the project note that triggered it
+      // (or another ordinary human-authored note with a matching title).
+      if (existing.id === originNote.id || existing.kind !== "wiki") {
+        continue;
+      }
       const index = notes.findIndex((note) => note.id === existing.id);
       if (index < 0) continue;
       notes[index] = mergeNoteContext(
         notes[index],
-        article,
+        preparedArticle,
         originNote,
         snapshot.workspace.name,
         now,
@@ -128,20 +173,21 @@ export function applyWikiEnrichmentResult(
       continue;
     }
 
+    if (isRedundantCompanionArticle(article, originNote)) {
+      continue;
+    }
+
     const noteId = `note-${nanoid(10)}`;
     const created: Note = {
       id: noteId,
       title,
       slug: uniqueSlug(title, notes),
-      summary: article.summary.trim(),
-      body: wikiArticleBody(article, snapshot.workspace.name),
-      aliases: unique(article.aliases).slice(0, 16),
-      tags: unique([...article.tags, "wiki-article", "ai-draft"]).slice(
-        0,
-        12,
-      ),
+      summary: preparedArticle.summary.trim(),
+      body: wikiArticleBody(preparedArticle, snapshot.workspace.name),
+      aliases: unique(preparedArticle.aliases).slice(0, 16),
+      tags: unique(preparedArticle.tags).slice(0, 12),
       kind: "wiki",
-      status: "draft",
+      status: "ready",
       conceptIds: [],
       sourceIds: [...originNote.sourceIds],
       createdAt: now,
@@ -221,8 +267,10 @@ function mergeNoteContext(
 ): Note {
   const currentBody = note.body.trim();
   const isLinkPlaceholder =
-    note.tags.includes("orion-link-draft") &&
-    currentBody.includes("<!-- orion-link-draft -->");
+    (note.tags.includes("orion-link-pending") ||
+      note.tags.includes("orion-link-draft")) &&
+    (currentBody.includes("<!-- orion-link-pending -->") ||
+      currentBody.includes("<!-- orion-link-draft -->"));
   const body =
     article.body.trim() ||
     (!currentBody || isLinkPlaceholder
@@ -233,19 +281,24 @@ function mergeNoteContext(
     ...note,
     summary:
       !note.summary.trim() ||
-      note.summary.startsWith("Orion is preparing a Space article for ")
+      note.summary.startsWith("Orion is preparing a Space article for ") ||
+      note.summary.startsWith("Orion is writing a Space article for ")
         ? article.summary.trim()
         : note.summary,
     body,
     aliases: unique([...note.aliases, ...article.aliases]).slice(0, 16),
     tags: unique([
-      ...note.tags.filter((tag) => tag !== "orion-link-draft"),
+      ...note.tags.filter(
+        (tag) =>
+          tag !== "orion-link-pending" &&
+          tag !== "orion-link-draft" &&
+          tag !== "ai-draft" &&
+          tag !== "wiki-article",
+      ),
       ...article.tags,
-      "wiki-article",
-      "ai-draft",
     ]).slice(0, 12),
     kind: "wiki",
-    status: note.status === "archived" ? "archived" : "draft",
+    status: note.status === "archived" ? "archived" : "ready",
     sourceIds: unique([...note.sourceIds, ...originNote.sourceIds]),
     updatedAt: now,
   };
@@ -288,6 +341,166 @@ function uniqueArticles(
     seen.add(key);
     return true;
   });
+}
+
+function withoutDerivedTasks(
+  article: OrganizedWikiArticle,
+  originNote: Note,
+): OrganizedWikiArticle {
+  const originTasks = markdownTaskFingerprints(originNote.body);
+  if (originTasks.size === 0) {
+    return article;
+  }
+
+  return {
+    ...article,
+    body: removeMatchingTaskLines(article.body, originTasks),
+    sourceGroundedDetails: article.sourceGroundedDetails.filter(
+      (detail) => !originTasks.has(taskFingerprint(detail)),
+    ),
+  };
+}
+
+function isRedundantCompanionArticle(
+  article: OrganizedWikiArticle,
+  originNote: Note,
+): boolean {
+  if (
+    normalizeConceptPhrase(article.title) ===
+    normalizeConceptPhrase(originNote.title)
+  ) {
+    return true;
+  }
+
+  if (looksLikeRelabelledCompanion(article.title, originNote.title)) {
+    return true;
+  }
+
+  const originTasks = markdownTaskFingerprints(originNote.body);
+  if (originTasks.size > 0) {
+    const copiedTask = [
+      ...markdownTaskFingerprints(article.body),
+      ...article.sourceGroundedDetails.map(taskFingerprint),
+    ].some((task) => originTasks.has(task));
+    if (copiedTask) {
+      return true;
+    }
+  }
+
+  return isNearTextDuplicate(
+    `${originNote.title}\n${originNote.summary}\n${originNote.body}`,
+    `${article.title}\n${article.summary}\n${article.body}`,
+  );
+}
+
+function looksLikeRelabelledCompanion(
+  articleTitle: string,
+  originTitle: string,
+): boolean {
+  const articleTokens = words(articleTitle);
+  if (!articleTokens.some((word) => COMPANION_TITLE_WORDS.has(word))) {
+    return false;
+  }
+  const articleSubject = articleTokens.filter(
+    (word) =>
+      !COMPANION_TITLE_WORDS.has(word) && !TITLE_GLUE_WORDS.has(word),
+  );
+  if (articleSubject.length === 0) {
+    return true;
+  }
+  const originTokens = new Set(
+    words(originTitle).filter((word) => !TITLE_GLUE_WORDS.has(word)),
+  );
+  return articleSubject.every((word) => originTokens.has(word));
+}
+
+function markdownTaskFingerprints(markdown: string): Set<string> {
+  const tasks = new Set<string>();
+  let inFence = false;
+  for (const line of markdown.split(/\r?\n/)) {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const task = line.match(TASK_LINE)?.[1];
+    if (task) tasks.add(taskFingerprint(task));
+  }
+  return tasks;
+}
+
+function removeMatchingTaskLines(
+  markdown: string,
+  originTasks: ReadonlySet<string>,
+): string {
+  const lines = markdown.split(/\r?\n/);
+  let inFence = false;
+  const withoutTasks = lines.filter((line) => {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      return true;
+    }
+    if (inFence) return true;
+    const task = line.match(TASK_LINE)?.[1];
+    return !task || !originTasks.has(taskFingerprint(task));
+  });
+  const withoutEmptyHeadings = withoutTasks.filter((line, index) => {
+    if (!/^#{1,6}\s+\S/.test(line)) return true;
+    let next = index + 1;
+    while (next < withoutTasks.length && !withoutTasks[next].trim()) {
+      next += 1;
+    }
+    return (
+      next < withoutTasks.length &&
+      !/^#{1,6}\s+\S/.test(withoutTasks[next])
+    );
+  });
+  return withoutEmptyHeadings.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function taskFingerprint(value: string): string {
+  return value
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[`*_~]/g, "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\p{P}\p{S}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isNearTextDuplicate(left: string, right: string): boolean {
+  const leftTokens = contentTokens(left);
+  const rightTokens = contentTokens(right);
+  if (leftTokens.size < 6 || rightTokens.size < 6) {
+    return false;
+  }
+  let shared = 0;
+  leftTokens.forEach((token) => {
+    if (rightTokens.has(token)) shared += 1;
+  });
+  const smaller = Math.min(leftTokens.size, rightTokens.size);
+  const larger = Math.max(leftTokens.size, rightTokens.size);
+  return shared / smaller >= 0.82 && larger / smaller <= 1.5;
+}
+
+function contentTokens(value: string): Set<string> {
+  return new Set(
+    words(value).filter(
+      (word) => word.length > 2 && !CONTENT_STOP_WORDS.has(word),
+    ),
+  );
+}
+
+function words(value: string): string[] {
+  return (
+    value
+      .normalize("NFKC")
+      .toLowerCase()
+      .match(/[\p{L}\p{N}]+/gu) ?? []
+  );
 }
 
 function uniqueSlug(title: string, notes: readonly Note[]): string {

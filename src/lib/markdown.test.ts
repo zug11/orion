@@ -1,4 +1,5 @@
 import Image from "@tiptap/extension-image";
+import { TableKit } from "@tiptap/extension-table";
 import { Markdown } from "@tiptap/markdown";
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
@@ -58,6 +59,29 @@ describe("Markdown frontmatter preservation", () => {
         "Visible prose.",
       ].join("\n"),
     );
+  });
+
+  it("preserves Tiptap table spacing when there are no legacy markers", () => {
+    const editor = new Editor({
+      extensions: [
+        StarterKit,
+        TableKit.configure({
+          table: { resizable: false, renderWrapper: true },
+        }),
+        Markdown.configure({ markedOptions: { gfm: true } }),
+      ],
+      content: "Before\n\nAfter",
+      contentType: "markdown",
+    });
+    editor.commands.setTextSelection(7);
+    editor.commands.insertTable({ rows: 2, cols: 2, withHeaderRow: true });
+    editor.commands.insertContent("First cell");
+
+    const serialized = editor.getMarkdown();
+    expect(serialized).toContain("Before\n\n\n| First cell");
+    expect(stripOrionNoteMarkers(serialized)).toBe(serialized);
+
+    editor.destroy();
   });
 
   it("round-trips images and rich formatting through the visual editor", () => {
@@ -170,15 +194,16 @@ describe("visual wiki links", () => {
 
   it("removes deleted Orion destinations without deleting their words", () => {
     const markdown =
-      "[Positivism](orion-concept://concept-positivism) and [its article](orion-note://note-positivism) remain readable beside [Comte](orion-note://note-comte).";
+      "[Positivism](orion-concept://concept-positivism), [its article](orion-note://note-positivism), and [Lecture 4](orion-source://source-lecture) remain readable beside [Comte](orion-note://note-comte).";
 
     expect(
       stripOrionLinksToTargets(markdown, {
         conceptIds: ["concept-positivism"],
         noteIds: ["note-positivism"],
+        sourceIds: ["source-lecture"],
       }),
     ).toBe(
-      "Positivism and its article remain readable beside [Comte](orion-note://note-comte).",
+      "Positivism, its article, and Lecture 4 remain readable beside [Comte](orion-note://note-comte).",
     );
   });
 });

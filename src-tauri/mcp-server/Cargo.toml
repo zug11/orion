@@ -1,6 +1,6 @@
 [package]
 name = "orion-mcp"
-version = "0.3.7"
+version = "0.3.8"
 description = "Local read-write MCP server for the Orion knowledge atlas"
 authors = ["Orion"]
 edition = "2021"
@@ -11,4 +11,4 @@ fs2 = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
-time = { version = "0.3", features = ["formatting"] }
+time = { version = "0.3", features = ["formatting", "parsing"] }

@@ -28,12 +28,17 @@ export function restoreMarkdownFrontmatter(
 }
 
 export function stripOrionNoteMarkers(markdown: string): string {
-  return markdown
-    .replace(
-      /^[ \t]*(?:\\?<!--|&lt;!--)[ \t]*orion-note:[^ \t\r\n>]+:(?:start|end)[ \t]*(?:-->|--&gt;)[ \t]*(?:\r?\n)?/gim,
-      "",
-    )
-    .replace(/\n{3,}/g, "\n\n");
+  const stripped = markdown.replace(
+    /^[ \t]*(?:\\?<!--|&lt;!--)[ \t]*orion-note:[^ \t\r\n>]+:(?:start|end)[ \t]*(?:-->|--&gt;)[ \t]*(?:\r?\n)?/gim,
+    "",
+  );
+
+  // Tiptap's GFM table serializer deliberately places an extra newline around
+  // a table. Reformatting every marker-free note here makes the controlled
+  // editor see its own update as external content, which reloads the document
+  // and moves the caret out of the selected cell. Only repair blank lines when
+  // a legacy marker was actually removed.
+  return stripped === markdown ? markdown : stripped.replace(/\n{3,}/g, "\n\n");
 }
 
 export function stripOrionLinksToTargets(
@@ -41,19 +46,25 @@ export function stripOrionLinksToTargets(
   targets: {
     noteIds?: readonly string[];
     conceptIds?: readonly string[];
+    sourceIds?: readonly string[];
   },
 ): string {
   const noteIds = new Set(targets.noteIds ?? []);
   const conceptIds = new Set(targets.conceptIds ?? []);
-  if (noteIds.size === 0 && conceptIds.size === 0) {
+  const sourceIds = new Set(targets.sourceIds ?? []);
+  if (noteIds.size === 0 && conceptIds.size === 0 && sourceIds.size === 0) {
     return markdown;
   }
 
   return markdown.replace(
-    /\[((?:\\.|[^\]\\])*)\]\(orion-(note|concept):\/\/([^) \t\r\n]+)\)/g,
+    /\[((?:\\.|[^\]\\])*)\]\(orion-(note|concept|source):\/\/([^) \t\r\n]+)\)/g,
     (link, label: string, kind: string, id: string) => {
       const remove =
-        kind === "note" ? noteIds.has(id) : conceptIds.has(id);
+        kind === "note"
+          ? noteIds.has(id)
+          : kind === "concept"
+            ? conceptIds.has(id)
+            : sourceIds.has(id);
       return remove ? label : link;
     },
   );

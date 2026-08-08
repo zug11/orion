@@ -34,7 +34,7 @@ describe("ConceptLinkPopover", () => {
     });
   });
 
-  it("makes source-aware AI drafting explicit before article creation", () => {
+  it("makes source-aware AI writing explicit before article creation", () => {
     const onSubmit = vi.fn();
     renderPopover(onSubmit, [], true);
 
@@ -65,7 +65,7 @@ function renderPopover(
     },
   ) => void,
   initialDestinationIds: readonly string[] = [],
-  aiArticleDraftingEnabled = false,
+  aiArticleWritingEnabled = false,
 ) {
   render(
     <ConceptLinkPopover
@@ -73,7 +73,7 @@ function renderPopover(
       initialDestinationIds={initialDestinationIds}
       currentNoteId="note-current"
       notes={[makeNote("note-current", "Project notes")]}
-      aiArticleDraftingEnabled={aiArticleDraftingEnabled}
+      aiArticleWritingEnabled={aiArticleWritingEnabled}
       onCancel={vi.fn()}
       onSubmit={onSubmit}
     />,

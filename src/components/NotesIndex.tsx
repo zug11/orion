@@ -1,14 +1,20 @@
-import { ArrowUpRight, BookOpen, Grid2X2, List, Search } from "../lib/icons";
+import { BookOpen, Grid2X2, List, Search, Trash2 } from "../lib/icons";
 import { useMemo, useState, type CSSProperties } from "react";
 import type { Note } from "../types";
+import { visibleNoteTags } from "../lib/noteMetadata";
 import BorderGlow from "./BorderGlow";
 
 interface NotesIndexProps {
   notes: Note[];
   onOpenNote: (noteId: string) => void;
+  onDeleteNote: (noteId: string) => void;
 }
 
-export function NotesIndex({ notes, onOpenNote }: NotesIndexProps) {
+export function NotesIndex({
+  notes,
+  onOpenNote,
+  onDeleteNote,
+}: NotesIndexProps) {
   const [query, setQuery] = useState("");
   const [layout, setLayout] = useState<"grid" | "list">("grid");
   const filtered = useMemo(() => {
@@ -65,43 +71,46 @@ export function NotesIndex({ notes, onOpenNote }: NotesIndexProps) {
 
       <div className={`notes-collection ${layout}`}>
         {filtered.map((note) => (
-          <BorderGlow
-            as="button"
-            key={note.id}
-            type="button"
-            className="note-index-card"
-            glowColor={note.color ?? "#a8b3ff"}
-            onClick={() => onOpenNote(note.id)}
-            style={
-              {
-                "--note-color": note.color ?? "#8798ff",
-              } as CSSProperties
-            }
-          >
-            <div className="note-card-top">
-              <span>
-                <BookOpen size={14} />
-                {note.kind}
-              </span>
-              <ArrowUpRight size={15} />
-            </div>
-            <strong>{note.title}</strong>
-            <p>{note.summary}</p>
-            <div className="tag-row">
-              {note.tags.slice(0, 3).map((tag) => (
-                <span key={tag}>#{tag}</span>
-              ))}
-            </div>
-            <div className="note-card-bottom">
-              <span>{note.conceptIds.length} concepts</span>
-              <span>
-                {new Intl.DateTimeFormat(undefined, {
-                  month: "short",
-                  day: "numeric",
-                }).format(new Date(note.updatedAt))}
-              </span>
-            </div>
-          </BorderGlow>
+          <div className="note-index-card-shell" key={note.id}>
+            <BorderGlow
+              as="button"
+              type="button"
+              className="note-index-card"
+              glowColor={note.color ?? "#a8b3ff"}
+              onClick={() => onOpenNote(note.id)}
+              style={
+                {
+                  "--note-color": note.color ?? "#8798ff",
+                } as CSSProperties
+              }
+            >
+              <strong>{note.title}</strong>
+              <p>{note.summary}</p>
+              <div className="tag-row">
+                {visibleNoteTags(note).slice(0, 3).map((tag) => (
+                  <span key={tag}>#{tag}</span>
+                ))}
+              </div>
+              <div className="note-card-bottom">
+                <span>{note.conceptIds.length} concepts</span>
+                <span>
+                  {new Intl.DateTimeFormat(undefined, {
+                    month: "short",
+                    day: "numeric",
+                  }).format(new Date(note.updatedAt))}
+                </span>
+              </div>
+            </BorderGlow>
+            <button
+              type="button"
+              className="note-index-delete"
+              aria-label={`Delete ${note.title}`}
+              title={`Delete ${note.title}`}
+              onClick={() => onDeleteNote(note.id)}
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
         ))}
         {filtered.length === 0 && (
           <div className="collection-empty">

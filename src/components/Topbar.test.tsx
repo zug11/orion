@@ -46,10 +46,16 @@ describe("Topbar", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /Search your atlas/i }));
-    fireEvent.click(screen.getByRole("button", { name: "Export Markdown" }));
-    fireEvent.click(
-      screen.getByRole("button", { name: "Toggle context panel" }),
+    fireEvent.click(screen.getByRole("button", { name: "Share or export" }));
+    const detailsButton = screen.getByRole("button", {
+      name: "Open note details",
+    });
+    expect(detailsButton).toHaveAttribute(
+      "aria-controls",
+      "note-details-panel",
     );
+    expect(detailsButton).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(detailsButton);
 
     expect(onOpenSearch).toHaveBeenCalledOnce();
     expect(onExport).toHaveBeenCalledOnce();

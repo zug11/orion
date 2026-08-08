@@ -65,6 +65,15 @@
         }
       ],
       "relationships": [],
+      "spaceOverview": {
+        "title": "The architecture of positivism",
+        "body": "This Space follows Auguste Comte's account of positivism and the hierarchy of sciences.",
+        "relatedNoteIds": [
+          "note-comte"
+        ],
+        "generatedAt": "2026-07-31T00:00:00.000Z",
+        "stale": false
+      },
       "importDrafts": [],
       "studio": {},
       "settings": {},

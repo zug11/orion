@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import type { Concept, Note } from "../types";
 import {
+  collectNoteTasks,
   collectTasksFromNote,
   setTaskChecked,
 } from "./tasks";
@@ -39,23 +40,75 @@ describe("note tasks", () => {
       "Intro\n\n- [x] Review evidence\n- [x] Done",
     );
   });
+
+  it("shows one authoritative task when a derived wiki copies a manual task", () => {
+    const manual = makeNote(
+      "- [ ] Buy milk\n- [ ] Pick up a prescription",
+      {
+        id: "note-shopping",
+        title: "Go shopping",
+        kind: "article",
+      },
+    );
+    const generated = makeNote(
+      "## Shopping list\n\n- [ ] Buy milk.\n- [ ] Pick up a prescription",
+      {
+        id: "note-shopping-wiki",
+        title: "Shopping list",
+        kind: "wiki",
+      },
+    );
+
+    expect(collectNoteTasks([generated, manual], [])).toMatchObject([
+      { noteId: manual.id, text: "Buy milk" },
+      { noteId: manual.id, text: "Pick up a prescription" },
+    ]);
+  });
+
+  it("deduplicates tasks derived from the same imported source", () => {
+    const first = makeNote("- [ ] Send the revised agenda", {
+      id: "note-first",
+      sourceIds: ["source-meeting"],
+    });
+    const second = makeNote("- [ ] Send the revised agenda.", {
+      id: "note-second",
+      sourceIds: ["source-meeting"],
+    });
+
+    expect(collectNoteTasks([first, second], [])).toHaveLength(1);
+  });
+
+  it("keeps identical recurring tasks from unrelated ordinary notes", () => {
+    const monday = makeNote("- [ ] Buy milk", {
+      id: "note-monday",
+    });
+    const friday = makeNote("- [ ] Buy milk", {
+      id: "note-friday",
+    });
+
+    expect(collectNoteTasks([monday, friday], [])).toMatchObject([
+      { noteId: "note-monday" },
+      { noteId: "note-friday" },
+    ]);
+  });
 });
 
-function makeNote(body: string): Note {
+function makeNote(body: string, overrides: Partial<Note> = {}): Note {
   return {
-    id: "note-plan",
-    title: "Project plan",
-    slug: "project-plan",
-    summary: "",
+    id: overrides.id ?? "note-plan",
+    title: overrides.title ?? "Project plan",
+    slug: overrides.slug ?? "project-plan",
+    summary: overrides.summary ?? "",
     body,
-    aliases: [],
-    tags: [],
-    kind: "project",
-    status: "ready",
-    conceptIds: [],
-    sourceIds: [],
-    createdAt: NOW,
-    updatedAt: NOW,
+    aliases: overrides.aliases ?? [],
+    tags: overrides.tags ?? [],
+    kind: overrides.kind ?? "project",
+    status: overrides.status ?? "ready",
+    conceptIds: overrides.conceptIds ?? [],
+    sourceIds: overrides.sourceIds ?? [],
+    createdAt: overrides.createdAt ?? NOW,
+    updatedAt: overrides.updatedAt ?? NOW,
+    color: overrides.color,
   };
 }
 

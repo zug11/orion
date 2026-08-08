@@ -4,6 +4,13 @@ import {
   normalizeHomeAtmosphere,
   normalizeHomeAtmosphereMotion,
   normalizeHomeAtmosphereTone,
+  normalizeThemeAccent,
+  normalizeThemeCanvasTone,
+  normalizeThemeColor,
+  normalizeThemeContrast,
+  normalizeThemePreset,
+  normalizeThemeSurfaceLift,
+  normalizeThemeTextWarmth,
 } from "./defaults";
 
 describe("normalizeHomeAtmosphere", () => {
@@ -38,5 +45,27 @@ describe("home atmosphere tuning defaults", () => {
   it("falls back when older or malformed vaults omit tuning", () => {
     expect(normalizeHomeAtmosphereTone(undefined)).toBe("signature");
     expect(normalizeHomeAtmosphereMotion("fast")).toBe("calm");
+  });
+});
+
+describe("theme defaults", () => {
+  it("keeps supported curated choices", () => {
+    expect(normalizeThemePreset("grove")).toBe("grove");
+    expect(normalizeThemeAccent("moss")).toBe("moss");
+    expect(normalizeThemeColor("#aabbcc")).toBe("#AABBCC");
+    expect(normalizeThemeCanvasTone("airy")).toBe("airy");
+    expect(normalizeThemeSurfaceLift("lifted")).toBe("lifted");
+    expect(normalizeThemeTextWarmth("warm")).toBe("warm");
+    expect(normalizeThemeContrast("high")).toBe("high");
+  });
+
+  it("hydrates missing or malformed choices to the restrained defaults", () => {
+    expect(normalizeThemePreset(undefined)).toBe("orion");
+    expect(normalizeThemeAccent("neon")).toBe("preset");
+    expect(normalizeThemeColor("blue")).toBe("");
+    expect(normalizeThemeCanvasTone(3)).toBe("balanced");
+    expect(normalizeThemeSurfaceLift("floating")).toBe("balanced");
+    expect(normalizeThemeTextWarmth(null)).toBe("neutral");
+    expect(normalizeThemeContrast("maximum")).toBe("balanced");
   });
 });

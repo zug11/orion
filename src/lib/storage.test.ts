@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   activeSpace,
   createEmptySnapshot,
@@ -10,15 +10,118 @@ import type { AppSnapshot } from "../types";
 import {
   apiKeyStatus,
   anthropicApiKeyStatus,
+  buildOrganizerInstructionSuffix,
   clearBrowserSnapshot,
   deleteAnthropicApiKey,
   deleteApiKey,
+  exportWebPage,
   loadSnapshot,
   parseChatResult,
+  recognizeDocumentText,
   saveAnthropicApiKey,
   saveApiKey,
   saveSnapshot,
 } from "./storage";
+
+const invokeTauriMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeTauriMock }));
+
+describe("organizer instruction boundaries", () => {
+  it("keeps task guidance before a full, independently bounded Space preference", () => {
+    const suffix = buildOrganizerInstructionSuffix({
+      taskInstructions: `batch-first ${"🪐".repeat(2_500)}`,
+      organizationInstructions: `space-second ${"🧭".repeat(2_500)}`,
+    });
+
+    expect(suffix.indexOf("batch-first")).toBeLessThan(
+      suffix.indexOf("space-second"),
+    );
+    expect(suffix).not.toContain("�");
+    expect(suffix).not.toContain("🪐".repeat(2_001));
+    expect(suffix).not.toContain("🧭".repeat(2_001));
+  });
+});
+
+describe("browser OCR boundary", () => {
+  it("explains that image recognition requires the desktop app", async () => {
+    const file = new File([new Uint8Array([1, 2, 3])], "board.png", {
+      type: "image/png",
+    });
+
+    await expect(recognizeDocumentText(file)).rejects.toThrow(
+      /installed Orion desktop app/i,
+    );
+  });
+
+  it("derives HEIC MIME and sends only the image bytes to native Vision", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    invokeTauriMock.mockResolvedValueOnce({
+      text: "A photographed plan",
+      pageCount: 1,
+      pages: [{ pageNumber: 1, text: "A photographed plan" }],
+      warnings: [],
+    });
+    const file = new File([new Uint8Array([1, 2, 3])], "board.heic");
+
+    try {
+      await expect(recognizeDocumentText(file)).resolves.toMatchObject({
+        text: "A photographed plan",
+        pageCount: 1,
+      });
+      expect(invokeTauriMock).toHaveBeenCalledWith(
+        "recognize_document_text",
+        {
+          request: {
+            fileName: "board.heic",
+            mimeType: "image/heic",
+            base64Data: "AQID",
+          },
+        },
+      );
+    } finally {
+      Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    }
+  });
+});
+
+describe("native web export boundary", () => {
+  it("passes the generated file through the narrow native save command", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    invokeTauriMock.mockResolvedValueOnce({
+      path: "/tmp/atlas.html",
+      cancelled: false,
+    });
+
+    try {
+      await expect(
+        exportWebPage("atlas.html", "<!doctype html><title>Atlas</title>"),
+      ).resolves.toEqual({ path: "/tmp/atlas.html", cancelled: false });
+      expect(invokeTauriMock).toHaveBeenCalledWith("export_web_page", {
+        request: {
+          fileName: "atlas.html",
+          html: "<!doctype html><title>Atlas</title>",
+        },
+      });
+    } finally {
+      Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    }
+  });
+
+  it("refuses an empty web article before invoking native code", async () => {
+    invokeTauriMock.mockClear();
+    await expect(exportWebPage("empty.html", "   ")).rejects.toThrow(
+      /no web article/i,
+    );
+    expect(invokeTauriMock).not.toHaveBeenCalled();
+  });
+});
 
 describe("browser persistence fallback", () => {
   beforeEach(async () => {
@@ -67,6 +170,79 @@ describe("browser persistence fallback", () => {
       id: "draft-test",
       status: "error",
       error: "Import paused.",
+    });
+  });
+
+  it("round-trips import guidance and a living Space overview", async () => {
+    const vault = createEmptyVault("Guided research", TEST_NOW);
+    const snapshot = activeSpace(vault);
+    snapshot.sources.push({
+      id: "source-guided",
+      title: "Interview",
+      kind: "text",
+      importedAt: TEST_NOW,
+      importGuidance: "Focus on objections and explicit next actions.",
+      text: "Interview transcript.",
+      noteIds: [],
+    });
+    snapshot.spaceOverview = {
+      title: "A dispute takes shape",
+      body: "The Space centres on a developing disagreement.",
+      relatedNoteIds: [],
+      generatedAt: TEST_NOW,
+      stale: true,
+    };
+
+    await saveSnapshot(vault);
+
+    expect(await loadSnapshot()).toMatchObject({
+      spaces: [
+        {
+          sources: [
+            {
+              importGuidance:
+                "Focus on objections and explicit next actions.",
+            },
+          ],
+          spaceOverview: {
+            title: "A dispute takes shape",
+            stale: true,
+          },
+        },
+      ],
+    });
+  });
+
+  it("round-trips the optional last-opened navigation timestamp", async () => {
+    const vault = createEmptyVault("Reading order", TEST_NOW);
+    const snapshot = activeSpace(vault);
+    snapshot.notes.push({
+      id: "note-opened",
+      title: "Opened note",
+      slug: "opened-note",
+      summary: "A note with navigation recency.",
+      body: "Body",
+      aliases: [],
+      tags: [],
+      kind: "article",
+      status: "ready",
+      conceptIds: [],
+      sourceIds: [],
+      createdAt: TEST_NOW,
+      updatedAt: TEST_NOW,
+      lastOpenedAt: "2026-08-07T02:00:00.000Z",
+    });
+
+    await saveSnapshot(vault);
+
+    expect(await loadSnapshot()).toMatchObject({
+      spaces: [
+        {
+          notes: [
+            { lastOpenedAt: "2026-08-07T02:00:00.000Z" },
+          ],
+        },
+      ],
     });
   });
 
@@ -120,8 +296,17 @@ describe("browser persistence fallback", () => {
     });
   });
 
-  it("accepts a vault saved before home atmosphere preferences existed", async () => {
+  it("accepts a vault saved before appearance preferences existed", async () => {
     const legacy = mutablePopulatedSnapshot();
+    delete legacy.settings.themePreset;
+    delete legacy.settings.themeAccent;
+    delete legacy.settings.themeAccentCustom;
+    delete legacy.settings.themeCanvasTone;
+    delete legacy.settings.themeCanvasCustom;
+    delete legacy.settings.themeSurfaceLift;
+    delete legacy.settings.themeSurfaceCustom;
+    delete legacy.settings.themeTextWarmth;
+    delete legacy.settings.themeContrast;
     delete legacy.settings.homeAtmosphere;
     delete legacy.settings.homeAtmosphereTone;
     delete legacy.settings.homeAtmosphereMotion;
@@ -263,6 +448,12 @@ describe("browser persistence fallback", () => {
         snapshot.notes[0].tags = ["valid", 42];
       },
     ],
+    [
+      "non-string last-opened timestamp",
+      (snapshot: MutableSnapshot) => {
+        snapshot.notes[0].lastOpenedAt = 42;
+      },
+    ],
   ])("rejects a note with a %s", async (_name, corrupt) => {
     const snapshot = mutablePopulatedSnapshot();
     corrupt(snapshot);
@@ -287,6 +478,60 @@ describe("browser persistence fallback", () => {
       "unsupported theme",
       (snapshot: MutableSnapshot) => {
         snapshot.settings.theme = "sepia";
+      },
+    ],
+    [
+      "unsupported theme preset",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.themePreset = "laser";
+      },
+    ],
+    [
+      "unsupported theme accent",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.themeAccent = "neon";
+      },
+    ],
+    [
+      "malformed custom accent",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.themeAccentCustom = "electric-blue";
+      },
+    ],
+    [
+      "unsupported canvas tone",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.themeCanvasTone = "black";
+      },
+    ],
+    [
+      "malformed custom canvas",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.themeCanvasCustom = "#123";
+      },
+    ],
+    [
+      "unsupported surface lift",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.themeSurfaceLift = "floating";
+      },
+    ],
+    [
+      "malformed custom surface",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.themeSurfaceCustom = "rgb(1, 2, 3)";
+      },
+    ],
+    [
+      "unsupported text warmth",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.themeTextWarmth = "hot";
+      },
+    ],
+    [
+      "unsupported theme contrast",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.themeContrast = "maximum";
       },
     ],
     [
@@ -363,6 +608,30 @@ describe("browser persistence fallback", () => {
         snapshot.activeNoteId = 99;
       },
     ],
+    [
+      "Space overview",
+      (snapshot: MutableSnapshot) => {
+        snapshot.spaceOverview = {
+          title: "Overview",
+          body: "Body",
+          relatedNoteIds: [42],
+          generatedAt: TEST_NOW,
+          stale: false,
+        };
+      },
+    ],
+    [
+      "Space overview timestamp",
+      (snapshot: MutableSnapshot) => {
+        snapshot.spaceOverview = {
+          title: "Overview",
+          body: "Body",
+          relatedNoteIds: [],
+          generatedAt: "2026-02-30T12:00:00.000Z",
+          stale: false,
+        };
+      },
+    ],
   ])("rejects a malformed %s entity", async (_name, corrupt) => {
     const snapshot = mutablePopulatedSnapshot();
     corrupt(snapshot);
@@ -379,6 +648,7 @@ interface MutableSnapshot {
   relationships: Array<Record<string, unknown>>;
   importDrafts: Array<Record<string, unknown>>;
   settings: Record<string, unknown>;
+  spaceOverview?: Record<string, unknown>;
   activeNoteId: unknown;
 }
 

@@ -6,13 +6,20 @@ import {
   FilePlus2,
   Link2,
   ListTodo,
+  LoaderCircle,
   Plus,
-  Tags,
+  RefreshCw,
 } from "../lib/icons";
 import {
   collectNoteTasks,
   type NoteTask,
 } from "../lib/tasks";
+import { buildLocalSpaceOverview } from "../lib/spaceOverview";
+import {
+  isSelectedAIConfigured,
+  selectedAIProviderName,
+} from "../lib/ai";
+import { decorateAutoLinks } from "../lib/wiki";
 import type { AppSnapshot, Note } from "../types";
 import BorderGlow from "./BorderGlow";
 import HomeAtmosphere from "./HomeAtmosphere";
@@ -25,6 +32,20 @@ interface HomeViewProps {
   onImport: () => void;
   onOpenNotes: () => void;
   onToggleTask: (task: NoteTask, checked: boolean) => void;
+  overviewBusy?: boolean;
+  overviewError?: string | null;
+  onRefreshOverview: () => void;
+}
+
+function formatOverviewDate(value: string): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) {
+    return "Updated recently";
+  }
+  return `Updated ${new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+  }).format(date)}`;
 }
 
 function NoteCard({
@@ -42,16 +63,6 @@ function NoteCard({
       glowColor={note.color ?? "#a8b3ff"}
       onClick={() => onOpen(note.id)}
     >
-      <div className="recent-note-meta">
-        <span
-          className="note-kind-mark"
-          style={{ "--note-color": note.color ?? "#8798ff" } as React.CSSProperties}
-        >
-          <BookOpen size={14} />
-        </span>
-        <span>{note.kind}</span>
-        {note.status === "draft" && <em>Draft</em>}
-      </div>
       <strong>{note.title}</strong>
       <p>{note.summary}</p>
       <div className="card-footer">
@@ -76,19 +87,27 @@ export function HomeView({
   onImport,
   onOpenNotes,
   onToggleTask,
+  overviewBusy = false,
+  overviewError,
+  onRefreshOverview,
 }: HomeViewProps) {
   const recent = [...snapshot.notes]
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .slice(0, 3);
-  const featuredConcepts = snapshot.concepts
-    .filter((concept) => concept.noteIds.length > 1)
-    .sort((a, b) => b.noteIds.length - a.noteIds.length)
-    .slice(0, 4);
   const isEmpty = snapshot.notes.length === 0;
   const openTasks = collectNoteTasks(
     snapshot.notes,
     snapshot.concepts,
   ).filter((task) => !task.checked);
+  const localOverview = buildLocalSpaceOverview(snapshot);
+  const aiConfigured = isSelectedAIConfigured(snapshot.settings);
+  const usingLocalOverview = !snapshot.spaceOverview;
+  const overview = usingLocalOverview
+    ? localOverview
+    : snapshot.spaceOverview!;
+  const overviewConcepts = snapshot.concepts.filter(
+    (concept) => concept.noteIds.length > 0,
+  );
 
   return (
     <div className="view home-view">
@@ -229,46 +248,6 @@ export function HomeView({
           </section>
 
           <section className="home-lower-grid">
-            <BorderGlow className="connection-panel">
-              <div className="section-heading compact">
-                <div>
-                  <span className="eyebrow neutral">Emerging connections</span>
-                  <h2>Concepts with gravity</h2>
-                </div>
-                <Tags size={18} />
-              </div>
-              <div className="concept-list">
-                {featuredConcepts.map((concept) => (
-                  <button
-                    key={concept.id}
-                    type="button"
-                    className="concept-row"
-                    onClick={() => onOpenConcept(concept.id)}
-                  >
-                    <span
-                      className="concept-orbit"
-                      style={
-                        {
-                          "--concept-color": concept.color,
-                        } as React.CSSProperties
-                      }
-                    >
-                      <i />
-                    </span>
-                    <span>
-                      <strong>{concept.label}</strong>
-                      <small>
-                        Appears across {concept.noteIds.length} notes
-                      </small>
-                    </span>
-                    <span className="concept-count">
-                      {concept.noteIds.length}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </BorderGlow>
-
             <BorderGlow
               className="task-panel"
               glowColor="#7bc9b0"
@@ -326,6 +305,84 @@ export function HomeView({
                   ))
                 )}
               </div>
+            </BorderGlow>
+
+            <BorderGlow
+              className="space-overview-panel"
+              glowColor="#8f9cff"
+              secondaryColor="#70b7d9"
+            >
+              <div className="section-heading compact">
+                <div>
+                  <span className="eyebrow neutral">Across this Space</span>
+                  <h2>{overview.title}</h2>
+                </div>
+                <button
+                  type="button"
+                  className="space-overview-refresh"
+                  onClick={onRefreshOverview}
+                  disabled={overviewBusy}
+                  aria-label="Refresh Space overview"
+                  title="Refresh Space overview"
+                >
+                  {overviewBusy ? (
+                    <LoaderCircle className="spin" size={15} />
+                  ) : (
+                    <RefreshCw size={14} />
+                  )}
+                </button>
+              </div>
+              <div className="space-overview-body">
+                {overview.body
+                  .split(/\n\s*\n/)
+                  .filter(Boolean)
+                  .map((paragraph, paragraphIndex) => (
+                    <p key={`${paragraph.slice(0, 24)}-${paragraphIndex}`}>
+                      {decorateAutoLinks(paragraph, overviewConcepts).map(
+                        (segment, segmentIndex) =>
+                          segment.type === "text" ? (
+                            segment.text
+                          ) : (
+                            <button
+                              type="button"
+                              className="wiki-link"
+                              key={`${segment.conceptId}-${segmentIndex}`}
+                              onClick={() =>
+                                onOpenConcept(segment.conceptId)
+                              }
+                            >
+                              {segment.text}
+                            </button>
+                          ),
+                      )}
+                    </p>
+                  ))}
+              </div>
+              <footer
+                className="space-overview-footer"
+                role="status"
+                aria-live="polite"
+              >
+                <span>
+                  {overviewBusy
+                    ? "Revising with the latest context…"
+                    : overviewError
+                      ? overviewError
+                      : usingLocalOverview
+                        ? aiConfigured
+                          ? "A local orientation while Orion prepares the living overview"
+                          : "A local orientation until AI is configured"
+                        : snapshot.spaceOverview?.stale
+                          ? aiConfigured
+                            ? "New context is waiting to be integrated"
+                            : `New context awaits an ${selectedAIProviderName(snapshot.settings)} key`
+                          : snapshot.spaceOverview
+                            ? formatOverviewDate(
+                                snapshot.spaceOverview.generatedAt,
+                              )
+                            : "A local orientation while Orion prepares the living overview"}
+                </span>
+              </footer>
             </BorderGlow>
           </section>
         </>

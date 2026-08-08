@@ -14,6 +14,7 @@ import { ChatView } from "./components/ChatView";
 import { CommandPalette } from "./components/CommandPalette";
 import { ConnectionCanvas } from "./components/ConnectionCanvas";
 import { ContextPanel } from "./components/ContextPanel";
+import { ExportDialog, type ExportRequest } from "./components/ExportDialog";
 import { HomeView } from "./components/HomeView";
 import {
   ImportStudio,
@@ -23,6 +24,7 @@ import { NoteView } from "./components/NoteView";
 import { NotesIndex } from "./components/NotesIndex";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar, type WorkspaceView } from "./components/Sidebar";
+import { SourceViewer } from "./components/SourceViewer";
 import { SourcesView } from "./components/SourcesView";
 import { Topbar } from "./components/Topbar";
 import {
@@ -33,6 +35,13 @@ import {
   normalizeHomeAtmosphere,
   normalizeHomeAtmosphereMotion,
   normalizeHomeAtmosphereTone,
+  normalizeThemeAccent,
+  normalizeThemeCanvasTone,
+  normalizeThemeColor,
+  normalizeThemeContrast,
+  normalizeThemePreset,
+  normalizeThemeSurfaceLift,
+  normalizeThemeTextWarmth,
   slugifyTitle,
 } from "./data/defaults";
 import {
@@ -47,6 +56,7 @@ import {
   deleteAnthropicApiKey,
   deleteApiKey,
   exportMarkdown,
+  exportWebPage,
   clearBrowserSnapshot,
   isTauriRuntime,
   loadSnapshot,
@@ -85,22 +95,44 @@ import {
   resolveConceptDestination,
 } from "./lib/wiki";
 import { deleteNoteFromSnapshot } from "./lib/noteDeletion";
+import {
+  attachSourceToNoteInSnapshot,
+  deleteSourceFromSnapshot,
+} from "./lib/sourceDeletion";
 import { parseOrionNoteLink } from "./lib/orionLinks";
 import { normalizeStudio } from "./lib/studio";
 import {
-  createNoteHistoryEntry,
-  moveNoteHistory,
-  pushNoteHistory,
+  applySpaceOverviewResult,
+  buildSpaceOverviewRequest,
+  hasSubstantiveOverviewNote,
+  markSpaceOverviewStale,
+  spaceKnowledgeFingerprint,
+} from "./lib/spaceOverview";
+import {
+  createNavigationEntry,
+  moveNavigationHistory,
+  pushNavigationHistory,
   readScrollPosition,
   resetScrollPosition,
   restoreScrollPosition,
-  type NoteHistoryEntry,
+  routesMatch,
+  type NavigationEntry,
+  type NavigationRoute,
   type ScrollPosition,
 } from "./lib/navigation";
+import { resolveThemeMode, themeCssVariables } from "./lib/theme";
+import {
+  buildWebExportDocument,
+  notesForExportScope,
+} from "./lib/webExport";
 import {
   isSelectedAIConfigured,
   selectedAIProviderName,
 } from "./lib/ai";
+import {
+  shouldAcceptExternalVault,
+  spacesNeedingOverviewRefresh,
+} from "./lib/externalVault";
 import type {
   AppSnapshot,
   ChatResult,
@@ -111,6 +143,15 @@ import type {
 } from "./types";
 
 type AppScreen = WorkspaceView | "note";
+
+function routeForScreen(
+  screen: AppScreen,
+  activeNoteId: EntityId | null,
+): NavigationRoute {
+  return screen === "note" && activeNoteId
+    ? { screen: "note", noteId: activeNoteId }
+    : { screen: screen === "note" ? "notes" : screen };
+}
 
 interface ToastState {
   id: string;
@@ -169,8 +210,10 @@ function App() {
   const [vaultLoadError, setVaultLoadError] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [commandOpen, setCommandOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
-  const [contextOpen, setContextOpen] = useState(true);
+  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
+  const [contextOpen, setContextOpen] = useState(false);
   const [connectionConceptId, setConnectionConceptId] = useState<string | null>(
     null,
   );
@@ -181,11 +224,19 @@ function App() {
   const [chatBusySpaceIds, setChatBusySpaceIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [overviewBusySpaceIds, setOverviewBusySpaceIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [overviewErrors, setOverviewErrors] = useState<Map<string, string>>(
+    () => new Map(),
+  );
   const [linkedArticleJobs, setLinkedArticleJobs] = useState<
     LinkedArticleJob[]
   >([]);
-  const [history, setHistory] = useState<NoteHistoryEntry[]>([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [history, setHistory] = useState<NavigationEntry[]>(() => [
+    createNavigationEntry({ screen: "home" }),
+  ]);
+  const [historyIndex, setHistoryIndex] = useState(0);
   const saveTimer = useRef<number | null>(null);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const pendingSaveCount = useRef(0);
@@ -196,12 +247,17 @@ function App() {
   const chatRequests = useRef(new ChatRequestRegistry());
   const linkedArticleRequests = useRef(new LinkedArticleRequestRegistry());
   const wikiEnrichmentRequests = useRef(new Set<string>());
+  const overviewRequests = useRef(new Map<string, string>());
+  const overviewTimers = useRef(new Map<string, number>());
+  const refreshSpaceOverviewRef = useRef<
+    (spaceId: string, manual?: boolean) => Promise<void>
+  >(async () => undefined);
   const snapshotBeforeImport = useRef<AppSnapshot | null>(null);
   const workspaceContentRef = useRef<HTMLElement | null>(null);
-  const historyRef = useRef<NoteHistoryEntry[]>([]);
-  const historyIndexRef = useRef(-1);
+  const historyRef = useRef<NavigationEntry[]>(history);
+  const historyIndexRef = useRef(0);
   const pendingScrollRestore = useRef<{
-    noteId: EntityId;
+    route: NavigationRoute;
     position: ScrollPosition;
   } | null>(null);
   const screenRef = useRef(screen);
@@ -216,7 +272,7 @@ function App() {
   screenRef.current = screen;
 
   const replaceHistory = useCallback(
-    (entries: NoteHistoryEntry[], index: number) => {
+    (entries: NavigationEntry[], index: number) => {
       historyRef.current = entries;
       historyIndexRef.current = index;
       setHistory(entries);
@@ -229,6 +285,11 @@ function App() {
     () =>
       snapshot.notes.find((note) => note.id === snapshot.activeNoteId) ?? null,
     [snapshot.activeNoteId, snapshot.notes],
+  );
+  const selectedSource = useMemo(
+    () =>
+      snapshot.sources.find((source) => source.id === selectedSourceId) ?? null,
+    [selectedSourceId, snapshot.sources],
   );
   const connectionConcept = useMemo(
     () =>
@@ -251,10 +312,10 @@ function App() {
   );
 
   useLayoutEffect(() => {
-    if (screen !== "note" || !snapshot.activeNoteId) return;
+    const route = routeForScreen(screen, snapshot.activeNoteId);
     const restoration = pendingScrollRestore.current;
     pendingScrollRestore.current = null;
-    if (restoration?.noteId === snapshot.activeNoteId) {
+    if (restoration && routesMatch(restoration.route, route)) {
       restoreScrollPosition(
         workspaceContentRef.current,
         restoration.position,
@@ -276,6 +337,180 @@ function App() {
     },
     [],
   );
+
+  const scheduleSpaceOverviewRefresh = useCallback(
+    (spaceId: string, delayMs = 1_400) => {
+      const pending = overviewTimers.current.get(spaceId);
+      if (pending !== undefined) {
+        window.clearTimeout(pending);
+      }
+      const timer = window.setTimeout(() => {
+        overviewTimers.current.delete(spaceId);
+        void refreshSpaceOverviewRef.current(spaceId);
+      }, delayMs);
+      overviewTimers.current.set(spaceId, timer);
+    },
+    [],
+  );
+
+  const cancelSpaceOverviewRefresh = useCallback((spaceId: string) => {
+    const pending = overviewTimers.current.get(spaceId);
+    if (pending !== undefined) {
+      window.clearTimeout(pending);
+      overviewTimers.current.delete(spaceId);
+    }
+    overviewRequests.current.delete(spaceId);
+    setOverviewBusySpaceIds((current) => {
+      if (!current.has(spaceId)) return current;
+      const next = new Set(current);
+      next.delete(spaceId);
+      return next;
+    });
+  }, []);
+
+  const refreshSpaceOverview = useCallback(
+    async (spaceId: string, manual = false) => {
+      const workspace = vaultRef.current.spaces.find(
+        (space) => space.workspace.id === spaceId,
+      );
+      if (!workspace || overviewRequests.current.has(spaceId)) {
+        return;
+      }
+      if (!workspace.notes.some(hasSubstantiveOverviewNote)) {
+        if (!workspace.spaceOverview) return;
+        const now = new Date().toISOString();
+        setVault((current) => ({
+          ...current,
+          spaces: current.spaces.map((space) =>
+            space.workspace.id === spaceId &&
+            !space.notes.some(hasSubstantiveOverviewNote)
+              ? { ...space, spaceOverview: undefined, updatedAt: now }
+              : space,
+          ),
+          updatedAt: now,
+        }));
+        return;
+      }
+      if (!isSelectedAIConfigured(workspace.settings)) {
+        if (manual) {
+          showToast(
+            "Local Space overview",
+            `Add an ${selectedAIProviderName(workspace.settings)} key in Settings when you want Orion to write a richer living overview.`,
+          );
+        }
+        return;
+      }
+
+      const requestId = `space-overview-${nanoid(10)}`;
+      const fingerprint = spaceKnowledgeFingerprint(workspace);
+      overviewRequests.current.set(spaceId, requestId);
+      setOverviewBusySpaceIds((current) => {
+        const next = new Set(current);
+        next.add(spaceId);
+        return next;
+      });
+      setOverviewErrors((current) => {
+        const next = new Map(current);
+        next.delete(spaceId);
+        return next;
+      });
+
+      try {
+        const result = await organizeWithAI(
+          buildSpaceOverviewRequest(workspace),
+        );
+        if (overviewRequests.current.get(spaceId) !== requestId) {
+          return;
+        }
+        const liveSpace = vaultRef.current.spaces.find(
+          (space) => space.workspace.id === spaceId,
+        );
+        if (
+          !liveSpace ||
+          spaceKnowledgeFingerprint(liveSpace) !== fingerprint
+        ) {
+          scheduleSpaceOverviewRefresh(spaceId, 900);
+          return;
+        }
+
+        const now = new Date().toISOString();
+        const overview = applySpaceOverviewResult(liveSpace, result, now);
+        setVault((current) => {
+          const currentSpace = current.spaces.find(
+            (space) => space.workspace.id === spaceId,
+          );
+          if (
+            !currentSpace ||
+            spaceKnowledgeFingerprint(currentSpace) !== fingerprint
+          ) {
+            return current;
+          }
+          return {
+            ...current,
+            spaces: current.spaces.map((space) =>
+              space.workspace.id === spaceId
+                ? { ...space, spaceOverview: overview, updatedAt: now }
+                : space,
+            ),
+            updatedAt: now,
+          };
+        });
+      } catch (error) {
+        if (overviewRequests.current.get(spaceId) !== requestId) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        setOverviewErrors((current) => {
+          const next = new Map(current);
+          next.set(spaceId, message);
+          return next;
+        });
+      } finally {
+        if (overviewRequests.current.get(spaceId) === requestId) {
+          overviewRequests.current.delete(spaceId);
+          setOverviewBusySpaceIds((current) => {
+            const next = new Set(current);
+            next.delete(spaceId);
+            return next;
+          });
+        }
+      }
+    },
+    [scheduleSpaceOverviewRefresh, showToast],
+  );
+  refreshSpaceOverviewRef.current = refreshSpaceOverview;
+
+  useEffect(
+    () => () => {
+      for (const timer of overviewTimers.current.values()) {
+        window.clearTimeout(timer);
+      }
+      overviewTimers.current.clear();
+      overviewRequests.current.clear();
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (
+      !hydrated ||
+      !isSelectedAIConfigured(snapshot.settings) ||
+      !snapshot.notes.some(hasSubstantiveOverviewNote) ||
+      (snapshot.spaceOverview && !snapshot.spaceOverview.stale)
+    ) {
+      return;
+    }
+    scheduleSpaceOverviewRefresh(snapshot.workspace.id, 1_800);
+  }, [
+    hydrated,
+    scheduleSpaceOverviewRefresh,
+    snapshot.notes.length,
+    snapshot.settings.anthropicApiKeyConfigured,
+    snapshot.settings.apiKeyConfigured,
+    snapshot.settings.model,
+    snapshot.spaceOverview,
+    snapshot.workspace.id,
+  ]);
 
   const queueSnapshotSave = useCallback((nextVault: OrionVault) => {
     pendingSaveCount.current += 1;
@@ -330,6 +565,29 @@ function App() {
               anthropicApiKeyConfigured: isTauriRuntime()
                 ? (base.settings.anthropicApiKeyConfigured ?? false)
                 : false,
+              themePreset: normalizeThemePreset(base.settings.themePreset),
+              themeAccent: normalizeThemeAccent(base.settings.themeAccent),
+              themeAccentCustom: normalizeThemeColor(
+                base.settings.themeAccentCustom,
+              ),
+              themeCanvasTone: normalizeThemeCanvasTone(
+                base.settings.themeCanvasTone,
+              ),
+              themeCanvasCustom: normalizeThemeColor(
+                base.settings.themeCanvasCustom,
+              ),
+              themeSurfaceLift: normalizeThemeSurfaceLift(
+                base.settings.themeSurfaceLift,
+              ),
+              themeSurfaceCustom: normalizeThemeColor(
+                base.settings.themeSurfaceCustom,
+              ),
+              themeTextWarmth: normalizeThemeTextWarmth(
+                base.settings.themeTextWarmth,
+              ),
+              themeContrast: normalizeThemeContrast(
+                base.settings.themeContrast,
+              ),
               homeAtmosphere: normalizeHomeAtmosphere(
                 base.settings.homeAtmosphere,
               ),
@@ -352,14 +610,11 @@ function App() {
             ? baseVault.activeSpaceId
             : spaces[0].workspace.id,
         };
-        const nextSpace = activeSpace(nextVault);
         setVault(nextVault);
-        if (nextSpace.activeNoteId && saved) {
-          replaceHistory(
-            [createNoteHistoryEntry(nextSpace.activeNoteId)],
-            0,
-          );
-        }
+        replaceHistory(
+          [createNavigationEntry({ screen: "home" })],
+          0,
+        );
         setPersistenceEnabled(true);
         setHydrated(true);
       })
@@ -451,20 +706,23 @@ function App() {
       try {
         const latest = await loadSnapshot();
         if (disposed || !latest) return;
-        const latestTime = Date.parse(latest.updatedAt);
-        const currentTime = Date.parse(vaultRef.current.updatedAt);
-        if (
-          Number.isFinite(latestTime) &&
-          (!Number.isFinite(currentTime) || latestTime > currentTime)
-        ) {
+        const previousVault = vaultRef.current;
+        if (shouldAcceptExternalVault(previousVault.updatedAt, latest.updatedAt)) {
           const reconciledLatest: OrionVault = {
             ...latest,
             spaces: latest.spaces.map(reconcileSnapshotConceptVocabulary),
           };
+          const overviewSpaceIds = spacesNeedingOverviewRefresh(
+            previousVault,
+            reconciledLatest,
+          );
           persistedVaultUpdatedAt.current = latest.updatedAt;
           skipAutosaveVault.current = reconciledLatest;
           vaultRef.current = reconciledLatest;
           setVault(reconciledLatest);
+          for (const spaceId of overviewSpaceIds) {
+            scheduleSpaceOverviewRefresh(spaceId, 800);
+          }
         }
       } catch {
         // A foreground refresh is opportunistic. Normal saves and explicit
@@ -481,7 +739,7 @@ function App() {
       window.removeEventListener("focus", refreshExternalVault);
       document.removeEventListener("visibilitychange", refreshExternalVault);
     };
-  }, [hydrated, persistenceEnabled]);
+  }, [hydrated, persistenceEnabled, scheduleSpaceOverviewRefresh]);
 
   useEffect(() => {
     if (!isTauriRuntime()) return undefined;
@@ -591,13 +849,41 @@ function App() {
   }, [queueSnapshotSave, showToast]);
 
   useEffect(() => {
-    document.documentElement.dataset.theme =
-      snapshot.settings.theme === "system"
-        ? window.matchMedia("(prefers-color-scheme: light)").matches
-          ? "light"
-          : "dark"
-        : snapshot.settings.theme;
-  }, [snapshot.settings.theme]);
+    const root = document.documentElement;
+    const systemTheme =
+      typeof window.matchMedia === "function"
+        ? window.matchMedia("(prefers-color-scheme: light)")
+        : null;
+    const applyTheme = () => {
+      const mode = resolveThemeMode(
+        snapshot.settings.theme,
+        systemTheme?.matches ?? false,
+      );
+      const variables = themeCssVariables(snapshot.settings, mode);
+      root.dataset.theme = mode;
+      root.dataset.themePreset = snapshot.settings.themePreset;
+      root.style.colorScheme = mode;
+      for (const [name, value] of Object.entries(variables)) {
+        root.style.setProperty(name, value);
+      }
+    };
+
+    applyTheme();
+    if (snapshot.settings.theme !== "system" || !systemTheme) return undefined;
+    systemTheme.addEventListener("change", applyTheme);
+    return () => systemTheme.removeEventListener("change", applyTheme);
+  }, [
+    snapshot.settings.theme,
+    snapshot.settings.themeAccent,
+    snapshot.settings.themeAccentCustom,
+    snapshot.settings.themeCanvasCustom,
+    snapshot.settings.themeCanvasTone,
+    snapshot.settings.themeContrast,
+    snapshot.settings.themePreset,
+    snapshot.settings.themeSurfaceCustom,
+    snapshot.settings.themeSurfaceLift,
+    snapshot.settings.themeTextWarmth,
+  ]);
 
   const closeConnections = useCallback(() => {
     setConnectionConceptId(null);
@@ -605,18 +891,17 @@ function App() {
   }, []);
 
   const resetSpaceNavigation = useCallback(
-    (space: AppSnapshot) => {
+    () => {
       setScreen("home");
       setCommandOpen(false);
       setImportOpen(false);
-      setContextOpen(true);
+      setSelectedSourceId(null);
+      setContextOpen(false);
       closeConnections();
       snapshotBeforeImport.current = null;
       replaceHistory(
-        space.activeNoteId
-          ? [createNoteHistoryEntry(space.activeNoteId)]
-          : [],
-        space.activeNoteId ? 0 : -1,
+        [createNavigationEntry({ screen: "home" })],
+        0,
       );
     },
     [closeConnections, replaceHistory],
@@ -635,7 +920,7 @@ function App() {
         activeSpaceId: spaceId,
         updatedAt: new Date().toISOString(),
       }));
-      resetSpaceNavigation(target);
+      resetSpaceNavigation();
       showToast(
         target.workspace.name,
         "Space switched. Its links and concepts stay independent.",
@@ -670,7 +955,7 @@ function App() {
         activeSpaceId: space.workspace.id,
         updatedAt: now,
       }));
-      resetSpaceNavigation(space);
+      resetSpaceNavigation();
       showToast(
         "Blank space created",
         `${normalizedName} is completely separate from your other projects.`,
@@ -695,27 +980,31 @@ function App() {
       preserveConnections = false,
       restorePosition?: ScrollPosition,
     ) => {
+      const now = new Date().toISOString();
+      const route: NavigationRoute = { screen: "note", noteId };
       pendingScrollRestore.current = restorePosition
-        ? { noteId, position: restorePosition }
+        ? { route, position: restorePosition }
         : null;
       setSnapshot((current) => ({
         ...current,
+        notes: current.notes.map((note) =>
+          note.id === noteId ? { ...note, lastOpenedAt: now } : note,
+        ),
         activeNoteId: noteId,
-        updatedAt: new Date().toISOString(),
+        updatedAt: now,
       }));
       setScreen("note");
+      setSelectedSourceId(null);
       if (!preserveConnections) {
         closeConnections();
-        setContextOpen(true);
+        setContextOpen(false);
       }
       if (trackHistory) {
-        const next = pushNoteHistory(
+        const next = pushNavigationHistory(
           historyRef.current,
           historyIndexRef.current,
-          noteId,
-          screenRef.current === "note"
-            ? readScrollPosition(workspaceContentRef.current)
-            : null,
+          route,
+          readScrollPosition(workspaceContentRef.current),
         );
         replaceHistory(next.entries, next.index);
       }
@@ -756,6 +1045,11 @@ function App() {
           candidate.workspace.id === spaceId
             ? {
                 ...candidate,
+                notes: candidate.notes.map((candidateNote) =>
+                  candidateNote.id === noteId
+                    ? { ...candidateNote, lastOpenedAt: now }
+                    : candidateNote,
+                ),
                 activeNoteId: noteId,
                 updatedAt: now,
               }
@@ -768,8 +1062,12 @@ function App() {
       setVault(nextVault);
       setScreen("note");
       closeConnections();
-      setContextOpen(true);
-      replaceHistory([createNoteHistoryEntry(noteId)], 0);
+      setSelectedSourceId(null);
+      setContextOpen(false);
+      replaceHistory(
+        [createNavigationEntry({ screen: "note", noteId })],
+        0,
+      );
     },
     [closeConnections, replaceHistory, showToast],
   );
@@ -843,23 +1141,42 @@ function App() {
 
   const navigateHistory = useCallback(
     (direction: -1 | 1) => {
-      const next = moveNoteHistory(
+      const next = moveNavigationHistory(
         historyRef.current,
         historyIndexRef.current,
         direction,
-        screenRef.current === "note"
-          ? readScrollPosition(workspaceContentRef.current)
-          : null,
+        readScrollPosition(workspaceContentRef.current),
       );
       if (!next) return;
       const entry = next.entries[next.index];
       replaceHistory(next.entries, next.index);
-      openNote(entry.noteId, false, false, {
-        scrollLeft: entry.scrollLeft,
-        scrollTop: entry.scrollTop,
-      });
+      pendingScrollRestore.current = {
+        route: entry.route,
+        position: {
+          scrollLeft: entry.scrollLeft,
+          scrollTop: entry.scrollTop,
+        },
+      };
+      closeConnections();
+      setContextOpen(false);
+      setSelectedSourceId(null);
+      if (entry.route.screen === "note") {
+        const noteId = entry.route.noteId;
+        const now = new Date().toISOString();
+        setSnapshot((current) => ({
+          ...current,
+          notes: current.notes.map((note) =>
+            note.id === noteId ? { ...note, lastOpenedAt: now } : note,
+          ),
+          activeNoteId: noteId,
+          updatedAt: now,
+        }));
+        setScreen("note");
+      } else {
+        setScreen(entry.route.screen);
+      }
     },
-    [openNote, replaceHistory],
+    [closeConnections, replaceHistory],
   );
 
   const createNote = useCallback(() => {
@@ -874,11 +1191,12 @@ function App() {
       aliases: [],
       tags: [],
       kind: "article",
-      status: "draft",
+      status: "ready",
       conceptIds: [],
       sourceIds: [],
       createdAt: now,
       updatedAt: now,
+      lastOpenedAt: now,
       color: "#8798ff",
     };
     setSnapshot((current) => ({
@@ -941,6 +1259,20 @@ function App() {
       };
     });
   }, []);
+
+  const attachSourceToNote = useCallback(
+    (noteId: EntityId, sourceId: EntityId) => {
+      setSnapshot((current) =>
+        attachSourceToNoteInSnapshot(
+          current,
+          noteId,
+          sourceId,
+          new Date().toISOString(),
+        ),
+      );
+    },
+    [],
+  );
 
   const toggleHomeTask = useCallback(
     (task: NoteTask, checked: boolean) => {
@@ -1022,6 +1354,12 @@ function App() {
           result,
           now,
         );
+        const changedCount =
+          applied.updatedNoteIds.length + applied.createdNoteIds.length;
+        const appliedSnapshot =
+          changedCount > 0
+            ? markSpaceOverviewStale(applied.snapshot)
+            : applied.snapshot;
         setVault((current) => {
           const currentSpace = current.spaces.find(
             (space) => space.workspace.id === workspaceId,
@@ -1040,14 +1378,15 @@ function App() {
             ...current,
             spaces: current.spaces.map((space) =>
               space.workspace.id === workspaceId
-                ? applied.snapshot
+                ? appliedSnapshot
                 : space,
             ),
             updatedAt: now,
           };
         });
-        const changedCount =
-          applied.updatedNoteIds.length + applied.createdNoteIds.length;
+        if (changedCount > 0) {
+          scheduleSpaceOverviewRefresh(workspaceId);
+        }
         showToast(
           changedCount > 0 ? "Space wiki updated" : "Space wiki is current",
           changedCount > 0
@@ -1065,7 +1404,51 @@ function App() {
         wikiEnrichmentRequests.current.delete(requestKey);
       }
     },
-    [showToast],
+    [scheduleSpaceOverviewRefresh, showToast],
+  );
+
+  const finishNoteEditing = useCallback(
+    (noteId: EntityId) => {
+      const workspaceId = vaultRef.current.activeSpaceId;
+      const workspace = vaultRef.current.spaces.find(
+        (space) => space.workspace.id === workspaceId,
+      );
+      const note = workspace?.notes.find((candidate) => candidate.id === noteId);
+      if (!workspace || !note) {
+        return;
+      }
+      const hasOverviewKnowledge = workspace.notes.some(
+        hasSubstantiveOverviewNote,
+      );
+      const now = new Date().toISOString();
+      setVault((current) => ({
+        ...current,
+        spaces: current.spaces.map((space) =>
+          space.workspace.id === workspaceId
+            ? {
+                ...(hasOverviewKnowledge
+                  ? markSpaceOverviewStale(space)
+                  : { ...space, spaceOverview: undefined }),
+                updatedAt: now,
+              }
+            : space,
+        ),
+        updatedAt: now,
+      }));
+      if (hasOverviewKnowledge) {
+        scheduleSpaceOverviewRefresh(workspaceId);
+      } else {
+        cancelSpaceOverviewRefresh(workspaceId);
+      }
+      if (hasSubstantiveKnowledgeNote(note)) {
+        void refreshWikiFromNote(noteId);
+      }
+    },
+    [
+      cancelSpaceOverviewRefresh,
+      refreshWikiFromNote,
+      scheduleSpaceOverviewRefresh,
+    ],
   );
 
   const generateLinkedArticle = useCallback(
@@ -1091,7 +1474,7 @@ function App() {
       if (!isLinkedArticlePlaceholder(article, phrase)) {
         console.warn("[linked-article] request skipped", {
           requestKey,
-          reason: "article-is-not-an-empty-draft",
+          reason: "article-is-not-an-empty-placeholder",
         });
         return;
       }
@@ -1127,7 +1510,7 @@ function App() {
           : {}),
         ...(!isSelectedAIConfigured(workspace.settings)
           ? {
-              error: `Add an ${selectedAIProviderName(workspace.settings)} key in Settings to draft this article.`,
+              error: `Add an ${selectedAIProviderName(workspace.settings)} key in Settings to write this article.`,
             }
           : {}),
       };
@@ -1151,7 +1534,7 @@ function App() {
           "Article link created",
           `Add an ${selectedAIProviderName(workspace.settings)} key in Settings to populate “${phrase}”.`,
           {
-            label: "Open draft",
+            label: "Open article",
             run: revealArticle,
           },
         );
@@ -1213,7 +1596,7 @@ function App() {
           !isLinkedArticlePlaceholder(liveArticle, phrase)
         ) {
           throw new Error(
-            "This article changed while Orion was drafting. Your edits were kept.",
+            "This article changed while Orion was writing. Your edits were kept.",
           );
         }
         const now = new Date().toISOString();
@@ -1238,6 +1621,9 @@ function App() {
             ) {
               return space;
             }
+            const validSourceIds = new Set(
+              space.sources.map((source) => source.id),
+            );
             const notes = space.notes.map((note) =>
               note.id === articleId
                 ? {
@@ -1248,7 +1634,7 @@ function App() {
                         ...currentArticle.sourceIds,
                         ...generatedArticle.sourceIds,
                       ]),
-                    ],
+                    ].filter((sourceId) => validSourceIds.has(sourceId)),
                   }
                 : note,
             );
@@ -1256,12 +1642,12 @@ function App() {
               notes,
               space.concepts,
             );
-            return {
+            return markSpaceOverviewStale({
               ...space,
               notes: vocabulary.notes,
               concepts: vocabulary.concepts,
               updatedAt: now,
-            };
+            });
           });
           return {
             ...current,
@@ -1269,6 +1655,7 @@ function App() {
             updatedAt: now,
           };
         });
+        scheduleSpaceOverviewRefresh(workspace.workspace.id);
         setLinkedArticleJobs((current) =>
           current.map((job) =>
             job.id === jobId
@@ -1287,7 +1674,7 @@ function App() {
         }, 1_800);
         showToast(
           "Wiki article ready",
-          `“${phrase}” was drafted from ${originNote.title} and its Space context.`,
+          `“${phrase}” was written from ${originNote.title} and its Space context.`,
           {
             label: "Open article",
             run: revealArticle,
@@ -1315,8 +1702,8 @@ function App() {
               : job,
           ),
         );
-        showToast("Article draft paused", message, {
-          label: "Open draft",
+        showToast("Article generation paused", message, {
+          label: "Open article",
           run: revealArticle,
         });
       } finally {
@@ -1324,7 +1711,7 @@ function App() {
         linkedArticleRequests.current.finish(requestKey, jobId);
       }
     },
-    [openNote, showToast, switchSpace],
+    [openNote, scheduleSpaceOverviewRefresh, showToast, switchSpace],
   );
 
   const restartLinkedArticle = useCallback(
@@ -1345,7 +1732,7 @@ function App() {
         !isLinkedArticlePlaceholder(article, job.title)
       ) {
         const message =
-          "This draft or its source note changed, so Orion cannot safely restart it.";
+          "This unfinished article or its source note changed, so Orion cannot safely restart it.";
         setLinkedArticleJobs((current) =>
           current.map((candidate) =>
             candidate.id === job.id
@@ -1353,7 +1740,7 @@ function App() {
               : candidate,
           ),
         );
-        showToast("Draft could not restart", message);
+        showToast("Article could not restart", message);
         return;
       }
 
@@ -1379,7 +1766,7 @@ function App() {
     (job: LinkedArticleJob) => {
       if (
         !window.confirm(
-          `Delete the paused “${job.title}” wiki draft? The link phrase will stop auto-linking until you create it again.`,
+          `Delete the unfinished “${job.title}” article? The link phrase will stop auto-linking until you create it again.`,
         )
       ) {
         return;
@@ -1394,19 +1781,24 @@ function App() {
         ? deleteLinkedArticleDraft(liveSpace, job, now)
         : null;
       linkedArticleRequests.current.cancel(requestKey);
-      console.info("[linked-article] draft deleted", {
+      console.info("[linked-article] unfinished page deleted", {
         requestKey,
         jobId: job.id,
       });
       setVault((current) => ({
         ...current,
-        spaces: current.spaces.map((space) =>
-          space.workspace.id === job.workspaceId
-            ? deleteLinkedArticleDraft(space, job, now).snapshot
-            : space,
-        ),
+        spaces: current.spaces.map((space) => {
+          if (space.workspace.id !== job.workspaceId) return space;
+          const deletion = deleteLinkedArticleDraft(space, job, now);
+          return deletion.deleted
+            ? markSpaceOverviewStale(deletion.snapshot)
+            : deletion.snapshot;
+        }),
         updatedAt: now,
       }));
+      if (preview?.deleted) {
+        scheduleSpaceOverviewRefresh(job.workspaceId);
+      }
       setLinkedArticleJobs((current) =>
         current.filter(
           (candidate) =>
@@ -1420,16 +1812,28 @@ function App() {
       ) {
         const fallbackNoteId = preview.snapshot.activeNoteId;
         replaceHistory(
-          fallbackNoteId ? [createNoteHistoryEntry(fallbackNoteId)] : [],
-          fallbackNoteId ? 0 : -1,
+          [
+            fallbackNoteId && screenRef.current === "note"
+              ? createNavigationEntry({
+                  screen: "note",
+                  noteId: fallbackNoteId,
+                })
+              : createNavigationEntry({
+                  screen:
+                    screenRef.current === "note"
+                      ? "notes"
+                      : screenRef.current,
+                }),
+          ],
+          0,
         );
       }
       showToast(
-        "Draft deleted",
+        "Article deleted",
         `“${job.title}” and its unfinished automatic link were removed.`,
       );
     },
-    [replaceHistory, showToast],
+    [replaceHistory, scheduleSpaceOverviewRefresh, showToast],
   );
 
   const deleteNote = useCallback(
@@ -1444,6 +1848,8 @@ function App() {
       if (!workspace || !note) {
         return;
       }
+      const deletingOpenNote =
+        screenRef.current === "note" && workspace.activeNoteId === noteId;
       if (
         !window.confirm(
           `Delete “${note.title}”? Its links, backlinks, and source references will be cleaned up. This cannot be undone.`,
@@ -1478,7 +1884,7 @@ function App() {
                 ...job,
                 stage: "error" as const,
                 error:
-                  "The source note was deleted. Delete this empty draft, or create the link again from another note.",
+                  "The source note was deleted. Delete this unfinished page, or create the link again from another note.",
               },
             ];
           }
@@ -1487,19 +1893,92 @@ function App() {
       );
       setVault((current) => ({
         ...current,
-        spaces: current.spaces.map((space) =>
-          space.workspace.id === workspaceId
-            ? deleteNoteFromSnapshot(space, noteId, now).snapshot
-            : space,
-        ),
+        spaces: current.spaces.map((space) => {
+          if (space.workspace.id !== workspaceId) return space;
+          const deletion = deleteNoteFromSnapshot(space, noteId, now);
+          return deletion.deleted
+            ? markSpaceOverviewStale(deletion.snapshot)
+            : deletion.snapshot;
+        }),
         updatedAt: now,
       }));
-      setScreen("notes");
-      closeConnections();
-      replaceHistory([], -1);
+      scheduleSpaceOverviewRefresh(workspaceId);
+      if (deletingOpenNote) {
+        setScreen("notes");
+        setContextOpen(false);
+        closeConnections();
+        replaceHistory(
+          [createNavigationEntry({ screen: "notes" })],
+          0,
+        );
+      }
       showToast("Note deleted", `“${note.title}” was removed from this Space.`);
     },
-    [closeConnections, linkedArticleJobs, replaceHistory, showToast],
+    [
+      closeConnections,
+      linkedArticleJobs,
+      replaceHistory,
+      scheduleSpaceOverviewRefresh,
+      showToast,
+    ],
+  );
+
+  const deleteSource = useCallback(
+    (sourceId: EntityId) => {
+      const workspaceId = vaultRef.current.activeSpaceId;
+      const workspace = vaultRef.current.spaces.find(
+        (space) => space.workspace.id === workspaceId,
+      );
+      const source = workspace?.sources.find(
+        (candidate) => candidate.id === sourceId,
+      );
+      if (!workspace || !source) {
+        return;
+      }
+
+      const connectedNoteCount = workspace.notes.filter((note) =>
+        note.sourceIds.includes(sourceId),
+      ).length;
+      const cleanupDescription =
+        connectedNoteCount === 0
+          ? "The preserved source will be permanently removed."
+          : `It will be detached from ${connectedNoteCount} ${
+              connectedNoteCount === 1 ? "note" : "notes"
+            }, but ${connectedNoteCount === 1 ? "that note" : "those notes"} and their content will stay intact.`;
+      if (
+        !window.confirm(
+          `Delete source “${source.title}”? ${cleanupDescription} This cannot be undone.`,
+        )
+      ) {
+        return;
+      }
+
+      const now = new Date().toISOString();
+      setSelectedSourceId((current) =>
+        current === sourceId ? null : current,
+      );
+      setVault((current) => ({
+        ...current,
+        spaces: current.spaces.map((space) => {
+          if (space.workspace.id !== workspaceId) return space;
+          const deletion = deleteSourceFromSnapshot(space, sourceId, now);
+          return deletion.deleted
+            ? markSpaceOverviewStale(deletion.snapshot)
+            : deletion.snapshot;
+        }),
+        updatedAt: now,
+      }));
+      scheduleSpaceOverviewRefresh(workspaceId);
+      showToast(
+        "Source deleted",
+        connectedNoteCount === 0
+          ? `“${source.title}” was removed from this Space.`
+          : `“${source.title}” was removed; its ${
+              connectedNoteCount === 1 ? "note was" : "notes were"
+            } kept intact.`,
+      );
+    },
+    [scheduleSpaceOverviewRefresh, showToast],
   );
 
   const registerLinkConcept = useCallback(
@@ -1513,28 +1992,26 @@ function App() {
       const originNote = currentSnapshot.notes.find(
         (note) => note.id === originNoteId,
       );
-      const shouldDraftWithAI =
+      const shouldWriteWithAI =
         input.destinationNoteIds.length === 0 &&
         input.articleMode === "ai";
       const candidateArticle: Note = {
         id: `note-${nanoid(10)}`,
         title: phrase,
         slug: slugifyTitle(phrase) || `article-${nanoid(5)}`,
-        summary: shouldDraftWithAI
-          ? `Orion is preparing a Space article for ${phrase}.`
+        summary: shouldWriteWithAI
+          ? `Orion is writing a Space article for ${phrase}.`
           : "",
-        body: shouldDraftWithAI
+        body: shouldWriteWithAI
           ? [
-              "<!-- orion-link-draft -->",
-              `> Orion is drafting this article from “${originNote?.title ?? "the current note"}”, its sources, and the active Space.`,
+              "<!-- orion-link-pending -->",
+              `> Orion is writing this article from “${originNote?.title ?? "the current note"}”, its sources, and the active Space.`,
             ].join("\n\n")
           : "",
         aliases: [],
-        tags: shouldDraftWithAI
-          ? ["wiki-article", "orion-link-draft"]
-          : ["wiki-article"],
+        tags: shouldWriteWithAI ? ["orion-link-pending"] : [],
         kind: "wiki",
-        status: "draft",
+        status: "ready",
         conceptIds: [],
         sourceIds: [...(originNote?.sourceIds ?? [])],
         createdAt: now,
@@ -1566,7 +2043,7 @@ function App() {
           updatedAt: new Date().toISOString(),
         };
       });
-      if (shouldDraftWithAI && originNote) {
+      if (shouldWriteWithAI && originNote) {
         const concept = preview.concepts.find(
           (candidate) => candidate.id === preview.conceptId,
         );
@@ -1723,6 +2200,7 @@ function App() {
 
   const applyImport = useCallback(
     (payload: ImportStudioApplyPayload) => {
+      const workspaceId = vaultRef.current.activeSpaceId;
       const firstNoteId = payload.notes[0]?.id ?? null;
       setSnapshot((current) => {
         snapshotBeforeImport.current = current;
@@ -1739,7 +2217,7 @@ function App() {
           notes,
           [...conceptMap.values()],
         );
-        return {
+        return markSpaceOverviewStale({
           ...current,
           notes: vocabulary.notes,
           sources: [...payload.sources, ...current.sources],
@@ -1750,8 +2228,9 @@ function App() {
           ],
           activeNoteId: firstNoteId ?? current.activeNoteId,
           updatedAt: new Date().toISOString(),
-        };
+        });
       });
+      scheduleSpaceOverviewRefresh(workspaceId);
       if (firstNoteId) openNote(firstNoteId);
       showToast(
         "Import added",
@@ -1762,21 +2241,45 @@ function App() {
           label: "Undo",
           run: () => {
             if (!snapshotBeforeImport.current) return;
+            cancelSpaceOverviewRefresh(workspaceId);
             setSnapshot(snapshotBeforeImport.current);
             snapshotBeforeImport.current = null;
             setScreen("home");
+            replaceHistory(
+              [createNavigationEntry({ screen: "home" })],
+              0,
+            );
             setToast(null);
           },
         },
       );
     },
-    [openNote, showToast],
+    [
+      cancelSpaceOverviewRefresh,
+      openNote,
+      replaceHistory,
+      scheduleSpaceOverviewRefresh,
+      showToast,
+    ],
   );
 
-  const openView = useCallback((view: WorkspaceView) => {
-    setScreen(view);
-    closeConnections();
-  }, [closeConnections]);
+  const openView = useCallback(
+    (view: WorkspaceView) => {
+      pendingScrollRestore.current = null;
+      const next = pushNavigationHistory(
+        historyRef.current,
+        historyIndexRef.current,
+        { screen: view },
+        readScrollPosition(workspaceContentRef.current),
+      );
+      replaceHistory(next.entries, next.index);
+      setScreen(view);
+      setSelectedSourceId(null);
+      setContextOpen(false);
+      closeConnections();
+    },
+    [closeConnections, replaceHistory],
+  );
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1790,14 +2293,20 @@ function App() {
       if (event.key === "Escape") {
         if (commandOpen) {
           setCommandOpen(false);
+        } else if (exportOpen) {
+          setExportOpen(false);
         } else if (importOpen) {
           setImportOpen(false);
+        } else if (selectedSourceId) {
+          setSelectedSourceId(null);
+        } else if (contextOpen) {
+          setContextOpen(false);
         } else {
           closeConnections();
         }
         return;
       }
-      if (commandOpen || importOpen) {
+      if (commandOpen || exportOpen || importOpen || selectedSourceId) {
         return;
       }
       const modifier = event.metaKey || event.ctrlKey;
@@ -1831,28 +2340,55 @@ function App() {
   }, [
     closeConnections,
     commandOpen,
+    contextOpen,
     createNote,
+    exportOpen,
     importOpen,
     navigateHistory,
+    selectedSourceId,
     vaultLoadError,
   ]);
 
-  async function handleExport() {
+  async function handleExport(request: ExportRequest): Promise<boolean> {
     try {
+      const originNoteId = screen === "note" ? activeNote?.id ?? null : null;
+      if (request.format === "web") {
+        const document = buildWebExportDocument(
+          snapshot,
+          request.scope,
+          originNoteId,
+        );
+        const result = await exportWebPage(document.fileName, document.html);
+        if (!result.cancelled) {
+          showToast(
+            "Web article exported",
+            `${document.noteIds.length} ${document.noteIds.length === 1 ? "note" : "notes"} saved as one offline file${result.path ? ` at ${result.path}` : ""}.`,
+          );
+        }
+        return true;
+      }
+
+      const selectedNotes = notesForExportScope(
+        snapshot,
+        request.scope,
+        originNoteId,
+      );
       const result = await exportMarkdown(
-        snapshot.notes.map(({ title, body, tags }) => ({ title, body, tags })),
+        selectedNotes.map(({ title, body, tags }) => ({ title, body, tags })),
       );
       if (!result.cancelled) {
         showToast(
-          "Atlas exported",
-          `${result.exportedCount} Markdown notes saved to ${result.directory}.`,
+          "Markdown exported",
+          `${result.exportedCount} ${result.exportedCount === 1 ? "note" : "notes"} saved to ${result.directory}.`,
         );
       }
+      return true;
     } catch (error) {
       showToast(
         "Export failed",
         error instanceof Error ? error.message : String(error),
       );
+      return false;
     }
   }
 
@@ -1903,7 +2439,7 @@ function App() {
     );
     empty.settings = { ...snapshot.settings };
     setSnapshot(empty);
-    resetSpaceNavigation(empty);
+    resetSpaceNavigation();
     showToast(
       "Space cleared",
       `${snapshot.workspace.name} is ready for a fresh start.`,
@@ -1917,29 +2453,42 @@ function App() {
           note={activeNote}
           notes={snapshot.notes}
           concepts={snapshot.concepts}
+          sources={snapshot.sources}
           onOpenNote={openNote}
           onOpenConcept={(conceptId) =>
             followConcept(conceptId, activeNote.id)
           }
+          onOpenSource={setSelectedSourceId}
+          onAttachSource={attachSourceToNote}
           onUpdateNote={updateNote}
           onDeleteNote={deleteNote}
-          onFinishEditing={(noteId) => {
-            void refreshWikiFromNote(noteId);
-          }}
+          onFinishEditing={finishNoteEditing}
           onRegisterConcept={(input) =>
             registerLinkConcept(input, activeNote.id)
           }
           onDisableConceptAutoLink={disableConceptAutoLink}
-          aiArticleDraftingEnabled={isSelectedAIConfigured(snapshot.settings)}
+          aiArticleWritingEnabled={isSelectedAIConfigured(snapshot.settings)}
           aiProviderName={selectedAIProviderName(snapshot.settings)}
         />
       );
     }
     if (screen === "notes") {
-      return <NotesIndex notes={snapshot.notes} onOpenNote={openNote} />;
+      return (
+        <NotesIndex
+          notes={snapshot.notes}
+          onOpenNote={openNote}
+          onDeleteNote={deleteNote}
+        />
+      );
     }
     if (screen === "sources") {
-      return <SourcesView sources={snapshot.sources} />;
+      return (
+        <SourcesView
+          sources={snapshot.sources}
+          onOpenSource={setSelectedSourceId}
+          onDeleteSource={deleteSource}
+        />
+      );
     }
     if (screen === "chat") {
       return (
@@ -1978,21 +2527,24 @@ function App() {
     return (
       <HomeView
         snapshot={snapshot}
-          onOpenNote={openNote}
-          onOpenConcept={(conceptId) => followConcept(conceptId)}
+        onOpenNote={openNote}
+        onOpenConcept={(conceptId) => followConcept(conceptId)}
         onNewNote={createNote}
         onImport={() => setImportOpen(true)}
         onOpenNotes={() => openView("notes")}
         onToggleTask={toggleHomeTask}
+        overviewBusy={overviewBusySpaceIds.has(snapshot.workspace.id)}
+        overviewError={overviewErrors.get(snapshot.workspace.id) ?? null}
+        onRefreshOverview={() => {
+          void refreshSpaceOverview(snapshot.workspace.id, true);
+        }}
       />
     );
   }
 
   const shellClassName = connectionConcept
     ? "app-shell with-context with-connection-canvas"
-    : contextOpen && screen === "note"
-      ? "app-shell with-context"
-      : "app-shell";
+    : "app-shell";
 
   return (
     <div className={shellClassName}>
@@ -2007,6 +2559,7 @@ function App() {
         )}
         onViewChange={openView}
         onOpenNote={openNote}
+        onDeleteNote={deleteNote}
         onNewNote={createNote}
         onCreateSpace={createSpace}
         onSwitchSpace={switchSpace}
@@ -2018,11 +2571,18 @@ function App() {
           workspaceName={snapshot.workspace.name}
           contextOpen={Boolean(connectionConcept) || contextOpen}
           onOpenSearch={() => setCommandOpen(true)}
-          onExport={handleExport}
+          onExport={() => setExportOpen(true)}
           rightPanelLabel={
             connectionConcept
               ? "Close connections canvas"
-              : "Toggle context panel"
+              : contextOpen
+                ? "Close note connections and sources"
+                : "Open note connections and sources"
+          }
+          rightPanelControls={
+            connectionConcept
+              ? "connections-canvas-panel"
+              : "note-details-panel"
           }
           onToggleContext={
             screen === "note"
@@ -2051,6 +2611,7 @@ function App() {
           note={activeNote}
           snapshot={snapshot}
           onOpenNote={openNote}
+          onOpenSource={setSelectedSourceId}
           onClose={() => setContextOpen(false)}
         />
       )}
@@ -2084,12 +2645,33 @@ function App() {
         onImport={() => setImportOpen(true)}
       />
 
+      <ExportDialog
+        open={exportOpen}
+        snapshot={snapshot}
+        activeNote={screen === "note" ? activeNote : null}
+        onClose={() => setExportOpen(false)}
+        onExport={handleExport}
+      />
+
       <ImportStudio
         open={importOpen}
         snapshot={snapshot}
         onClose={() => setImportOpen(false)}
         onApply={applyImport}
       />
+
+      {selectedSource && (
+        <SourceViewer
+          source={selectedSource}
+          notes={snapshot.notes}
+          onOpenNote={(noteId) => {
+            setSelectedSourceId(null);
+            openNote(noteId);
+          }}
+          onDeleteSource={deleteSource}
+          onClose={() => setSelectedSourceId(null)}
+        />
+      )}
 
       {toast && (
         <div className="toast" key={toast.id}>

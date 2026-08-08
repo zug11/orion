@@ -24,6 +24,16 @@ import {
   resolveAtmospherePalette,
 } from "../lib/homeAtmosphere";
 import {
+  resolveThemeMode,
+  resolveThemePalette,
+  themeAccentOptions,
+  themeCanvasOptions,
+  themeContrastOptions,
+  themePresetOptions,
+  themeSurfaceOptions,
+  themeWarmthOptions,
+} from "../lib/theme";
+import {
   checkTranscriptionSetup,
   isTauriRuntime,
   openClaudeConnector,
@@ -33,6 +43,79 @@ import type {
   ReasoningEffort,
   Settings,
 } from "../types";
+
+interface ThemeChoiceOption<T extends string> {
+  id: T;
+  name: string;
+}
+
+function ThemeChoiceGroup<T extends string>({
+  label,
+  options,
+  value,
+  onSelect,
+}: {
+  label: string;
+  options: ReadonlyArray<ThemeChoiceOption<T>>;
+  value: T;
+  onSelect: (value: T) => void;
+}) {
+  return (
+    <div className="theme-choice-group" role="radiogroup" aria-label={label}>
+      {options.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          role="radio"
+          aria-checked={option.id === value}
+          className={option.id === value ? "active" : ""}
+          onClick={() => onSelect(option.id)}
+        >
+          {option.name}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ThemeColorOverride({
+  label,
+  value,
+  fallback,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  fallback: string;
+  onChange: (value: string) => void;
+}) {
+  const selected = value || fallback;
+  return (
+    <div className={`theme-color-override${value ? " active" : ""}`}>
+      <label>
+        <input
+          type="color"
+          aria-label={`Custom ${label} color`}
+          value={selected}
+          onChange={(event) => onChange(event.target.value.toUpperCase())}
+        />
+        <span>
+          <strong>Custom</strong>
+          <small>{value || "Preset"}</small>
+        </span>
+      </label>
+      {value ? (
+        <button
+          type="button"
+          aria-label={`Reset custom ${label} color`}
+          onClick={() => onChange("")}
+        >
+          Reset
+        </button>
+      ) : null}
+    </div>
+  );
+}
 
 interface SettingsViewProps {
   settings: Settings;
@@ -149,6 +232,14 @@ export function SettingsView({
     | "data"
   >("intelligence");
   const desktopRuntime = isTauriRuntime();
+  const prefersLight =
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-color-scheme: light)").matches;
+  const previewMode = resolveThemeMode(
+    settings.theme,
+    prefersLight,
+  );
+  const activeThemePalette = resolveThemePalette(settings, previewMode);
 
   useEffect(() => {
     setKeyMessage(null);
@@ -682,8 +773,10 @@ export function SettingsView({
 
               <div className="claude-connector-actions">
                 <small>
-                  Installs as a local Claude Desktop extension. Search stays in
-                  the active Space unless you explicitly choose another one.
+                  Installs as a local Claude Desktop extension with no vault
+                  path to configure. Open Orion once, then Claude finds your
+                  local atlas automatically. Search stays in the active Space
+                  unless you explicitly choose another one.
                 </small>
                 <button
                   className="button primary compact"
@@ -829,22 +922,245 @@ export function SettingsView({
                 <p>A reading room should get out of the way.</p>
               </span>
             </div>
-            <div className="setting-card theme-row">
-              {(["dark", "light", "system"] as const).map((theme) => (
-                <button
-                  key={theme}
-                  type="button"
-                  className={settings.theme === theme ? "active" : ""}
-                  onClick={() => patch({ theme })}
+            <div className="setting-card theme-system-setting">
+              <div className="theme-setting-intro">
+                <span>
+                  <strong>Reading-room palette</strong>
+                  <small>
+                    Start with a curated room, then tune only its essential
+                    materials. Orion keeps text and controls contrast-safe.
+                  </small>
+                </span>
+                <span className="theme-safety-note">Accessible foregrounds</span>
+              </div>
+              <div
+                className="theme-preset-grid"
+                role="radiogroup"
+                aria-label="Color preset"
+              >
+                {themePresetOptions.map((preset) => {
+                  const preview = resolveThemePalette(
+                    {
+                      ...settings,
+                      themePreset: preset.id,
+                      themeAccent: "preset",
+                      themeAccentCustom: "",
+                      themeCanvasCustom: "",
+                      themeSurfaceCustom: "",
+                    },
+                    previewMode,
+                  );
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={settings.themePreset === preset.id}
+                      className={
+                        settings.themePreset === preset.id ? "active" : ""
+                      }
+                      aria-label={`${preset.name}: ${preset.description}`}
+                      onClick={() =>
+                        patch({
+                          themePreset: preset.id,
+                          themeAccent: "preset",
+                          themeAccentCustom: "",
+                          themeCanvasCustom: "",
+                          themeSurfaceCustom: "",
+                        })
+                      }
+                    >
+                      <span
+                        className="theme-preset-preview"
+                        aria-hidden="true"
+                        style={
+                          {
+                            "--preview-canvas": preview.canvas,
+                            "--preview-surface": preview.surface1,
+                            "--preview-raised": preview.surfaceRaised,
+                            "--preview-accent": preview.accent,
+                            "--preview-text": preview.text,
+                          } as CSSProperties
+                        }
+                      >
+                        <i />
+                        <i />
+                        <i />
+                      </span>
+                      <span>
+                        <strong>{preset.name}</strong>
+                        <small>{preset.description}</small>
+                      </span>
+                      <i className="theme-preset-selection">
+                        {settings.themePreset === preset.id ? (
+                          <Check size={12} />
+                        ) : null}
+                      </i>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="theme-mode-setting">
+                <span>
+                  <strong>Mode</strong>
+                  <small>System follows this Mac automatically.</small>
+                </span>
+                <div
+                  className="theme-row"
+                  role="radiogroup"
+                  aria-label="Theme mode"
                 >
-                  <span className={`theme-swatch ${theme}`}>
-                    <i />
-                    <i />
+                  {(["dark", "light", "system"] as const).map((theme) => (
+                    <button
+                      key={theme}
+                      type="button"
+                      role="radio"
+                      aria-checked={settings.theme === theme}
+                      className={settings.theme === theme ? "active" : ""}
+                      onClick={() => patch({ theme })}
+                    >
+                      <span className={`theme-swatch ${theme}`}>
+                        <i />
+                        <i />
+                      </span>
+                      <strong>{theme[0].toUpperCase() + theme.slice(1)}</strong>
+                      {settings.theme === theme ? <Check size={13} /> : null}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="theme-tuning" aria-label="Palette tuning">
+                <div className="theme-tuning-row theme-tuning-row--accent">
+                  <span>
+                    <strong>Accent</strong>
+                    <small>Links, focus, and primary actions</small>
                   </span>
-                  <strong>{theme[0].toUpperCase() + theme.slice(1)}</strong>
-                  {settings.theme === theme && <Check size={13} />}
-                </button>
-              ))}
+                  <div
+                    className="theme-accent-options"
+                    role="radiogroup"
+                    aria-label="Theme accent"
+                  >
+                    {themeAccentOptions.map((option) => {
+                      const preview = resolveThemePalette(
+                        {
+                          ...settings,
+                          themeAccent: option.id,
+                          themeAccentCustom: "",
+                        },
+                        previewMode,
+                      );
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={
+                            !settings.themeAccentCustom &&
+                            settings.themeAccent === option.id
+                          }
+                          aria-label={`${option.name} theme accent`}
+                          title={option.name}
+                          className={
+                            !settings.themeAccentCustom &&
+                            settings.themeAccent === option.id
+                              ? "active"
+                              : ""
+                          }
+                          style={
+                            {
+                              "--theme-choice-color": preview.accent,
+                            } as CSSProperties
+                          }
+                          onClick={() =>
+                            patch({
+                              themeAccent: option.id,
+                              themeAccentCustom: "",
+                            })
+                          }
+                        >
+                          <i aria-hidden="true" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <ThemeColorOverride
+                    label="accent"
+                    value={settings.themeAccentCustom}
+                    fallback={activeThemePalette.accent}
+                    onChange={(themeAccentCustom) =>
+                      patch({ themeAccentCustom })
+                    }
+                  />
+                </div>
+                <div className="theme-tuning-row">
+                  <span>
+                    <strong>Canvas</strong>
+                    <small>The room behind every view</small>
+                  </span>
+                  <ThemeChoiceGroup
+                    label="Canvas depth"
+                    options={themeCanvasOptions}
+                    value={settings.themeCanvasTone}
+                    onSelect={(themeCanvasTone) =>
+                      patch({ themeCanvasTone, themeCanvasCustom: "" })
+                    }
+                  />
+                  <ThemeColorOverride
+                    label="canvas"
+                    value={settings.themeCanvasCustom}
+                    fallback={activeThemePalette.canvas}
+                    onChange={(themeCanvasCustom) =>
+                      patch({ themeCanvasCustom })
+                    }
+                  />
+                </div>
+                <div className="theme-tuning-row">
+                  <span>
+                    <strong>Surfaces</strong>
+                    <small>Cards, panels, and the editor</small>
+                  </span>
+                  <ThemeChoiceGroup
+                    label="Surface lift"
+                    options={themeSurfaceOptions}
+                    value={settings.themeSurfaceLift}
+                    onSelect={(themeSurfaceLift) =>
+                      patch({ themeSurfaceLift, themeSurfaceCustom: "" })
+                    }
+                  />
+                  <ThemeColorOverride
+                    label="surface"
+                    value={settings.themeSurfaceCustom}
+                    fallback={activeThemePalette.surface1}
+                    onChange={(themeSurfaceCustom) =>
+                      patch({ themeSurfaceCustom })
+                    }
+                  />
+                </div>
+                <div className="theme-tuning-row">
+                  <span>
+                    <strong>Text warmth</strong>
+                    <small>Cool clarity through warm paper</small>
+                  </span>
+                  <ThemeChoiceGroup
+                    label="Text warmth"
+                    options={themeWarmthOptions}
+                    value={settings.themeTextWarmth}
+                    onSelect={(themeTextWarmth) => patch({ themeTextWarmth })}
+                  />
+                </div>
+                <div className="theme-tuning-row">
+                  <span>
+                    <strong>Contrast</strong>
+                    <small>All options keep body copy accessible</small>
+                  </span>
+                  <ThemeChoiceGroup
+                    label="Theme contrast"
+                    options={themeContrastOptions}
+                    value={settings.themeContrast}
+                    onSelect={(themeContrast) => patch({ themeContrast })}
+                  />
+                </div>
+              </div>
             </div>
             <div className="setting-card atmosphere-setting">
               <div className="setting-row vertical">

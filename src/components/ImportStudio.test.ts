@@ -7,7 +7,15 @@ import type {
   OrganizedWikiArticle,
   ParsedImport,
 } from "../types";
-import { buildImportPayload } from "./ImportStudio";
+import {
+  buildImportOrganizationInstructions,
+  buildImportPayload,
+  classifyImportUrl,
+  pastedTextToParsedImport,
+  replaceImportItem,
+  settleImportItem,
+  type ImportItem,
+} from "./ImportStudio";
 
 const TEST_NOW = "2026-07-27T10:00:00.000Z";
 
@@ -98,7 +106,7 @@ describe("buildImportPayload", () => {
     });
   });
 
-  it("preserves pasted text in the manual import draft and source", () => {
+  it("preserves pasted text in the manual import note and source", () => {
     const snapshot = createEmptySnapshot("Manual Space", TEST_NOW);
     const text =
       "The first paragraph stays intact.\n\n- A preserved list item";
@@ -120,6 +128,141 @@ describe("buildImportPayload", () => {
     expect(payload.sources).toHaveLength(1);
     expect(payload.sources[0].text).toBe(text);
     expect(payload.sources[0].noteIds).toEqual([payload.notes[0].id]);
+    expect(payload.notes[0]).toMatchObject({
+      kind: "article",
+      status: "ready",
+    });
+    expect(payload.notes[0].tags).not.toContain("ai-draft");
+  });
+
+  it("persists batch guidance on every source", () => {
+    const snapshot = createEmptySnapshot("Guided Space", TEST_NOW);
+    const guidance =
+      "Focus on the disputed claims, preserve examples, and extract explicit tasks.";
+    const payload = buildImportPayload(
+      [
+        makeOrganizedSource(
+          "import-one",
+          makeParsedImport("First source", "first.md", "First source body."),
+        ),
+        makeOrganizedSource(
+          "import-two",
+          makeParsedImport("Second source", "second.md", "Second source body."),
+        ),
+      ],
+      snapshot,
+      guidance,
+    );
+
+    expect(payload.sources).toHaveLength(2);
+    expect(payload.sources.every((source) => source.importGuidance === guidance)).toBe(
+      true,
+    );
+  });
+});
+
+describe("buildImportOrganizationInstructions", () => {
+  it("places this import's guidance before Orion's import rules", () => {
+    const instructions = buildImportOrganizationInstructions(
+      "Prioritise arguments against the central thesis.",
+    );
+
+    expect(instructions).toContain("User guidance for this import batch:");
+    expect(instructions.indexOf("Prioritise arguments")).toBeLessThan(
+      instructions.indexOf("Import-refresh requirement"),
+    );
+    expect(instructions.length).toBeLessThanOrEqual(2_000);
+  });
+
+  it("bounds long batch guidance independently of the Space preference", () => {
+    const instructions = buildImportOrganizationInstructions("x".repeat(5_000));
+
+    expect(instructions.length).toBeLessThanOrEqual(2_000);
+    expect(instructions).toContain("Import-refresh requirement");
+  });
+});
+
+describe("import queue helpers", () => {
+  it("classifies public HTTPS pages and specific YouTube videos", () => {
+    expect(classifyImportUrl("https://example.org/essay#section")).toEqual({
+      kind: "webpage",
+      url: "https://example.org/essay",
+    });
+    expect(
+      classifyImportUrl("https://www.youtube.com/watch?v=orion"),
+    ).toEqual({
+      kind: "youtube",
+      url: "https://www.youtube.com/watch?v=orion",
+    });
+  });
+
+  it.each([
+    "http://example.org/essay",
+    "https://localhost/private",
+    "https://127.0.0.1/private",
+    "https://[::1]/private",
+    "https://notes.internal/private",
+    "https://youtube.com/",
+  ])("rejects an unsafe or incomplete URL: %s", (url) => {
+    expect(() => classifyImportUrl(url)).toThrow();
+  });
+
+  it("does not resurrect an item removed while preprocessing", () => {
+    const parsed = makeParsedImport("Late page", "late.html", "Late body");
+    const queue: ImportItem[] = [];
+
+    expect(settleImportItem(queue, "deleted-item", { parsed })).toBe(queue);
+    expect(
+      replaceImportItem(queue, "deleted-item", [
+        makeImportItem("replacement", parsed),
+      ]),
+    ).toBe(queue);
+  });
+
+  it("settles parsed text and bounds placeholder expansion", () => {
+    const placeholder: ImportItem = {
+      id: "pending-media",
+      fileName: "Media",
+      mimeType: "audio/video",
+      byteSize: 0,
+      status: "parsing",
+      included: false,
+    };
+    const settled = settleImportItem([placeholder], placeholder.id, {
+      parsed: makeParsedImport("Transcript", "transcript.md", "Body"),
+    });
+    expect(settled[0]).toMatchObject({
+      status: "ready",
+      included: true,
+      fileName: "transcript.md",
+    });
+
+    const existing = [
+      makeImportItem("one", makeParsedImport("One", "one.md", "One")),
+      placeholder,
+      makeImportItem("two", makeParsedImport("Two", "two.md", "Two")),
+    ];
+    const replacements = [
+      makeImportItem("a", makeParsedImport("A", "a.md", "A")),
+      makeImportItem("b", makeParsedImport("B", "b.md", "B")),
+      makeImportItem("c", makeParsedImport("C", "c.md", "C")),
+    ];
+    expect(
+      replaceImportItem(existing, placeholder.id, replacements, 4),
+    ).toHaveLength(4);
+  });
+
+  it("turns pasted text into a UTF-8 source with an optional title", () => {
+    const parsed = pastedTextToParsedImport("", "  Orion ✨  ");
+
+    expect(parsed).toMatchObject({
+      title: "Pasted notes",
+      fileName: "pasted-notes.txt",
+      text: "Orion ✨",
+    });
+    expect(parsed.byteSize).toBe(
+      new TextEncoder().encode("Orion ✨").byteLength,
+    );
   });
 });
 
@@ -202,6 +345,18 @@ function makeWikiArticle(
     tags: ["databases"],
     aliases: ["Structured Query Language"],
     links: [],
+  };
+}
+
+function makeImportItem(id: string, parsed: ParsedImport): ImportItem {
+  return {
+    id,
+    fileName: parsed.fileName,
+    mimeType: parsed.mimeType,
+    byteSize: parsed.byteSize,
+    status: "ready",
+    included: true,
+    parsed,
   };
 }
 

@@ -12,6 +12,7 @@ import {
   X,
 } from "../lib/icons";
 import clsx from "clsx";
+import { visibleNoteTags } from "../lib/noteMetadata";
 import type {
   Concept,
   ConceptReference,
@@ -139,7 +140,6 @@ export function ConnectionCanvas({
           (exactTitle ? 52 : 0) +
           (aliasMatch ? 28 : 0) +
           (note.pinned ? 12 : 0) +
-          (note.status === "ready" ? 4 : 0) +
           Math.min(noteReferences.length * 6, 24);
 
         return {
@@ -192,6 +192,7 @@ export function ConnectionCanvas({
 
   return (
     <aside
+      id="connections-canvas-panel"
       ref={canvasRef}
       className={clsx("connections-canvas", className)}
       role="region"
@@ -272,6 +273,7 @@ export function ConnectionCanvas({
           <div className="connections-canvas__targets">
             {rankedTargets.map((target, index) => {
               const selected = target.note.id === selectedNoteId;
+              const visibleTags = visibleNoteTags(target.note).slice(0, 2);
               return (
                 <button
                   className={clsx(
@@ -333,20 +335,24 @@ export function ConnectionCanvas({
                       />
                       <span aria-hidden="true">”</span>
                     </span>
-                    <span className="connections-canvas__target-footer">
-                      <span>{target.note.kind}</span>
-                      {target.referenceCount > 0 && (
-                        <span>
-                          {target.referenceCount}{" "}
-                          {target.referenceCount === 1 ? "match" : "matches"}
-                        </span>
-                      )}
-                      {target.note.tags.slice(0, 2).map((tag) => (
-                        <span className="connections-canvas__tag" key={tag}>
-                          {tag}
-                        </span>
-                      ))}
-                    </span>
+                    {target.referenceCount > 0 || visibleTags.length > 0 ? (
+                      <span className="connections-canvas__target-footer">
+                        {target.referenceCount > 0 && (
+                          <span>
+                            {target.referenceCount}{" "}
+                            {target.referenceCount === 1 ? "match" : "matches"}
+                          </span>
+                        )}
+                        {visibleTags.map((tag) => (
+                          <span
+                            className="connections-canvas__tag"
+                            key={tag}
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </span>
+                    ) : null}
                   </span>
                   <ArrowRight
                     className="connections-canvas__target-arrow"

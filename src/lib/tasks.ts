@@ -21,7 +21,35 @@ export function collectNoteTasks(
   notes: readonly Note[],
   concepts: readonly Concept[],
 ): NoteTask[] {
-  return notes.flatMap((note) => collectTasksFromNote(note, concepts));
+  const collected = notes.flatMap((note) =>
+    collectTasksFromNote(note, concepts).map((task) => ({
+      note,
+      task,
+      fingerprint: taskFingerprint(task.text),
+    })),
+  );
+  const deduplicated: typeof collected = [];
+
+  for (const candidate of collected) {
+    const duplicateIndex = deduplicated.findIndex(
+      (existing) =>
+        existing.fingerprint === candidate.fingerprint &&
+        sharesTaskDerivation(existing.note, candidate.note),
+    );
+    if (duplicateIndex < 0) {
+      deduplicated.push(candidate);
+      continue;
+    }
+
+    if (
+      taskAuthority(candidate.note) >
+      taskAuthority(deduplicated[duplicateIndex].note)
+    ) {
+      deduplicated[duplicateIndex] = candidate;
+    }
+  }
+
+  return deduplicated.map(({ task }) => task);
 }
 
 export function collectTasksFromNote(
@@ -117,4 +145,37 @@ function readableTaskText(value: string): string {
     .replace(/[`*_~]/g, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function taskFingerprint(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\p{P}\p{S}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Exact task text is not enough to establish identity: the same recurring task
+ * can be intentionally present in unrelated notes. Shared source provenance is
+ * a reliable derivation signal. A compatibility `wiki` note is also derivative
+ * by design and must not surface a copied project task as a second Home item.
+ */
+function sharesTaskDerivation(left: Note, right: Note): boolean {
+  if (left.id === right.id) {
+    return false;
+  }
+  if (left.kind === "wiki" || right.kind === "wiki") {
+    return true;
+  }
+  if (left.sourceIds.length === 0 || right.sourceIds.length === 0) {
+    return false;
+  }
+  const leftSources = new Set(left.sourceIds);
+  return right.sourceIds.some((sourceId) => leftSources.has(sourceId));
+}
+
+function taskAuthority(note: Note): number {
+  return Number(note.kind !== "wiki");
 }

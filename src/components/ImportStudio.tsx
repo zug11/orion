@@ -5,7 +5,6 @@ import {
   useRef,
   useState,
   type ChangeEvent,
-  type DragEvent,
   type KeyboardEvent,
 } from "react";
 import {
@@ -16,14 +15,13 @@ import {
   Bot,
   Check,
   CheckCircle2,
-  CirclePlay,
   FileText,
   Files,
+  Link2,
   LoaderCircle,
   PenLine,
   Plus,
   Trash2,
-  UploadCloud,
   X,
 } from "../lib/icons";
 import { nanoid } from "nanoid";
@@ -32,10 +30,16 @@ import {
   reconcileConceptVocabulary,
   type ConceptSeed,
 } from "../lib/concepts";
-import { IMPORT_ACCEPT, parseImportFiles } from "../lib/files";
+import {
+  detectSourceKind,
+  IMPORT_ACCEPT,
+  parseImportFiles,
+} from "../lib/files";
 import {
   isTauriRuntime,
+  fetchWebPage,
   organizeWithAI,
+  recognizeDocumentText,
   transcribeMediaFiles,
   transcribeYouTube,
 } from "../lib/storage";
@@ -43,6 +47,8 @@ import {
   isSelectedAIConfigured,
   selectedAIProviderName,
 } from "../lib/ai";
+import { visibleNoteTags } from "../lib/noteMetadata";
+import { truncateUnicode } from "../lib/text";
 import { transcriptToParsedImport } from "../lib/transcription";
 import type {
   AppSnapshot,
@@ -50,7 +56,6 @@ import type {
   EntityId,
   ExistingNoteContext,
   Note,
-  NoteKind,
   OrganizeContentResult,
   OrganizedNote,
   OrganizedWikiArticle,
@@ -68,13 +73,14 @@ const MAX_MANUAL_CHARS_PER_SOURCE = 200_000;
 const MAX_NOTES_PER_SOURCE = 8;
 const MAX_WIKI_ARTICLES_PER_SOURCE = 20;
 const MAX_TOTAL_GENERATED_NOTES = 30;
+const MAX_IMPORT_GUIDANCE_CHARS = 1_000;
 const MEDIA_ACCEPT =
   ".flac,.m4a,.mp3,.mp4,.mpeg,.mpga,.ogg,.wav,.webm,audio/*,video/mp4,video/webm";
 type ImportStage = "add" | "review" | "organizing" | "results";
 type ImportMode = "ai" | "manual";
 type ItemStatus = "parsing" | "ready" | "error";
 
-interface ImportItem {
+export interface ImportItem {
   id: EntityId;
   fileName: string;
   mimeType: string;
@@ -83,6 +89,15 @@ interface ImportItem {
   included: boolean;
   parsed?: ParsedImport;
   error?: string;
+  dedupeKey?: string;
+  preprocessLabel?: string;
+}
+
+export type ImportUrlKind = "youtube" | "webpage";
+
+export interface ClassifiedImportUrl {
+  kind: ImportUrlKind;
+  url: string;
 }
 
 interface OrganizeIssue {
@@ -180,6 +195,126 @@ function slugBase(title: string): string {
   return slug || "untitled";
 }
 
+const YOUTUBE_HOSTS = new Set([
+  "youtube.com",
+  "www.youtube.com",
+  "m.youtube.com",
+  "music.youtube.com",
+  "youtu.be",
+  "www.youtu.be",
+]);
+
+export function classifyImportUrl(value: string): ClassifiedImportUrl {
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new Error("Enter a valid webpage or YouTube URL.");
+  }
+  if (
+    url.protocol !== "https:" ||
+    Boolean(url.username) ||
+    Boolean(url.password)
+  ) {
+    throw new Error("Use a standard https webpage or YouTube URL.");
+  }
+  const host = url.hostname.toLocaleLowerCase().replace(/\.$/, "");
+  if (
+    !host ||
+    host === "localhost" ||
+    /^(?:\d{1,3}\.){3}\d{1,3}$/.test(host) ||
+    host.startsWith("[") ||
+    [
+      ".localhost",
+      ".local",
+      ".internal",
+      ".lan",
+      ".home",
+      ".test",
+      ".invalid",
+      ".example",
+    ].some((suffix) => host.endsWith(suffix))
+  ) {
+    throw new Error("Orion can only import public webpages.");
+  }
+  url.hash = "";
+  if (YOUTUBE_HOSTS.has(host)) {
+    if (!url.pathname || url.pathname === "/") {
+      throw new Error("Paste a link to a specific YouTube video.");
+    }
+    return { kind: "youtube", url: url.toString() };
+  }
+  return { kind: "webpage", url: url.toString() };
+}
+
+export function settleImportItem(
+  items: readonly ImportItem[],
+  itemId: EntityId,
+  outcome:
+    | { parsed: ParsedImport }
+    | { error: string },
+): ImportItem[] {
+  const index = items.findIndex((item) => item.id === itemId);
+  if (index < 0) return items as ImportItem[];
+  return items.map((item) => {
+    if (item.id !== itemId) return item;
+    if ("error" in outcome) {
+      return {
+        ...item,
+        status: "error",
+        included: false,
+        parsed: undefined,
+        error: outcome.error,
+        preprocessLabel: undefined,
+      };
+    }
+    return {
+      ...item,
+      status: "ready",
+      included: true,
+      parsed: outcome.parsed,
+      fileName: outcome.parsed.fileName,
+      mimeType: outcome.parsed.mimeType,
+      byteSize: outcome.parsed.byteSize,
+      error: undefined,
+      preprocessLabel: undefined,
+    };
+  });
+}
+
+export function replaceImportItem(
+  items: readonly ImportItem[],
+  itemId: EntityId,
+  replacements: readonly ImportItem[],
+  limit = MAX_FILES,
+): ImportItem[] {
+  const index = items.findIndex((item) => item.id === itemId);
+  if (index < 0) return items as ImportItem[];
+  const capacity = Math.max(0, limit - (items.length - 1));
+  return [
+    ...items.slice(0, index),
+    ...replacements.slice(0, capacity),
+    ...items.slice(index + 1),
+  ];
+}
+
+export function pastedTextToParsedImport(
+  title: string,
+  body: string,
+): ParsedImport {
+  const safeTitle = title.trim() || "Pasted notes";
+  const text = body.trim();
+  return {
+    title: safeTitle,
+    fileName: `${slugBase(safeTitle)}.txt`,
+    mimeType: "text/plain;charset=utf-8",
+    format: "text",
+    byteSize: new TextEncoder().encode(text).byteLength,
+    text,
+    warnings: [],
+  };
+}
+
 function uniqueSlug(title: string, reserved: Set<string>): string {
   const base = slugBase(title);
   let candidate = base;
@@ -222,24 +357,21 @@ function manualOrganizedNote(parsed: ParsedImport): OrganizedNote {
   };
 }
 
-function inferNoteKind(note: OrganizedNote): NoteKind {
-  const tags = new Set(note.tags.map(normalize));
-  if (tags.has("person") || tags.has("people")) {
-    return "person";
-  }
-  if (tags.has("place") || tags.has("location")) {
-    return "place";
-  }
-  if (tags.has("project")) {
-    return "project";
-  }
-  if (tags.has("idea") || tags.has("concept")) {
-    return "idea";
-  }
-  if (note.links.length >= 5) {
-    return "hub";
-  }
-  return "article";
+export function buildImportOrganizationInstructions(
+  importGuidance: string,
+): string {
+  const guidance = truncateUnicode(
+    importGuidance.trim(),
+    MAX_IMPORT_GUIDANCE_CHARS,
+  );
+  return [
+    guidance
+      ? `User guidance for this import batch:\n${guidance}`
+      : "",
+    "Import-refresh requirement: return every existing reference article this source can meaningfully enrich. Rewrite each returned wikiArticles.body as one coherent integrated article, preserving worthwhile existing knowledge and weaving new material into the relevant explanation; never append provenance or change-log sections. Return new definitional reference articles only for genuinely durable concepts, never a relabelled or paraphrased copy of the imported project note. Infer concepts from meaning, roles, relationships, and aliases rather than keyword frequency. Preserve explicit actions as Markdown '- [ ]' tasks in the relevant project note only; never copy tasks into wikiArticles and do not invent work.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function contentPreview(text: string, length = 150): string {
@@ -296,8 +428,6 @@ function mergeWikiArticle(
     tags: unique([
       ...note.tags,
       ...article.tags,
-      "wiki-article",
-      "ai-draft",
     ]).slice(0, 12),
     kind: "wiki",
     sourceIds: unique([...note.sourceIds, sourceId]),
@@ -308,6 +438,7 @@ function mergeWikiArticle(
 export function buildImportPayload(
   organizedSources: readonly OrganizedSource[],
   snapshot: AppSnapshot,
+  importGuidance = "",
 ): ImportStudioApplyPayload {
   const now = new Date().toISOString();
   const reservedSlugs = new Set(snapshot.notes.map((note) => note.slug));
@@ -371,8 +502,8 @@ export function buildImportPayload(
           body: organized.body.trim(),
           aliases: unique(organized.aliases).slice(0, 12),
           tags: unique(organized.tags).slice(0, 10),
-          kind: inferNoteKind(organized),
-          status: "draft",
+          kind: "article",
+          status: "ready",
           conceptIds: [],
           sourceIds: [sourceId],
           createdAt: now,
@@ -414,7 +545,7 @@ export function buildImportPayload(
             aliases: [],
             tags: [],
             kind: "wiki",
-            status: "draft",
+            status: "ready",
             conceptIds: [],
             sourceIds: [],
             createdAt: now,
@@ -445,6 +576,14 @@ export function buildImportPayload(
       mimeType: parsed.mimeType,
       byteSize: parsed.byteSize,
       sourceUrl: parsed.sourceUrl,
+      ...(importGuidance.trim()
+        ? {
+            importGuidance: truncateUnicode(
+              importGuidance.trim(),
+              MAX_IMPORT_GUIDANCE_CHARS,
+            ),
+          }
+        : {}),
       text: parsed.text,
       noteIds: unique(sourceNoteIds),
     });
@@ -618,19 +757,24 @@ export function ImportStudio({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaInputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const pasteDialogRef = useRef<HTMLFormElement>(null);
+  const pasteBodyRef = useRef<HTMLTextAreaElement>(null);
+  const fileChoiceDialogRef = useRef<HTMLDivElement>(null);
+  const itemsRef = useRef<ImportItem[]>([]);
+  const workspaceIdRef = useRef(snapshot.workspace.id);
   const [stage, setStage] = useState<ImportStage>("add");
   const [items, setItems] = useState<ImportItem[]>([]);
-  const [pastedTitle, setPastedTitle] = useState("Pasted notes");
+  const [pastedTitle, setPastedTitle] = useState("");
   const [pastedText, setPastedText] = useState("");
-  const [youtubeUrl, setYoutubeUrl] = useState("");
-  const [transcribing, setTranscribing] = useState<
-    "media" | "youtube" | null
-  >(null);
-  const [transcriptionError, setTranscriptionError] = useState("");
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteError, setPasteError] = useState("");
+  const [fileChoiceOpen, setFileChoiceOpen] = useState(false);
+  const [importUrl, setImportUrl] = useState("");
+  const [urlError, setUrlError] = useState("");
   const [mode, setMode] = useState<ImportMode>(
     aiConfigured ? "ai" : "manual",
   );
-  const [dragActive, setDragActive] = useState(false);
+  const [importGuidance, setImportGuidance] = useState("");
   const [progressIndex, setProgressIndex] = useState(0);
   const [progressLabel, setProgressLabel] = useState("");
   const [organizeIssues, setOrganizeIssues] = useState<OrganizeIssue[]>([]);
@@ -638,16 +782,27 @@ export function ImportStudio({
   const [applyError, setApplyError] = useState("");
   const [applying, setApplying] = useState(false);
 
+  const updateItems = (
+    updater: (current: ImportItem[]) => ImportItem[],
+  ) => {
+    const next = updater(itemsRef.current);
+    itemsRef.current = next;
+    setItems(next);
+  };
+
   const reset = () => {
     setStage("add");
+    itemsRef.current = [];
     setItems([]);
-    setPastedTitle("Pasted notes");
+    setPastedTitle("");
     setPastedText("");
-    setYoutubeUrl("");
-    setTranscribing(null);
-    setTranscriptionError("");
+    setPasteOpen(false);
+    setPasteError("");
+    setFileChoiceOpen(false);
+    setImportUrl("");
+    setUrlError("");
     setMode(aiConfigured ? "ai" : "manual");
-    setDragActive(false);
+    setImportGuidance("");
     setProgressIndex(0);
     setProgressLabel("");
     setOrganizeIssues([]);
@@ -657,10 +812,7 @@ export function ImportStudio({
   };
 
   useEffect(() => {
-    if (!open) {
-      reset();
-      return undefined;
-    }
+    if (!open) return undefined;
 
     const previouslyFocused = document.activeElement as HTMLElement | null;
     const previousOverflow = document.body.style.overflow;
@@ -677,6 +829,26 @@ export function ImportStudio({
   }, [open]);
 
   useEffect(() => {
+    if (workspaceIdRef.current === snapshot.workspace.id) return;
+    workspaceIdRef.current = snapshot.workspace.id;
+    reset();
+  }, [snapshot.workspace.id]);
+
+  useEffect(() => {
+    if (!open || (!pasteOpen && !fileChoiceOpen)) return undefined;
+    const frame = requestAnimationFrame(() => {
+      if (pasteOpen) {
+        pasteBodyRef.current?.focus();
+      } else {
+        fileChoiceDialogRef.current
+          ?.querySelector<HTMLElement>("button")
+          ?.focus();
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [fileChoiceOpen, open, pasteOpen]);
+
+  useEffect(() => {
     if (!open) return undefined;
 
     const handleEscape = (event: globalThis.KeyboardEvent) => {
@@ -685,7 +857,13 @@ export function ImportStudio({
         stage !== "organizing" &&
         !applying
       ) {
-        onClose();
+        if (pasteOpen) {
+          setPasteOpen(false);
+        } else if (fileChoiceOpen) {
+          setFileChoiceOpen(false);
+        } else {
+          onClose();
+        }
       }
     };
     window.addEventListener("keydown", handleEscape);
@@ -693,7 +871,7 @@ export function ImportStudio({
     return () => {
       window.removeEventListener("keydown", handleEscape);
     };
-  }, [applying, onClose, open, stage]);
+  }, [applying, fileChoiceOpen, onClose, open, pasteOpen, stage]);
 
   const readyItems = useMemo(
     () =>
@@ -703,9 +881,7 @@ export function ImportStudio({
       ),
     [items],
   );
-  const parsing =
-    items.some((item) => item.status === "parsing") ||
-    transcribing !== null;
+  const parsing = items.some((item) => item.status === "parsing");
   const totalBytes = readyItems.reduce(
     (total, item) => total + item.byteSize,
     0,
@@ -716,19 +892,26 @@ export function ImportStudio({
   );
   const activeStageIndex = STAGES.findIndex(({ id }) => id === stage);
 
-  const addFiles = async (files: readonly File[]) => {
+  const queueKey = (fileName: string, byteSize: number) =>
+    `file:${normalize(fileName)}:${byteSize}`;
+
+  const addDocumentFiles = async (files: readonly File[]) => {
     if (files.length === 0) {
       return;
     }
 
     const existingKeys = new Set(
-      items.map((item) => `${item.fileName}:${item.byteSize}`),
+      itemsRef.current.map(
+        (item) => item.dedupeKey ?? queueKey(item.fileName, item.byteSize),
+      ),
     );
-    const availableSlots = Math.max(0, MAX_FILES - items.length);
+    const availableSlots = Math.max(0, MAX_FILES - itemsRef.current.length);
     const candidates = files.slice(0, availableSlots);
     const additions: ImportItem[] = candidates.map((file) => {
-      const duplicate = existingKeys.has(`${file.name}:${file.size}`);
+      const dedupeKey = queueKey(file.name, file.size);
+      const duplicate = existingKeys.has(dedupeKey);
       const tooLarge = file.size > MAX_FILE_BYTES;
+      existingKeys.add(dedupeKey);
 
       return {
         id: `import_${nanoid(12)}`,
@@ -737,6 +920,12 @@ export function ImportStudio({
         byteSize: file.size,
         status: duplicate || tooLarge ? "error" : "parsing",
         included: !duplicate && !tooLarge,
+        dedupeKey,
+        preprocessLabel: duplicate || tooLarge
+          ? undefined
+          : detectSourceKind(file.name, file.type) === "image"
+            ? "Recognizing text locally…"
+            : "Reading document…",
         error: duplicate
           ? "This file is already in the import queue."
           : tooLarge
@@ -745,7 +934,7 @@ export function ImportStudio({
       };
     });
 
-    setItems((current) => [...current, ...additions]);
+    updateItems((current) => [...current, ...additions]);
 
     await Promise.all(
       candidates.map(async (file, index) => {
@@ -755,33 +944,30 @@ export function ImportStudio({
         }
 
         try {
-          const [parsed] = await parseImportFiles([file]);
-          setItems((current) =>
-            current.map((candidate) =>
-              candidate.id === item.id
-                ? {
-                    ...candidate,
-                    status: "ready",
-                    parsed,
-                    fileName: parsed.fileName,
-                    mimeType: parsed.mimeType,
-                    byteSize: parsed.byteSize,
-                  }
-                : candidate,
-            ),
+          const [parsed] = await parseImportFiles(
+            [file],
+            async (document) => {
+              updateItems((current) =>
+                current.map((currentItem) =>
+                  currentItem.id === item.id
+                    ? {
+                        ...currentItem,
+                        preprocessLabel: "Recognizing text locally…",
+                      }
+                    : currentItem,
+                ),
+              );
+              return recognizeDocumentText(document);
+            },
+          );
+          updateItems((current) =>
+            settleImportItem(current, item.id, { parsed }),
           );
         } catch (error) {
-          setItems((current) =>
-            current.map((candidate) =>
-              candidate.id === item.id
-                ? {
-                    ...candidate,
-                    status: "error",
-                    included: false,
-                    error: errorMessage(error),
-                  }
-                : candidate,
-            ),
+          updateItems((current) =>
+            settleImportItem(current, item.id, {
+              error: errorMessage(error),
+            }),
           );
         }
       }),
@@ -791,89 +977,175 @@ export function ImportStudio({
   const handleFileInput = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.currentTarget.files ?? []);
     event.currentTarget.value = "";
-    void addFiles(files);
-  };
-
-  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    setDragActive(false);
-    void addFiles(Array.from(event.dataTransfer.files));
+    void addDocumentFiles(files);
   };
 
   const addPastedText = () => {
     const text = pastedText.trim();
     if (!text) {
+      setPasteError("Paste some text to add it to the queue.");
       return;
     }
-    const safeTitle = pastedTitle.trim() || "Pasted notes";
-    const filename = `${slugBase(safeTitle)}.txt`;
-    const file = new File([text], filename, {
-      type: "text/plain;charset=utf-8",
-    });
+    if (itemsRef.current.length >= MAX_FILES) {
+      setPasteError(`The queue can hold up to ${MAX_FILES} sources.`);
+      return;
+    }
+    const parsed = pastedTextToParsedImport(pastedTitle, text);
+    const dedupeKey = `paste:${normalize(parsed.title)}:${parsed.byteSize}:${normalize(parsed.text.slice(0, 160))}`;
+    const duplicate = itemsRef.current.some(
+      (item) => item.dedupeKey === dedupeKey,
+    );
+    updateItems((current) => [
+      ...current,
+      {
+        id: `import_${nanoid(12)}`,
+        fileName: parsed.fileName,
+        mimeType: parsed.mimeType,
+        byteSize: parsed.byteSize,
+        status: duplicate ? "error" : "ready",
+        included: !duplicate,
+        parsed: duplicate ? undefined : parsed,
+        dedupeKey,
+        error: duplicate
+          ? "This pasted text is already in the import queue."
+          : undefined,
+      },
+    ]);
+    setPastedTitle("");
     setPastedText("");
-    void addFiles([file]);
+    setPasteError("");
+    setPasteOpen(false);
   };
 
   const whisperConfig = (): WhisperConfig => ({
     language: snapshot.settings.whisperLanguage || undefined,
   });
 
-  const addTranscripts = (transcripts: readonly TranscribedMedia[]) => {
-    if (transcripts.length === 0) {
-      return;
-    }
-    setItems((current) => {
+  const replaceWithTranscripts = (
+    itemId: EntityId,
+    transcripts: readonly TranscribedMedia[],
+  ) => {
+    updateItems((current) => {
+      const placeholder = current.find((item) => item.id === itemId);
+      if (!placeholder) return current;
+      if (transcripts.length === 0) {
+        return current.filter((item) => item.id !== itemId);
+      }
       const existingKeys = new Set(
-        current.map((item) => `${item.fileName}:${item.byteSize}`),
+        current
+          .filter((item) => item.id !== itemId)
+          .map(
+            (item) =>
+              item.dedupeKey ?? queueKey(item.fileName, item.byteSize),
+          ),
       );
-      const availableSlots = Math.max(0, MAX_FILES - current.length);
-      return [
-        ...current,
-        ...transcripts.slice(0, availableSlots).map((transcript) => {
-          const parsed = transcriptToParsedImport(transcript);
-          const duplicate = existingKeys.has(
-            `${parsed.fileName}:${parsed.byteSize}`,
-          );
-          existingKeys.add(`${parsed.fileName}:${parsed.byteSize}`);
-          return {
-            id: `import_${nanoid(12)}`,
-            fileName: parsed.fileName,
-            mimeType: parsed.mimeType,
-            byteSize: parsed.byteSize,
-            status: duplicate ? ("error" as const) : ("ready" as const),
-            included: !duplicate,
-            parsed: duplicate ? undefined : parsed,
-            error: duplicate
-              ? "This transcript is already in the import queue."
-              : undefined,
-          };
-        }),
-      ];
+      const capacity = Math.max(0, MAX_FILES - (current.length - 1));
+      const accepted = transcripts.slice(0, capacity);
+      const omitted = transcripts.length - accepted.length;
+      const replacements = accepted.map((transcript, index) => {
+        const initialParsed = transcriptToParsedImport(transcript);
+        const parsed =
+          omitted > 0 && index === accepted.length - 1
+            ? {
+                ...initialParsed,
+                warnings: [
+                  ...initialParsed.warnings,
+                  `${omitted} additional media ${omitted === 1 ? "file was" : "files were"} not added because the queue can hold up to ${MAX_FILES} sources.`,
+                ],
+              }
+            : initialParsed;
+        const dedupeKey =
+          index === 0 && placeholder.dedupeKey
+            ? placeholder.dedupeKey
+            : queueKey(parsed.fileName, parsed.byteSize);
+        const duplicate = existingKeys.has(dedupeKey);
+        existingKeys.add(dedupeKey);
+        return {
+          id: index === 0 ? itemId : `import_${nanoid(12)}`,
+          fileName: parsed.fileName,
+          mimeType: parsed.mimeType,
+          byteSize: parsed.byteSize,
+          status: duplicate ? ("error" as const) : ("ready" as const),
+          included: !duplicate,
+          parsed: duplicate ? undefined : parsed,
+          dedupeKey,
+          error: duplicate
+            ? "This transcript is already in the import queue."
+            : undefined,
+        };
+      });
+      return replaceImportItem(current, itemId, replacements);
     });
   };
 
   const runMediaTranscription = async (browserFiles?: readonly File[]) => {
-    setTranscribing("media");
-    setTranscriptionError("");
+    if (itemsRef.current.length >= MAX_FILES) return;
+    const fileCount = browserFiles?.length ?? 0;
+    const displayName =
+      fileCount === 1
+        ? browserFiles?.[0]?.name ?? "Audio or video"
+        : fileCount > 1
+          ? `${fileCount} media files`
+          : "Audio or video";
+    const byteSize =
+      browserFiles?.reduce((total, file) => total + file.size, 0) ?? 0;
+    const itemId = `import_${nanoid(12)}`;
+    const dedupeKey =
+      fileCount === 1 && browserFiles?.[0]
+        ? queueKey(browserFiles[0].name, browserFiles[0].size)
+        : undefined;
+    const duplicate = Boolean(
+      dedupeKey &&
+        itemsRef.current.some((item) => item.dedupeKey === dedupeKey),
+    );
+    updateItems((current) => [
+      ...current,
+      {
+        id: itemId,
+        fileName: displayName,
+        mimeType: browserFiles?.[0]?.type ?? "audio/video",
+        byteSize,
+        status: duplicate ? "error" : "parsing",
+        included: false,
+        dedupeKey,
+        preprocessLabel: duplicate
+          ? undefined
+          : fileCount > 0
+            ? "Transcribing locally…"
+            : "Choose media, then Orion will transcribe it locally…",
+        error: duplicate
+          ? "This media file is already in the import queue."
+          : undefined,
+      },
+    ]);
+    if (duplicate) return;
     try {
       const transcripts = await transcribeMediaFiles(
         whisperConfig(),
         browserFiles,
       );
-      addTranscripts(transcripts);
+      replaceWithTranscripts(itemId, transcripts);
     } catch (error) {
-      setTranscriptionError(errorMessage(error));
-    } finally {
-      setTranscribing(null);
+      updateItems((current) =>
+        settleImportItem(current, itemId, {
+          error: errorMessage(error),
+        }),
+      );
     }
   };
 
   const chooseMedia = () => {
+    setFileChoiceOpen(false);
     if (isTauriRuntime()) {
       void runMediaTranscription();
     } else {
-      mediaInputRef.current?.click();
+      window.requestAnimationFrame(() => mediaInputRef.current?.click());
     }
+  };
+
+  const chooseDocuments = () => {
+    setFileChoiceOpen(false);
+    window.requestAnimationFrame(() => fileInputRef.current?.click());
   };
 
   const handleMediaInput = (event: ChangeEvent<HTMLInputElement>) => {
@@ -884,32 +1156,76 @@ export function ImportStudio({
     }
   };
 
-  const runYouTubeTranscription = async () => {
-    if (!youtubeUrl.trim()) {
+  const queueUrl = async () => {
+    let classified: ClassifiedImportUrl;
+    try {
+      classified = classifyImportUrl(importUrl);
+    } catch (error) {
+      setUrlError(errorMessage(error));
       return;
     }
-    setTranscribing("youtube");
-    setTranscriptionError("");
+    if (itemsRef.current.length >= MAX_FILES) {
+      setUrlError(`The queue can hold up to ${MAX_FILES} sources.`);
+      return;
+    }
+    const dedupeKey = `url:${classified.url}`;
+    const duplicate = itemsRef.current.some(
+      (item) => item.dedupeKey === dedupeKey,
+    );
+    const itemId = `import_${nanoid(12)}`;
+    const host = new URL(classified.url).hostname.replace(/^www\./i, "");
+    updateItems((current) => [
+      ...current,
+      {
+        id: itemId,
+        fileName:
+          classified.kind === "youtube" ? "YouTube video" : host,
+        mimeType:
+          classified.kind === "youtube" ? "video/youtube" : "text/html",
+        byteSize: 0,
+        status: duplicate ? "error" : "parsing",
+        included: false,
+        dedupeKey,
+        preprocessLabel: duplicate
+          ? undefined
+          : classified.kind === "youtube"
+            ? "Downloading, transcribing locally, then deleting media…"
+            : "Fetching readable webpage text…",
+        error: duplicate
+          ? "This URL is already in the import queue."
+          : undefined,
+      },
+    ]);
+    setImportUrl("");
+    setUrlError("");
+    if (duplicate) return;
     try {
-      const transcript = await transcribeYouTube(
-        youtubeUrl.trim(),
-        whisperConfig(),
+      const parsed =
+        classified.kind === "youtube"
+          ? transcriptToParsedImport(
+              await transcribeYouTube(classified.url, whisperConfig()),
+            )
+          : await fetchWebPage(classified.url);
+      updateItems((current) =>
+        settleImportItem(current, itemId, { parsed }),
       );
-      addTranscripts([transcript]);
-      setYoutubeUrl("");
     } catch (error) {
-      setTranscriptionError(errorMessage(error));
-    } finally {
-      setTranscribing(null);
+      updateItems((current) =>
+        settleImportItem(current, itemId, {
+          error: errorMessage(error),
+        }),
+      );
     }
   };
 
   const removeItem = (itemId: EntityId) => {
-    setItems((current) => current.filter((item) => item.id !== itemId));
+    updateItems((current) =>
+      current.filter((item) => item.id !== itemId),
+    );
   };
 
   const toggleItem = (itemId: EntityId) => {
-    setItems((current) =>
+    updateItems((current) =>
       current.map((item) =>
         item.id === itemId && item.status === "ready"
           ? { ...item, included: !item.included }
@@ -946,14 +1262,14 @@ export function ImportStudio({
           )
           .slice(0, 80)
           .map((note) => ({
-          id: note.id,
-          title: note.title,
-          aliases: [...note.aliases],
-          summary: note.summary,
-          kind: note.kind,
-          ...(note.kind === "wiki"
-            ? { body: note.body.slice(0, 6_000) }
-            : {}),
+            id: note.id,
+            title: note.title,
+            aliases: [...note.aliases],
+            summary: note.summary,
+            reference: note.kind === "wiki",
+            ...(note.kind === "wiki"
+              ? { body: note.body.slice(0, 6_000) }
+              : {}),
           }))
       : undefined;
 
@@ -982,12 +1298,10 @@ export function ImportStudio({
           existingNotes,
           model: snapshot.settings.model,
           effort: snapshot.settings.reasoningEffort,
-          organizationInstructions: [
-            "Import-refresh requirement: return every existing canonical wiki article that this source can meaningfully enrich, even when it already has a body. Rewrite each returned wikiArticles.body as one coherent integrated article, preserving worthwhile existing knowledge and weaving new material into the relevant explanation; never append “Context from” or other provenance/change-log sections. Return new definitional canonical wiki articles for other durable concepts in the source. Infer concepts from meaning, roles, relationships, and aliases rather than keyword frequency. Do not include unrelated articles or rely on lexical overlap alone. Preserve explicit actions and next steps in project-note bodies as Markdown '- [ ]' tasks without inventing work.",
+          taskInstructions:
+            buildImportOrganizationInstructions(importGuidance),
+          organizationInstructions:
             snapshot.settings.organizationInstructions,
-          ]
-            .filter((instruction) => instruction.trim())
-            .join("\n\n"),
         });
         if (organized.notes.length === 0) {
           throw new Error("The organizer did not return any notes.");
@@ -1010,7 +1324,7 @@ export function ImportStudio({
                 summary:
                   article.summary.trim() ||
                   existingNotes[existingIndex].summary,
-                kind: "wiki",
+                reference: true,
                 body: revisedBody,
               };
             } else {
@@ -1022,7 +1336,7 @@ export function ImportStudio({
                 title: article.title.trim(),
                 aliases: [...article.aliases],
                 summary: article.summary.trim(),
-                kind: "wiki",
+                reference: true,
                 body: revisedBody,
               });
             }
@@ -1050,7 +1364,11 @@ export function ImportStudio({
 
     setProgressIndex(selected.length);
     setProgressLabel("Connecting your notes");
-    const payload = buildImportPayload(organizedSources, snapshot);
+    const payload = buildImportPayload(
+      organizedSources,
+      snapshot,
+      effectiveMode === "ai" ? importGuidance : "",
+    );
     setOrganizeIssues(issues);
     setResult(payload);
     setStage("results");
@@ -1085,6 +1403,7 @@ export function ImportStudio({
           ...relationship,
         })),
       });
+      reset();
       onClose();
     } catch (error) {
       setApplyError(errorMessage(error));
@@ -1093,10 +1412,11 @@ export function ImportStudio({
     }
   };
 
-  const handleDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+  const handleDialogKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key !== "Tab") {
       return;
     }
+    event.stopPropagation();
 
     const dialog = event.currentTarget;
     const focusable = Array.from(
@@ -1155,8 +1475,8 @@ export function ImportStudio({
               <Files size={16} strokeWidth={1.8} />
             </span>
             <div>
-              <span className="import-studio__eyebrow">Orion workflow</span>
-              <h2 id={titleId}>Import Studio</h2>
+              <span className="import-studio__eyebrow">Add knowledge</span>
+              <h2 id={titleId}>Import</h2>
             </div>
           </div>
           <p id={descriptionId}>
@@ -1165,7 +1485,7 @@ export function ImportStudio({
           <button
             className="import-studio__close"
             type="button"
-            aria-label="Close Import Studio"
+            aria-label="Close import"
             disabled={!canClose}
             onClick={onClose}
           >
@@ -1216,39 +1536,46 @@ export function ImportStudio({
                 </span>
               </div>
 
-              <div className="import-studio__input-grid">
-                <div
-                  className={clsx(
-                    "import-studio__dropzone",
-                    dragActive && "import-studio__dropzone--active",
-                  )}
-                  onDragEnter={(event) => {
-                    event.preventDefault();
-                    setDragActive(true);
-                  }}
-                  onDragOver={(event) => event.preventDefault()}
-                  onDragLeave={(event) => {
-                    if (!event.currentTarget.contains(event.relatedTarget as Node)) {
-                      setDragActive(false);
-                    }
-                  }}
-                  onDrop={handleDrop}
-                >
+              <div className="import-studio__unified-intake">
+                <div className="import-studio__intake-card">
                   <span className="import-studio__drop-icon" aria-hidden="true">
-                    <UploadCloud size={25} strokeWidth={1.5} />
+                    <Files size={25} strokeWidth={1.5} />
                   </span>
-                  <strong>Drop files into Orion</strong>
-                  <p>
-                    Markdown, text, PDF, DOCX, JSON, CSV, TSV, or HTML.
-                  </p>
-                  <button
-                    className="button soft"
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    <Files aria-hidden="true" size={15} />
-                    Choose files
-                  </button>
+                  <div className="import-studio__intake-copy">
+                    <strong>Files, images, audio, or video</strong>
+                    <p>
+                      Documents and images are read locally. Media is
+                      transcribed on-device with Orion’s bundled Whisper model.
+                    </p>
+                  </div>
+                  <div className="import-studio__intake-actions">
+                    <button
+                      className="button soft"
+                      type="button"
+                      disabled={items.length >= MAX_FILES}
+                      onClick={() => setFileChoiceOpen(true)}
+                    >
+                      <Files aria-hidden="true" size={15} />
+                      Choose files, images, or media
+                    </button>
+                    <button
+                      className="button ghost"
+                      type="button"
+                      disabled={items.length >= MAX_FILES}
+                      onClick={() => {
+                        setPasteError("");
+                        setPasteOpen(true);
+                      }}
+                    >
+                      <PenLine aria-hidden="true" size={15} />
+                      Paste text
+                    </button>
+                  </div>
+                  <small className="import-studio__intake-note">
+                    Documents up to {formatBytes(MAX_FILE_BYTES)} · media up to
+                    2 GB · originals never leave your Mac unless you later
+                    choose AI organization
+                  </small>
                   <input
                     className="import-studio__file-input"
                     ref={fileInputRef}
@@ -1259,151 +1586,59 @@ export function ImportStudio({
                     aria-hidden="true"
                     onChange={handleFileInput}
                   />
+                  <input
+                    className="import-studio__file-input"
+                    ref={mediaInputRef}
+                    type="file"
+                    accept={MEDIA_ACCEPT}
+                    multiple
+                    tabIndex={-1}
+                    aria-hidden="true"
+                    onChange={handleMediaInput}
+                  />
                 </div>
 
-                <div className="import-studio__paste">
-                  <div className="import-studio__paste-heading">
-                    <span className="import-studio__paste-icon" aria-hidden="true">
-                      <PenLine size={16} strokeWidth={1.7} />
-                    </span>
-                    <div>
-                      <strong>Or paste text</strong>
-                      <span>Notes, transcripts, research, fragments</span>
-                    </div>
-                  </div>
-                  <label className="import-studio__field">
-                    <span>Source name</span>
-                    <input
-                      type="text"
-                      value={pastedTitle}
-                      maxLength={100}
-                      onChange={(event) => setPastedTitle(event.target.value)}
-                    />
-                  </label>
-                  <label className="import-studio__field">
-                    <span>Content</span>
-                    <textarea
-                      value={pastedText}
-                      rows={5}
-                      placeholder="Paste something worth remembering…"
-                      onChange={(event) => setPastedText(event.target.value)}
-                    />
-                  </label>
-                  <button
-                    className="button ghost import-studio__paste-add"
-                    type="button"
-                    disabled={!pastedText.trim()}
-                    onClick={addPastedText}
-                  >
-                    <Plus aria-hidden="true" size={15} />
-                    Add to queue
-                  </button>
-                </div>
-              </div>
-
-              <div className="import-studio__transcription">
-                <div className="import-studio__transcription-heading">
-                  <span className="import-studio__transcription-mark">
-                    <AudioLines size={17} />
-                  </span>
-                  <span>
-                    <strong>Transcribe into the same note workflow</strong>
+                <form
+                  className="import-studio__url-source"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void queueUrl();
+                  }}
+                >
+                  <Link2 size={16} aria-hidden="true" />
+                  <div className="import-studio__url-copy">
+                    <label htmlFor={`${titleId}-url`}>Webpage or YouTube</label>
                     <small>
-                      Orion’s bundled Whisper model transcribes locally, then
-                      turns the result into notes, concepts, and intelligent
-                      links.
+                      Webpages become readable source text. YouTube audio is
+                      deleted as soon as local transcription finishes.
                     </small>
-                  </span>
-                  <em>On-device</em>
-                </div>
-                <div className="import-studio__transcription-grid">
-                  <div className="import-studio__media-source">
-                    <span>
-                      <strong>Audio or video</strong>
-                      <small>
-                        MP3, MP4, M4A, WAV, WebM, OGG, FLAC, or MPEG · up to 2 GB
-                      </small>
-                    </span>
-                    <button
-                      className="button soft compact"
-                      type="button"
-                      disabled={
-                        transcribing !== null || items.length >= MAX_FILES
-                      }
-                      onClick={chooseMedia}
-                    >
-                      {transcribing === "media" ? (
-                        <LoaderCircle size={14} className="spin" />
-                      ) : (
-                        <AudioLines size={14} />
-                      )}
-                      {transcribing === "media"
-                        ? "Transcribing…"
-                        : "Choose media"}
-                    </button>
-                    <input
-                      className="import-studio__file-input"
-                      ref={mediaInputRef}
-                      type="file"
-                      accept={MEDIA_ACCEPT}
-                      multiple
-                      tabIndex={-1}
-                      aria-hidden="true"
-                      onChange={handleMediaInput}
-                    />
                   </div>
-                  <form
-                    className="import-studio__youtube-source"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      void runYouTubeTranscription();
+                  <input
+                    id={`${titleId}-url`}
+                    type="url"
+                    value={importUrl}
+                    placeholder="https://…"
+                    aria-label="Webpage or YouTube URL"
+                    onChange={(event) => {
+                      setImportUrl(event.target.value);
+                      setUrlError("");
                     }}
+                  />
+                  <button
+                    className="button soft compact"
+                    type="submit"
+                    disabled={!importUrl.trim() || items.length >= MAX_FILES}
                   >
-                    <CirclePlay size={16} aria-hidden="true" />
-                    <input
-                      type="url"
-                      value={youtubeUrl}
-                      placeholder="Paste a YouTube video link"
-                      aria-label="YouTube video URL"
-                      onChange={(event) => {
-                        setYoutubeUrl(event.target.value);
-                        setTranscriptionError("");
-                      }}
-                    />
-                    <button
-                      className="button soft compact"
-                      type="submit"
-                      disabled={
-                        !youtubeUrl.trim() ||
-                        transcribing !== null ||
-                        items.length >= MAX_FILES
-                      }
-                    >
-                      {transcribing === "youtube" ? (
-                        <LoaderCircle size={14} className="spin" />
-                      ) : (
-                        <CirclePlay size={14} />
-                      )}
-                      {transcribing === "youtube"
-                        ? "Downloading…"
-                        : "Transcribe"}
-                    </button>
-                  </form>
-                </div>
-                <div className="import-studio__transcription-foot">
-                  <span>
-                    Whisper base · multilingual · bundled with Orion
-                  </span>
-                  <span>
-                    YouTube media is deleted immediately after transcription.
-                  </span>
-                </div>
-                {transcriptionError && (
-                  <p className="import-studio__transcription-error" role="alert">
-                    <AlertTriangle size={14} />
-                    {transcriptionError}
-                  </p>
-                )}
+                    <Plus aria-hidden="true" size={14} />
+                    Add URL
+                  </button>
+                  {urlError && (
+                    <p className="import-studio__url-error" role="alert">
+                      <AlertTriangle size={14} aria-hidden="true" />
+                      {urlError}
+                    </p>
+                  )}
+                </form>
               </div>
 
               {items.length > 0 && (
@@ -1439,7 +1674,8 @@ export function ImportStudio({
                         <span className="import-studio__queue-copy">
                           <strong>{item.parsed?.title || item.fileName}</strong>
                           <span>
-                            {item.fileName} · {formatBytes(item.byteSize)}
+                            {item.preprocessLabel ??
+                              `${item.fileName} · ${formatBytes(item.byteSize)}`}
                           </span>
                           {item.error && <em>{item.error}</em>}
                           {item.parsed?.warnings.map((warning) => (
@@ -1522,6 +1758,14 @@ export function ImportStudio({
                         <span className="import-studio__review-size">
                           {formatBytes(item.byteSize)}
                         </span>
+                        <button
+                          className="import-studio__icon-button import-studio__review-remove"
+                          type="button"
+                          aria-label={`Remove ${item.fileName}`}
+                          onClick={() => removeItem(item.id)}
+                        >
+                          <Trash2 aria-hidden="true" size={15} />
+                        </button>
                       </div>
                     );
                   })}
@@ -1561,9 +1805,9 @@ export function ImportStudio({
                       <PenLine size={18} />
                     </span>
                     <span>
-                      <strong>Import as drafts</strong>
+                      <strong>Import locally</strong>
                       <small>
-                        One local draft per source, ready for you to shape.
+                        One editable note per source, ready for you to shape.
                       </small>
                     </span>
                     <span className="import-studio__mode-radio" aria-hidden="true" />
@@ -1574,17 +1818,41 @@ export function ImportStudio({
                       <AlertTriangle aria-hidden="true" size={15} />
                       <span>
                         No API key is configured. Your sources stay local and
-                        will be imported as editable drafts.
+                        will become editable notes without leaving your Mac.
                       </span>
                     </div>
                   )}
 
                   {mode === "ai" && aiConfigured && (
-                    <div className="import-studio__privacy-note">
-                      <Bot aria-hidden="true" size={14} />
-                      Selected source text will be sent to {aiProviderName} using your
-                      configured key.
-                    </div>
+                    <>
+                      <label className="import-studio__guidance">
+                        <span>
+                          Guide this import <em>Optional</em>
+                        </span>
+                        <small>
+                          Tell Orion what matters most, what to preserve, or how
+                          the notes should be shaped.
+                        </small>
+                        <textarea
+                          value={importGuidance}
+                          maxLength={MAX_IMPORT_GUIDANCE_CHARS}
+                          rows={4}
+                          aria-label="Guide this import"
+                          placeholder="For example: Focus on the central argument and its strongest criticisms. Preserve useful examples, connect it with ideas already in this Space, and keep any explicit next steps as to-dos."
+                          onChange={(event) =>
+                            setImportGuidance(event.target.value)
+                          }
+                        />
+                        <i>
+                          Leave this blank and Orion will use its normal judgement.
+                        </i>
+                      </label>
+                      <div className="import-studio__privacy-note">
+                        <Bot aria-hidden="true" size={14} />
+                        Selected source text will be sent to {aiProviderName} using your
+                        configured key.
+                      </div>
+                    </>
                   )}
                 </aside>
               </div>
@@ -1605,7 +1873,7 @@ export function ImportStudio({
                 <span className="import-studio__orbit import-studio__orbit--two" />
               </div>
               <span className="import-studio__eyebrow">
-                {mode === "ai" ? "Finding structure" : "Preparing local drafts"}
+                {mode === "ai" ? "Finding structure" : "Preparing local notes"}
               </span>
               <h3 id={`${titleId}-organizing`}>
                 {mode === "ai"
@@ -1646,24 +1914,16 @@ export function ImportStudio({
                     {result.notes.length === 1 ? "page" : "pages"} found
                   </h3>
                   <p>
-                    Project notes and canonical wiki articles stay as drafts
-                    until you refine them.
+                    Orion shaped your source material into connected notes that
+                    can keep evolving with this Space.
                   </p>
                 </div>
               </div>
 
               <div className="import-studio__result-stats">
                 <span>
-                  <strong>
-                    {result.notes.filter((note) => note.kind !== "wiki").length}
-                  </strong>
+                  <strong>{result.notes.length}</strong>
                   Notes
-                </span>
-                <span>
-                  <strong>
-                    {result.notes.filter((note) => note.kind === "wiki").length}
-                  </strong>
-                  Wiki articles
                 </span>
                 <span>
                   <strong>{result.relationships.length}</strong>
@@ -1687,7 +1947,7 @@ export function ImportStudio({
                       <span>
                         {issue.message}
                         {issue.usedManualFallback &&
-                          " Orion preserved it as a manual draft instead."}
+                          " Orion preserved it as an editable local note instead."}
                       </span>
                     </p>
                   ))}
@@ -1703,13 +1963,10 @@ export function ImportStudio({
                     <div>
                       <span className="import-studio__result-title">
                         <strong>{note.title}</strong>
-                        <i>
-                          {note.kind === "wiki" ? "Wiki article" : note.kind}
-                        </i>
                       </span>
                       <p>{note.summary}</p>
                       <span className="import-studio__result-tags">
-                        {note.tags.slice(0, 4).map((tag) => (
+                        {visibleNoteTags(note).slice(0, 4).map((tag) => (
                           <i key={tag}>{tag}</i>
                         ))}
                         {note.aliases.length > 0 && (
@@ -1733,6 +1990,160 @@ export function ImportStudio({
             </section>
           )}
         </div>
+
+        {fileChoiceOpen && (
+          <div
+            className="import-studio__nested-backdrop"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                setFileChoiceOpen(false);
+              }
+            }}
+          >
+            <div
+              ref={fileChoiceDialogRef}
+              className="import-studio__nested-sheet import-studio__file-choice"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={`${titleId}-file-choice`}
+              tabIndex={-1}
+              onKeyDown={handleDialogKeyDown}
+            >
+              <header className="import-studio__nested-header">
+                <div>
+                  <span className="import-studio__eyebrow">Add to queue</span>
+                  <h3 id={`${titleId}-file-choice`}>Choose a source</h3>
+                </div>
+                <button
+                  className="import-studio__icon-button"
+                  type="button"
+                  aria-label="Close file choices"
+                  onClick={() => setFileChoiceOpen(false)}
+                >
+                  <X aria-hidden="true" size={16} />
+                </button>
+              </header>
+              <div className="import-studio__file-choice-grid">
+                <button type="button" onClick={chooseDocuments}>
+                  <FileText size={20} aria-hidden="true" />
+                  <span>
+                    <strong>Documents &amp; images</strong>
+                    <small>
+                      PDF, DOCX, Markdown, data, PNG/JPEG screenshots, or HEIC
+                      whiteboard photos
+                    </small>
+                  </span>
+                  <ArrowRight size={15} aria-hidden="true" />
+                </button>
+                <button type="button" onClick={chooseMedia}>
+                  <AudioLines size={20} aria-hidden="true" />
+                  <span>
+                    <strong>Audio or video</strong>
+                    <small>
+                      MP3, MP4, M4A, WAV, WebM, OGG, FLAC, or MPEG
+                    </small>
+                  </span>
+                  <ArrowRight size={15} aria-hidden="true" />
+                </button>
+              </div>
+              <p className="import-studio__nested-note">
+                Media follows the native picker so even very large recordings
+                never pass through renderer IPC.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {pasteOpen && (
+          <div
+            className="import-studio__nested-backdrop"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                setPasteOpen(false);
+              }
+            }}
+          >
+            <form
+              ref={pasteDialogRef}
+              className="import-studio__nested-sheet import-studio__paste-sheet"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={`${titleId}-paste`}
+              tabIndex={-1}
+              onKeyDown={handleDialogKeyDown}
+              onSubmit={(event) => {
+                event.preventDefault();
+                addPastedText();
+              }}
+            >
+              <header className="import-studio__nested-header">
+                <div>
+                  <span className="import-studio__eyebrow">Direct source</span>
+                  <h3 id={`${titleId}-paste`}>Paste text</h3>
+                </div>
+                <button
+                  className="import-studio__icon-button"
+                  type="button"
+                  aria-label="Close pasted text"
+                  onClick={() => setPasteOpen(false)}
+                >
+                  <X aria-hidden="true" size={16} />
+                </button>
+              </header>
+              <div className="import-studio__paste-sheet-body">
+                <label className="import-studio__field">
+                  <span>Title <em>Optional</em></span>
+                  <input
+                    type="text"
+                    value={pastedTitle}
+                    maxLength={100}
+                    placeholder="Pasted notes"
+                    onChange={(event) => {
+                      setPastedTitle(event.target.value);
+                      setPasteError("");
+                    }}
+                  />
+                </label>
+                <label className="import-studio__field">
+                  <span>Text</span>
+                  <textarea
+                    ref={pasteBodyRef}
+                    value={pastedText}
+                    rows={12}
+                    placeholder="Paste something worth remembering…"
+                    onChange={(event) => {
+                      setPastedText(event.target.value);
+                      setPasteError("");
+                    }}
+                  />
+                </label>
+                {pasteError && (
+                  <p className="import-studio__paste-error" role="alert">
+                    <AlertTriangle size={14} aria-hidden="true" />
+                    {pasteError}
+                  </p>
+                )}
+              </div>
+              <footer className="import-studio__nested-actions">
+                <button
+                  className="button ghost"
+                  type="button"
+                  onClick={() => setPasteOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="button primary"
+                  type="submit"
+                  disabled={!pastedText.trim()}
+                >
+                  <Plus size={15} aria-hidden="true" />
+                  Add to queue
+                </button>
+              </footer>
+            </form>
+          </div>
+        )}
 
         <footer className="import-studio__footer">
           <span className="import-studio__footer-note">
@@ -1784,7 +2195,7 @@ export function ImportStudio({
                 ) : (
                   <>
                     <PenLine aria-hidden="true" size={15} />
-                    Create drafts
+                    Create notes
                   </>
                 )}
               </button>

@@ -2618,8 +2618,9 @@ dependencies = [
 
 [[package]]
 name = "orion"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
+ "base64 0.22.1",
  "fs2",
  "keyring",
  "reqwest 0.12.28",

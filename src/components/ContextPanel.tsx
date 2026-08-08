@@ -2,32 +2,24 @@ import {
   ArrowUpRight,
   FileText,
   Link2,
-  ListTree,
   Network,
   PanelRightClose,
   Quote,
 } from "../lib/icons";
 import { markdownToPlainText } from "../lib/wiki";
 import type { AppSnapshot, Note } from "../types";
+import { useEffect, useRef } from "react";
 
 interface ContextPanelProps {
   note: Note | null;
   snapshot: AppSnapshot;
   onOpenNote: (noteId: string) => void;
+  onOpenSource: (sourceId: string) => void;
   onClose: () => void;
 }
 
 function plainBody(body: string) {
   return markdownToPlainText(body);
-}
-
-function headingAnchor(heading: string) {
-  const slug = heading
-    .normalize("NFKD")
-    .toLocaleLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return `heading-${slug || "section"}`;
 }
 
 function excerptAround(body: string, term: string) {
@@ -45,30 +37,50 @@ export function ContextPanel({
   note,
   snapshot,
   onOpenNote,
+  onOpenSource,
   onClose,
 }: ContextPanelProps) {
+  const panelRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    panelRef.current?.focus({ preventScroll: true });
+    return () => {
+      if (previouslyFocused?.isConnected) {
+        previouslyFocused.focus();
+      } else {
+        document
+          .querySelector<HTMLElement>("[data-right-panel-toggle]")
+          ?.focus();
+      }
+    };
+  }, []);
+
   if (!note) {
     return (
-      <aside className="context-panel context-empty">
+      <aside
+        id="note-details-panel"
+        ref={panelRef}
+        className="context-panel context-empty"
+        role="region"
+        aria-label="Note connections and sources"
+        tabIndex={-1}
+      >
         <button
           type="button"
           className="icon-button"
           onClick={onClose}
-          aria-label="Close context"
+          aria-label="Close connections and sources"
         >
           <PanelRightClose size={16} />
         </button>
         <Network size={28} />
-        <strong>Context follows your reading</strong>
-        <p>Open a note to see its outline, sources, and incoming references.</p>
+        <strong>Details follow your reading</strong>
+        <p>Open a note to see its sources and connections.</p>
       </aside>
     );
   }
 
-  const headings = note.body
-    .split("\n")
-    .filter((line) => /^#{2,3}\s/.test(line))
-    .map((line) => line.replace(/^#{2,3}\s+/, ""));
   const concepts = snapshot.concepts.filter((concept) =>
     note.conceptIds.includes(concept.id),
   );
@@ -81,7 +93,7 @@ export function ContextPanel({
           candidate.body.toLocaleLowerCase().includes(term.toLocaleLowerCase()),
         ),
     )
-    .slice(0, 4);
+    .slice(0, 12);
   const sources = snapshot.sources.filter((source) =>
     note.sourceIds.includes(source.id),
   );
@@ -98,46 +110,29 @@ export function ContextPanel({
     );
   const related = snapshot.notes
     .filter((candidate) => relatedIds.includes(candidate.id))
-    .slice(0, 4);
+    .filter((candidate) => !backlinks.some((backlink) => backlink.id === candidate.id))
+    .slice(0, 12);
 
   return (
-    <aside className="context-panel">
+    <aside
+      id="note-details-panel"
+      ref={panelRef}
+      className="context-panel"
+      role="region"
+      aria-label={`Connections and sources for ${note.title}`}
+      tabIndex={-1}
+    >
       <header className="context-header">
-        <span>Context</span>
+        <span>Connections</span>
         <button
           type="button"
           className="icon-button subtle"
           onClick={onClose}
-          aria-label="Close context"
+          aria-label="Close connections and sources"
         >
           <PanelRightClose size={16} />
         </button>
       </header>
-
-      {headings.length > 0 && (
-        <section className="context-section">
-          <h3>
-            <ListTree size={14} />
-            On this page
-          </h3>
-          <div className="outline-list">
-            {headings.map((heading, index) => (
-              <button
-                type="button"
-                key={`${heading}-${index}`}
-                onClick={() =>
-                  document
-                    .getElementById(headingAnchor(heading))
-                    ?.scrollIntoView({ behavior: "smooth", block: "start" })
-                }
-              >
-                <i />
-                {heading}
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
 
       <section className="context-section">
         <h3>
@@ -211,10 +206,14 @@ export function ContextPanel({
           </h3>
           <div className="source-chip-list">
             {sources.map((source) => (
-              <span key={source.id}>
+              <button
+                type="button"
+                key={source.id}
+                onClick={() => onOpenSource(source.id)}
+              >
                 <FileText size={12} />
                 {source.title}
-              </span>
+              </button>
             ))}
           </div>
         </section>

@@ -1,6 +1,6 @@
 [package]
 name = "orion"
-version = "0.3.7"
+version = "0.3.8"
 description = "Orion — an AI-organized personal knowledge atlas"
 authors = ["Orion"]
 edition = "2021"
@@ -18,6 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+base64 = "0.22"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-deep-link = "2"

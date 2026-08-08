@@ -37,6 +37,7 @@ export { default as Files } from "lucide-react/dist/esm/icons/files.mjs";
 export { default as GalleryVerticalEnd } from "lucide-react/dist/esm/icons/gallery-vertical-end.mjs";
 export { default as Grid2X2 } from "lucide-react/dist/esm/icons/grid-2x2.mjs";
 export { default as Home } from "lucide-react/dist/esm/icons/home.mjs";
+export { default as Image } from "lucide-react/dist/esm/icons/image.mjs";
 export { default as Italic } from "lucide-react/dist/esm/icons/italic.mjs";
 export { default as KeyRound } from "lucide-react/dist/esm/icons/key-round.mjs";
 export { default as Layers3 } from "lucide-react/dist/esm/icons/layers-3.mjs";

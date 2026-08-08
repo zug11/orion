@@ -28,7 +28,7 @@ function makeOrigin(): Note {
     aliases: [],
     tags: [],
     kind: "article",
-    status: "draft",
+    status: "ready",
     conceptIds: [],
     sourceIds: ["source-lecture"],
     createdAt: NOW,
@@ -67,19 +67,19 @@ describe("linked article generation", () => {
     expect(request.sourceName).toBe("Link created in Database lecture");
     expect(request.content).toContain(origin.body);
     expect(request.content).toContain(source.text);
-    expect(request.organizationInstructions).toContain(
+    expect(request.taskInstructions).toContain(
       "exactly one canonical wiki article titled “SQL”",
     );
     expect(request.organizationInstructions).toContain(
       "Keep the tone academic.",
     );
-    expect(request.organizationInstructions).toContain(
+    expect(request.taskInstructions).toContain(
       "Focus on joins and relational algebra.",
     );
     expect(request.timeoutMs).toBe(90_000);
   });
 
-  it("turns the matching returned wiki article into a rich canonical draft", () => {
+  it("turns the matching returned wiki article into a rich canonical page", () => {
     const placeholder: Note = {
       ...makeOrigin(),
       id: "note-sql",
@@ -129,7 +129,8 @@ describe("linked article generation", () => {
     expect(article.body).not.toContain("From the linked source");
     expect(article.aliases).toContain("Structured Query Language");
     expect(article.tags).not.toContain("orion-link-draft");
-    expect(article.tags).toContain("ai-draft");
+    expect(article.tags).not.toContain("ai-draft");
+    expect(article.status).toBe("ready");
   });
 
   it("recognizes both current and legacy empty link placeholders", () => {
@@ -153,6 +154,20 @@ describe("linked article generation", () => {
         "SQL",
       ),
     ).toBe(false);
+    expect(
+      isLinkedArticlePlaceholder(
+        {
+          ...placeholder,
+          body: [
+            "<!-- orion-link-pending -->",
+            "> Orion is writing this article from “Database lecture”, its sources, and the active Space.",
+          ].join("\n\n"),
+          tags: ["orion-link-pending"],
+          status: "ready",
+        },
+        "SQL",
+      ),
+    ).toBe(true);
     expect(
       isLinkedArticlePlaceholder(
         {
@@ -208,7 +223,7 @@ describe("linked article generation", () => {
   it("maps bounded progress to meaningful phases", () => {
     expect(linkedArticleStageForProgress(12)).toBe("gathering");
     expect(linkedArticleStageForProgress(38)).toBe("reading");
-    expect(linkedArticleStageForProgress(70)).toBe("drafting");
+    expect(linkedArticleStageForProgress(70)).toBe("writing");
     expect(linkedArticleStageForProgress(90)).toBe("linking");
     expect(linkedArticleStageForProgress(100)).toBe("complete");
   });
@@ -226,7 +241,7 @@ describe("linked article generation", () => {
       const pending = new Promise<never>(() => undefined);
       const result = waitForLinkedArticle(pending, 1_000);
       const rejection = expect(result).rejects.toThrow(
-        /paused this draft after 1 seconds/i,
+        /paused this article after 1 seconds/i,
       );
 
       await vi.advanceTimersByTimeAsync(1_000);
@@ -324,7 +339,7 @@ describe("linked article generation", () => {
     expect(deleted.snapshot.activeNoteId).toBe(origin.id);
   });
 
-  it("can queue the same phrase again after its paused draft is deleted", () => {
+  it("can queue the same phrase again after its paused page is deleted", () => {
     const snapshot = createEmptySnapshot(
       "Data systems",
       NOW,

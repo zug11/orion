@@ -5,6 +5,12 @@ import type {
   HomeAtmosphereTone,
   OrionVault,
   Settings,
+  ThemeAccent,
+  ThemeCanvasTone,
+  ThemeContrast,
+  ThemePreset,
+  ThemeSurfaceLift,
+  ThemeTextWarmth,
 } from "../types";
 import { createEmptyStudio } from "../lib/studio";
 
@@ -20,10 +26,78 @@ export const defaultSettings: Settings = {
     "Prefer durable, concise wiki notes. Preserve uncertainty, cite the source, and connect ideas only when the source supports the connection.",
   whisperLanguage: "",
   theme: "dark",
+  themePreset: "orion",
+  themeAccent: "preset",
+  themeAccentCustom: "",
+  themeCanvasTone: "balanced",
+  themeCanvasCustom: "",
+  themeSurfaceLift: "balanced",
+  themeSurfaceCustom: "",
+  themeTextWarmth: "neutral",
+  themeContrast: "balanced",
   homeAtmosphere: "field",
   homeAtmosphereTone: "signature",
   homeAtmosphereMotion: "calm",
 };
+
+export function normalizeThemePreset(value: unknown): ThemePreset {
+  if (
+    value === "orion" ||
+    value === "tide" ||
+    value === "grove" ||
+    value === "ember"
+  ) {
+    return value;
+  }
+  return defaultSettings.themePreset;
+}
+
+export function normalizeThemeAccent(value: unknown): ThemeAccent {
+  if (
+    value === "preset" ||
+    value === "iris" ||
+    value === "tide" ||
+    value === "moss" ||
+    value === "ember"
+  ) {
+    return value;
+  }
+  return defaultSettings.themeAccent;
+}
+
+export function normalizeThemeColor(value: unknown): string {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)
+    ? value.toUpperCase()
+    : "";
+}
+
+export function normalizeThemeCanvasTone(value: unknown): ThemeCanvasTone {
+  if (value === "deep" || value === "balanced" || value === "airy") {
+    return value;
+  }
+  return defaultSettings.themeCanvasTone;
+}
+
+export function normalizeThemeSurfaceLift(value: unknown): ThemeSurfaceLift {
+  if (value === "quiet" || value === "balanced" || value === "lifted") {
+    return value;
+  }
+  return defaultSettings.themeSurfaceLift;
+}
+
+export function normalizeThemeTextWarmth(value: unknown): ThemeTextWarmth {
+  if (value === "cool" || value === "neutral" || value === "warm") {
+    return value;
+  }
+  return defaultSettings.themeTextWarmth;
+}
+
+export function normalizeThemeContrast(value: unknown): ThemeContrast {
+  if (value === "soft" || value === "balanced" || value === "high") {
+    return value;
+  }
+  return defaultSettings.themeContrast;
+}
 
 export function normalizeHomeAtmosphere(value: unknown): HomeAtmosphere {
   if (

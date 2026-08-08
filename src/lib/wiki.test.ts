@@ -302,6 +302,22 @@ describe("wiki discovery helpers", () => {
     });
   });
 
+  it("keeps private lifecycle tags out of search and result labels", () => {
+    const taggedSnapshot = createEmptySnapshot("Tags", TEST_NOW);
+    taggedSnapshot.notes = [
+      makeNote({
+        id: "note-private-tag",
+        title: "Research note",
+        tags: ["ai-draft", "research"],
+      }),
+    ];
+
+    expect(searchWiki("ai-draft", taggedSnapshot)).toEqual([]);
+    expect(searchWiki("Research note", taggedSnapshot)[0].subtitle).toBe(
+      "research",
+    );
+  });
+
   it("creates readable excerpts around a match", () => {
     const excerpt = makeExcerpt(
       "First sentence. A long discussion of Betelgeuse follows here. Last.",

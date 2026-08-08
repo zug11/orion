@@ -36,13 +36,17 @@ describe("SettingsView appearance", () => {
       />,
     );
 
+    const atmosphereGroup = screen.getByRole("radiogroup", {
+      name: "Home atmosphere",
+    });
+
     expect(
-      screen.getByRole("radio", {
+      within(atmosphereGroup).getByRole("radio", {
         name: "Field: A precise dot matrix that responds to movement.",
       }),
     ).toHaveAttribute("aria-checked", "true");
 
-    const atmosphereRadios = screen.getAllByRole("radio");
+    const atmosphereRadios = within(atmosphereGroup).getAllByRole("radio");
     expect(atmosphereRadios[0]).toHaveAccessibleName(
       "Line Waves: Fine contours flow through a quiet warped field.",
     );
@@ -75,6 +79,76 @@ describe("SettingsView appearance", () => {
       homeAtmosphereMotion: "alive",
     });
     expect(atmosphereRadios).toHaveLength(3);
+  });
+
+  it("offers curated rooms with restrained, resettable color overrides", () => {
+    const onChange = vi.fn();
+    const settings = {
+      ...defaultSettings,
+      themeAccentCustom: "#112233",
+    };
+
+    render(
+      <SettingsView
+        settings={settings}
+        onChange={onChange}
+        onSaveApiKey={vi.fn(async () => undefined)}
+        onDeleteApiKey={vi.fn(async () => undefined)}
+        onTestApiKey={vi.fn(async () => ({
+          valid: true,
+          message: "Connected.",
+        }))}
+        onSaveAnthropicApiKey={vi.fn(async () => undefined)}
+        onDeleteAnthropicApiKey={vi.fn(async () => undefined)}
+        onTestAnthropicApiKey={vi.fn(async () => ({
+          valid: true,
+          message: "Connected.",
+        }))}
+        onOpenDataLocation={vi.fn()}
+        onEraseVault={vi.fn()}
+      />,
+    );
+
+    const presetGroup = screen.getByRole("radiogroup", {
+      name: "Color preset",
+    });
+    expect(within(presetGroup).getAllByRole("radio")).toHaveLength(4);
+
+    fireEvent.click(
+      within(presetGroup).getByRole("radio", {
+        name: /Tide: Cool marine depth/,
+      }),
+    );
+    expect(onChange).toHaveBeenNthCalledWith(1, {
+      ...settings,
+      themePreset: "tide",
+      themeAccent: "preset",
+      themeAccentCustom: "",
+      themeCanvasCustom: "",
+      themeSurfaceCustom: "",
+    });
+
+    fireEvent.change(screen.getByLabelText("Custom accent color"), {
+      target: { value: "#345678" },
+    });
+    expect(onChange).toHaveBeenNthCalledWith(2, {
+      ...settings,
+      themeAccentCustom: "#345678",
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reset custom accent color" }),
+    );
+    expect(onChange).toHaveBeenNthCalledWith(3, {
+      ...settings,
+      themeAccentCustom: "",
+    });
+
+    expect(
+      within(
+        screen.getByRole("radiogroup", { name: "Canvas depth" }),
+      ).getByRole("radio", { name: "Deep" }),
+    ).toBeVisible();
   });
 
   it("offers Claude 5 models and saves one shared Anthropic key", async () => {

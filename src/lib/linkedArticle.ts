@@ -1,6 +1,7 @@
 import {
   normalizeConceptPhrase,
 } from "./concepts";
+import { truncateUnicode } from "./text";
 import { deleteNoteFromSnapshot } from "./noteDeletion";
 import type {
   AppSnapshot,
@@ -19,7 +20,7 @@ const LINKED_ARTICLE_MAX_PENDING_PROGRESS = 94;
 export type LinkedArticleJobStage =
   | "gathering"
   | "reading"
-  | "drafting"
+  | "writing"
   | "linking"
   | "complete"
   | "error";
@@ -82,14 +83,14 @@ export function linkedArticleStageLabel(
       return "Gathering source context";
     case "reading":
       return "Reading this Space";
-    case "drafting":
+    case "writing":
       return "Writing wiki article";
     case "linking":
       return "Connecting related notes";
     case "complete":
       return "Article ready";
     case "error":
-      return "Draft paused";
+      return "Generation paused";
   }
 }
 
@@ -98,7 +99,7 @@ export function linkedArticleStageForProgress(
 ): LinkedArticleJobStage {
   if (progress < 28) return "gathering";
   if (progress < 52) return "reading";
-  if (progress < 82) return "drafting";
+  if (progress < 82) return "writing";
   if (progress < 100) return "linking";
   return "complete";
 }
@@ -127,7 +128,7 @@ export async function waitForLinkedArticle<T>(
     timeout = setTimeout(() => {
       reject(
         new Error(
-          `Orion paused this draft after ${seconds} seconds without a response. Restart it, or delete the empty draft.`,
+          `Orion paused this article after ${seconds} seconds without a response. Restart it, or delete the unfinished page.`,
         ),
       );
     }, timeoutMs);
@@ -160,18 +161,20 @@ export function isLinkedArticlePlaceholder(note: Note, phrase: string): boolean 
   const hasMatchingTitle =
     normalizeConceptPhrase(note.title) === normalized;
   const normalizedBody = body
+    .replace(/<!--\s*orion-link-pending\s*-->/gi, "")
     .replace(/<!--\s*orion-link-draft\s*-->/gi, "")
     .replace(/^>\s?/gm, "")
     .replace(/[“”]/g, '"')
     .replace(/\s+/g, " ")
     .trim();
   const hasOnlyDraftMessage =
-    /^Orion is drafting this article from .+?, its sources, and the active Space\.?$/i.test(
+    /^Orion is (?:writing|drafting) this article from .+?, its sources, and the active Space\.?$/i.test(
       normalizedBody,
     );
   const isCurrentPlaceholder =
     hasMatchingTitle &&
-    note.tags.includes("orion-link-draft") &&
+    (note.tags.includes("orion-link-pending") ||
+      note.tags.includes("orion-link-draft")) &&
     hasOnlyDraftMessage;
   const isLegacyPlaceholder =
     !body &&
@@ -225,10 +228,7 @@ export function buildLinkedArticleRequest(
     `The article was requested from the note “${originNote.title}”. Ground its source-specific details in that note and its direct sources, then explain why the subject matters in the Space “${snapshot.workspace.name}”.`,
     "This is a user-created link page, so write a definitional wiki article rather than an import summary. Return the requested article in wikiArticles and a matching canonical concept. Its body must be one coherent, ready-to-read article: weave source context into the relevant explanation instead of adding sections named “Context from”, “From the linked source”, or other provenance/change-log headings. Do not create unrelated project notes or unrelated wiki articles. Use ordinary readable prose, never [[wiki-link]] brackets. Clearly preserve uncertainty when the supplied material is incomplete.",
   ].join(" ");
-  const pageInstructions = customInstructions.trim().slice(0, 1_250);
-  const userInstructions = snapshot.settings.organizationInstructions
-    .trim()
-    .slice(0, 1_250);
+  const pageInstructions = truncateUnicode(customInstructions.trim(), 1_250);
 
   return {
     content: [
@@ -256,7 +256,7 @@ export function buildLinkedArticleRequest(
             title: note.title,
             aliases: [...note.aliases],
             summary: note.summary,
-            kind: note.kind,
+            reference: note.kind === "wiki",
             ...(note.kind === "wiki"
               ? { body: note.body.slice(0, 6_000) }
               : {}),
@@ -265,15 +265,15 @@ export function buildLinkedArticleRequest(
     model: snapshot.settings.model,
     effort: snapshot.settings.reasoningEffort,
     timeoutMs: LINKED_ARTICLE_TIMEOUT_MS,
-    organizationInstructions: [
+    taskInstructions: [
       linkedTask,
       pageInstructions
         ? `User instruction for this specific page:\n${pageInstructions}`
         : "",
-      userInstructions,
     ]
       .filter(Boolean)
       .join("\n\n"),
+    organizationInstructions: snapshot.settings.organizationInstructions,
   };
 }
 
@@ -315,10 +315,14 @@ export function applyLinkedArticleResult(
       normalizeConceptPhrase(alias) !== normalizeConceptPhrase(note.title),
   );
   const tags = unique([
-    ...note.tags.filter((tag) => tag !== "orion-link-draft"),
+    ...note.tags.filter(
+      (tag) =>
+        tag !== "orion-link-pending" &&
+        tag !== "orion-link-draft" &&
+        tag !== "wiki-article" &&
+        tag !== "ai-draft",
+    ),
     ...(article?.tags ?? organizedNote?.tags ?? []),
-    "wiki-article",
-    "ai-draft",
   ]);
 
   return {
@@ -329,7 +333,7 @@ export function applyLinkedArticleResult(
     aliases: aliases.slice(0, 16),
     tags: tags.slice(0, 12),
     kind: "wiki",
-    status: "draft",
+    status: "ready",
     updatedAt: now,
   };
 }

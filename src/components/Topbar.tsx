@@ -14,6 +14,7 @@ interface TopbarProps {
   onExport: () => void;
   onToggleContext?: () => void;
   rightPanelLabel?: string;
+  rightPanelControls?: string;
   onBack?: () => void;
   onForward?: () => void;
 }
@@ -24,7 +25,8 @@ export function Topbar({
   onOpenSearch,
   onExport,
   onToggleContext,
-  rightPanelLabel = "Toggle context panel",
+  rightPanelLabel = "Open note details",
+  rightPanelControls = "note-details-panel",
   onBack,
   onForward,
 }: TopbarProps) {
@@ -74,8 +76,8 @@ export function Topbar({
           type="button"
           className="icon-button"
           onClick={onExport}
-          aria-label="Export Markdown"
-          title="Export Markdown"
+          aria-label="Share or export"
+          title="Share or export"
         >
           <Download size={16} />
         </button>
@@ -86,6 +88,8 @@ export function Topbar({
             className={contextOpen ? "icon-button active" : "icon-button"}
             onClick={onToggleContext}
             aria-label={rightPanelLabel}
+            aria-controls={rightPanelControls}
+            aria-expanded={contextOpen}
           >
             <PanelRight size={17} />
           </button>

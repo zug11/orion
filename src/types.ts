@@ -20,12 +20,16 @@ export interface Note {
   body: string;
   aliases: string[];
   tags: string[];
+  /** @deprecated Hidden compatibility metadata; never expose as a user type. */
   kind: NoteKind;
+  /** @deprecated Hidden compatibility metadata; new notes are always ready. */
   status: NoteStatus;
   conceptIds: EntityId[];
   sourceIds: EntityId[];
   createdAt: ISODateString;
   updatedAt: ISODateString;
+  /** Legacy navigation metadata; it must never change the stable sidebar order. */
+  lastOpenedAt?: ISODateString;
   pinned?: boolean;
   color?: string;
 }
@@ -39,6 +43,7 @@ export type SourceKind =
   | "html"
   | "pdf"
   | "docx"
+  | "image"
   | "audio"
   | "video"
   | "youtube";
@@ -52,6 +57,8 @@ export interface Source {
   mimeType?: string;
   byteSize?: number;
   sourceUrl?: string;
+  /** Optional user-authored emphasis for this import batch. */
+  importGuidance?: string;
   text: string;
   noteIds: EntityId[];
 }
@@ -138,6 +145,14 @@ export type HomeAtmosphereTone =
 
 export type HomeAtmosphereMotion = "still" | "calm" | "alive";
 
+export type ThemeMode = "dark" | "light" | "system";
+export type ThemePreset = "orion" | "tide" | "grove" | "ember";
+export type ThemeAccent = "preset" | "iris" | "tide" | "moss" | "ember";
+export type ThemeCanvasTone = "deep" | "balanced" | "airy";
+export type ThemeSurfaceLift = "quiet" | "balanced" | "lifted";
+export type ThemeTextWarmth = "cool" | "neutral" | "warm";
+export type ThemeContrast = "soft" | "balanced" | "high";
+
 export interface Settings {
   model: string;
   reasoningEffort: ReasoningEffort;
@@ -148,7 +163,16 @@ export interface Settings {
   includeExistingNotesInAIContext: boolean;
   organizationInstructions: string;
   whisperLanguage: string;
-  theme: "dark" | "light" | "system";
+  theme: ThemeMode;
+  themePreset: ThemePreset;
+  themeAccent: ThemeAccent;
+  themeAccentCustom: string;
+  themeCanvasTone: ThemeCanvasTone;
+  themeCanvasCustom: string;
+  themeSurfaceLift: ThemeSurfaceLift;
+  themeSurfaceCustom: string;
+  themeTextWarmth: ThemeTextWarmth;
+  themeContrast: ThemeContrast;
   homeAtmosphere: HomeAtmosphere;
   homeAtmosphereTone: HomeAtmosphereTone;
   homeAtmosphereMotion: HomeAtmosphereMotion;
@@ -159,6 +183,14 @@ export interface WorkspaceInfo {
   name: string;
   description: string;
   createdAt: ISODateString;
+}
+
+export interface SpaceOverview {
+  title: string;
+  body: string;
+  relatedNoteIds: EntityId[];
+  generatedAt: ISODateString;
+  stale: boolean;
 }
 
 export type StudioCardKind =
@@ -234,6 +266,7 @@ export interface AppSnapshot {
   importDrafts: ImportDraft[];
   studio: ConceptStudioState;
   settings: Settings;
+  spaceOverview?: SpaceOverview;
   activeNoteId: EntityId | null;
   updatedAt: ISODateString;
 }
@@ -253,6 +286,18 @@ export interface ParsedImport {
   byteSize: number;
   sourceUrl?: string;
   text: string;
+  warnings: string[];
+}
+
+export interface RecognizedDocumentPage {
+  pageNumber: number;
+  text: string;
+}
+
+export interface RecognizedDocumentText {
+  text: string;
+  pageCount: number;
+  pages: RecognizedDocumentPage[];
   warnings: string[];
 }
 
@@ -345,7 +390,7 @@ export interface ExistingNoteContext {
   title: string;
   aliases: string[];
   summary: string;
-  kind: NoteKind;
+  reference: boolean;
   body?: string;
 }
 
@@ -357,6 +402,8 @@ export interface OrganizeContentRequest {
   existingNotes?: ExistingNoteContext[];
   model?: string;
   effort?: ReasoningEffort;
+  /** Request-scoped feature rules, bounded separately from Space preferences. */
+  taskInstructions?: string;
   organizationInstructions?: string;
   timeoutMs?: number;
 }
@@ -463,5 +510,10 @@ export interface ExportMarkdownNote {
 export interface ExportMarkdownResult {
   exportedCount: number;
   directory: string;
+  cancelled: boolean;
+}
+
+export interface ExportWebResult {
+  path: string;
   cancelled: boolean;
 }

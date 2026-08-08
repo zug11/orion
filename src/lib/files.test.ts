@@ -1,12 +1,45 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   delimitedRowsToMarkdown,
   detectSourceKind,
+  parseImportFile,
   parseDelimitedText,
   parseTextImport,
 } from "./files";
 
+const pdfState = vi.hoisted(() => ({ pages: [] as string[] }));
+const destroyPdf = vi.hoisted(() => vi.fn());
+
+vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
+  GlobalWorkerOptions: { workerSrc: "test-pdf-worker" },
+  getDocument: () => ({
+    promise: Promise.resolve({
+      get numPages() {
+        return pdfState.pages.length;
+      },
+      getPage: async (pageNumber: number) => ({
+        getTextContent: async () => ({
+          items: pdfState.pages[pageNumber - 1]
+            ? [
+                {
+                  str: pdfState.pages[pageNumber - 1],
+                  hasEOL: true,
+                },
+              ]
+            : [],
+        }),
+      }),
+    }),
+    destroy: destroyPdf,
+  }),
+}));
+
 describe("import file helpers", () => {
+  beforeEach(() => {
+    pdfState.pages = [];
+    destroyPdf.mockClear();
+  });
+
   it("detects supported formats from extensions and MIME types", () => {
     expect(detectSourceKind("notes.md", "")).toBe("markdown");
     expect(detectSourceKind("scan", "application/pdf")).toBe("pdf");
@@ -16,7 +49,78 @@ describe("import file helpers", () => {
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       ),
     ).toBe("docx");
-    expect(detectSourceKind("photo.png", "image/png")).toBeNull();
+    expect(detectSourceKind("photo.png", "image/png")).toBe("image");
+    expect(detectSourceKind("photo.JPG", "")).toBe("image");
+    expect(detectSourceKind("whiteboard.heic", "")).toBe("image");
+  });
+
+  it("uses local text recognition for image imports", async () => {
+    const recognize = vi.fn().mockResolvedValue({
+      text: "A photographed whiteboard plan",
+      pageCount: 1,
+      pages: [{ pageNumber: 1, text: "A photographed whiteboard plan" }],
+      warnings: ["One line was faint."],
+    });
+    const file = new File([new Uint8Array([1, 2, 3])], "board.heic", {
+      type: "image/heic",
+    });
+
+    await expect(parseImportFile(file, recognize)).resolves.toMatchObject({
+      title: "Board",
+      format: "image",
+      text: "A photographed whiteboard plan",
+      warnings: ["One line was faint."],
+    });
+    expect(recognize).toHaveBeenCalledWith(file);
+  });
+
+  it("preserves an image MIME type when WebKit omits it", async () => {
+    const recognize = vi.fn().mockResolvedValue({
+      text: "Recognized HEIC text",
+      pageCount: 1,
+      pages: [{ pageNumber: 1, text: "Recognized HEIC text" }],
+      warnings: [],
+    });
+    const file = new File([new Uint8Array([1])], "board.heic");
+
+    const parsed = await parseImportFile(file, recognize);
+
+    expect(parsed.mimeType).toBe("image/heic");
+  });
+
+  it("keeps selectable-text PDFs on the pdf.js fast path", async () => {
+    pdfState.pages = [
+      "This ordinary PDF contains enough selectable words to import directly.",
+    ];
+    const recognize = vi.fn();
+    const file = new File(["pdf"], "paper.pdf", {
+      type: "application/pdf",
+    });
+
+    const parsed = await parseImportFile(file, recognize);
+
+    expect(parsed.text).toContain("This ordinary PDF contains");
+    expect(recognize).not.toHaveBeenCalled();
+  });
+
+  it("falls back to local text recognition for scanned PDFs", async () => {
+    pdfState.pages = [""];
+    const recognize = vi.fn().mockResolvedValue({
+      text: "Scanned page text",
+      pageCount: 1,
+      pages: [{ pageNumber: 1, text: "Scanned page text" }],
+      warnings: [],
+    });
+    const file = new File(["pdf"], "scan.pdf", {
+      type: "application/pdf",
+    });
+
+    const parsed = await parseImportFile(file, recognize);
+
+    expect(recognize).toHaveBeenCalledOnce();
+    expect(parsed.format).toBe("pdf");
+    expect(parsed.text).toBe("## Page 1\n\nScanned page text");
+    expect(parsed.warnings[0]).toMatch(/on-device text recognition/i);
   });
 
   it("parses quoted CSV values and converts them to Markdown", () => {

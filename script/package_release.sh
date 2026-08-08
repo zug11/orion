@@ -83,7 +83,7 @@ verify_connector_package() (
   codesign --verify --strict --verbose=2 "$connector_binary"
   "$connector_binary" --version
   node "$ROOT_DIR/script/test_mcp_connector.mjs" \
-    "$connector_binary" "$FIXTURE_VAULT"
+    "$connector_binary" "$FIXTURE_VAULT" "$verification_dir/manifest.json"
 )
 
 source_fingerprint() (
@@ -107,6 +107,7 @@ source_fingerprint() (
       src-tauri/mcp-server/Cargo.lock \
       src-tauri/tauri.conf.json \
       script/build_mcp_connector.sh \
+      script/build_ocr_sidecar.sh \
       script/build_transcription_sidecar.sh \
       script/package_release.sh \
       script/test_mcp_connector.mjs
@@ -263,6 +264,7 @@ sign_app_bundle() {
     "$APP_BUNDLE/Contents/Frameworks/whisper.framework"
   for executable in \
     "$APP_BUNDLE/Contents/MacOS/orion-whisper" \
+    "$APP_BUNDLE/Contents/MacOS/orion-ocr" \
     "$APP_BUNDLE/Contents/MacOS/deno"; do
     codesign --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
       "$executable"
@@ -455,6 +457,7 @@ verify_final_dmg() (
     exit 1
   fi
   "$copied_app/Contents/MacOS/orion-whisper" --version
+  "$copied_app/Contents/MacOS/orion-ocr" --version
   "$copied_app/Contents/MacOS/yt-dlp" --version
   "$copied_app/Contents/MacOS/deno" --version
   verify_connector_package "$copied_app/$CONNECTOR_RELATIVE_PATH"
@@ -464,6 +467,7 @@ case "$BUILD_MODE" in
   build)
     verify_release_layout
     "$ROOT_DIR/script/build_transcription_sidecar.sh"
+    "$ROOT_DIR/script/build_ocr_sidecar.sh"
     build_renderer_in_staging
     (
       cd "$ROOT_DIR"

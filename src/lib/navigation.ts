@@ -8,12 +8,24 @@ export interface ScrollPosition {
   scrollTop: number;
 }
 
-export interface NoteHistoryEntry extends ScrollPosition {
-  noteId: string;
+export type NavigationScreen =
+  | "home"
+  | "notes"
+  | "sources"
+  | "chat"
+  | "settings"
+  | "note";
+
+export type NavigationRoute =
+  | { screen: Exclude<NavigationScreen, "note"> }
+  | { screen: "note"; noteId: string };
+
+export interface NavigationEntry extends ScrollPosition {
+  route: NavigationRoute;
 }
 
-export interface NoteHistoryState {
-  entries: NoteHistoryEntry[];
+export interface NavigationHistoryState {
+  entries: NavigationEntry[];
   index: number;
 }
 
@@ -42,38 +54,50 @@ export function resetScrollPosition(
   restoreScrollPosition(target, TOP_LEFT);
 }
 
-export function createNoteHistoryEntry(
-  noteId: string,
-  position: ScrollPosition = TOP_LEFT,
-): NoteHistoryEntry {
-  return { noteId, ...position };
+export function routesMatch(
+  left: NavigationRoute,
+  right: NavigationRoute,
+): boolean {
+  return (
+    left.screen === right.screen &&
+    (left.screen !== "note" ||
+      (right.screen === "note" && left.noteId === right.noteId))
+  );
 }
 
-export function pushNoteHistory(
-  entries: readonly NoteHistoryEntry[],
+export function createNavigationEntry(
+  route: NavigationRoute,
+  position: ScrollPosition = TOP_LEFT,
+): NavigationEntry {
+  return { route, ...position };
+}
+
+export function pushNavigationHistory(
+  entries: readonly NavigationEntry[],
   index: number,
-  noteId: string,
+  route: NavigationRoute,
   currentPosition: ScrollPosition | null,
   limit = 40,
-): NoteHistoryState {
+): NavigationHistoryState {
   const recorded = recordCurrentPosition(entries, index, currentPosition);
   const currentEntries = recorded.slice(0, index + 1);
-  if (currentEntries[currentEntries.length - 1]?.noteId === noteId) {
+  const current = currentEntries[currentEntries.length - 1];
+  if (current && routesMatch(current.route, route)) {
     return { entries: recorded, index };
   }
   const nextEntries = [
     ...currentEntries,
-    createNoteHistoryEntry(noteId),
+    createNavigationEntry(route),
   ].slice(-limit);
   return { entries: nextEntries, index: nextEntries.length - 1 };
 }
 
-export function moveNoteHistory(
-  entries: readonly NoteHistoryEntry[],
+export function moveNavigationHistory(
+  entries: readonly NavigationEntry[],
   index: number,
   direction: -1 | 1,
   currentPosition: ScrollPosition | null,
-): NoteHistoryState | null {
+): NavigationHistoryState | null {
   const nextIndex = index + direction;
   if (nextIndex < 0 || nextIndex >= entries.length) {
     return null;
@@ -85,11 +109,14 @@ export function moveNoteHistory(
 }
 
 function recordCurrentPosition(
-  entries: readonly NoteHistoryEntry[],
+  entries: readonly NavigationEntry[],
   index: number,
   position: ScrollPosition | null,
-): NoteHistoryEntry[] {
-  const next = entries.map((entry) => ({ ...entry }));
+): NavigationEntry[] {
+  const next = entries.map((entry) => ({
+    ...entry,
+    route: { ...entry.route },
+  }));
   if (position && next[index]) {
     next[index] = { ...next[index], ...position };
   }

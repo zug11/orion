@@ -42,11 +42,17 @@ describe("automatic wiki enrichment", () => {
 
     expect(request.content).toContain(origin.body);
     expect(request.spaceName).toBe("Sociology");
-    expect(request.organizationInstructions).toContain(
+    expect(request.taskInstructions).toContain(
       "return an empty notes array",
     );
-    expect(request.organizationInstructions).toContain(
+    expect(request.taskInstructions).toContain(
       "every supplied existing canonical wiki article",
+    );
+    expect(request.taskInstructions).toContain(
+      "never for a relabelled version, summary, plan, list, checklist, or paraphrase",
+    );
+    expect(request.taskInstructions).toContain(
+      "never copy its task list into a wiki article",
     );
     expect(request.existingNotes?.[0].title).toBe("Positivism");
   });
@@ -193,6 +199,168 @@ describe("automatic wiki enrichment", () => {
     expect(body).not.toContain("First source detail.");
     expect(body).toContain("Corrected source detail.");
     expect(body).not.toContain("Context from");
+  });
+
+  it("rejects a generated shopping-list companion and leaves its source note untouched", () => {
+    const snapshot = createEmptySnapshot("Life", NOW, "space-life");
+    const origin = makeNote({
+      id: "note-shopping",
+      title: "Go shopping",
+      body: [
+        "Things I need this afternoon.",
+        "",
+        "- [ ] Buy milk",
+        "- [ ] Pick up a prescription",
+      ].join("\n"),
+      status: "ready",
+    });
+    snapshot.notes = [origin];
+
+    const applied = applyWikiEnrichmentResult(
+      snapshot,
+      origin,
+      makeResult([
+        {
+          ...makeArticle(
+            "Shopping list",
+            "- [ ] Buy milk\n- [ ] Pick up a prescription",
+          ),
+          body: [
+            "## Shopping list",
+            "",
+            "- [ ] Buy milk",
+            "- [ ] Pick up a prescription",
+          ].join("\n"),
+        },
+      ]),
+      "2026-07-29T02:05:00.000Z",
+    );
+
+    expect(applied.createdNoteIds).toEqual([]);
+    expect(applied.updatedNoteIds).toEqual([]);
+    expect(applied.snapshot.notes).toHaveLength(1);
+    expect(applied.snapshot.notes[0]).toMatchObject({
+      id: origin.id,
+      title: origin.title,
+      body: origin.body,
+      kind: origin.kind,
+      status: origin.status,
+    });
+  });
+
+  it("never overwrites the originating note when the organizer echoes its title", () => {
+    const snapshot = createEmptySnapshot("Writing", NOW, "space-writing");
+    const origin = makeNote({
+      id: "note-outline",
+      title: "Essay outline",
+      body: "A deliberately written outline with enough detail to be substantive.",
+      status: "ready",
+    });
+    snapshot.notes = [origin];
+
+    const applied = applyWikiEnrichmentResult(
+      snapshot,
+      origin,
+      makeResult([
+        makeArticle("Essay outline", "An AI-authored replacement body."),
+      ]),
+      "2026-07-29T02:05:00.000Z",
+    );
+
+    expect(applied.snapshot.notes).toHaveLength(1);
+    expect(applied.snapshot.notes[0]).toMatchObject({
+      id: origin.id,
+      body: origin.body,
+      kind: origin.kind,
+    });
+    expect(applied.updatedNoteIds).toEqual([]);
+    expect(applied.createdNoteIds).toEqual([]);
+  });
+
+  it("keeps tasks in their source note while integrating prose into an existing article", () => {
+    const snapshot = createEmptySnapshot("Data", NOW, "space-data");
+    const origin = makeNote({
+      id: "note-query",
+      title: "Query work",
+      body: "SQL uses declarative queries.\n\n- [ ] Compare query plans",
+    });
+    snapshot.notes = [
+      origin,
+      makeNote({
+        id: "note-sql",
+        title: "SQL",
+        kind: "wiki",
+        body: "An existing SQL article.",
+      }),
+    ];
+    const article = makeArticle(
+      "SQL",
+      "The note distinguishes declarative queries from execution plans.",
+    );
+    article.body = [
+      "## Overview",
+      "SQL is a declarative query language.",
+      "",
+      "## Tasks",
+      "- [ ] Compare query plans",
+      "",
+      "## In this Space",
+      "Execution plans are relevant to the current work.",
+    ].join("\n");
+
+    const applied = applyWikiEnrichmentResult(
+      snapshot,
+      origin,
+      makeResult([article]),
+      "2026-07-29T02:05:00.000Z",
+    );
+    const updated = applied.snapshot.notes.find(
+      (note) => note.id === "note-sql",
+    );
+
+    expect(updated?.body).toContain("SQL is a declarative query language.");
+    expect(updated?.body).toContain("Execution plans are relevant");
+    expect(updated?.body).not.toContain("Compare query plans");
+    expect(updated?.body).not.toContain("## Tasks");
+    expect(
+      applied.snapshot.notes.find((note) => note.id === origin.id)?.body,
+    ).toContain("- [ ] Compare query plans");
+  });
+
+  it("skips a same-title ordinary note instead of rewriting it or creating a duplicate", () => {
+    const snapshot = createEmptySnapshot("Data", NOW, "space-data");
+    const origin = makeNote({
+      id: "note-query",
+      title: "Query lecture",
+      body: "SQL uses declarative queries and relational tables.",
+    });
+    const manualSql = makeNote({
+      id: "note-sql",
+      title: "SQL",
+      kind: "article",
+      body: "My own carefully written SQL note.",
+      status: "ready",
+    });
+    snapshot.notes = [origin, manualSql];
+
+    const applied = applyWikiEnrichmentResult(
+      snapshot,
+      origin,
+      makeResult([
+        makeArticle("SQL", "An AI-authored replacement body."),
+      ]),
+      "2026-07-29T02:05:00.000Z",
+    );
+
+    expect(applied.snapshot.notes).toHaveLength(2);
+    expect(
+      applied.snapshot.notes.find((note) => note.id === manualSql.id),
+    ).toMatchObject({
+      body: manualSql.body,
+      kind: manualSql.kind,
+    });
+    expect(applied.updatedNoteIds).toEqual([]);
+    expect(applied.createdNoteIds).toEqual([]);
   });
 
   it("only refreshes substantive non-wiki notes", () => {

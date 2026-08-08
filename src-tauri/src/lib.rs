@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use fs2::FileExt;
 use reqwest::{Client, Response, StatusCode, Url};
 use serde::{Deserialize, Serialize};
@@ -5,6 +6,7 @@ use serde_json::{json, Value};
 use std::{
     fs::{self, File, OpenOptions},
     io::{BufReader, Write},
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
     path::{Path, PathBuf},
     process::Command,
     sync::{
@@ -32,6 +34,16 @@ const ANTHROPIC_MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
 const DEFAULT_OPENAI_MODEL: &str = "gpt-5.6-sol";
 const MAX_MEDIA_FILES: usize = 8;
 const MAX_MEDIA_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_WEBPAGE_BYTES: usize = 5 * 1024 * 1024;
+const MAX_WEBPAGE_REDIRECTS: usize = 5;
+const MAX_OCR_DOCUMENT_BYTES: usize = 25 * 1024 * 1024;
+const MAX_OCR_BASE64_BYTES: usize = MAX_OCR_DOCUMENT_BYTES.div_ceil(3) * 4;
+const MAX_OCR_PAGES: usize = 50;
+const MAX_OCR_PAGE_CHARACTERS: usize = 100_000;
+const MAX_OCR_OUTPUT_CHARACTERS: usize = 1_000_000;
+const MAX_OCR_STDOUT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_WEB_EXPORT_BYTES: usize = 16 * 1024 * 1024;
+const BUNDLED_OCR_NAME: &str = "orion-ocr";
 const BUNDLED_WHISPER_NAME: &str = "orion-whisper";
 const BUNDLED_WHISPER_MODEL_NAME: &str = "ggml-base.bin";
 const BUNDLED_WHISPER_MODEL_LABEL: &str = "Whisper base · multilingual";
@@ -56,14 +68,16 @@ facts.
 Write faithful project notes for the imported material in readable Markdown and
 choose aliases only when they name the whole note. When the material contains
 explicit actions, obligations, or next steps, preserve them as Markdown task
-items using `- [ ]`; do not invent tasks. Separately create canonical wiki
-articles for the durable people,
+items using `- [ ]` in the relevant project note only; never copy tasks into a
+wiki article and do not invent tasks. Separately create canonical wiki articles
+for the durable people,
 places, technologies, methods, organizations, and ideas that should become
 reusable hyperlinks. A phrase such as SQL must use one article titled exactly SQL
 inside the active Space. Reuse an existing exact article title when supplied; do
-not create a suffixed duplicate. Return every supplied existing canonical wiki
-article that the new material can meaningfully enrich, even when it already has
-a body. Omit unrelated articles and superficial keyword matches. Write concept
+not create a suffixed duplicate, and never create a second note that merely
+renames, paraphrases, or repeats a source/project note. Return every supplied
+existing canonical wiki article that the new material can meaningfully enrich,
+even when it already has a body. Omit unrelated articles and superficial keyword matches. Write concept
 names as ordinary prose in note bodies. Never emit Obsidian or wiki bracket
 syntax such as [[SQL]], because Orion creates the visible hyperlinks from the
 concept catalog. Express explicit relationships through the links arrays instead.
@@ -147,7 +161,7 @@ struct ExistingNote {
     #[serde(default)]
     summary: String,
     #[serde(default)]
-    kind: String,
+    reference: bool,
     #[serde(default)]
     body: String,
 }
@@ -168,6 +182,8 @@ struct OrganizeRequest {
     model: Option<String>,
     #[serde(default)]
     effort: Option<String>,
+    #[serde(default)]
+    task_instructions: Option<String>,
     #[serde(default)]
     organization_instructions: Option<String>,
     #[serde(default)]
@@ -305,6 +321,20 @@ struct ExportResult {
     cancelled: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExportWebPageRequest {
+    file_name: String,
+    html: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportWebPageResult {
+    path: String,
+    cancelled: bool,
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WhisperConfig {
@@ -318,6 +348,53 @@ struct YouTubeTranscriptionRequest {
     url: String,
     #[serde(default)]
     language: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WebPageRequest {
+    url: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FetchedWebPage {
+    final_url: String,
+    mime_type: String,
+    byte_size: usize,
+    content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OCRDocumentRequest {
+    file_name: String,
+    mime_type: String,
+    base64_data: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OCRPage {
+    page_number: usize,
+    text: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OCRDocumentResult {
+    text: String,
+    page_count: usize,
+    pages: Vec<OCRPage>,
+    warnings: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OCRDocumentKind {
+    Png,
+    Jpeg,
+    Heif,
+    Pdf,
 }
 
 #[derive(Clone)]
@@ -1162,21 +1239,9 @@ async fn organize_content(
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .unwrap_or("Imported material");
-    let organization_preference = request
-        .organization_instructions
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.chars().take(2_000).collect::<String>());
-    let instructions = organization_preference.map_or_else(
-        || ORGANIZER_INSTRUCTIONS.trim().to_string(),
-        |preference| {
-            format!(
-                "{}\n\nUser-authored organization preference:\n{}",
-                ORGANIZER_INSTRUCTIONS.trim(),
-                preference
-            )
-        },
+    let instructions = build_organizer_instructions(
+        request.task_instructions.as_deref(),
+        request.organization_instructions.as_deref(),
     );
     let existing_notes = request
         .existing_notes
@@ -1192,7 +1257,7 @@ async fn organize_content(
                     .map(|alias| bounded_text(alias, 300))
                     .collect::<Vec<_>>(),
                 "summary": bounded_text(&note.summary, 1_000),
-                "kind": bounded_text(&note.kind, 40),
+                "reference": note.reference,
                 "body": bounded_text(&note.body, 6_000)
             })
         })
@@ -1322,6 +1387,32 @@ async fn organize_content(
     serde_json::from_str::<OrganizeResult>(&output_text).map_err(|_| {
         "OpenAI returned notes Orion could not read. Try the import again.".to_string()
     })
+}
+
+fn build_organizer_instructions(
+    task_instructions: Option<&str>,
+    organization_preference: Option<&str>,
+) -> String {
+    let mut blocks = vec![ORGANIZER_INSTRUCTIONS.trim().to_string()];
+    if let Some(value) = task_instructions
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        blocks.push(format!(
+            "Task-specific guidance and requirements:\n{}",
+            value.chars().take(2_000).collect::<String>()
+        ));
+    }
+    if let Some(value) = organization_preference
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        blocks.push(format!(
+            "User-authored organization preference:\n{}",
+            value.chars().take(2_000).collect::<String>()
+        ));
+    }
+    blocks.join("\n\n")
 }
 
 fn bounded_text(value: &str, max_chars: usize) -> String {
@@ -1644,6 +1735,64 @@ fn selected_directory(path: FilePath) -> Result<PathBuf, String> {
     }
 }
 
+fn selected_export_path(path: FilePath) -> Result<PathBuf, String> {
+    match path {
+        FilePath::Path(path) => Ok(path),
+        FilePath::Url(url) => url
+            .to_file_path()
+            .map_err(|_| "The selected export destination is not a local file.".to_string()),
+    }
+}
+
+fn validate_web_export(request: &ExportWebPageRequest) -> Result<(), String> {
+    if request.file_name.trim().is_empty() {
+        return Err("The web article needs a filename.".to_string());
+    }
+    if request.file_name.chars().count() > 240 {
+        return Err("The web article filename is too long.".to_string());
+    }
+    if request.html.trim().is_empty() {
+        return Err("There is no web article to export.".to_string());
+    }
+    if request.html.len() > MAX_WEB_EXPORT_BYTES {
+        return Err("This web article is too large to export as one file.".to_string());
+    }
+    if !request
+        .html
+        .trim_start()
+        .get(..15)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("<!doctype html>"))
+    {
+        return Err("Orion received an invalid web article.".to_string());
+    }
+    Ok(())
+}
+
+fn persist_web_export(path: &Path, html: &str) -> Result<(), String> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| "Orion could not resolve the export folder.".to_string())?;
+    if !directory.is_dir() {
+        return Err("Choose an existing folder for the web article.".to_string());
+    }
+    let mut temporary = NamedTempFile::new_in(directory)
+        .map_err(|error| format!("Orion could not prepare the web article: {error}"))?;
+    temporary
+        .as_file_mut()
+        .write_all(html.as_bytes())
+        .and_then(|_| temporary.as_file_mut().flush())
+        .and_then(|_| temporary.as_file().sync_all())
+        .map_err(|error| format!("Orion could not write the web article: {error}"))?;
+    temporary.persist(path).map_err(|error| {
+        format!(
+            "Orion could not save the web article atomically: {}",
+            error.error
+        )
+    })?;
+    sync_directory(directory)?;
+    Ok(())
+}
+
 fn selected_local_path(path: FilePath) -> Result<PathBuf, String> {
     match path {
         FilePath::Path(path) => Ok(path),
@@ -1763,6 +1912,435 @@ fn normalize_youtube_url(value: &str) -> Result<String, String> {
         return Err("Paste a link to a specific YouTube video.".to_string());
     }
     Ok(url.to_string())
+}
+
+fn normalize_webpage_url(value: &str) -> Result<Url, String> {
+    let trimmed = value.trim();
+    if trimmed.len() > 2_048 {
+        return Err("That webpage URL is too long.".to_string());
+    }
+    let mut url = Url::parse(trimmed).map_err(|_| "Enter a valid webpage URL.".to_string())?;
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+        return Err("Use a standard https webpage URL.".to_string());
+    }
+    let host = url
+        .host_str()
+        .unwrap_or_default()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if host.is_empty() || host.parse::<IpAddr>().is_ok() {
+        return Err("Use a public website hostname, not an IP address.".to_string());
+    }
+    if matches!(host.as_str(), "localhost" | "local" | "internal")
+        || [
+            ".localhost",
+            ".local",
+            ".internal",
+            ".lan",
+            ".home",
+            ".test",
+            ".invalid",
+            ".example",
+        ]
+        .iter()
+        .any(|suffix| host.ends_with(suffix))
+    {
+        return Err("Orion can only import public webpages.".to_string());
+    }
+    url.set_fragment(None);
+    Ok(url)
+}
+
+fn is_public_web_ip(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            let [first, second, third, _fourth] = address.octets();
+            !(first == 0
+                || first == 10
+                || first == 127
+                || first >= 224
+                || (first == 100 && (64..=127).contains(&second))
+                || (first == 169 && second == 254)
+                || (first == 172 && (16..=31).contains(&second))
+                || (first == 192 && second == 0 && third == 0)
+                || (first == 192 && second == 0 && third == 2)
+                || (first == 192 && second == 168)
+                || (first == 198 && (second == 18 || second == 19))
+                || (first == 198 && second == 51 && third == 100)
+                || (first == 203 && second == 0 && third == 113))
+        }
+        IpAddr::V6(address) => {
+            if let Some(mapped) = address.to_ipv4_mapped() {
+                return is_public_web_ip(IpAddr::V4(mapped));
+            }
+            let segments = address.segments();
+            !(address.is_unspecified()
+                || address.is_loopback()
+                || address.is_multicast()
+                || segments[..6].iter().all(|segment| *segment == 0)
+                || (segments[0] & 0xfe00) == 0xfc00
+                || (segments[0] & 0xffc0) == 0xfe80
+                || (segments[0] & 0xffc0) == 0xfec0
+                || (segments[0] == 0x0064
+                    && segments[1] == 0xff9b
+                    && (segments[2] == 0 || segments[2] == 1))
+                || (segments[0] == 0x0100
+                    && segments[1] == 0
+                    && segments[2] == 0
+                    && segments[3] == 0)
+                || (segments[0] == 0x2001 && segments[1] == 0)
+                || (segments[0] == 0x2001 && segments[1] == 2 && segments[2] == 0)
+                || (segments[0] == 0x2001 && segments[1] == 0x0db8)
+                || segments[0] == 0x2002)
+        }
+    }
+}
+
+fn resolve_public_web_addresses(url: &Url) -> Result<(String, Vec<SocketAddr>), String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| "That webpage URL does not have a hostname.".to_string())?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let port = url.port_or_known_default().unwrap_or(443);
+    let addresses = (host.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|_| "Orion could not resolve that webpage's hostname.".to_string())?
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        return Err("Orion could not resolve that webpage's hostname.".to_string());
+    }
+    if addresses
+        .iter()
+        .any(|address| !is_public_web_ip(address.ip()))
+    {
+        return Err("Orion cannot import local or private network addresses.".to_string());
+    }
+    Ok((host, addresses))
+}
+
+async fn fetch_public_web_response(url: &Url) -> Result<Response, String> {
+    let lookup_url = url.clone();
+    let (host, addresses) =
+        tauri::async_runtime::spawn_blocking(move || resolve_public_web_addresses(&lookup_url))
+            .await
+            .map_err(|error| format!("Orion could not validate that webpage: {error}"))??;
+    let client = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(20))
+        .resolve_to_addrs(&host, &addresses)
+        .build()
+        .map_err(|error| format!("Orion could not prepare webpage import: {error}"))?;
+    let response = client
+        .get(url.clone())
+        .header(
+            reqwest::header::ACCEPT,
+            "text/html,application/xhtml+xml,text/plain;q=0.9",
+        )
+        .header(
+            reqwest::header::USER_AGENT,
+            "Orion/0.3.8 (+local webpage import)",
+        )
+        .send()
+        .await
+        .map_err(|error| format!("Orion could not fetch that webpage: {error}"))?;
+    if response
+        .remote_addr()
+        .is_some_and(|address| !is_public_web_ip(address.ip()))
+    {
+        return Err("Orion refused a webpage response from a private address.".to_string());
+    }
+    Ok(response)
+}
+
+fn webpage_mime_type(response: &Response) -> Result<String, String> {
+    let value = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if matches!(
+        value.as_str(),
+        "text/html" | "application/xhtml+xml" | "text/plain"
+    ) {
+        Ok(value)
+    } else {
+        Err("That URL did not return a readable HTML or text webpage.".to_string())
+    }
+}
+
+#[tauri::command]
+async fn fetch_webpage(request: WebPageRequest) -> Result<FetchedWebPage, String> {
+    let mut url = normalize_webpage_url(&request.url)?;
+    for redirect_count in 0..=MAX_WEBPAGE_REDIRECTS {
+        let mut response = fetch_public_web_response(&url).await?;
+        if response.status().is_redirection() {
+            if redirect_count == MAX_WEBPAGE_REDIRECTS {
+                return Err("That webpage redirected too many times.".to_string());
+            }
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| "That webpage returned an invalid redirect.".to_string())?;
+            let redirected = url
+                .join(location)
+                .map_err(|_| "That webpage returned an invalid redirect URL.".to_string())?;
+            url = normalize_webpage_url(redirected.as_str())?;
+            continue;
+        }
+        if !response.status().is_success() {
+            return Err(format!(
+                "That webpage returned HTTP {}.",
+                response.status().as_u16()
+            ));
+        }
+        let mime_type = webpage_mime_type(&response)?;
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_WEBPAGE_BYTES as u64)
+        {
+            return Err("Webpages must be smaller than 5 MB.".to_string());
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|error| format!("Orion could not finish reading that webpage: {error}"))?
+        {
+            if body.len().saturating_add(chunk.len()) > MAX_WEBPAGE_BYTES {
+                return Err("Webpages must be smaller than 5 MB.".to_string());
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let byte_size = body.len();
+        let content = String::from_utf8_lossy(&body).into_owned();
+        if content.trim().is_empty() {
+            return Err("That webpage did not contain readable text.".to_string());
+        }
+        return Ok(FetchedWebPage {
+            final_url: url.to_string(),
+            mime_type,
+            byte_size,
+            content,
+        });
+    }
+    Err("That webpage redirected too many times.".to_string())
+}
+
+impl OCRDocumentKind {
+    fn from_mime_type(value: &str) -> Result<(Self, &'static str), String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "image/png" => Ok((Self::Png, "image/png")),
+            "image/jpeg" | "image/jpg" => Ok((Self::Jpeg, "image/jpeg")),
+            "image/heic" | "image/heif" => Ok((Self::Heif, "image/heic")),
+            "application/pdf" => Ok((Self::Pdf, "application/pdf")),
+            _ => Err("Choose a PNG, JPEG, HEIC, HEIF, or PDF document.".to_string()),
+        }
+    }
+
+    fn temporary_suffix(self) -> &'static str {
+        match self {
+            Self::Png => ".png",
+            Self::Jpeg => ".jpg",
+            Self::Heif => ".heic",
+            Self::Pdf => ".pdf",
+        }
+    }
+
+    fn has_expected_signature(self, bytes: &[u8]) -> bool {
+        match self {
+            Self::Png => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+            Self::Jpeg => bytes.starts_with(b"\xff\xd8\xff"),
+            Self::Pdf => bytes[..bytes.len().min(1_024)]
+                .windows(5)
+                .any(|window| window == b"%PDF-"),
+            Self::Heif => {
+                const BRANDS: [&[u8; 4]; 8] = [
+                    b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"mif1", b"msf1",
+                ];
+                bytes.len() >= 12
+                    && &bytes[4..8] == b"ftyp"
+                    && (BRANDS.iter().any(|brand| bytes[8..12] == brand[..])
+                        || (bytes.len() >= 20
+                            && bytes[16..]
+                                .chunks_exact(4)
+                                .take(16)
+                                .any(|chunk| BRANDS.iter().any(|brand| chunk == &brand[..]))))
+            }
+        }
+    }
+}
+
+fn validate_ocr_file_name(value: &str) -> Result<(), String> {
+    let file_name = value.trim();
+    if file_name.is_empty()
+        || file_name.chars().count() > 255
+        || file_name.chars().any(char::is_control)
+        || file_name.contains(['/', '\\'])
+    {
+        return Err("That OCR document has an invalid file name.".to_string());
+    }
+    Ok(())
+}
+
+fn decode_ocr_document(
+    request: OCRDocumentRequest,
+) -> Result<(OCRDocumentKind, String, Zeroizing<Vec<u8>>), String> {
+    let OCRDocumentRequest {
+        file_name,
+        mime_type,
+        base64_data,
+    } = request;
+    validate_ocr_file_name(&file_name)?;
+    let (kind, normalized_mime_type) = OCRDocumentKind::from_mime_type(&mime_type)?;
+    let encoded = Zeroizing::new(base64_data);
+    if encoded.is_empty() {
+        return Err("The selected OCR document is empty.".to_string());
+    }
+    if encoded.len() > MAX_OCR_BASE64_BYTES {
+        return Err("OCR documents must be 25 MB or smaller.".to_string());
+    }
+    let bytes = Zeroizing::new(
+        BASE64_STANDARD
+            .decode(encoded.as_bytes())
+            .map_err(|_| "The OCR document data is not valid base64.".to_string())?,
+    );
+    if bytes.is_empty() {
+        return Err("The selected OCR document is empty.".to_string());
+    }
+    if bytes.len() > MAX_OCR_DOCUMENT_BYTES {
+        return Err("OCR documents must be 25 MB or smaller.".to_string());
+    }
+    if !kind.has_expected_signature(&bytes) {
+        return Err("The OCR document contents do not match its file type.".to_string());
+    }
+    Ok((kind, normalized_mime_type.to_string(), bytes))
+}
+
+fn bundled_ocr_runtime() -> Result<PathBuf, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("Orion could not locate its app bundle: {error}"))?;
+    executable
+        .parent()
+        .map(|directory| directory.join(BUNDLED_OCR_NAME))
+        .ok_or_else(|| "Orion could not locate its bundled OCR engine.".to_string())
+}
+
+fn validate_ocr_runtime(path: &Path) -> Result<(), String> {
+    if !is_executable_file(path) {
+        return Err(
+            "Orion's bundled Vision OCR engine is missing or damaged. Reinstall Orion.".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_ocr_result(mut result: OCRDocumentResult) -> Result<OCRDocumentResult, String> {
+    if result.page_count == 0
+        || result.page_count > MAX_OCR_PAGES
+        || result.pages.len() != result.page_count
+    {
+        return Err("The bundled OCR engine returned invalid page data.".to_string());
+    }
+    for (index, page) in result.pages.iter_mut().enumerate() {
+        if page.page_number != index + 1 || page.text.chars().count() > MAX_OCR_PAGE_CHARACTERS {
+            return Err("The bundled OCR engine returned invalid page data.".to_string());
+        }
+        page.text = page.text.trim().to_string();
+    }
+    if result.warnings.len() > MAX_OCR_PAGES
+        || result
+            .warnings
+            .iter()
+            .any(|warning| warning.chars().count() > 300)
+    {
+        return Err("The bundled OCR engine returned invalid warnings.".to_string());
+    }
+    result.warnings.retain(|warning| !warning.trim().is_empty());
+    let text = result
+        .pages
+        .iter()
+        .map(|page| page.text.as_str())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if text.is_empty() {
+        return Err("No readable text was found in this document.".to_string());
+    }
+    if text.chars().count() > MAX_OCR_OUTPUT_CHARACTERS {
+        return Err("This document contains too much recognized text.".to_string());
+    }
+    if result.text.trim() != text {
+        return Err("The bundled OCR engine returned inconsistent text.".to_string());
+    }
+    result.text = text;
+    Ok(result)
+}
+
+async fn recognize_document_text_with_runtime(
+    runtime: &Path,
+    request: OCRDocumentRequest,
+) -> Result<OCRDocumentResult, String> {
+    validate_ocr_runtime(runtime)?;
+    let (kind, mime_type, bytes) = decode_ocr_document(request)?;
+    let mut temporary = tempfile::Builder::new()
+        .prefix("orion-ocr-")
+        .suffix(kind.temporary_suffix())
+        .tempfile()
+        .map_err(|error| format!("Orion could not prepare temporary OCR input: {error}"))?;
+    temporary
+        .as_file_mut()
+        .write_all(&bytes)
+        .and_then(|_| temporary.as_file_mut().flush())
+        .map_err(|error| format!("Orion could not prepare temporary OCR input: {error}"))?;
+
+    let executable = runtime.to_path_buf();
+    let input_path = temporary.path().to_path_buf();
+    let output = tauri::async_runtime::spawn_blocking(move || {
+        Command::new(executable)
+            .arg("--input")
+            .arg(input_path)
+            .arg("--mime-type")
+            .arg(mime_type)
+            .output()
+    })
+    .await
+    .map_err(|error| format!("The local OCR task could not finish: {error}"))?
+    .map_err(|error| format!("Orion could not start its bundled OCR engine: {error}"))?;
+    // `temporary` remains owned until the child exits and is removed on every
+    // return path, including malformed output and Vision failures.
+    if !output.status.success() {
+        let detail: String = String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("The bundled Vision OCR engine stopped unexpectedly.")
+            .trim()
+            .chars()
+            .take(900)
+            .collect();
+        return Err(detail);
+    }
+    if output.stdout.len() > MAX_OCR_STDOUT_BYTES {
+        return Err("The bundled OCR engine returned too much data.".to_string());
+    }
+    let result: OCRDocumentResult = serde_json::from_slice(&output.stdout)
+        .map_err(|_| "The bundled OCR engine returned invalid data.".to_string())?;
+    validate_ocr_result(result)
+}
+
+#[tauri::command]
+async fn recognize_document_text(request: OCRDocumentRequest) -> Result<OCRDocumentResult, String> {
+    let runtime = bundled_ocr_runtime()?;
+    recognize_document_text_with_runtime(&runtime, request).await
 }
 
 fn media_extension(path: &Path) -> Option<String> {
@@ -2127,6 +2705,51 @@ async fn export_markdown(app: AppHandle, notes: Vec<ExportNote>) -> Result<Expor
 }
 
 #[tauri::command]
+async fn export_web_page(
+    app: AppHandle,
+    request: ExportWebPageRequest,
+) -> Result<ExportWebPageResult, String> {
+    validate_web_export(&request)?;
+    let requested_stem = Path::new(request.file_name.trim())
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Orion export");
+    let suggested_name = format!("{}.html", safe_file_stem(requested_stem));
+    let selected = app
+        .dialog()
+        .file()
+        .set_title("Export Orion web article")
+        .set_file_name(suggested_name)
+        .add_filter("Web page", &["html"])
+        .blocking_save_file();
+    let Some(selected) = selected else {
+        return Ok(ExportWebPageResult {
+            path: String::new(),
+            cancelled: true,
+        });
+    };
+    let mut path = selected_export_path(selected)?;
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("html"))
+    {
+        path.set_extension("html");
+    }
+    let path_for_export = path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        persist_web_export(&path_for_export, &request.html)
+    })
+    .await
+    .map_err(|error| format!("The web export task could not finish: {error}"))??;
+
+    Ok(ExportWebPageResult {
+        path: path.to_string_lossy().into_owned(),
+        cancelled: false,
+    })
+}
+
+#[tauri::command]
 fn complete_app_exit(app: AppHandle, handshake: State<'_, ExitHandshake>) {
     handshake.allow_exit.store(true, Ordering::SeqCst);
     app.exit(0);
@@ -2195,8 +2818,11 @@ pub fn run() {
             chat,
             transcribe_media_files,
             transcribe_youtube,
+            fetch_webpage,
+            recognize_document_text,
             transcription_setup_status,
             export_markdown,
+            export_web_page,
             complete_app_exit,
             set_exit_guard_ready,
             acknowledge_app_exit,
@@ -2282,6 +2908,36 @@ mod tests {
             yt_dlp,
             deno,
         }
+    }
+
+    fn ocr_request(mime_type: &str, bytes: &[u8]) -> OCRDocumentRequest {
+        OCRDocumentRequest {
+            file_name: "scan.png".to_string(),
+            mime_type: mime_type.to_string(),
+            base64_data: BASE64_STANDARD.encode(bytes),
+        }
+    }
+
+    #[test]
+    fn keeps_task_and_space_instructions_independently_bounded_and_ordered() {
+        let import = format!("batch-first {}", "x".repeat(2_500));
+        let preference = format!("space-second {}", "y".repeat(2_500));
+        let instructions = build_organizer_instructions(Some(&import), Some(&preference));
+        let import_index = instructions.find("batch-first").unwrap();
+        let preference_index = instructions.find("space-second").unwrap();
+
+        assert!(import_index < preference_index);
+        assert!(!instructions.contains(&"x".repeat(2_001)));
+        assert!(!instructions.contains(&"y".repeat(2_001)));
+        assert!(instructions.contains("Task-specific guidance and requirements"));
+        assert!(instructions.contains("User-authored organization preference"));
+    }
+
+    #[test]
+    fn organizer_does_not_duplicate_project_notes_or_tasks_into_articles() {
+        assert!(ORGANIZER_INSTRUCTIONS
+            .contains("never create a second note that merely\nrenames, paraphrases, or repeats"));
+        assert!(ORGANIZER_INSTRUCTIONS.contains("never copy tasks into a\nwiki article"));
     }
 
     #[test]
@@ -2397,6 +3053,45 @@ mod tests {
     }
 
     #[test]
+    fn validates_bounded_html_exports() {
+        let valid = ExportWebPageRequest {
+            file_name: "My atlas.html".to_string(),
+            html: "<!doctype html><title>My atlas</title>".to_string(),
+        };
+        assert!(validate_web_export(&valid).is_ok());
+
+        let invalid = ExportWebPageRequest {
+            file_name: "My atlas.html".to_string(),
+            html: "<script>not a complete export</script>".to_string(),
+        };
+        assert!(validate_web_export(&invalid)
+            .unwrap_err()
+            .contains("invalid web article"));
+
+        let oversized = ExportWebPageRequest {
+            file_name: "My atlas.html".to_string(),
+            html: format!("<!doctype html>{}", "x".repeat(MAX_WEB_EXPORT_BYTES)),
+        };
+        assert!(validate_web_export(&oversized)
+            .unwrap_err()
+            .contains("too large"));
+    }
+
+    #[test]
+    fn atomically_replaces_a_web_export() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("atlas.html");
+        fs::write(&path, "old export").unwrap();
+
+        persist_web_export(&path, "<!doctype html><title>New</title>").unwrap();
+
+        assert_eq!(
+            fs::read_to_string(path).unwrap(),
+            "<!doctype html><title>New</title>"
+        );
+    }
+
+    #[test]
     fn atomically_round_trips_a_vault() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join(VAULT_FILENAME);
@@ -2476,6 +3171,156 @@ mod tests {
         assert!(normalize_youtube_url("http://youtube.com/watch?v=abc123").is_err());
         assert!(normalize_youtube_url("https://example.com/watch?v=abc123").is_err());
         assert!(normalize_youtube_url("https://youtube.com/").is_err());
+    }
+
+    #[test]
+    fn validates_ocr_mime_types_signatures_and_encoded_bound() {
+        let png = b"\x89PNG\r\n\x1a\nfixture";
+        let (kind, mime_type, decoded) =
+            decode_ocr_document(ocr_request("image/png", png)).unwrap();
+        assert_eq!(kind, OCRDocumentKind::Png);
+        assert_eq!(mime_type, "image/png");
+        assert_eq!(&decoded[..], png);
+
+        assert!(decode_ocr_document(ocr_request("image/png", b"not-a-png")).is_err());
+        assert!(decode_ocr_document(ocr_request("image/gif", b"GIF89a")).is_err());
+        assert!(decode_ocr_document(OCRDocumentRequest {
+            file_name: "scan.png".to_string(),
+            mime_type: "image/png".to_string(),
+            base64_data: "A".repeat(MAX_OCR_BASE64_BYTES + 1),
+        })
+        .unwrap_err()
+        .contains("25 MB"));
+    }
+
+    #[test]
+    fn validates_structured_ocr_page_data_and_rejects_blank_results() {
+        let result = validate_ocr_result(OCRDocumentResult {
+            text: "First page\n\nThird page".to_string(),
+            page_count: 3,
+            pages: vec![
+                OCRPage {
+                    page_number: 1,
+                    text: "First page".to_string(),
+                },
+                OCRPage {
+                    page_number: 2,
+                    text: String::new(),
+                },
+                OCRPage {
+                    page_number: 3,
+                    text: "Third page".to_string(),
+                },
+            ],
+            warnings: vec!["No text was recognized on page 2.".to_string()],
+        })
+        .unwrap();
+        assert_eq!(result.page_count, 3);
+        assert_eq!(result.pages[1].page_number, 2);
+        assert_eq!(result.text, "First page\n\nThird page");
+
+        assert!(validate_ocr_result(OCRDocumentResult {
+            text: "Out of sequence".to_string(),
+            page_count: 1,
+            pages: vec![OCRPage {
+                page_number: 2,
+                text: "Out of sequence".to_string(),
+            }],
+            warnings: Vec::new(),
+        })
+        .unwrap_err()
+        .contains("invalid page data"));
+
+        assert!(validate_ocr_result(OCRDocumentResult {
+            text: String::new(),
+            page_count: 1,
+            pages: vec![OCRPage {
+                page_number: 1,
+                text: String::new(),
+            }],
+            warnings: Vec::new(),
+        })
+        .unwrap_err()
+        .contains("No readable text"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_uses_the_exact_runtime_and_deletes_temporary_input() {
+        let fixture = tempfile::tempdir().unwrap();
+        let runtime = fixture.path().join("orion-ocr");
+        let input_marker = fixture.path().join("ocr-input.txt");
+        let argument_marker = fixture.path().join("ocr-arguments.txt");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"{}\"\ninput=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--input' ]; then\n    shift\n    input=\"$1\"\n  fi\n  shift\ndone\nprintf '%s' \"$input\" > \"{}\"\nprintf '%s\\n' '{{\"text\":\"Recognized locally.\",\"pageCount\":1,\"pages\":[{{\"pageNumber\":1,\"text\":\"Recognized locally.\"}}],\"warnings\":[]}}'\n",
+            argument_marker.display(),
+            input_marker.display(),
+        );
+        write_executable(&runtime, &script);
+
+        let result = tauri::async_runtime::block_on(recognize_document_text_with_runtime(
+            &runtime,
+            ocr_request("image/png", b"\x89PNG\r\n\x1a\nfixture"),
+        ))
+        .unwrap();
+
+        assert_eq!(result.text, "Recognized locally.");
+        let temporary_path = fs::read_to_string(&input_marker).unwrap();
+        assert!(!Path::new(&temporary_path).exists());
+        let arguments = fs::read_to_string(&argument_marker).unwrap();
+        assert!(arguments.contains("--input"));
+        assert!(arguments.contains("--mime-type"));
+        assert!(arguments.contains("image/png"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_deletes_temporary_input_after_malformed_helper_output() {
+        let fixture = tempfile::tempdir().unwrap();
+        let runtime = fixture.path().join("orion-ocr");
+        let input_marker = fixture.path().join("ocr-input.txt");
+        let script = format!(
+            "#!/bin/sh\ninput=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--input' ]; then\n    shift\n    input=\"$1\"\n  fi\n  shift\ndone\nprintf '%s' \"$input\" > \"{}\"\nprintf 'not-json\\n'\n",
+            input_marker.display(),
+        );
+        write_executable(&runtime, &script);
+
+        let error = tauri::async_runtime::block_on(recognize_document_text_with_runtime(
+            &runtime,
+            ocr_request("image/png", b"\x89PNG\r\n\x1a\nfixture"),
+        ))
+        .unwrap_err();
+
+        assert!(error.contains("invalid data"));
+        let temporary_path = fs::read_to_string(&input_marker).unwrap();
+        assert!(!Path::new(&temporary_path).exists());
+    }
+
+    #[test]
+    fn accepts_only_public_https_webpage_urls() {
+        assert!(normalize_webpage_url("https://example.org/research?q=orion").is_ok());
+        assert!(normalize_webpage_url("http://example.org/research").is_err());
+        assert!(normalize_webpage_url("https://user:secret@example.org/").is_err());
+        assert!(normalize_webpage_url("https://localhost:8080/private").is_err());
+        assert!(normalize_webpage_url("https://notes.internal/private").is_err());
+        assert!(normalize_webpage_url("https://127.0.0.1/private").is_err());
+        assert!(normalize_webpage_url("https://192.168.1.20/private").is_err());
+    }
+
+    #[test]
+    fn rejects_private_link_local_and_documentation_web_addresses() {
+        assert!(is_public_web_ip("8.8.8.8".parse().unwrap()));
+        assert!(is_public_web_ip("2606:4700:4700::1111".parse().unwrap()));
+        assert!(!is_public_web_ip("10.0.0.4".parse().unwrap()));
+        assert!(!is_public_web_ip("100.64.0.1".parse().unwrap()));
+        assert!(!is_public_web_ip("169.254.1.2".parse().unwrap()));
+        assert!(!is_public_web_ip("192.0.2.10".parse().unwrap()));
+        assert!(!is_public_web_ip("::1".parse().unwrap()));
+        assert!(!is_public_web_ip("fe80::1".parse().unwrap()));
+        assert!(!is_public_web_ip("2001:db8::1".parse().unwrap()));
+        assert!(!is_public_web_ip("::ffff:192.168.1.2".parse().unwrap()));
+        assert!(!is_public_web_ip("64:ff9b::a00:1".parse().unwrap()));
+        assert!(!is_public_web_ip("2002:0a00:0001::".parse().unwrap()));
     }
 
     #[test]

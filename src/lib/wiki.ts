@@ -10,6 +10,7 @@ import type {
   WikiLinkResolution,
 } from "../types";
 import { splitMarkdownFrontmatter } from "./markdown";
+import { visibleNoteTags } from "./noteMetadata";
 
 export interface AutoLinkOptions {
   excludeConceptIds?: ReadonlySet<string>;
@@ -569,10 +570,11 @@ export function searchWiki(
 
   for (const note of snapshot.notes) {
     const body = splitMarkdownFrontmatter(note.body).content;
+    const tags = visibleNoteTags(note);
     const score = scoreFields(normalizedQuery, tokens, {
       title: note.title,
       aliases: note.aliases,
-      tags: note.tags,
+      tags,
       summary: note.summary,
       body,
     });
@@ -581,7 +583,7 @@ export function searchWiki(
         id: note.id,
         kind: "note",
         title: note.title,
-        subtitle: `${note.kind} · ${note.tags.slice(0, 2).join(" · ")}`,
+        subtitle: tags.slice(0, 2).join(" · ") || "Note",
         excerpt: makeExcerpt(
           body,
           bestExcerptQuery({ ...note, body }, tokens),

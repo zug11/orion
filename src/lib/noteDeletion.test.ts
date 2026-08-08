@@ -55,6 +55,13 @@ describe("deleteNoteFromSnapshot", () => {
       },
     ];
     snapshot.activeNoteId = target.id;
+    snapshot.spaceOverview = {
+      title: "A changing field",
+      body: "Positivism connects the lecture.",
+      relatedNoteIds: [origin.id, target.id],
+      generatedAt: NOW,
+      stale: false,
+    };
 
     const result = deleteNoteFromSnapshot(
       snapshot,
@@ -72,6 +79,7 @@ describe("deleteNoteFromSnapshot", () => {
     );
     expect(result.snapshot.relationships).toEqual([]);
     expect(result.snapshot.sources[0]?.noteIds).toEqual([origin.id]);
+    expect(result.snapshot.spaceOverview?.relatedNoteIds).toEqual([origin.id]);
     expect(result.snapshot.activeNoteId).toBeNull();
   });
 });

@@ -1,6 +1,7 @@
 import type {
   ImportDraft,
   ParsedImport,
+  RecognizedDocumentText,
   SourceKind,
 } from "../types";
 
@@ -15,10 +16,19 @@ export const SUPPORTED_IMPORT_EXTENSIONS = [
   ".htm",
   ".pdf",
   ".docx",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".heic",
+  ".heif",
 ] as const;
 
 export const IMPORT_ACCEPT =
-  ".txt,.md,.markdown,.json,.csv,.tsv,.html,.htm,.pdf,.docx,text/plain,text/markdown,text/csv,text/html,application/json,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  ".txt,.md,.markdown,.json,.csv,.tsv,.html,.htm,.pdf,.docx,.png,.jpg,.jpeg,.heic,.heif,text/plain,text/markdown,text/csv,text/html,application/json,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg,image/heic,image/heif";
+
+export type DocumentTextRecognizer = (
+  file: File,
+) => Promise<RecognizedDocumentText>;
 
 export class UnsupportedImportError extends Error {
   constructor(
@@ -30,17 +40,23 @@ export class UnsupportedImportError extends Error {
   }
 }
 
-export async function parseImportFile(file: File): Promise<ParsedImport> {
+export async function parseImportFile(
+  file: File,
+  recognizeDocumentText?: DocumentTextRecognizer,
+): Promise<ParsedImport> {
   const format = detectSourceKind(file.name, file.type);
   if (!format) {
     throw new UnsupportedImportError(file.name, file.type);
   }
 
   if (format === "pdf") {
-    return parsePdf(file);
+    return parsePdf(file, recognizeDocumentText);
   }
   if (format === "docx") {
     return parseDocx(file);
+  }
+  if (format === "image") {
+    return parseImage(file, recognizeDocumentText);
   }
 
   const rawText = stripByteOrderMark(await file.text());
@@ -49,8 +65,13 @@ export async function parseImportFile(file: File): Promise<ParsedImport> {
 
 export async function parseImportFiles(
   files: Iterable<File> | ArrayLike<File>,
+  recognizeDocumentText?: DocumentTextRecognizer,
 ): Promise<ParsedImport[]> {
-  return Promise.all(Array.from(files).map(parseImportFile));
+  return Promise.all(
+    Array.from(files).map((file) =>
+      parseImportFile(file, recognizeDocumentText),
+    ),
+  );
 }
 
 export function parseTextImport(
@@ -61,7 +82,12 @@ export function parseTextImport(
   knownFormat?: SourceKind,
 ): ParsedImport {
   const format = knownFormat ?? detectSourceKind(fileName, mimeType);
-  if (!format || format === "pdf" || format === "docx") {
+  if (
+    !format ||
+    format === "pdf" ||
+    format === "docx" ||
+    format === "image"
+  ) {
     throw new UnsupportedImportError(fileName, mimeType);
   }
 
@@ -140,6 +166,12 @@ export function detectSourceKind(
 
   if (extension === ".pdf" || mime === "application/pdf") {
     return "pdf";
+  }
+  if (
+    [".png", ".jpg", ".jpeg", ".heic", ".heif"].includes(extension) ||
+    ["image/png", "image/jpeg", "image/heic", "image/heif"].includes(mime)
+  ) {
+    return "image";
   }
   if (
     extension === ".docx" ||
@@ -241,7 +273,10 @@ export function delimitedRowsToMarkdown(rows: readonly string[][]): string {
     .join("\n");
 }
 
-async function parsePdf(file: File): Promise<ParsedImport> {
+async function parsePdf(
+  file: File,
+  recognizeDocumentText?: DocumentTextRecognizer,
+): Promise<ParsedImport> {
   const { getDocument, GlobalWorkerOptions } = await import(
     "pdfjs-dist/legacy/build/pdf.mjs"
   );
@@ -257,7 +292,7 @@ async function parsePdf(file: File): Promise<ParsedImport> {
     useWorkerFetch: false,
   });
   const document = await loadingTask.promise;
-  const pages: string[] = [];
+  const pages: Array<{ pageNumber: number; text: string }> = [];
 
   try {
     for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
@@ -276,18 +311,39 @@ async function parsePdf(file: File): Promise<ParsedImport> {
         .replace(/[ \t]{2,}/g, " ")
         .trim();
       if (normalized) {
-        pages.push(normalized);
+        pages.push({ pageNumber, text: normalized });
       }
     }
   } finally {
     await loadingTask.destroy();
   }
 
-  const warnings: string[] = [];
-  if (pages.length === 0) {
-    warnings.push(
-      "No selectable text was found. This PDF may contain scanned images.",
+  const selectableText = pages.map(({ text }) => text).join("\n");
+  if (!hasMeaningfulText(selectableText)) {
+    const recognized = await requireDocumentTextRecognition(
+      file,
+      recognizeDocumentText,
     );
+    return {
+      title: titleFromFileName(file.name),
+      fileName: file.name,
+      mimeType: file.type || "application/pdf",
+      format: "pdf",
+      byteSize: file.size,
+      text: recognized.pages.length > 0
+        ? recognized.pages
+            .filter(({ text }) => text.trim())
+            .map(
+              ({ pageNumber, text }) =>
+                `## Page ${pageNumber}\n\n${text.trim()}`,
+            )
+            .join("\n\n")
+        : recognized.text.trim(),
+      warnings: [
+        "No meaningful selectable text was found, so Orion used on-device text recognition.",
+        ...recognized.warnings,
+      ],
+    };
   }
 
   return {
@@ -297,10 +353,61 @@ async function parsePdf(file: File): Promise<ParsedImport> {
     format: "pdf",
     byteSize: file.size,
     text: pages
-      .map((page, index) => `## Page ${index + 1}\n\n${page}`)
+      .map(({ pageNumber, text }) => `## Page ${pageNumber}\n\n${text}`)
       .join("\n\n"),
-    warnings,
+    warnings: [],
   };
+}
+
+async function parseImage(
+  file: File,
+  recognizeDocumentText?: DocumentTextRecognizer,
+): Promise<ParsedImport> {
+  const recognized = await requireDocumentTextRecognition(
+    file,
+    recognizeDocumentText,
+  );
+  const text = recognized.text.trim();
+  return {
+    title: titleFromFileName(file.name),
+    fileName: file.name,
+    mimeType: file.type || imageMimeTypeFromFileName(file.name),
+    format: "image",
+    byteSize: file.size,
+    text,
+    warnings: [
+      ...recognized.warnings,
+      ...(!text ? ["No readable text was found in this image."] : []),
+    ],
+  };
+}
+
+function imageMimeTypeFromFileName(fileName: string): string {
+  const extension = fileName.toLocaleLowerCase().match(/\.[^.]+$/)?.[0];
+  if (extension === ".png") return "image/png";
+  if (extension === ".heic") return "image/heic";
+  if (extension === ".heif") return "image/heif";
+  return fallbackMimeType("image");
+}
+
+async function requireDocumentTextRecognition(
+  file: File,
+  recognizeDocumentText?: DocumentTextRecognizer,
+): Promise<RecognizedDocumentText> {
+  if (!recognizeDocumentText) {
+    throw new Error(
+      `Text recognition for “${file.name}” is available in the installed Orion desktop app.`,
+    );
+  }
+  return recognizeDocumentText(file);
+}
+
+function hasMeaningfulText(value: string): boolean {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  const lettersAndNumbers = normalized.match(/[\p{L}\p{N}]/gu)?.length ?? 0;
+  const words = normalized.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu)?.length ?? 0;
+  return lettersAndNumbers >= 24 || words >= 5;
 }
 
 async function parseDocx(file: File): Promise<ParsedImport> {
@@ -441,6 +548,7 @@ function fallbackMimeType(format: SourceKind): string {
     pdf: "application/pdf",
     docx:
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    image: "image/jpeg",
     audio: "audio/mpeg",
     video: "video/mp4",
     youtube: "text/uri-list",

@@ -1,12 +1,12 @@
 import {
   BookOpen,
-  FileText,
   GalleryVerticalEnd,
   Home,
   MessageCircle,
   Plus,
   Settings,
   Star,
+  Trash2,
 } from "../lib/icons";
 import type { AppSnapshot, Note } from "../types";
 import {
@@ -31,6 +31,7 @@ interface SidebarProps {
   linkedArticleJobs: readonly LinkedArticleJob[];
   onViewChange: (view: WorkspaceView) => void;
   onOpenNote: (noteId: string) => void;
+  onDeleteNote: (noteId: string) => void;
   onNewNote: () => void;
   onCreateSpace: (name: string) => void;
   onSwitchSpace: (spaceId: string) => void;
@@ -49,6 +50,50 @@ const navigation = [
   icon: typeof Home;
 }>;
 
+interface SidebarNoteRowProps {
+  note: Note;
+  active: boolean;
+  onOpenNote: (noteId: string) => void;
+  onDeleteNote: (noteId: string) => void;
+}
+
+function SidebarNoteRow({
+  note,
+  active,
+  onOpenNote,
+  onDeleteNote,
+}: SidebarNoteRowProps) {
+  return (
+    <div className={active ? "sidebar-note-row active" : "sidebar-note-row"}>
+      <button
+        type="button"
+        className="note-nav-item"
+        aria-label={`Open ${note.title}`}
+        onClick={() => onOpenNote(note.id)}
+      >
+        <span className="note-nav-title">{note.title}</span>
+        {note.pinned ? (
+          <Star
+            className="note-nav-favorite"
+            size={11}
+            fill="currentColor"
+            aria-label="Favorite"
+          />
+        ) : null}
+      </button>
+      <button
+        type="button"
+        className="sidebar-note-delete"
+        aria-label={`Delete ${note.title}`}
+        title={`Delete ${note.title}`}
+        onClick={() => onDeleteNote(note.id)}
+      >
+        <Trash2 size={12} />
+      </button>
+    </div>
+  );
+}
+
 export function Sidebar({
   view,
   notes,
@@ -58,17 +103,14 @@ export function Sidebar({
   linkedArticleJobs,
   onViewChange,
   onOpenNote,
+  onDeleteNote,
   onNewNote,
   onCreateSpace,
   onSwitchSpace,
   onRestartLinkedArticle,
   onDeleteLinkedArticle,
 }: SidebarProps) {
-  const favorites = notes.filter((note) => note.pinned).slice(0, 4);
-  const recents = [...notes]
-    .filter((note) => !note.pinned)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .slice(0, 5);
+  const favorites = notes.filter((note) => note.pinned);
   const visibleLinkedArticleJobs = [
     ...linkedArticleJobs.filter((job) => job.stage === "error"),
     ...linkedArticleJobs.filter((job) => job.stage !== "error"),
@@ -158,7 +200,7 @@ export function Sidebar({
                 <div
                   className="sidebar-generation-job__actions"
                   role="group"
-                  aria-label={`${job.title} draft actions`}
+                  aria-label={`${job.title} article actions`}
                 >
                   <button
                     type="button"
@@ -181,56 +223,41 @@ export function Sidebar({
       )}
 
       <div className="sidebar-scroll">
-        {favorites.length > 0 && (
-          <section className="sidebar-section">
+        {favorites.length > 0 ? (
+          <section className="sidebar-section" aria-label="Favorites">
             <div className="sidebar-heading">
               <span>Favorites</span>
               <Star size={12} />
             </div>
             {favorites.map((note) => (
-              <button
+              <SidebarNoteRow
                 key={note.id}
-                type="button"
-                className={
-                  activeNoteId === note.id
-                    ? "note-nav-item active"
-                    : "note-nav-item"
-                }
-                onClick={() => onOpenNote(note.id)}
-              >
-                <span
-                  className="note-nav-dot"
-                  style={{ background: note.color ?? "#8798ff" }}
-                />
-                <span>{note.title}</span>
-              </button>
+                note={note}
+                active={activeNoteId === note.id}
+                onOpenNote={onOpenNote}
+                onDeleteNote={onDeleteNote}
+              />
             ))}
           </section>
-        )}
+        ) : null}
 
-        <section className="sidebar-section">
+        <section className="sidebar-section" aria-label="All notes">
           <div className="sidebar-heading">
-            <span>Recently opened</span>
-            <FileText size={12} />
+            <span>All notes</span>
+            <em>{notes.length}</em>
           </div>
-          {recents.map((note) => (
-            <button
+          {notes.map((note) => (
+            <SidebarNoteRow
               key={note.id}
-              type="button"
-              className={
-                activeNoteId === note.id
-                  ? "note-nav-item active"
-                  : "note-nav-item"
-              }
-              onClick={() => onOpenNote(note.id)}
-            >
-              <span
-                className="note-nav-dot"
-                style={{ background: note.color ?? "#8798ff" }}
-              />
-              <span>{note.title}</span>
-            </button>
+              note={note}
+              active={activeNoteId === note.id}
+              onOpenNote={onOpenNote}
+              onDeleteNote={onDeleteNote}
+            />
           ))}
+          {notes.length === 0 ? (
+            <p className="sidebar-notes-empty">No notes yet</p>
+          ) : null}
         </section>
       </div>
 
