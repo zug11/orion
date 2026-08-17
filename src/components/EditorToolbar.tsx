@@ -5,6 +5,7 @@ import {
   Bold as BoldIcon,
   Braces,
   FileCode2,
+  Image as ImageIcon,
   Italic,
   Link2,
   List,
@@ -24,6 +25,8 @@ import {
 } from "react";
 import { findConceptByPhrase } from "../lib/concepts";
 import type { Concept, EntityId } from "../types";
+import { AIWritingMark } from "./icons/AIWritingMark";
+import { NOTE_IMAGE_ACCEPT } from "../lib/noteImages";
 
 interface EditorToolbarProps {
   editor: Editor;
@@ -32,6 +35,13 @@ interface EditorToolbarProps {
   onUnlink: (conceptId?: EntityId) => void;
   citationAvailable: boolean;
   onOpenCitation: () => void;
+  onInsertImages?: (files: readonly File[]) => void;
+  imageBusy?: boolean;
+  aiWritingAvailable?: boolean;
+  aiWritingActive?: boolean;
+  aiWritingBusy?: boolean;
+  aiProviderName?: string;
+  onToggleAIWriting?: () => void;
   onAnnounce?: (message: string) => void;
 }
 
@@ -42,9 +52,17 @@ export function EditorToolbar({
   onUnlink,
   citationAvailable,
   onOpenCitation,
+  onInsertImages,
+  imageBusy = false,
+  aiWritingAvailable = false,
+  aiWritingActive = false,
+  aiWritingBusy = false,
+  aiProviderName = "AI",
+  onToggleAIWriting,
   onAnnounce,
 }: EditorToolbarProps) {
   const toolbarRef = useRef<HTMLDivElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const state = useEditorState({
     editor,
     selector: ({ editor: current }) => {
@@ -221,7 +239,10 @@ export function EditorToolbar({
       aria-label="Text formatting"
       onKeyDown={moveToolbarFocus}
     >
-      <div className="editor-toolbar-main">
+      <div
+        className="editor-toolbar-main"
+        inert={aiWritingBusy ? true : undefined}
+      >
         <label className="editor-style-select" title="Text style">
           <span className="sr-only">Text style</span>
           <select
@@ -375,6 +396,30 @@ export function EditorToolbar({
         >
           <Sheet size={15} />
         </button>
+        <button
+          type="button"
+          aria-label="Insert image"
+          title="Insert image"
+          disabled={imageBusy || !onInsertImages}
+          onMouseDown={preserveSelection}
+          onClick={() => imageInputRef.current?.click()}
+        >
+          <ImageIcon size={15} />
+        </button>
+        <input
+          ref={imageInputRef}
+          className="sr-only"
+          type="file"
+          accept={NOTE_IMAGE_ACCEPT}
+          multiple
+          tabIndex={-1}
+          aria-hidden="true"
+          onChange={(event) => {
+            const files = Array.from(event.currentTarget.files ?? []);
+            event.currentTarget.value = "";
+            if (files.length > 0) onInsertImages?.(files);
+          }}
+        />
 
         {state.table ? (
           <label className="editor-style-select editor-table-action-select">
@@ -474,10 +519,41 @@ export function EditorToolbar({
         </button>
       </div>
 
+      <div className="editor-toolbar-ai" role="group" aria-label="AI writing">
+        <button
+          type="button"
+          className={`${aiWritingActive ? "active " : ""}ai-writing-toggle${
+            aiWritingAvailable ? "" : " is-unavailable"
+          }`}
+          aria-label={aiWritingActive ? "Turn off AI writing" : "Turn on AI writing"}
+          aria-pressed={aiWritingActive}
+          aria-disabled={!aiWritingAvailable}
+          title={
+            aiWritingAvailable
+              ? aiWritingActive
+                ? "Turn off AI writing"
+                : "AI writing"
+              : `Add an ${aiProviderName} key in Settings to use AI writing`
+          }
+          data-tooltip={
+            aiWritingAvailable
+              ? aiWritingActive
+                ? "Turn off AI writing"
+                : "AI writing"
+              : `Add an ${aiProviderName} key in Settings`
+          }
+          onMouseDown={preserveSelection}
+          onClick={onToggleAIWriting}
+        >
+          <AIWritingMark size={15} />
+        </button>
+      </div>
+
       <div
         className="editor-toolbar-history"
         role="group"
         aria-label="Editing history"
+        inert={aiWritingBusy ? true : undefined}
       >
         <button
           type="button"

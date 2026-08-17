@@ -9,7 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { slugifyTitle } from "../data/defaults";
-import type { AppSnapshot, Concept, Note } from "../types";
+import type { AppSnapshot, Concept, Note, ThemeMode } from "../types";
 import {
   expandOrionWikiLinks,
   splitMarkdownFrontmatter,
@@ -18,7 +18,14 @@ import {
 } from "./markdown";
 import { extractNoteOutline } from "./noteOutline";
 import { visibleNoteTags } from "./noteMetadata";
+import { isSafeNoteImageUrl } from "./noteImages";
 import { canonicalizeSourceCitations } from "./sourceCitations";
+import {
+  resolveThemePalette,
+  type ResolvedThemeMode,
+  type ThemePalette,
+  type ThemePreferences,
+} from "./theme";
 import { decorateAutoLinks, resolveConceptDestination } from "./wiki";
 
 export type ExportScope = "note" | "linked" | "space";
@@ -43,47 +50,16 @@ interface ExportNoteProps {
   includedNoteIds: ReadonlySet<string>;
 }
 
+type ExportThemePreferences = ThemePreferences & { theme: ThemeMode };
+
 const ORION_LINK_PATTERN =
   /\[[^\]\n]*\]\(orion-(note|concept):\/\/([^) \t\r\n]+)\)/g;
 
 const EXPORT_STYLES = String.raw`
 :root {
-  color-scheme: light dark;
-  --canvas: #f4f6fa;
-  --surface: rgba(255, 255, 255, 0.92);
-  --surface-solid: #ffffff;
-  --text: #182033;
-  --text-soft: #44506a;
-  --muted: #74809a;
-  --faint: #98a2b6;
-  --line: rgba(68, 80, 106, 0.14);
-  --line-strong: rgba(68, 80, 106, 0.23);
-  --accent: #6175d8;
-  --accent-soft: rgba(97, 117, 216, 0.11);
-  --accent-strong: #4058c3;
-  --code: #edf0f7;
-  --shadow: 0 22px 70px rgba(29, 40, 70, 0.10);
   --serif: ui-serif, "New York", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
   --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
   --mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --canvas: #090d17;
-    --surface: rgba(18, 24, 39, 0.92);
-    --surface-solid: #121827;
-    --text: #edf0f7;
-    --text-soft: #c4cbda;
-    --muted: #8e98ac;
-    --faint: #6d778b;
-    --line: rgba(196, 203, 218, 0.11);
-    --line-strong: rgba(196, 203, 218, 0.19);
-    --accent: #9eabff;
-    --accent-soft: rgba(132, 149, 255, 0.12);
-    --accent-strong: #bbc4ff;
-    --code: #171e30;
-    --shadow: 0 26px 80px rgba(0, 0, 0, 0.30);
-  }
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
@@ -121,7 +97,7 @@ a { color: inherit; }
   height: 29px;
   place-items: center;
   border-radius: 50%;
-  color: var(--surface-solid);
+  color: var(--accent-ink);
   background: var(--accent);
   box-shadow: 0 0 0 5px var(--accent-soft);
   font-family: var(--serif);
@@ -191,7 +167,7 @@ a { color: inherit; }
   border: 1px solid var(--line);
   border-radius: 13px;
   background: var(--surface);
-  box-shadow: 0 8px 30px rgba(20, 28, 48, .04);
+  box-shadow: var(--shadow-soft);
   text-decoration: none;
   transition: transform 170ms ease, border-color 170ms ease, background 170ms ease;
 }
@@ -247,6 +223,7 @@ a { color: inherit; }
 .export-prose a:hover, .orion-link:hover { text-decoration-color: currentColor; }
 .orion-link.is-excluded { color: inherit; text-decoration: underline dotted var(--faint); text-underline-offset: 3px; cursor: help; }
 .source-citation { display: inline-flex; margin-left: .08em; color: var(--accent-strong); font-family: var(--sans); font-size: .72em; font-weight: 700; line-height: 1; text-decoration: none; vertical-align: .4em; }
+.export-prose img { display: block; width: auto; max-width: 100%; height: auto; margin: 28px auto; border-radius: 12px; box-shadow: var(--shadow-soft); }
 .export-image-alt { display: inline-block; padding: 8px 10px; border-radius: 7px; color: var(--muted); background: var(--code); font-family: var(--sans); font-size: 11px; }
 .export-empty { color: var(--faint); font-style: italic; }
 .export-outline { position: sticky; top: 38px; align-self: start; padding-top: 2px; }
@@ -288,7 +265,7 @@ a { color: inherit; }
   *, *::before, *::after { transition-duration: .001ms !important; }
 }
 @media print {
-  :root { color-scheme: light; --canvas: #fff; --surface: #fff; --surface-solid: #fff; --text: #111827; --text-soft: #283247; --muted: #596273; --faint: #7b8391; --line: #dfe3ea; --line-strong: #cbd1dc; --accent: #4257b8; --accent-soft: #f1f3fb; --accent-strong: #3449aa; --code: #f3f4f7; }
+  :root { color-scheme: light; --canvas: #fff; --surface: #fff; --surface-solid: #fff; --surface-raised: #fff; --text: #111827; --text-soft: #283247; --muted: #596273; --faint: #7b8391; --line: #dfe3ea; --line-strong: #cbd1dc; --accent: #4257b8; --accent-soft: #f1f3fb; --accent-strong: #3449aa; --accent-ink: #fff; --code: #f3f4f7; --shadow-soft: none; --shadow: none; --shadow-lg: none; }
   body { background: #fff; }
   .export-sidebar { display: none !important; }
   .export-main { margin: 0 !important; }
@@ -365,6 +342,69 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function exportPaletteVariables(
+  palette: ThemePalette,
+  mode: ResolvedThemeMode,
+): Record<`--${string}`, string> {
+  return {
+    "--canvas": palette.canvas,
+    "--canvas-deep": palette.canvasDeep,
+    "--surface": `color-mix(in srgb, ${palette.surface1} 92%, transparent)`,
+    "--surface-0": palette.surface0,
+    "--surface-solid": palette.surface1,
+    "--surface-2": palette.surface2,
+    "--surface-3": palette.surface3,
+    "--surface-raised": palette.surfaceRaised,
+    "--text": palette.text,
+    "--text-soft": palette.textSoft,
+    "--muted": palette.muted,
+    "--faint": palette.faint,
+    "--line": palette.line,
+    "--line-strong": palette.lineStrong,
+    "--accent": palette.accent,
+    "--accent-soft": `color-mix(in srgb, ${palette.accent} ${mode === "dark" ? 13 : 10}%, transparent)`,
+    "--accent-strong": palette.accentStrong,
+    "--accent-ink": palette.accentInk,
+    "--mint": palette.mint,
+    "--gold": palette.gold,
+    "--rose": palette.rose,
+    "--danger": palette.danger,
+    "--code": palette.surface2,
+    "--shadow-soft": palette.shadowSm,
+    "--shadow": palette.shadowMd,
+    "--shadow-lg": palette.shadowLg,
+  };
+}
+
+function exportPaletteRule(
+  settings: ExportThemePreferences,
+  mode: ResolvedThemeMode,
+): string {
+  const declarations = Object.entries(
+    exportPaletteVariables(resolveThemePalette(settings, mode), mode),
+  )
+    .map(([name, value]) => `  ${name}: ${value};`)
+    .join("\n");
+  return `:root {\n  color-scheme: ${mode};\n${declarations}\n}`;
+}
+
+function exportThemeStyles(settings: ExportThemePreferences): string {
+  if (settings.theme !== "system") {
+    return exportPaletteRule(settings, settings.theme);
+  }
+  return `${exportPaletteRule(settings, "light")}\n@media (prefers-color-scheme: dark) {\n${exportPaletteRule(settings, "dark")}\n}`;
+}
+
+function exportThemeMetadata(settings: ExportThemePreferences): string {
+  if (settings.theme !== "system") {
+    const palette = resolveThemePalette(settings, settings.theme);
+    return `<meta name="color-scheme" content="${settings.theme}">\n<meta name="theme-color" content="${palette.canvas}">`;
+  }
+  const light = resolveThemePalette(settings, "light");
+  const dark = resolveThemePalette(settings, "dark");
+  return `<meta name="color-scheme" content="light dark">\n<meta name="theme-color" content="${light.canvas}" media="(prefers-color-scheme: light)">\n<meta name="theme-color" content="${dark.canvas}" media="(prefers-color-scheme: dark)">`;
 }
 
 function safeExternalUrl(value: string | undefined): string | null {
@@ -599,9 +639,14 @@ function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
         <span>{children}</span>
       );
     },
-    img: ({ alt }) => (
-      <span className="export-image-alt">{alt ? `Image: ${alt}` : "Image omitted from offline export"}</span>
-    ),
+    img: ({ alt, src }) =>
+      src && isSafeNoteImageUrl(src) ? (
+        <img src={src} alt={alt ?? ""} />
+      ) : (
+        <span className="export-image-alt">
+          {alt ? `Image: ${alt}` : "Image omitted from offline export"}
+        </span>
+      ),
     input: ({ checked, ...props }) => (
       <input {...props} type="checkbox" checked={Boolean(checked)} readOnly />
     ),
@@ -851,7 +896,7 @@ export function buildWebExportDocument(
     <ExportSite snapshot={snapshot} notes={notes} scope={scope} originNoteId={originNoteId} />,
   );
   const defaultPage = scope === "space" ? "space-home" : noteAnchor(origin);
-  const html = `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n<meta name="color-scheme" content="light dark">\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none'">\n<title>${escapeHtml(title)} · Orion</title>\n<style>${EXPORT_STYLES}</style>\n</head>\n<body data-default-page="${escapeHtml(defaultPage)}" data-export-title="${escapeHtml(snapshot.workspace.name)}">\n${body}\n<script>${EXPORT_SCRIPT}</script>\n</body>\n</html>\n`;
+  const html = `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n${exportThemeMetadata(snapshot.settings)}\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none'">\n<title>${escapeHtml(title)} · Orion</title>\n<style>${exportThemeStyles(snapshot.settings)}\n${EXPORT_STYLES}</style>\n</head>\n<body data-default-page="${escapeHtml(defaultPage)}" data-export-title="${escapeHtml(snapshot.workspace.name)}">\n${body}\n<script>${EXPORT_SCRIPT}</script>\n</body>\n</html>\n`;
   return {
     fileName: `${slugifyTitle(title) || "orion-export"}.html`,
     html,

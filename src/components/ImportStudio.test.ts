@@ -15,6 +15,7 @@ import {
   replaceImportItem,
   settleImportItem,
   type ImportItem,
+  type OrganizedSource,
 } from "./ImportStudio";
 
 const TEST_NOW = "2026-07-27T10:00:00.000Z";
@@ -135,6 +136,28 @@ describe("buildImportPayload", () => {
     expect(payload.notes[0].tags).not.toContain("ai-draft");
   });
 
+  it("keeps the complete source record when the editable note is a bounded preview", () => {
+    const snapshot = createEmptySnapshot("Manual Space", TEST_NOW);
+    const text = `${"A".repeat(200_000)}SOURCE_TAIL`;
+    const parsed = makeParsedImport(
+      "Long pasted notes",
+      "long-pasted-notes.txt",
+      text,
+    );
+
+    const payload = buildImportPayload(
+      [makeOrganizedSource("import-long-paste", parsed)],
+      snapshot,
+    );
+
+    expect(payload.sources[0].text).toBe(text);
+    const previewBody = payload.notes[0].body;
+    const heading = "# Long pasted notes\n\n";
+    expect(previewBody.startsWith(heading)).toBe(true);
+    expect(previewBody.slice(heading.length)).toHaveLength(200_000);
+    expect(previewBody).not.toContain("SOURCE_TAIL");
+  });
+
   it("persists batch guidance on every source", () => {
     const snapshot = createEmptySnapshot("Guided Space", TEST_NOW);
     const guidance =
@@ -158,6 +181,195 @@ describe("buildImportPayload", () => {
     expect(payload.sources.every((source) => source.importGuidance === guidance)).toBe(
       true,
     );
+  });
+
+  it("keeps one batch note while attaching every proven source", () => {
+    const snapshot = createEmptySnapshot("Batch Space", TEST_NOW);
+    const first = makeOrganizedSource(
+      "item-one",
+      makeParsedImport("First", "first.md", "First evidence."),
+      {
+        notes: [
+          {
+            title: "Shared finding",
+            summary: "A finding grounded across the batch.",
+            body: "# Shared finding\n\nIntegrated evidence.",
+            tags: [],
+            aliases: [],
+            links: [],
+          },
+        ],
+        wikiArticles: [],
+        concepts: [],
+        suggestedConnections: [],
+      },
+    );
+    const second = makeOrganizedSource(
+      "item-two",
+      makeParsedImport("Second", "second.md", "Second evidence."),
+      { notes: [], wikiArticles: [], concepts: [], suggestedConnections: [] },
+    );
+    const payload = buildImportPayload(
+      [
+        {
+          ...first,
+          provenance: [
+            {
+              kind: "note" as const,
+              title: "Shared finding",
+              sourceIds: ["item-one", "item-two"],
+              evidenceReferences: [
+                { kind: "source" as const, sourceId: "item-one" },
+                { kind: "source" as const, sourceId: "item-two" },
+              ],
+            },
+          ],
+        },
+        second,
+      ],
+      snapshot,
+    );
+
+    expect(payload.notes).toHaveLength(1);
+    expect(payload.notes[0].sourceIds).toHaveLength(2);
+    expect(payload.sources).toHaveLength(2);
+    expect(payload.sources.every(({ noteIds }) => noteIds.length === 1)).toBe(
+      true,
+    );
+    expect(payload.sources[0].noteIds[0]).toBe(payload.sources[1].noteIds[0]);
+  });
+
+  it("keeps every proven batch note beyond the legacy per-source slice", () => {
+    const snapshot = createEmptySnapshot("Batch Space", TEST_NOW);
+    const items: OrganizedSource[] = Array.from({ length: 12 }, (_, index) =>
+      makeOrganizedSource(
+        `item-${index + 1}`,
+        makeParsedImport(
+          `Source ${index + 1}`,
+          `source-${index + 1}.md`,
+          `Evidence ${index + 1}.`,
+        ),
+        { notes: [], wikiArticles: [], concepts: [], suggestedConnections: [] },
+      ),
+    );
+    const notes = items.map((_, index) => ({
+      title: `Finding ${index + 1}`,
+      summary: `Finding ${index + 1}.`,
+      body: `# Finding ${index + 1}\n\nGrounded evidence.`,
+      tags: [],
+      aliases: [],
+      links: [],
+    }));
+    items[0] = {
+      ...items[0],
+      result: {
+        notes,
+        wikiArticles: [],
+        concepts: [],
+        suggestedConnections: [],
+      },
+      provenance: notes.map((note, index) => ({
+        kind: "note" as const,
+        title: note.title,
+        sourceIds: [`item-${index + 1}`],
+        evidenceReferences: [
+          { kind: "source" as const, sourceId: `item-${index + 1}` },
+        ],
+      })),
+    };
+
+    const payload = buildImportPayload(items, snapshot);
+
+    expect(payload.notes).toHaveLength(12);
+    expect(payload.sources).toHaveLength(12);
+    expect(payload.sources.every(({ noteIds }) => noteIds.length === 1)).toBe(
+      true,
+    );
+  });
+
+  it("rejects an oversized batch visibly instead of silently dropping notes", () => {
+    const snapshot = createEmptySnapshot("Batch Space", TEST_NOW);
+    const source = makeOrganizedSource(
+      "item-one",
+      makeParsedImport("Source", "source.md", "Evidence."),
+    );
+    const notes = Array.from({ length: 31 }, (_, index) => ({
+      title: `Finding ${index + 1}`,
+      summary: "Finding.",
+      body: `# Finding ${index + 1}`,
+      tags: [],
+      aliases: [],
+      links: [],
+    }));
+
+    expect(() =>
+      buildImportPayload(
+        [
+          {
+            ...source,
+            result: {
+              notes,
+              wikiArticles: [],
+              concepts: [],
+              suggestedConnections: [],
+            },
+            provenance: notes.map((note) => ({
+              kind: "note" as const,
+              title: note.title,
+              sourceIds: ["item-one"],
+              evidenceReferences: [
+                { kind: "source" as const, sourceId: "item-one" },
+              ],
+            })),
+          },
+        ],
+        snapshot,
+      ),
+    ).toThrow(/more than 30 new notes/);
+  });
+
+  it("never defaults unresolved batch provenance to the first source", () => {
+    const snapshot = createEmptySnapshot("Batch Space", TEST_NOW);
+    const source = makeOrganizedSource(
+      "item-one",
+      makeParsedImport("Source", "source.md", "Evidence."),
+      {
+        notes: [
+          {
+            title: "Finding",
+            summary: "Finding.",
+            body: "# Finding",
+            tags: [],
+            aliases: [],
+            links: [],
+          },
+        ],
+        wikiArticles: [],
+        concepts: [],
+        suggestedConnections: [],
+      },
+    );
+
+    expect(() =>
+      buildImportPayload(
+        [
+          {
+            ...source,
+            provenance: [
+              {
+                kind: "note" as const,
+                title: "Finding",
+                sourceIds: ["missing-item"],
+                evidenceReferences: [
+                  { kind: "source" as const, sourceId: "missing-item" },
+                ],
+              },
+            ],
+          },
+        ],
+        snapshot,
+      ),
+    ).toThrow(/outside this import/);
   });
 });
 

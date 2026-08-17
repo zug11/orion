@@ -57,11 +57,13 @@ import {
   deleteApiKey,
   exportMarkdown,
   exportWebPage,
+  generateNoteImage,
   clearBrowserSnapshot,
   isTauriRuntime,
   loadSnapshot,
   openDataDirectory,
   organizeWithAI,
+  runKnowledgeAssignment,
   saveAnthropicApiKey,
   saveApiKey,
   saveSnapshot,
@@ -72,6 +74,7 @@ import {
   applyChatResult,
   buildChatRequest,
   ChatRequestRegistry,
+  saveChatReplyAsNote,
 } from "./lib/chat";
 import {
   applyLinkedArticleResult,
@@ -85,16 +88,35 @@ import {
   type LinkedArticleJob,
 } from "./lib/linkedArticle";
 import {
+  buildLinkTitleRequest,
+  normalizeGeneratedLinkTitle,
+} from "./lib/linkTitle";
+import {
+  buildAIWritingRequest,
+  normalizeAIWritingReply,
+  type AIWritingRequestInput,
+} from "./lib/aiWriting";
+import {
+  buildAIImagePrompt,
+  type AIImageRequestInput,
+} from "./lib/aiImages";
+import {
   applyWikiEnrichmentResult,
   buildWikiEnrichmentRequest,
   hasSubstantiveKnowledgeNote,
 } from "./lib/wikiEnrichment";
+import { runKnowledgeEnrichment } from "./lib/knowledgeOrchestration/enrichment";
+import {
+  noteVersion,
+  stableSnapshotVersion,
+} from "./lib/knowledgeOrchestration/context";
 import { setTaskChecked, type NoteTask } from "./lib/tasks";
 import {
   getConceptReferences,
   resolveConceptDestination,
 } from "./lib/wiki";
 import { deleteNoteFromSnapshot } from "./lib/noteDeletion";
+import { deleteSpaceFromVault } from "./lib/spaceDeletion";
 import {
   attachSourceToNoteInSnapshot,
   deleteSourceFromSnapshot,
@@ -103,11 +125,18 @@ import { parseOrionNoteLink } from "./lib/orionLinks";
 import { normalizeStudio } from "./lib/studio";
 import {
   applySpaceOverviewResult,
-  buildSpaceOverviewRequest,
   hasSubstantiveOverviewNote,
   markSpaceOverviewStale,
   spaceKnowledgeFingerprint,
 } from "./lib/spaceOverview";
+import {
+  applySpaceBlueprintResult,
+  applySpaceRootResult,
+  buildSpaceBlueprintRequest,
+  buildSpaceRootRequest,
+  pendingSpaceBlueprints,
+  prepareSpaceKnowledgeIndex,
+} from "./lib/spaceKnowledge";
 import {
   createNavigationEntry,
   moveNavigationHistory,
@@ -120,7 +149,7 @@ import {
   type NavigationRoute,
   type ScrollPosition,
 } from "./lib/navigation";
-import { resolveThemeMode, themeCssVariables } from "./lib/theme";
+import { useResolvedTheme } from "./lib/useResolvedTheme";
 import {
   buildWebExportDocument,
   notesForExportScope,
@@ -138,6 +167,7 @@ import type {
   ChatResult,
   EntityId,
   Note,
+  OrganizeContentResult,
   OrionVault,
   Settings,
 } from "./types";
@@ -182,6 +212,9 @@ function App() {
     createEmptyVault(),
   );
   const snapshot = useMemo(() => activeSpace(vault), [vault]);
+  const { palette: resolvedThemePalette } = useResolvedTheme(
+    snapshot.settings,
+  );
   const setSnapshot = useCallback(
     (action: SetStateAction<AppSnapshot>) => {
       setVault((currentVault) => {
@@ -245,6 +278,12 @@ function App() {
   const closingRef = useRef(false);
   const toastTimer = useRef<number | null>(null);
   const chatRequests = useRef(new ChatRequestRegistry());
+  const pendingChatNoteSaveNotices = useRef(
+    new Map<
+      string,
+      { workspaceId: string; messageId: string; noteId: string }
+    >(),
+  );
   const linkedArticleRequests = useRef(new LinkedArticleRequestRegistry());
   const wikiEnrichmentRequests = useRef(new Set<string>());
   const overviewRequests = useRef(new Map<string, string>());
@@ -377,25 +416,54 @@ function App() {
         return;
       }
       if (!workspace.notes.some(hasSubstantiveOverviewNote)) {
-        if (!workspace.spaceOverview) return;
+        if (!workspace.spaceOverview && !workspace.spaceKnowledge) return;
         const now = new Date().toISOString();
         setVault((current) => ({
           ...current,
           spaces: current.spaces.map((space) =>
             space.workspace.id === spaceId &&
             !space.notes.some(hasSubstantiveOverviewNote)
-              ? { ...space, spaceOverview: undefined, updatedAt: now }
+              ? {
+                  ...space,
+                  spaceOverview: undefined,
+                  spaceKnowledge: undefined,
+                  updatedAt: now,
+                }
               : space,
           ),
           updatedAt: now,
         }));
         return;
       }
-      if (!isSelectedAIConfigured(workspace.settings)) {
+      const preparedAt = new Date().toISOString();
+      const preparedKnowledge = prepareSpaceKnowledgeIndex(workspace, preparedAt);
+      if (
+        !workspace.settings.includeExistingNotesInAIContext ||
+        !isSelectedAIConfigured(workspace.settings)
+      ) {
+        const localKnowledge = { ...preparedKnowledge, stale: false };
+        setVault((current) => {
+          const currentSpace = current.spaces.find(
+            (space) => space.workspace.id === spaceId,
+          );
+          if (!currentSpace) return current;
+          const now = new Date().toISOString();
+          return {
+            ...current,
+            spaces: current.spaces.map((space) =>
+              space.workspace.id === spaceId
+                ? { ...space, spaceKnowledge: localKnowledge, updatedAt: now }
+                : space,
+            ),
+            updatedAt: now,
+          };
+        });
         if (manual) {
           showToast(
             "Local Space overview",
-            `Add an ${selectedAIProviderName(workspace.settings)} key in Settings when you want Orion to write a richer living overview.`,
+            workspace.settings.includeExistingNotesInAIContext
+              ? `Add an ${selectedAIProviderName(workspace.settings)} key in Settings when you want Orion to write a richer living overview.`
+              : "Existing-note AI context is off. Orion refreshed the private local Space index without sending note-derived material to a provider.",
           );
         }
         return;
@@ -416,8 +484,31 @@ function App() {
       });
 
       try {
+        let knowledge = preparedKnowledge;
+        for (const blueprint of pendingSpaceBlueprints(knowledge)) {
+          const clusterResult = await organizeWithAI(
+            buildSpaceBlueprintRequest(workspace, knowledge, blueprint.id),
+          );
+          if (overviewRequests.current.get(spaceId) !== requestId) return;
+          const liveSpace = vaultRef.current.spaces.find(
+            (space) => space.workspace.id === spaceId,
+          );
+          if (
+            !liveSpace ||
+            spaceKnowledgeFingerprint(liveSpace) !== fingerprint
+          ) {
+            scheduleSpaceOverviewRefresh(spaceId, 900);
+            return;
+          }
+          knowledge = applySpaceBlueprintResult(
+            knowledge,
+            blueprint.id,
+            clusterResult,
+            new Date().toISOString(),
+          );
+        }
         const result = await organizeWithAI(
-          buildSpaceOverviewRequest(workspace),
+          buildSpaceRootRequest(workspace, knowledge),
         );
         if (overviewRequests.current.get(spaceId) !== requestId) {
           return;
@@ -435,6 +526,11 @@ function App() {
 
         const now = new Date().toISOString();
         const overview = applySpaceOverviewResult(liveSpace, result, now);
+        const completedKnowledge = applySpaceRootResult(
+          knowledge,
+          result,
+          now,
+        );
         setVault((current) => {
           const currentSpace = current.spaces.find(
             (space) => space.workspace.id === spaceId,
@@ -449,7 +545,12 @@ function App() {
             ...current,
             spaces: current.spaces.map((space) =>
               space.workspace.id === spaceId
-                ? { ...space, spaceOverview: overview, updatedAt: now }
+                ? {
+                    ...space,
+                    spaceOverview: overview,
+                    spaceKnowledge: completedKnowledge,
+                    updatedAt: now,
+                  }
                 : space,
             ),
             updatedAt: now,
@@ -492,11 +593,23 @@ function App() {
   );
 
   useEffect(() => {
+    const localKnowledgeIsCurrent =
+      Boolean(snapshot.spaceKnowledge) && !snapshot.spaceKnowledge?.stale;
+    const providerKnowledgeIsCurrent =
+      localKnowledgeIsCurrent &&
+      Boolean(snapshot.spaceKnowledge?.blueprints.length) &&
+      snapshot.spaceKnowledge?.blueprints.every(
+        ({ origin }) => origin === "provider",
+      );
+    const providerOverviewIsCurrent =
+      Boolean(snapshot.spaceOverview) && !snapshot.spaceOverview?.stale;
     if (
       !hydrated ||
-      !isSelectedAIConfigured(snapshot.settings) ||
       !snapshot.notes.some(hasSubstantiveOverviewNote) ||
-      (snapshot.spaceOverview && !snapshot.spaceOverview.stale)
+      (localKnowledgeIsCurrent &&
+        (!snapshot.settings.includeExistingNotesInAIContext ||
+          !isSelectedAIConfigured(snapshot.settings) ||
+          (providerKnowledgeIsCurrent && providerOverviewIsCurrent)))
     ) {
       return;
     }
@@ -507,7 +620,9 @@ function App() {
     snapshot.notes.length,
     snapshot.settings.anthropicApiKeyConfigured,
     snapshot.settings.apiKeyConfigured,
+    snapshot.settings.includeExistingNotesInAIContext,
     snapshot.settings.model,
+    snapshot.spaceKnowledge,
     snapshot.spaceOverview,
     snapshot.workspace.id,
   ]);
@@ -848,43 +963,6 @@ function App() {
     };
   }, [queueSnapshotSave, showToast]);
 
-  useEffect(() => {
-    const root = document.documentElement;
-    const systemTheme =
-      typeof window.matchMedia === "function"
-        ? window.matchMedia("(prefers-color-scheme: light)")
-        : null;
-    const applyTheme = () => {
-      const mode = resolveThemeMode(
-        snapshot.settings.theme,
-        systemTheme?.matches ?? false,
-      );
-      const variables = themeCssVariables(snapshot.settings, mode);
-      root.dataset.theme = mode;
-      root.dataset.themePreset = snapshot.settings.themePreset;
-      root.style.colorScheme = mode;
-      for (const [name, value] of Object.entries(variables)) {
-        root.style.setProperty(name, value);
-      }
-    };
-
-    applyTheme();
-    if (snapshot.settings.theme !== "system" || !systemTheme) return undefined;
-    systemTheme.addEventListener("change", applyTheme);
-    return () => systemTheme.removeEventListener("change", applyTheme);
-  }, [
-    snapshot.settings.theme,
-    snapshot.settings.themeAccent,
-    snapshot.settings.themeAccentCustom,
-    snapshot.settings.themeCanvasCustom,
-    snapshot.settings.themeCanvasTone,
-    snapshot.settings.themeContrast,
-    snapshot.settings.themePreset,
-    snapshot.settings.themeSurfaceCustom,
-    snapshot.settings.themeSurfaceLift,
-    snapshot.settings.themeTextWarmth,
-  ]);
-
   const closeConnections = useCallback(() => {
     setConnectionConceptId(null);
     setConnectionOriginNoteId(null);
@@ -962,6 +1040,85 @@ function App() {
       );
     },
     [resetSpaceNavigation, showToast],
+  );
+
+  const deleteSpace = useCallback(
+    (spaceId: string): boolean => {
+      const currentVault = vaultRef.current;
+      const space = currentVault.spaces.find(
+        (candidate) => candidate.workspace.id === spaceId,
+      );
+      if (!space) return false;
+      if (currentVault.spaces.length <= 1) {
+        showToast(
+          "Keep one Space",
+          "Create another Space before deleting Orion's final one.",
+        );
+        return false;
+      }
+      if (
+        !window.confirm(
+          `Delete “${space.workspace.name}” and its ${space.notes.length} ${space.notes.length === 1 ? "note" : "notes"}, ${space.sources.length} ${space.sources.length === 1 ? "source" : "sources"}, concepts, links, tasks, and Chat? This cannot be undone.`,
+        )
+      ) {
+        return false;
+      }
+
+      const now = new Date().toISOString();
+      const deletion = deleteSpaceFromVault(currentVault, spaceId, now);
+      if (!deletion.deleted) return false;
+      const nextSpace = deletion.vault.spaces.find(
+        (candidate) =>
+          candidate.workspace.id === deletion.nextActiveSpaceId,
+      );
+
+      chatRequests.current.invalidate(spaceId);
+      setChatBusySpaceIds((current) => {
+        if (!current.has(spaceId)) return current;
+        const next = new Set(current);
+        next.delete(spaceId);
+        return next;
+      });
+      cancelSpaceOverviewRefresh(spaceId);
+      setOverviewErrors((current) => {
+        if (!current.has(spaceId)) return current;
+        const next = new Map(current);
+        next.delete(spaceId);
+        return next;
+      });
+      for (const requestKey of wikiEnrichmentRequests.current) {
+        if (requestKey.startsWith(`${spaceId}:`)) {
+          wikiEnrichmentRequests.current.delete(requestKey);
+        }
+      }
+      setLinkedArticleJobs((current) => {
+        for (const job of current) {
+          if (job.workspaceId === spaceId) {
+            linkedArticleRequests.current.cancel(
+              `${job.workspaceId}:${job.noteId}`,
+            );
+          }
+        }
+        return current.filter((job) => job.workspaceId !== spaceId);
+      });
+      setVault((current) => deleteSpaceFromVault(current, spaceId, now).vault);
+
+      if (deletion.activeSpaceChanged) {
+        resetSpaceNavigation();
+      }
+      showToast(
+        "Space deleted",
+        deletion.activeSpaceChanged && nextSpace
+          ? `“${space.workspace.name}” was removed. ${nextSpace.workspace.name} is now open.`
+          : `“${space.workspace.name}” was removed.`,
+      );
+      return true;
+    },
+    [
+      cancelSpaceOverviewRefresh,
+      resetSpaceNavigation,
+      showToast,
+    ],
   );
 
   const openConnections = useCallback(
@@ -1320,9 +1477,28 @@ function App() {
       );
 
       try {
-        const result = await organizeWithAI(
-          buildWikiEnrichmentRequest(workspace, originNote),
-        );
+        let result: OrganizeContentResult;
+        let baseOriginVersion = noteVersion(originNote);
+        let destinationBaseVersions: Array<{
+          noteId: EntityId;
+          version: string;
+        }> = [];
+        if (isTauriRuntime()) {
+          const enrichment = await runKnowledgeEnrichment({
+            snapshot: workspace,
+            originNote,
+            model: workspace.settings.model,
+            effort: workspace.settings.reasoningEffort,
+            driver: runKnowledgeAssignment,
+          });
+          result = enrichment.result;
+          baseOriginVersion = enrichment.baseOriginVersion;
+          destinationBaseVersions = enrichment.destinationBaseVersions;
+        } else {
+          result = await organizeWithAI(
+            buildWikiEnrichmentRequest(workspace, originNote),
+          );
+        }
         const liveSpace = vaultRef.current.spaces.find(
           (space) => space.workspace.id === workspaceId,
         );
@@ -1332,10 +1508,16 @@ function App() {
         if (
           !liveSpace ||
           !liveOrigin ||
-          liveOrigin.updatedAt !== originNote.updatedAt
+          noteVersion(liveOrigin) !== baseOriginVersion ||
+          destinationBaseVersions.some(({ noteId, version }) => {
+            const destination = liveSpace.notes.find(
+              (note) => note.id === noteId,
+            );
+            return !destination || noteVersion(destination) !== version;
+          })
         ) {
           throw new Error(
-            "The note changed while Orion was reading it, so this refresh was skipped.",
+            "This Space changed while Orion was reading it, so the stale refresh was skipped.",
           );
         }
 
@@ -1396,6 +1578,13 @@ function App() {
             : `“${originNote.title}” did not add reliable context to another article.`,
         );
       } catch (error) {
+        if (
+          !vaultRef.current.spaces.some(
+            (space) => space.workspace.id === workspaceId,
+          )
+        ) {
+          return;
+        }
         showToast(
           "Wiki refresh paused",
           error instanceof Error ? error.message : String(error),
@@ -1458,6 +1647,7 @@ function App() {
       originNoteId: EntityId,
       phrase: string,
       instructions = "",
+      selectedContext = "",
     ) => {
       const requestKey = `${workspace.workspace.id}:${articleId}`;
       const article = workspace.notes.find((note) => note.id === articleId);
@@ -1507,6 +1697,9 @@ function App() {
           : "error",
         ...(instructions.trim()
           ? { instructions: instructions.trim().slice(0, 1_250) }
+          : {}),
+        ...(selectedContext.trim()
+          ? { selectedContext: selectedContext.trim().slice(0, 12_000) }
           : {}),
         ...(!isSelectedAIConfigured(workspace.settings)
           ? {
@@ -1579,6 +1772,7 @@ function App() {
               originNote,
               phrase,
               instructions,
+              selectedContext,
             ),
           ),
         );
@@ -1757,6 +1951,7 @@ function App() {
         job.originNoteId,
         job.title,
         job.instructions,
+        job.selectedContext,
       );
     },
     [generateLinkedArticle, showToast],
@@ -2067,6 +2262,7 @@ function App() {
             originNoteId,
             phrase,
             input.articleInstructions,
+            input.selectedContext,
           );
         }
       } else if (input.destinationNoteIds.length === 0) {
@@ -2085,6 +2281,76 @@ function App() {
       return preview.conceptId;
     },
     [generateLinkedArticle, openNote, showToast],
+  );
+
+  const generateLinkTitle = useCallback(
+    async (
+      originNoteId: EntityId,
+      selectedContext: string,
+    ): Promise<string> => {
+      const currentSnapshot = snapshotRef.current;
+      const workspaceId = currentSnapshot.workspace.id;
+      const result = await chatWithOrion(
+        buildLinkTitleRequest(
+          currentSnapshot,
+          originNoteId,
+          selectedContext,
+        ),
+      );
+      if (snapshotRef.current.workspace.id !== workspaceId) {
+        throw new Error(
+          "The active Space changed while Orion was naming this page. Try again in the current Space.",
+        );
+      }
+      return normalizeGeneratedLinkTitle(result.reply);
+    },
+    [],
+  );
+
+  const generateAIWriting = useCallback(
+    async (
+      originNoteId: EntityId,
+      input: Omit<AIWritingRequestInput, "originNoteId">,
+    ): Promise<string> => {
+      const currentSnapshot = snapshotRef.current;
+      const workspaceId = currentSnapshot.workspace.id;
+      const result = await chatWithOrion(
+        buildAIWritingRequest(currentSnapshot, {
+          ...input,
+          originNoteId,
+        }),
+      );
+      if (snapshotRef.current.workspace.id !== workspaceId) {
+        throw new Error(
+          "The active Space changed while Orion was writing. Try again in the current Space.",
+        );
+      }
+      return normalizeAIWritingReply(result.reply);
+    },
+    [],
+  );
+
+  const generateAIImage = useCallback(
+    async (
+      originNoteId: EntityId,
+      input: Omit<AIImageRequestInput, "originNoteId">,
+      signal: AbortSignal,
+    ) => {
+      const currentSnapshot = snapshotRef.current;
+      const workspaceId = currentSnapshot.workspace.id;
+      const request = buildAIImagePrompt(currentSnapshot, {
+        ...input,
+        originNoteId,
+      });
+      const image = await generateNoteImage(request.prompt, signal);
+      if (snapshotRef.current.workspace.id !== workspaceId) {
+        throw new Error(
+          "The active Space changed while Orion was creating the image. Try again in the current Space.",
+        );
+      }
+      return { ...image, alt: request.alt };
+    },
+    [],
   );
 
   const updateSettings = useCallback((settings: Settings) => {
@@ -2152,21 +2418,26 @@ function App() {
         const result = await chatWithOrion(buildChatRequest(space, prompt));
         if (chatRequests.current.isCurrent(token)) {
           const now = new Date().toISOString();
+          const createdNotes = (result.noteActions?.length ?? 0) > 0;
           setVault((current) => ({
             ...current,
-            spaces: current.spaces.map((candidate) =>
-              candidate.workspace.id === workspaceId
-                ? applyChatResult(
-                    candidate,
-                    prompt,
-                    result,
-                    now,
-                    () => `chat-${nanoid(10)}`,
-                  )
-                : candidate,
-            ),
+            spaces: current.spaces.map((candidate) => {
+              if (candidate.workspace.id !== workspaceId) return candidate;
+              const next = applyChatResult(
+                candidate,
+                prompt,
+                result,
+                now,
+                () => `chat-${nanoid(10)}`,
+                () => `note-${nanoid(10)}`,
+              );
+              return createdNotes ? markSpaceOverviewStale(next) : next;
+            }),
             updatedAt: now,
           }));
+          if (createdNotes) {
+            scheduleSpaceOverviewRefresh(workspaceId);
+          }
         }
         return result;
       } finally {
@@ -2179,8 +2450,91 @@ function App() {
         }
       }
     },
-    [],
+    [scheduleSpaceOverviewRefresh],
   );
+
+  const saveChatMessageAsNote = useCallback(
+    (messageId: string) => {
+      const current = activeSpace(vaultRef.current);
+      const workspaceId = current.workspace.id;
+      const pendingKey = `${workspaceId}:${messageId}`;
+      const message = current.studio.messages.find(
+        (candidate) =>
+          candidate.id === messageId && candidate.role === "assistant",
+      );
+      if (!message) return;
+      const existing = message.createdNoteIds
+        ?.map((id) => current.notes.find((note) => note.id === id))
+        .find((note): note is Note => Boolean(note));
+      if (existing) {
+        openNote(existing.id);
+        return;
+      }
+      if (pendingChatNoteSaveNotices.current.has(pendingKey)) return;
+
+      const now = new Date().toISOString();
+      const noteId = `note-${nanoid(10)}`;
+      if (saveChatReplyAsNote(current, messageId, now, noteId) === current) {
+        return;
+      }
+      pendingChatNoteSaveNotices.current.set(pendingKey, {
+        workspaceId,
+        messageId,
+        noteId,
+      });
+      setVault((currentVault) => {
+        const target = currentVault.spaces.find(
+          (space) => space.workspace.id === workspaceId,
+        );
+        if (!target) return currentVault;
+        const next = saveChatReplyAsNote(target, messageId, now, noteId);
+        if (next === target) return currentVault;
+        const marked = markSpaceOverviewStale(next);
+        return {
+          ...currentVault,
+          spaces: currentVault.spaces.map((space) =>
+            space.workspace.id === workspaceId ? marked : space,
+          ),
+          updatedAt: now,
+        };
+      });
+    },
+    [openNote],
+  );
+
+  useEffect(() => {
+    for (const [key, pending] of pendingChatNoteSaveNotices.current) {
+      const space = vault.spaces.find(
+        (candidate) => candidate.workspace.id === pending.workspaceId,
+      );
+      const landed = space?.notes.some(
+        (note) => note.id === pending.noteId,
+      );
+      if (landed) {
+        pendingChatNoteSaveNotices.current.delete(key);
+        scheduleSpaceOverviewRefresh(pending.workspaceId);
+        showToast("Note created", "The Chat reply is now an editable note.", {
+          label: "Open note",
+          run: () => {
+            const liveVault = vaultRef.current;
+            if (liveVault.activeSpaceId === pending.workspaceId) {
+              openNote(pending.noteId);
+              return;
+            }
+            switchSpace(pending.workspaceId);
+            window.setTimeout(() => openNote(pending.noteId), 0);
+          },
+        });
+        continue;
+      }
+      const message = space?.studio.messages.find(
+        (candidate) => candidate.id === pending.messageId,
+      );
+      if (!space || !message || message.createdNoteIds?.length) {
+        pendingChatNoteSaveNotices.current.delete(key);
+      }
+    }
+  }, [openNote, scheduleSpaceOverviewRefresh, showToast, switchSpace, vault]);
 
   const clearChat = useCallback(() => {
     chatRequests.current.invalidate(vaultRef.current.activeSpaceId);
@@ -2201,8 +2555,26 @@ function App() {
   const applyImport = useCallback(
     (payload: ImportStudioApplyPayload) => {
       const workspaceId = vaultRef.current.activeSpaceId;
+      const liveSpace = vaultRef.current.spaces.find(
+        (space) => space.workspace.id === workspaceId,
+      );
+      if (
+        !liveSpace ||
+        (payload.baseSnapshotVersion &&
+          stableSnapshotVersion(liveSpace) !== payload.baseSnapshotVersion)
+      ) {
+        throw new Error(
+          "This Space changed after Orion finished reading. Review the import again before adding it.",
+        );
+      }
       const firstNoteId = payload.notes[0]?.id ?? null;
       setSnapshot((current) => {
+        if (
+          payload.baseSnapshotVersion &&
+          stableSnapshotVersion(current) !== payload.baseSnapshotVersion
+        ) {
+          return current;
+        }
         snapshotBeforeImport.current = current;
         const conceptMap = new Map(
           current.concepts.map((concept) => [concept.id, concept]),
@@ -2466,8 +2838,18 @@ function App() {
           onRegisterConcept={(input) =>
             registerLinkConcept(input, activeNote.id)
           }
+          onGenerateLinkTitle={(selectedContext) =>
+            generateLinkTitle(activeNote.id, selectedContext)
+          }
+          onGenerateAIWriting={(input) =>
+            generateAIWriting(activeNote.id, input)
+          }
+          onGenerateAIImage={(input, signal) =>
+            generateAIImage(activeNote.id, input, signal)
+          }
           onDisableConceptAutoLink={disableConceptAutoLink}
           aiArticleWritingEnabled={isSelectedAIConfigured(snapshot.settings)}
+          aiImageGenerationEnabled={snapshot.settings.apiKeyConfigured}
           aiProviderName={selectedAIProviderName(snapshot.settings)}
         />
       );
@@ -2497,6 +2879,8 @@ function App() {
           busy={chatBusySpaceIds.has(snapshot.workspace.id)}
           onSend={sendChatMessage}
           onClear={clearChat}
+          onOpenNote={openNote}
+          onSaveReply={saveChatMessageAsNote}
           onOpenSettings={() => openView("settings")}
         />
       );
@@ -2505,6 +2889,7 @@ function App() {
       return (
         <SettingsView
           settings={snapshot.settings}
+          themePalette={resolvedThemePalette}
           onChange={updateSettings}
           onSaveApiKey={handleSaveKey}
           onDeleteApiKey={handleDeleteKey}
@@ -2527,6 +2912,7 @@ function App() {
     return (
       <HomeView
         snapshot={snapshot}
+        themePalette={resolvedThemePalette}
         onOpenNote={openNote}
         onOpenConcept={(conceptId) => followConcept(conceptId)}
         onNewNote={createNote}
@@ -2562,6 +2948,7 @@ function App() {
         onDeleteNote={deleteNote}
         onNewNote={createNote}
         onCreateSpace={createSpace}
+        onDeleteSpace={deleteSpace}
         onSwitchSpace={switchSpace}
         onRestartLinkedArticle={restartLinkedArticle}
         onDeleteLinkedArticle={deletePausedLinkedArticle}

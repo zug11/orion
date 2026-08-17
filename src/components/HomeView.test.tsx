@@ -3,19 +3,26 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { createEmptySnapshot } from "../data/defaults";
+import { resolveThemePalette } from "../lib/theme";
 import { HomeView } from "./HomeView";
 
 describe("HomeView atmosphere", () => {
   it("keeps the hero actions semantic while rendering the selected atmosphere and glow surfaces", () => {
     const onImport = vi.fn();
     const onNewNote = vi.fn();
+    const snapshot = createEmptySnapshot(
+      "New research",
+      "2026-07-31T00:00:00.000Z",
+    );
+    snapshot.settings.themeAccentCustom = "#B16BDA";
+    snapshot.settings.themeCanvasCustom = "#111B24";
+    snapshot.settings.themeSurfaceCustom = "#162B34";
+    const themePalette = resolveThemePalette(snapshot.settings, "dark");
 
     render(
       <HomeView
-        snapshot={createEmptySnapshot(
-          "New research",
-          "2026-07-31T00:00:00.000Z",
-        )}
+        snapshot={snapshot}
+        themePalette={themePalette}
         onOpenNote={vi.fn()}
         onOpenConcept={vi.fn()}
         onNewNote={onNewNote}
@@ -37,6 +44,18 @@ describe("HomeView atmosphere", () => {
     expect(
       document.querySelector('[data-atmosphere="field"]'),
     ).toBeInTheDocument();
+    expect(
+      document.querySelector<HTMLElement>('[data-atmosphere="field"]')?.style
+        .getPropertyValue("--atmosphere-background"),
+    ).toBe(themePalette.canvasDeep);
+    expect(
+      document.querySelector<HTMLElement>('[data-atmosphere="field"]')?.style
+        .getPropertyValue("--atmosphere-background-secondary"),
+    ).toBe(themePalette.surface0);
+    expect(
+      document.querySelector<HTMLElement>('[data-atmosphere="field"]')?.style
+        .getPropertyValue("--atmosphere-primary"),
+    ).toBe(themePalette.accentStrong);
     expect(
       screen.getByRole("button", { name: /Import documents/i }),
     ).toHaveClass("border-glow");

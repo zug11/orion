@@ -15,12 +15,14 @@ import {
   Bot,
   Check,
   CheckCircle2,
+  ChevronDown,
   FileText,
   Files,
   Link2,
   LoaderCircle,
   PenLine,
   Plus,
+  RefreshCw,
   Trash2,
   X,
 } from "../lib/icons";
@@ -37,24 +39,40 @@ import {
 } from "../lib/files";
 import {
   isTauriRuntime,
+  createFailoverKnowledgeDriver,
+  createKnowledgeReadingCache,
   fetchWebPage,
+  preflightKnowledgeProvider,
   organizeWithAI,
   recognizeDocumentText,
   transcribeMediaFiles,
   transcribeYouTube,
 } from "../lib/storage";
+import { partitionImportSourcesForSynthesis } from "../lib/importBatching";
+import {
+  buildCompactOrganizerContext,
+  mergeGeneratedOrganizerArticles,
+} from "../lib/organizerContext";
+import { autoResumeBackoffMs, shouldAutoResume } from "../lib/providerHealth";
 import {
   isSelectedAIConfigured,
   selectedAIProviderName,
 } from "../lib/ai";
 import { visibleNoteTags } from "../lib/noteMetadata";
+import {
+  buildLongDocumentSynthesis,
+  longDocumentSectionInstructions,
+  longDocumentSynthesisInstructions,
+  mapLongDocumentSections,
+  relevantExistingNotesForSynthesis,
+  splitDocumentForParallelReading,
+} from "../lib/longDocumentImport";
 import { truncateUnicode } from "../lib/text";
 import { transcriptToParsedImport } from "../lib/transcription";
 import type {
   AppSnapshot,
   Concept,
   EntityId,
-  ExistingNoteContext,
   Note,
   OrganizeContentResult,
   OrganizedNote,
@@ -65,6 +83,23 @@ import type {
   TranscribedMedia,
   WhisperConfig,
 } from "../types";
+import type {
+  KnowledgeResultProvenance,
+  KnowledgeTelemetry,
+} from "../lib/knowledgeOrchestration/protocol";
+import {
+  stableSnapshotVersion,
+} from "../lib/knowledgeOrchestration/context";
+import {
+  createKnowledgeImportRunError,
+  KnowledgeImportRunError,
+  landFailedKnowledgeImport,
+  runKnowledgeImportBatch,
+  snapshotStillMatchesImportBase,
+  type KnowledgeImportBatchResult,
+  type KnowledgeImportDiagnostic,
+} from "../lib/knowledgeOrchestration/import";
+import type { FixedBlueprintImportCheckpoint } from "../lib/knowledgeOrchestration/blueprintImport";
 
 const MAX_FILES = 12;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -107,9 +142,180 @@ interface OrganizeIssue {
   usedManualFallback: boolean;
 }
 
-interface OrganizedSource {
+export interface OrganizedSource {
   item: ImportItem;
   result?: OrganizeContentResult;
+  provenance?: KnowledgeResultProvenance[];
+}
+
+interface OrganizeProgress {
+  sourceIndex: number;
+  sourceTotal: number;
+  sourceTitle: string;
+  phase: "source" | "sections" | "synthesis" | "orchestration";
+  completedSections: number;
+  sectionTotal: number;
+  operationLabel?: string;
+  detailLabel?: string;
+  orchestrationStage?: "direct" | ImportPipelineStage;
+}
+
+type ImportPipelineStage = NonNullable<KnowledgeTelemetry["pipelineStage"]>;
+type UserFacingImportStage = "direct" | ImportPipelineStage;
+
+const INTERNAL_KNOWLEDGE_DIAGNOSTIC =
+  /\b(?:assignments?|artifacts?(?:\s+ids?)?|blueprints?|parsers?|payloads?|schemas?|writer\s+slots?)\b|\b(?:artifact|assignment|output|reader|writer|slot)[:_-][a-z0-9][\w:.-]*/i;
+
+const EMPTY_ORGANIZE_PROGRESS: OrganizeProgress = {
+  sourceIndex: 0,
+  sourceTotal: 0,
+  sourceTitle: "",
+  phase: "source",
+  completedSections: 0,
+  sectionTotal: 0,
+};
+
+export function progressFromKnowledgeTelemetry(
+  telemetry: KnowledgeTelemetry,
+  sourceTotal: number,
+  sourceTitle: string,
+): OrganizeProgress {
+  const sourceSummaryTotal = telemetry.sourceSummaryTotal ?? 0;
+  const sourceSummaryCompleted = telemetry.sourceSummaryCompleted ?? 0;
+  const spaceSummaryTotal = telemetry.spaceSummaryTotal ?? 0;
+  const spaceSummaryCompleted = telemetry.spaceSummaryCompleted ?? 0;
+  const primitives = new Set(telemetry.currentPrimitives);
+  const readingInParallel =
+    sourceSummaryTotal > 0 ||
+    spaceSummaryTotal > 0 ||
+    telemetry.physicalWidth > 1 ||
+    primitives.has("fan_out") ||
+    primitives.has("re_expand");
+  const orchestrationStage =
+    telemetry.pipelineStage ??
+    (telemetry.phase === "finalizing"
+      ? "assembling"
+      : readingInParallel
+        ? "reading"
+        : "direct");
+  const combinedReadingTotal = sourceSummaryTotal + spaceSummaryTotal;
+  const combinedReadingCompleted =
+    sourceSummaryCompleted + spaceSummaryCompleted;
+  const readingTotal = Math.max(
+    telemetry.readingTotal ?? 0,
+    combinedReadingTotal,
+  );
+  const readingCompleted = Math.min(
+    readingTotal,
+    Math.max(telemetry.readingCompleted ?? 0, combinedReadingCompleted),
+  );
+  const writingTotal = telemetry.writingTotal ?? telemetry.writeWidth;
+  const writingCompleted = telemetry.writingCompleted ?? 0;
+  const operationLabel =
+    orchestrationStage === "reading-plan"
+      ? "Orion is mapping what to look for"
+      : orchestrationStage === "reading"
+        ? "Orion is reading every part"
+        : orchestrationStage === "writing-plan"
+          ? "Orion is deciding what belongs together"
+          : orchestrationStage === "writing"
+            ? `Orion is preparing ${Math.max(writingTotal, 1)} connected ${writingTotal === 1 ? "note" : "notes"}`
+            : orchestrationStage === "assembling"
+              ? "Orion is connecting and checking the notes"
+              : primitives.has("validate")
+                ? "Checking sources and links"
+                : primitives.has("re_evaluate")
+                  ? "Revisiting a finding"
+                  : "Orion is shaping your notes";
+  const currentAccepted =
+    telemetry.activeAssignments +
+    telemetry.waitingAssignments +
+    telemetry.completedAssignments +
+    telemetry.failedAssignments;
+  const parallelSummaryParts = [
+    ...(sourceSummaryTotal > 0
+      ? [`${sourceSummaryCompleted} of ${sourceSummaryTotal} section summaries ready`]
+      : []),
+    ...(spaceSummaryTotal > 0
+      ? [`${spaceSummaryCompleted} of ${spaceSummaryTotal} Space readings ready`]
+      : []),
+  ];
+  const synthesisSummaryLabel =
+    sourceSummaryTotal > 0
+      ? `${sourceSummaryCompleted} ${sourceSummaryCompleted === 1 ? "section summary" : "section summaries"} ready`
+      : spaceSummaryTotal > 0
+        ? `${spaceSummaryCompleted} ${spaceSummaryCompleted === 1 ? "Space reading" : "Space readings"} ready`
+        : `${telemetry.completedAssignments} ${telemetry.completedAssignments === 1 ? "reading" : "readings"} ready`;
+  const detailLabel =
+    orchestrationStage === "reading-plan"
+      ? "Using this Space to guide the reading"
+      : orchestrationStage === "reading"
+        ? readingTotal > 0
+          ? `${Math.min(readingCompleted, readingTotal)} of ${readingTotal} readings ready`
+          : `${parallelSummaryParts.length > 0 ? `${parallelSummaryParts.join(" · ")} · ` : ""}${telemetry.physicalWidth} ${telemetry.physicalWidth === 1 ? "reading" : "readings"} active`
+        : orchestrationStage === "writing-plan"
+          ? `${synthesisSummaryLabel} · planning what is relevant and new`
+          : orchestrationStage === "writing"
+            ? `${Math.min(writingCompleted, writingTotal)} of ${Math.max(writingTotal, 1)} ready`
+            : orchestrationStage === "assembling"
+              ? "Checking sources, links, and repeated material"
+              : telemetry.completedAssignments > 0
+                ? `${telemetry.completedAssignments} of ${Math.max(currentAccepted, telemetry.completedAssignments)} readings ready`
+                : telemetry.physicalWidth > 0
+                  ? "Reading the source in one pass"
+                  : "Preparing the direct reading";
+  return {
+    sourceIndex: 0,
+    sourceTotal,
+    sourceTitle,
+    phase: "orchestration",
+    completedSections: telemetry.completedAssignments,
+    sectionTotal: currentAccepted,
+    operationLabel,
+    detailLabel,
+    orchestrationStage,
+  };
+}
+
+export function orchestrationEyebrow(
+  stage: OrganizeProgress["orchestrationStage"],
+) {
+  switch (stage) {
+    case "reading-plan":
+      return "Preparing the reading";
+    case "reading":
+      return "Reading in parallel";
+    case "writing-plan":
+      return "Planning the notes";
+    case "writing":
+      return "Writing in parallel";
+    case "assembling":
+      return "Final checks";
+    default:
+      return "Organizing";
+  }
+}
+
+export function orchestrationReassurance(
+  stage: OrganizeProgress["orchestrationStage"],
+  hasSpaceOrientation = true,
+) {
+  switch (stage) {
+    case "reading-plan":
+      return hasSpaceOrientation
+        ? "Across this Space is guiding what Orion looks for."
+        : "Orion is preparing the source reading.";
+    case "reading":
+      return "Every planned part is read before note writing begins.";
+    case "writing-plan":
+      return "The completed readings become one coherent note plan.";
+    case "writing":
+      return "Connected notes are prepared together from the shared plan.";
+    case "assembling":
+      return "The final pass checks connections, sources, and repeated material.";
+    default:
+      return "Short imports skip unnecessary parallel reading.";
+  }
 }
 
 interface GeneratedNoteContext {
@@ -129,6 +335,7 @@ export interface ImportStudioApplyPayload {
   sources: Source[];
   concepts: Concept[];
   relationships: Relationship[];
+  baseSnapshotVersion?: string;
 }
 
 export interface ImportStudioProps {
@@ -155,8 +362,133 @@ function errorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
   }
+  if (typeof error === "string" && error.trim()) {
+    return error.trim();
+  }
 
   return "Orion could not read this source.";
+}
+
+function reportKnowledgeImportDiagnostic(
+  context: string,
+  diagnostic: unknown,
+) {
+  console.warn(`[Orion import] ${context}`, diagnostic);
+}
+
+function isKnowledgeImportRunError(error: unknown): error is KnowledgeImportRunError {
+  return (
+    error instanceof KnowledgeImportRunError ||
+    (error instanceof Error &&
+      error.name === "KnowledgeImportRunError" &&
+      "diagnostic" in error &&
+      typeof error.diagnostic === "object" &&
+      error.diagnostic !== null)
+  );
+}
+
+function waitForAutoResumeBackoff(
+  delayMs: number,
+  signal: AbortSignal,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve(false);
+      return;
+    }
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      resolve(false);
+    };
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, delayMs);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function diagnosticStageLabel(
+  stage: KnowledgeImportDiagnostic["stage"],
+): string {
+  switch (stage) {
+    case "reading-plan":
+      return "Preparing the reading";
+    case "reading":
+      return "Reading source material";
+    case "writing-plan":
+      return "Planning the notes";
+    case "writing":
+      return "Writing the notes";
+    case "assembling":
+      return "Final checks";
+    default:
+      return "Direct import";
+  }
+}
+
+function diagnosticProgressText(
+  diagnostic: KnowledgeImportDiagnostic,
+): string {
+  if (diagnostic.stage === "reading" && diagnostic.totalReadings > 0) {
+    return `${diagnostic.completedReadings} of ${diagnostic.totalReadings} completed readings retained`;
+  }
+  if (
+    (diagnostic.stage === "writing" || diagnostic.stage === "assembling") &&
+    diagnostic.totalWrites > 0
+  ) {
+    return `${diagnostic.completedWrites} of ${diagnostic.totalWrites} completed notes retained`;
+  }
+  if (diagnostic.stage === "writing-plan" && diagnostic.completedReadings > 0) {
+    return `${diagnostic.completedReadings} completed readings retained`;
+  }
+  return diagnostic.resumable
+    ? "Completed work is retained for Resume"
+    : "A fresh retry will start from the source";
+}
+
+export function knowledgeImportFailureMessage(
+  error: unknown,
+  stage: UserFacingImportStage,
+): string {
+  const diagnostic = errorMessage(error);
+  if (/This Space changed while Orion was reading/i.test(diagnostic)) {
+    return "This Space changed while Orion was reading, so these notes were not applied.";
+  }
+
+  switch (stage) {
+    case "reading-plan":
+      return "Orion could not finish preparing the reading.";
+    case "reading":
+      return "Orion could not finish reading every part of this import.";
+    case "writing-plan":
+      return "Orion finished the reading but could not complete the note plan.";
+    case "writing":
+      return "Orion finished the reading but could not complete every planned note.";
+    case "assembling":
+      return "Orion prepared the notes but could not finish the final checks.";
+    default:
+      return "Orion could not finish shaping these notes.";
+  }
+}
+
+function userFacingKnowledgeWarning(
+  warning: string,
+  stage: UserFacingImportStage,
+): string {
+  if (!INTERNAL_KNOWLEDGE_DIAGNOSTIC.test(warning)) return warning;
+
+  reportKnowledgeImportDiagnostic("A hidden pipeline warning was reported", warning);
+  if (stage === "reading-plan" || stage === "reading") {
+    return "Orion completed the import after narrowing part of the reading.";
+  }
+  if (stage === "writing-plan" || stage === "writing") {
+    return "Orion completed the import with a smaller set of connected notes.";
+  }
+  if (stage === "assembling") {
+    return "Orion completed the import after resolving a note consistency issue.";
+  }
+  return "Orion completed the import with a minor quality warning.";
 }
 
 function formatBytes(bytes: number): string {
@@ -446,6 +778,16 @@ export function buildImportPayload(
   const sourceIdByItemId = new Map<EntityId, EntityId>();
   const generatedContexts: GeneratedNoteContext[] = [];
   const wikiContextByTitle = new Map<string, GeneratedNoteContext>();
+  let newNoteCount = 0;
+
+  const reserveNewNote = () => {
+    if (newNoteCount >= MAX_TOTAL_GENERATED_NOTES) {
+      throw new Error(
+        `Orion prepared more than ${MAX_TOTAL_GENERATED_NOTES} new notes. Narrow this import or split it into smaller batches.`,
+      );
+    }
+    newNoteCount += 1;
+  };
 
   const resolveExistingWikiArticle = (title: string) => {
     const key = normalize(title);
@@ -472,102 +814,13 @@ export function buildImportPayload(
     return exact.length === 1 ? exact[0] : undefined;
   };
 
-  for (const { item, result } of organizedSources) {
+  for (const { item } of organizedSources) {
     const parsed = item.parsed;
     if (!parsed) {
       continue;
     }
-
     const sourceId = `source_${nanoid(12)}`;
-    const organizedNotes =
-      result?.notes.length
-        ? result.notes.slice(0, MAX_NOTES_PER_SOURCE)
-        : [manualOrganizedNote(parsed)];
-    const sourceNoteIds: EntityId[] = [];
-
-    organizedNotes.forEach((organized) => {
-      if (generatedContexts.length >= MAX_TOTAL_GENERATED_NOTES) {
-        return;
-      }
-      const noteId = `note_${nanoid(12)}`;
-      sourceNoteIds.push(noteId);
-      generatedContexts.push({
-        contributions: [{ sourceId, organized }],
-        note: {
-          id: noteId,
-          title: organized.title.trim() || parsed.title,
-          slug: uniqueSlug(organized.title || parsed.title, reservedSlugs),
-          summary:
-            organized.summary.trim() || manualSummary(organized.body),
-          body: organized.body.trim(),
-          aliases: unique(organized.aliases).slice(0, 12),
-          tags: unique(organized.tags).slice(0, 10),
-          kind: "article",
-          status: "ready",
-          conceptIds: [],
-          sourceIds: [sourceId],
-          createdAt: now,
-          updatedAt: now,
-        },
-      });
-    });
-
-    for (const article of
-      result?.wikiArticles.slice(0, MAX_WIKI_ARTICLES_PER_SOURCE) ?? []) {
-      const title = article.title.trim();
-      const key = normalize(title);
-      if (!key) {
-        continue;
-      }
-      let context = wikiContextByTitle.get(key);
-      if (context) {
-        context.note = mergeWikiArticle(
-          context.note,
-          article,
-          sourceId,
-          snapshot.workspace.name,
-          now,
-        );
-        context.contributions.push({ sourceId, organized: article });
-      } else {
-        const existing = resolveExistingWikiArticle(title);
-        if (!existing && generatedContexts.length >= MAX_TOTAL_GENERATED_NOTES) {
-          continue;
-        }
-        const noteId = existing?.id ?? `note_${nanoid(12)}`;
-        const base: Note =
-          existing ?? {
-            id: noteId,
-            title,
-            slug: uniqueSlug(title, reservedSlugs),
-            summary: article.summary.trim(),
-            body: "",
-            aliases: [],
-            tags: [],
-            kind: "wiki",
-            status: "ready",
-            conceptIds: [],
-            sourceIds: [],
-            createdAt: now,
-            updatedAt: now,
-          };
-        context = {
-          note: mergeWikiArticle(
-            base,
-            article,
-            sourceId,
-            snapshot.workspace.name,
-            now,
-          ),
-          contributions: [{ sourceId, organized: article }],
-        };
-        generatedContexts.push(context);
-        wikiContextByTitle.set(key, context);
-      }
-      sourceNoteIds.push(context.note.id);
-    }
-
-    sources.push({
+    const source: Source = {
       id: sourceId,
       title: parsed.title,
       kind: parsed.format,
@@ -585,9 +838,160 @@ export function buildImportPayload(
           }
         : {}),
       text: parsed.text,
-      noteIds: unique(sourceNoteIds),
-    });
+      noteIds: [],
+    };
+    sources.push(source);
     sourceIdByItemId.set(item.id, sourceId);
+  }
+
+  const sourceIdsForOutput = (
+    organizedSource: OrganizedSource,
+    kind: KnowledgeResultProvenance["kind"],
+    title: string,
+  ): EntityId[] => {
+    const matchingProvenance = organizedSource.provenance?.filter(
+      (entry) =>
+        entry.kind === kind && normalize(entry.title) === normalize(title),
+    );
+    if (organizedSource.provenance !== undefined) {
+      if (matchingProvenance?.length !== 1) {
+        throw new Error(`Orion could not resolve source provenance for “${title}”.`);
+      }
+      if (matchingProvenance[0].sourceIds.length === 0) {
+        throw new Error(`Orion returned empty source provenance for “${title}”.`);
+      }
+      const resolved = matchingProvenance[0].sourceIds.map((itemId) => {
+        const sourceId = sourceIdByItemId.get(itemId);
+        if (!sourceId) {
+          throw new Error(
+            `Orion returned source provenance outside this import for “${title}”.`,
+          );
+        }
+        return sourceId;
+      });
+      return unique(resolved);
+    }
+    const ownSourceId = sourceIdByItemId.get(organizedSource.item.id);
+    return ownSourceId ? [ownSourceId] : [];
+  };
+
+  const attachNoteToSources = (
+    noteId: EntityId,
+    sourceIds: readonly EntityId[],
+  ) => {
+    for (const source of sources) {
+      if (sourceIds.includes(source.id)) {
+        source.noteIds = unique([...source.noteIds, noteId]);
+      }
+    }
+  };
+
+  for (const organizedSource of organizedSources) {
+    const { item, result } = organizedSource;
+    const parsed = item.parsed;
+    if (!parsed) continue;
+    const fallbackSourceId = sourceIdByItemId.get(item.id);
+    if (!fallbackSourceId) continue;
+    const organizedNotes = result
+      ? organizedSource.provenance !== undefined
+        ? result.notes
+        : result.notes.slice(0, MAX_NOTES_PER_SOURCE)
+      : [manualOrganizedNote(parsed)];
+
+    organizedNotes.forEach((organized) => {
+      reserveNewNote();
+      const sourceIds = result
+        ? sourceIdsForOutput(organizedSource, "note", organized.title)
+        : [fallbackSourceId];
+      const noteId = `note_${nanoid(12)}`;
+      attachNoteToSources(noteId, sourceIds);
+      generatedContexts.push({
+        contributions: sourceIds.map((sourceId) => ({ sourceId, organized })),
+        note: {
+          id: noteId,
+          title: organized.title.trim() || parsed.title,
+          slug: uniqueSlug(organized.title || parsed.title, reservedSlugs),
+          summary:
+            organized.summary.trim() || manualSummary(organized.body),
+          body: organized.body.trim(),
+          aliases: unique(organized.aliases).slice(0, 12),
+          tags: unique(organized.tags).slice(0, 10),
+          kind: "article",
+          status: "ready",
+          conceptIds: [],
+          sourceIds,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+    });
+
+    const organizedArticles = result
+      ? organizedSource.provenance !== undefined
+        ? result.wikiArticles
+        : result.wikiArticles.slice(0, MAX_WIKI_ARTICLES_PER_SOURCE)
+      : [];
+    for (const article of organizedArticles) {
+      const title = article.title.trim();
+      const key = normalize(title);
+      if (!key) {
+        continue;
+      }
+      let context = wikiContextByTitle.get(key);
+      const sourceIds = sourceIdsForOutput(
+        organizedSource,
+        "wikiArticle",
+        article.title,
+      );
+      if (context) {
+        for (const sourceId of sourceIds) {
+          context.note = mergeWikiArticle(
+            context.note,
+            article,
+            sourceId,
+            snapshot.workspace.name,
+            now,
+          );
+          context.contributions.push({ sourceId, organized: article });
+        }
+      } else {
+        const existing = resolveExistingWikiArticle(title);
+        if (!existing) reserveNewNote();
+        const noteId = existing?.id ?? `note_${nanoid(12)}`;
+        const base: Note =
+          existing ?? {
+            id: noteId,
+            title,
+            slug: uniqueSlug(title, reservedSlugs),
+            summary: article.summary.trim(),
+            body: "",
+            aliases: [],
+            tags: [],
+            kind: "wiki",
+            status: "ready",
+            conceptIds: [],
+            sourceIds: [],
+            createdAt: now,
+            updatedAt: now,
+          };
+        let note = base;
+        const contributions: GeneratedNoteContext["contributions"] = [];
+        for (const sourceId of sourceIds) {
+          note = mergeWikiArticle(
+            note,
+            article,
+            sourceId,
+            snapshot.workspace.name,
+            now,
+          );
+          contributions.push({ sourceId, organized: article });
+        }
+        context = { note, contributions };
+        generatedContexts.push(context);
+        wikiContextByTitle.set(key, context);
+      }
+      attachNoteToSources(context.note.id, sourceIds);
+    }
   }
 
   const allNotesById = new Map(snapshot.notes.map((note) => [note.id, note]));
@@ -761,6 +1165,14 @@ export function ImportStudio({
   const pasteBodyRef = useRef<HTMLTextAreaElement>(null);
   const fileChoiceDialogRef = useRef<HTMLDivElement>(null);
   const itemsRef = useRef<ImportItem[]>([]);
+  const snapshotRef = useRef(snapshot);
+  snapshotRef.current = snapshot;
+  const organizeAbortRef = useRef<AbortController | null>(null);
+  const autoResumeAttemptRef = useRef(0);
+  const importCheckpointBatchIndexRef = useRef(0);
+  const organizeProgressFrameRef = useRef<number | null>(null);
+  const pendingOrganizeProgressRef = useRef<OrganizeProgress | null>(null);
+  const latestOrchestrationStageRef = useRef<UserFacingImportStage>("direct");
   const workspaceIdRef = useRef(snapshot.workspace.id);
   const [stage, setStage] = useState<ImportStage>("add");
   const [items, setItems] = useState<ImportItem[]>([]);
@@ -775,22 +1187,59 @@ export function ImportStudio({
     aiConfigured ? "ai" : "manual",
   );
   const [importGuidance, setImportGuidance] = useState("");
-  const [progressIndex, setProgressIndex] = useState(0);
-  const [progressLabel, setProgressLabel] = useState("");
+  const [organizeProgress, setOrganizeProgress] = useState<OrganizeProgress>(
+    EMPTY_ORGANIZE_PROGRESS,
+  );
   const [organizeIssues, setOrganizeIssues] = useState<OrganizeIssue[]>([]);
+  const [importDiagnostic, setImportDiagnostic] =
+    useState<KnowledgeImportDiagnostic | null>(null);
+  const [importCheckpoint, setImportCheckpoint] =
+    useState<FixedBlueprintImportCheckpoint | null>(null);
   const [result, setResult] = useState<ImportStudioApplyPayload | null>(null);
+  const [resultBaseSnapshotVersion, setResultBaseSnapshotVersion] = useState<
+    string | null
+  >(null);
   const [applyError, setApplyError] = useState("");
   const [applying, setApplying] = useState(false);
+
+  const clearImportRecovery = () => {
+    setImportDiagnostic(null);
+    setImportCheckpoint(null);
+  };
 
   const updateItems = (
     updater: (current: ImportItem[]) => ImportItem[],
   ) => {
+    clearImportRecovery();
     const next = updater(itemsRef.current);
     itemsRef.current = next;
     setItems(next);
   };
 
+  const scheduleOrganizeProgress = (progress: OrganizeProgress) => {
+    pendingOrganizeProgressRef.current = progress;
+    if (organizeProgressFrameRef.current !== null) return;
+    organizeProgressFrameRef.current = window.requestAnimationFrame(() => {
+      organizeProgressFrameRef.current = null;
+      const pending = pendingOrganizeProgressRef.current;
+      pendingOrganizeProgressRef.current = null;
+      if (pending) setOrganizeProgress(pending);
+    });
+  };
+
   const reset = () => {
+    organizeAbortRef.current?.abort(
+      new Error("The knowledge import was cancelled."),
+    );
+    organizeAbortRef.current = null;
+    if (organizeProgressFrameRef.current !== null) {
+      window.cancelAnimationFrame(organizeProgressFrameRef.current);
+      organizeProgressFrameRef.current = null;
+    }
+    pendingOrganizeProgressRef.current = null;
+    latestOrchestrationStageRef.current = "direct";
+    autoResumeAttemptRef.current = 0;
+    importCheckpointBatchIndexRef.current = 0;
     setStage("add");
     itemsRef.current = [];
     setItems([]);
@@ -803,10 +1252,12 @@ export function ImportStudio({
     setUrlError("");
     setMode(aiConfigured ? "ai" : "manual");
     setImportGuidance("");
-    setProgressIndex(0);
-    setProgressLabel("");
+    setOrganizeProgress(EMPTY_ORGANIZE_PROGRESS);
     setOrganizeIssues([]);
+    setImportDiagnostic(null);
+    setImportCheckpoint(null);
     setResult(null);
+    setResultBaseSnapshotVersion(null);
     setApplyError("");
     setApplying(false);
   };
@@ -833,6 +1284,18 @@ export function ImportStudio({
     workspaceIdRef.current = snapshot.workspace.id;
     reset();
   }, [snapshot.workspace.id]);
+
+  useEffect(
+    () => () => {
+      organizeAbortRef.current?.abort(
+        new Error("The knowledge import was cancelled."),
+      );
+      if (organizeProgressFrameRef.current !== null) {
+        window.cancelAnimationFrame(organizeProgressFrameRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!open || (!pasteOpen && !fileChoiceOpen)) return undefined;
@@ -946,18 +1409,20 @@ export function ImportStudio({
         try {
           const [parsed] = await parseImportFiles(
             [file],
-            async (document) => {
+            async (document, options) => {
               updateItems((current) =>
                 current.map((currentItem) =>
                   currentItem.id === item.id
                     ? {
                         ...currentItem,
-                        preprocessLabel: "Recognizing text locally…",
+                        preprocessLabel: options?.pageNumbers?.length
+                          ? `Repairing ${options.pageNumbers.length.toLocaleString("en-US")} PDF ${options.pageNumbers.length === 1 ? "page" : "pages"} locally…`
+                          : "Recognizing text locally…",
                       }
                     : currentItem,
                 ),
               );
-              return recognizeDocumentText(document);
+              return recognizeDocumentText(document, options);
             },
           );
           updateItems((current) =>
@@ -1234,17 +1699,29 @@ export function ImportStudio({
     );
   };
 
-  const organize = async () => {
+  const organize = async (
+    resumeCheckpoint?: FixedBlueprintImportCheckpoint,
+  ) => {
     const selected = readyItems;
     if (selected.length === 0) {
       return;
     }
 
+    const importSnapshot = snapshotRef.current;
     const effectiveMode: ImportMode =
       mode === "ai" && aiConfigured ? "ai" : "manual";
     setStage("organizing");
-    setProgressIndex(0);
+    setOrganizeProgress({
+      ...EMPTY_ORGANIZE_PROGRESS,
+      sourceTotal: selected.length,
+    });
     setOrganizeIssues([]);
+    setImportDiagnostic(null);
+    if (!resumeCheckpoint) {
+      setImportCheckpoint(null);
+      autoResumeAttemptRef.current = 0;
+      importCheckpointBatchIndexRef.current = 0;
+    }
     setApplyError("");
     await new Promise<void>((resolve) => {
       window.setTimeout(resolve, 0);
@@ -1252,26 +1729,346 @@ export function ImportStudio({
 
     const organizedSources: OrganizedSource[] = [];
     const issues: OrganizeIssue[] = [];
-    const existingNotes: ExistingNoteContext[] | undefined =
-      snapshot.settings.includeExistingNotesInAIContext
-      ? [...snapshot.notes]
-          .sort(
-            (left, right) =>
-              Number(right.kind === "wiki") -
-              Number(left.kind === "wiki"),
-          )
-          .slice(0, 80)
-          .map((note) => ({
-            id: note.id,
-            title: note.title,
-            aliases: [...note.aliases],
-            summary: note.summary,
-            reference: note.kind === "wiki",
-            ...(note.kind === "wiki"
-              ? { body: note.body.slice(0, 6_000) }
-              : {}),
-          }))
-      : undefined;
+    const baseTaskInstructions =
+      buildImportOrganizationInstructions(importGuidance);
+    let existingNotes = buildCompactOrganizerContext(importSnapshot, {
+      matchText: [
+        importGuidance,
+        ...selected.flatMap((item) =>
+          item.parsed
+            ? [item.parsed.title, item.parsed.text]
+            : [item.fileName],
+        ),
+      ].join("\n"),
+    });
+
+    if (effectiveMode === "ai" && isTauriRuntime()) {
+      const controller = new AbortController();
+      organizeAbortRef.current?.abort(
+        new Error("A newer knowledge import replaced this run."),
+      );
+      organizeAbortRef.current = controller;
+      latestOrchestrationStageRef.current = "direct";
+      setOrganizeProgress({
+        ...EMPTY_ORGANIZE_PROGRESS,
+        sourceTotal: selected.length,
+        sourceTitle:
+          selected.length === 1
+            ? selected[0].parsed?.title ?? selected[0].fileName
+            : `${selected.length} sources`,
+        phase: "orchestration",
+        operationLabel: "Orion is shaping your notes",
+        detailLabel: "Preparing the direct reading",
+        orchestrationStage: "direct",
+      });
+      // One oversized selection becomes several bounded knowledge runs.
+      // Partitioning is deterministic and order-preserving; a source too
+      // large for any batch stays alone so the run explains it directly.
+      const batches = partitionImportSourcesForSynthesis(
+        selected,
+        (item) => item.parsed?.text ?? "",
+      );
+      const batchProgressTitle = (
+        batchItems: readonly ImportItem[],
+        batchIndex: number,
+      ) => {
+        const base =
+          batchItems.length === 1
+            ? batchItems[0].parsed?.title ?? batchItems[0].fileName
+            : `${batchItems.length} sources`;
+        return batches.length > 1
+          ? `${base} · batch ${batchIndex + 1} of ${batches.length}`
+          : base;
+      };
+      const knowledgeSourcesFor = (batchItems: readonly ImportItem[]) =>
+        batchItems.flatMap((item) =>
+          item.parsed ? [{ sourceId: item.id, parsed: item.parsed }] : [],
+        );
+      const emptyResult: OrganizeContentResult = {
+        notes: [],
+        wikiArticles: [],
+        concepts: [],
+        suggestedConnections: [],
+      };
+      const presentKnowledgeResults = (
+        segments: ReadonlyArray<{
+          items: readonly ImportItem[];
+          knowledge: KnowledgeImportBatchResult;
+        }>,
+      ) => {
+        const batchSources: OrganizedSource[] = segments.flatMap(
+          ({ items: segmentItems, knowledge }) =>
+            segmentItems.map((item, index) => ({
+              item,
+              result: index === 0 ? knowledge.organized : emptyResult,
+              ...(index === 0 ? { provenance: knowledge.provenance } : {}),
+            })),
+        );
+        const payload = buildImportPayload(
+          batchSources,
+          importSnapshot,
+          importGuidance,
+        );
+        const baseSnapshotVersion = segments[0].knowledge.baseSnapshotVersion;
+        setOrganizeIssues(
+          unique(
+            segments.flatMap(({ knowledge }) =>
+              knowledge.warnings.map((message) =>
+                userFacingKnowledgeWarning(
+                  message,
+                  latestOrchestrationStageRef.current,
+                ),
+              ),
+            ),
+          ).map((message) => ({
+            itemId: selected[0].id,
+            fileName: selected[0].fileName,
+            message,
+            usedManualFallback: false,
+          })),
+        );
+        setResult({
+          ...payload,
+          baseSnapshotVersion,
+        });
+        setResultBaseSnapshotVersion(baseSnapshotVersion);
+        clearImportRecovery();
+        setStage("results");
+      };
+      const completedSegments: Array<{
+        items: readonly ImportItem[];
+        knowledge: KnowledgeImportBatchResult;
+      }> = [];
+      let activeBatchIndex = 0;
+      try {
+        const preflight = await preflightKnowledgeProvider(
+          importSnapshot.settings.model,
+        );
+        if (!preflight.ok) {
+          throw new Error(preflight.message);
+        }
+        const driver = createFailoverKnowledgeDriver(importSnapshot.settings);
+        const resumeBatchIndex = resumeCheckpoint
+          ? Math.min(importCheckpointBatchIndexRef.current, batches.length - 1)
+          : 0;
+        for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+          activeBatchIndex = batchIndex;
+          const batchItems = batches[batchIndex];
+          const batchSources = knowledgeSourcesFor(batchItems);
+          const batchTitle = batchProgressTitle(batchItems, batchIndex);
+          let checkpoint =
+            batchIndex === resumeBatchIndex ? resumeCheckpoint : undefined;
+          latestOrchestrationStageRef.current = "direct";
+          scheduleOrganizeProgress({
+            ...EMPTY_ORGANIZE_PROGRESS,
+            sourceTotal: batchItems.length,
+            sourceTitle: batchTitle,
+            phase: "orchestration",
+            operationLabel: "Orion is shaping your notes",
+            detailLabel: "Preparing the direct reading",
+            orchestrationStage: "direct",
+          });
+          for (;;) {
+            try {
+              const knowledge = await runKnowledgeImportBatch({
+                snapshot: importSnapshot,
+                sources: batchSources,
+                importGuidance,
+                model: importSnapshot.settings.model,
+                effort: importSnapshot.settings.reasoningEffort,
+                driver,
+                readingCache: createKnowledgeReadingCache(),
+                routingCache: createKnowledgeReadingCache(),
+                signal: controller.signal,
+                onTelemetry: (telemetry) => {
+                  if (organizeAbortRef.current !== controller) return;
+                  const progress = progressFromKnowledgeTelemetry(
+                    telemetry,
+                    batchItems.length,
+                    batchTitle,
+                  );
+                  latestOrchestrationStageRef.current =
+                    progress.orchestrationStage ?? "direct";
+                  scheduleOrganizeProgress(progress);
+                },
+                resume: checkpoint,
+              });
+              if (
+                !snapshotStillMatchesImportBase(
+                  snapshotRef.current,
+                  knowledge.baseSnapshotVersion,
+                )
+              ) {
+                throw new Error(
+                  "This Space changed while Orion was reading, so the knowledge run was not applied.",
+                );
+              }
+              completedSegments.push({ items: batchItems, knowledge });
+              break;
+            } catch (error) {
+              if (controller.signal.aborted) {
+                throw error;
+              }
+              const runError = isKnowledgeImportRunError(error)
+                ? error
+                : createKnowledgeImportRunError(
+                    error,
+                    `import:${Date.now().toString(36)}`,
+                    importSnapshot.settings.model,
+                    undefined,
+                    latestOrchestrationStageRef.current,
+                  );
+              reportKnowledgeImportDiagnostic(
+                `Run ${runError.diagnostic.runId} paused during ${runError.diagnostic.stage}`,
+                runError.originalError,
+              );
+              if (
+                runError.diagnostic.resumable &&
+                runError.checkpoint &&
+                shouldAutoResume(
+                  runError.diagnostic.code,
+                  autoResumeAttemptRef.current,
+                )
+              ) {
+                const attempt = autoResumeAttemptRef.current;
+                autoResumeAttemptRef.current = attempt + 1;
+                scheduleOrganizeProgress({
+                  ...EMPTY_ORGANIZE_PROGRESS,
+                  sourceTotal: batchItems.length,
+                  sourceTitle: batchTitle,
+                  phase: "orchestration",
+                  operationLabel: "Orion is recovering this import",
+                  detailLabel: "Resuming from the saved progress in a moment",
+                  orchestrationStage: latestOrchestrationStageRef.current,
+                });
+                const waited = await waitForAutoResumeBackoff(
+                  autoResumeBackoffMs(attempt),
+                  controller.signal,
+                );
+                if (!waited || controller.signal.aborted) {
+                  throw error;
+                }
+                checkpoint = runError.checkpoint;
+                continue;
+              }
+              // Auto-resume is exhausted or ineligible: land this batch
+              // instead of pausing. Cancellation and a changed Space never
+              // land, and a Space that changed mid-run falls through to the
+              // ordinary paused card.
+              const landed = landFailedKnowledgeImport(
+                runError,
+                batchSources,
+                importSnapshot,
+              );
+              if (
+                landed &&
+                snapshotStillMatchesImportBase(
+                  snapshotRef.current,
+                  landed.baseSnapshotVersion,
+                )
+              ) {
+                reportKnowledgeImportDiagnostic(
+                  `Run ${landed.runId} landed at tier ${landed.landing?.tier ?? 2}`,
+                  runError.originalError,
+                );
+                completedSegments.push({
+                  items: batchItems,
+                  knowledge: landed,
+                });
+                break;
+              }
+              throw runError;
+            }
+          }
+        }
+        activeBatchIndex = batches.length;
+        presentKnowledgeResults(completedSegments);
+        return;
+      } catch (error) {
+        if (controller.signal.aborted) {
+          setStage("review");
+          setOrganizeIssues([]);
+          return;
+        }
+        const alreadyReported = isKnowledgeImportRunError(error);
+        const runError = alreadyReported
+          ? error
+          : createKnowledgeImportRunError(
+              error,
+              `import:${Date.now().toString(36)}`,
+              importSnapshot.settings.model,
+              undefined,
+              latestOrchestrationStageRef.current,
+            );
+        if (!alreadyReported) {
+          reportKnowledgeImportDiagnostic(
+            `Run ${runError.diagnostic.runId} paused during ${runError.diagnostic.stage}`,
+            runError.originalError,
+          );
+        }
+        // A failure before any provider work — the preflight — still lands:
+        // every batch that has not completed lands together while completed
+        // batches keep their real results. After the last batch there is
+        // nothing left to land, so an assembly failure pauses visibly below.
+        const remainingItems = batches.slice(activeBatchIndex).flat();
+        if (remainingItems.length > 0) {
+          const landed = landFailedKnowledgeImport(
+            runError,
+            knowledgeSourcesFor(remainingItems),
+            importSnapshot,
+          );
+          if (
+            landed &&
+            snapshotStillMatchesImportBase(
+              snapshotRef.current,
+              landed.baseSnapshotVersion,
+            )
+          ) {
+            reportKnowledgeImportDiagnostic(
+              `Run ${landed.runId} landed at tier ${landed.landing?.tier ?? 2}`,
+              runError.originalError,
+            );
+            try {
+              presentKnowledgeResults([
+                ...completedSegments,
+                { items: remainingItems, knowledge: landed },
+              ]);
+              return;
+            } catch (landedPresentError) {
+              reportKnowledgeImportDiagnostic(
+                "The landed batch results could not be combined",
+                landedPresentError,
+              );
+            }
+          }
+        }
+        const baseSnapshotVersion = stableSnapshotVersion(importSnapshot);
+        const payload = buildImportPayload(
+          selected.map((item) => ({ item })),
+          importSnapshot,
+          importGuidance,
+        );
+        importCheckpointBatchIndexRef.current = activeBatchIndex;
+        setImportDiagnostic(runError.diagnostic);
+        setImportCheckpoint(runError.checkpoint ?? null);
+        setOrganizeIssues(
+          selected.map((item) => ({
+            itemId: item.id,
+            fileName: item.fileName,
+            message: runError.diagnostic.summary,
+            usedManualFallback: true,
+          })),
+        );
+        setResult({ ...payload, baseSnapshotVersion });
+        setResultBaseSnapshotVersion(baseSnapshotVersion);
+        setStage("results");
+        return;
+      } finally {
+        if (organizeAbortRef.current === controller) {
+          organizeAbortRef.current = null;
+        }
+      }
+    }
 
     for (let index = 0; index < selected.length; index += 1) {
       const item = selected[index];
@@ -1280,8 +2077,14 @@ export function ImportStudio({
         continue;
       }
 
-      setProgressIndex(index);
-      setProgressLabel(parsed.title);
+      setOrganizeProgress({
+        sourceIndex: index,
+        sourceTotal: selected.length,
+        sourceTitle: parsed.title,
+        phase: "source",
+        completedSections: 0,
+        sectionTotal: 0,
+      });
 
       if (effectiveMode === "manual") {
         organizedSources.push({ item });
@@ -1289,60 +2092,130 @@ export function ImportStudio({
       }
 
       try {
-        const content = parsed.text.slice(0, MAX_AI_CHARS_PER_SOURCE);
-        const organized = await organizeWithAI({
-          content,
-          sourceName: parsed.fileName,
-          spaceName: snapshot.workspace.name,
-          spaceDescription: snapshot.workspace.description,
-          existingNotes,
-          model: snapshot.settings.model,
-          effort: snapshot.settings.reasoningEffort,
-          taskInstructions:
-            buildImportOrganizationInstructions(importGuidance),
-          organizationInstructions:
-            snapshot.settings.organizationInstructions,
-        });
+        const sections = splitDocumentForParallelReading(parsed.text);
+        let organized: OrganizeContentResult;
+        if (sections.length > 1) {
+          setOrganizeProgress({
+            sourceIndex: index,
+            sourceTotal: selected.length,
+            sourceTitle: parsed.title,
+            phase: "sections",
+            completedSections: 0,
+            sectionTotal: sections.length,
+          });
+          const sectionOutcomes = await mapLongDocumentSections(
+            sections,
+            async (section) => {
+              const sectionResult = await organizeWithAI({
+                content: section.content,
+                sourceName: `${parsed.fileName} · section ${section.index + 1} of ${section.total}`,
+                spaceName: importSnapshot.workspace.name,
+                spaceDescription: importSnapshot.workspace.description,
+                model: importSnapshot.settings.model,
+                effort: importSnapshot.settings.reasoningEffort,
+                taskInstructions: longDocumentSectionInstructions(
+                  parsed.title,
+                  section,
+                  baseTaskInstructions,
+                ),
+                organizationInstructions:
+                  importSnapshot.settings.organizationInstructions,
+              });
+              if (sectionResult.notes.length === 0) {
+                throw new Error(
+                  `Section ${section.index + 1} returned no reading notes.`,
+                );
+              }
+              return sectionResult;
+            },
+            (completed, total) => {
+              setOrganizeProgress({
+                sourceIndex: index,
+                sourceTotal: selected.length,
+                sourceTitle: parsed.title,
+                phase: "sections",
+                completedSections: completed,
+                sectionTotal: total,
+              });
+            },
+          );
+          const successfulSections = sectionOutcomes.filter(
+            ({ value }) => Boolean(value),
+          ).length;
+          if (successfulSections === 0) {
+            const firstFailure = sectionOutcomes.find(({ error }) => error)?.error;
+            throw new Error(
+              `Orion could not read any section of this long document. ${errorMessage(firstFailure)}`,
+            );
+          }
+          const synthesis = buildLongDocumentSynthesis(
+            parsed.title,
+            sectionOutcomes,
+          );
+          setOrganizeProgress({
+            sourceIndex: index,
+            sourceTotal: selected.length,
+            sourceTitle: parsed.title,
+            phase: "synthesis",
+            completedSections: successfulSections,
+            sectionTotal: sections.length,
+          });
+          organized = await organizeWithAI({
+            content: synthesis,
+            sourceName: parsed.fileName,
+            spaceName: importSnapshot.workspace.name,
+            spaceDescription: importSnapshot.workspace.description,
+            existingNotes: relevantExistingNotesForSynthesis(
+              existingNotes,
+              synthesis,
+            ),
+            model: importSnapshot.settings.model,
+            effort: importSnapshot.settings.reasoningEffort,
+            taskInstructions: longDocumentSynthesisInstructions(
+              parsed.title,
+              successfulSections,
+              sections.length,
+              baseTaskInstructions,
+            ),
+            organizationInstructions:
+              importSnapshot.settings.organizationInstructions,
+          });
+          for (const outcome of sectionOutcomes) {
+            if (!outcome.error) continue;
+            issues.push({
+              itemId: item.id,
+              fileName: item.fileName,
+              message: `Section ${outcome.section.index + 1} of ${sections.length} could not be read (${errorMessage(outcome.error)}). Orion synthesized the remaining ${successfulSections} sections.`,
+              usedManualFallback: false,
+            });
+          }
+        } else {
+          const content = parsed.text.slice(0, MAX_AI_CHARS_PER_SOURCE);
+          organized = await organizeWithAI({
+            content,
+            sourceName: parsed.fileName,
+            spaceName: importSnapshot.workspace.name,
+            spaceDescription: importSnapshot.workspace.description,
+            existingNotes,
+            model: importSnapshot.settings.model,
+            effort: importSnapshot.settings.reasoningEffort,
+            taskInstructions: baseTaskInstructions,
+            organizationInstructions:
+              importSnapshot.settings.organizationInstructions,
+          });
+        }
         if (organized.notes.length === 0) {
           throw new Error("The organizer did not return any notes.");
         }
         organizedSources.push({ item, result: organized });
-        if (existingNotes) {
-          for (const article of organized.wikiArticles) {
-            const key = normalize(article.title);
-            const revisedBody =
-              article.body.trim() ||
-              wikiArticleBody(article, snapshot.workspace.name);
-            const existingIndex = existingNotes.findIndex(
-              (note) =>
-                normalize(note.title) === key ||
-                note.aliases.some((alias) => normalize(alias) === key),
-            );
-            if (existingIndex >= 0) {
-              existingNotes[existingIndex] = {
-                ...existingNotes[existingIndex],
-                summary:
-                  article.summary.trim() ||
-                  existingNotes[existingIndex].summary,
-                reference: true,
-                body: revisedBody,
-              };
-            } else {
-              if (existingNotes.length >= 80) {
-                existingNotes.pop();
-              }
-              existingNotes.push({
-                id: `pending-wiki:${key}`,
-                title: article.title.trim(),
-                aliases: [...article.aliases],
-                summary: article.summary.trim(),
-                reference: true,
-                body: revisedBody,
-              });
-            }
-          }
-        }
-        if (parsed.text.length > MAX_AI_CHARS_PER_SOURCE) {
+        existingNotes = mergeGeneratedOrganizerArticles(
+          existingNotes,
+          organized.wikiArticles,
+        );
+        if (
+          sections.length <= 1 &&
+          parsed.text.length > MAX_AI_CHARS_PER_SOURCE
+        ) {
           issues.push({
             itemId: item.id,
             fileName: item.fileName,
@@ -1362,15 +2235,23 @@ export function ImportStudio({
       }
     }
 
-    setProgressIndex(selected.length);
-    setProgressLabel("Connecting your notes");
+    setOrganizeProgress({
+      sourceIndex: selected.length,
+      sourceTotal: selected.length,
+      sourceTitle: "Connecting your notes",
+      phase: "synthesis",
+      completedSections: 0,
+      sectionTotal: 0,
+    });
     const payload = buildImportPayload(
       organizedSources,
-      snapshot,
+      importSnapshot,
       effectiveMode === "ai" ? importGuidance : "",
     );
     setOrganizeIssues(issues);
-    setResult(payload);
+    const baseSnapshotVersion = stableSnapshotVersion(importSnapshot);
+    setResult({ ...payload, baseSnapshotVersion });
+    setResultBaseSnapshotVersion(baseSnapshotVersion);
     setStage("results");
   };
 
@@ -1382,7 +2263,16 @@ export function ImportStudio({
     setApplying(true);
     setApplyError("");
     try {
+      if (
+        resultBaseSnapshotVersion &&
+        stableSnapshotVersion(snapshotRef.current) !== resultBaseSnapshotVersion
+      ) {
+        throw new Error(
+          "This Space changed after Orion finished reading. Return to Review so Orion can use the current notes safely.",
+        );
+      }
       await onApply({
+        baseSnapshotVersion: result.baseSnapshotVersion,
         notes: result.notes.map((note) => ({
           ...note,
           aliases: [...note.aliases],
@@ -1445,10 +2335,31 @@ export function ImportStudio({
   }
 
   const canClose = stage !== "organizing" && !applying;
+  const sourceProgress =
+    organizeProgress.sourceIndex >= organizeProgress.sourceTotal
+      ? 1
+      : organizeProgress.phase === "sections" &&
+          organizeProgress.sectionTotal > 0
+        ? (organizeProgress.completedSections /
+            organizeProgress.sectionTotal) *
+          0.82
+        : organizeProgress.phase === "synthesis"
+          ? 0.9
+          : 0.08;
   const progressPercent =
-    readyItems.length > 0
-      ? Math.round((progressIndex / readyItems.length) * 100)
+    organizeProgress.sourceTotal > 0
+      ? organizeProgress.sourceIndex >= organizeProgress.sourceTotal
+        ? 100
+        : Math.round(
+            ((organizeProgress.sourceIndex + sourceProgress) /
+              organizeProgress.sourceTotal) *
+              100,
+          )
       : 0;
+  const manualFallbackCount = organizeIssues.reduce(
+    (count, { usedManualFallback }) => count + Number(usedManualFallback),
+    0,
+  );
 
   return (
     <div
@@ -1780,7 +2691,10 @@ export function ImportStudio({
                     )}
                     type="button"
                     disabled={!aiConfigured}
-                    onClick={() => setMode("ai")}
+                    onClick={() => {
+                      clearImportRecovery();
+                      setMode("ai");
+                    }}
                   >
                     <span className="import-studio__mode-icon" aria-hidden="true">
                       <Bot size={18} />
@@ -1799,7 +2713,10 @@ export function ImportStudio({
                       mode === "manual" && "import-studio__mode--selected",
                     )}
                     type="button"
-                    onClick={() => setMode("manual")}
+                    onClick={() => {
+                      clearImportRecovery();
+                      setMode("manual");
+                    }}
                   >
                     <span className="import-studio__mode-icon" aria-hidden="true">
                       <PenLine size={18} />
@@ -1839,9 +2756,10 @@ export function ImportStudio({
                           rows={4}
                           aria-label="Guide this import"
                           placeholder="For example: Focus on the central argument and its strongest criticisms. Preserve useful examples, connect it with ideas already in this Space, and keep any explicit next steps as to-dos."
-                          onChange={(event) =>
-                            setImportGuidance(event.target.value)
-                          }
+                          onChange={(event) => {
+                            clearImportRecovery();
+                            setImportGuidance(event.target.value);
+                          }}
                         />
                         <i>
                           Leave this blank and Orion will use its normal judgement.
@@ -1873,28 +2791,104 @@ export function ImportStudio({
                 <span className="import-studio__orbit import-studio__orbit--two" />
               </div>
               <span className="import-studio__eyebrow">
-                {mode === "ai" ? "Finding structure" : "Preparing local notes"}
+                {mode !== "ai"
+                  ? "Preparing local notes"
+                  : organizeProgress.phase === "orchestration"
+                    ? orchestrationEyebrow(
+                        organizeProgress.orchestrationStage,
+                      )
+                  : organizeProgress.phase === "sections"
+                    ? "Reading in parallel"
+                    : organizeProgress.phase === "synthesis"
+                      ? "Distilling the complete reading"
+                      : "Finding structure"}
               </span>
               <h3 id={`${titleId}-organizing`}>
-                {mode === "ai"
-                  ? "Orion is mapping your material"
-                  : "Orion is preparing your sources"}
+                {mode !== "ai"
+                  ? "Orion is preparing your sources"
+                  : organizeProgress.phase === "orchestration"
+                    ? organizeProgress.operationLabel ?? "Orion is shaping your notes"
+                  : organizeProgress.phase === "sections"
+                    ? "Orion is reading this document in parallel"
+                    : organizeProgress.phase === "synthesis"
+                      ? "Orion is shaping the complete reading"
+                      : "Orion is mapping your material"}
               </h3>
-              <p>
-                {progressLabel || "Reading source material"} ·{" "}
-                {Math.min(progressIndex + 1, readyItems.length)} of{" "}
-                {readyItems.length}
+              <p className="import-studio__progress-source">
+                <strong>
+                  {organizeProgress.sourceTitle || "Reading source material"}
+                </strong>
+                <span>
+                  {organizeProgress.phase === "orchestration" &&
+                  organizeProgress.sourceTotal > 1
+                    ? `${organizeProgress.sourceTotal} source batch`
+                    : `${Math.min(
+                        organizeProgress.sourceIndex + 1,
+                        organizeProgress.sourceTotal,
+                      )} of ${organizeProgress.sourceTotal}`}
+                </span>
               </p>
+              {organizeProgress.phase === "orchestration" ? (
+                <p className="import-studio__progress-detail">
+                  <span>{organizeProgress.operationLabel}</span>
+                  <span>{organizeProgress.detailLabel}</span>
+                </p>
+              ) : organizeProgress.sectionTotal > 0 ? (
+                <p className="import-studio__progress-detail">
+                  <span>
+                    {organizeProgress.phase === "synthesis"
+                      ? `Distilling ${organizeProgress.sectionTotal} sections`
+                      : `Reading ${organizeProgress.sectionTotal} sections`}
+                  </span>
+                  <span>
+                    {organizeProgress.phase === "synthesis"
+                      ? "Writing connected notes"
+                      : `Section ${Math.min(
+                          organizeProgress.completedSections + 1,
+                          organizeProgress.sectionTotal,
+                        )} of ${organizeProgress.sectionTotal}`}
+                  </span>
+                </p>
+              ) : null}
               <div
-                className="import-studio__progress"
+                className={clsx("import-studio__progress", {
+                  "import-studio__progress--indeterminate":
+                    organizeProgress.phase === "orchestration",
+                })}
                 role="progressbar"
                 aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={progressPercent}
+                {...(organizeProgress.phase === "orchestration"
+                  ? { "aria-label": organizeProgress.operationLabel }
+                  : { "aria-valuemax": 100, "aria-valuenow": progressPercent })}
               >
-                <span style={{ width: `${progressPercent}%` }} />
+                <span
+                  {...(organizeProgress.phase === "orchestration"
+                    ? {}
+                    : { style: { width: `${progressPercent}%` } })}
+                />
               </div>
-              <small>Keep this window open while the import completes.</small>
+              <small>
+                {organizeProgress.phase === "orchestration"
+                  ? orchestrationReassurance(
+                      organizeProgress.orchestrationStage,
+                      snapshot.settings.includeExistingNotesInAIContext &&
+                        snapshot.notes.length > 0,
+                    )
+                  : "Keep this window open while the import completes."}
+              </small>
+              {organizeProgress.phase === "orchestration" && (
+                <button
+                  className="button ghost import-studio__cancel-run"
+                  type="button"
+                  onClick={() =>
+                    organizeAbortRef.current?.abort(
+                      new Error("The knowledge import was cancelled."),
+                    )
+                  }
+                >
+                  Cancel
+                </button>
+              )}
             </section>
           )}
 
@@ -1903,22 +2897,101 @@ export function ImportStudio({
               className="import-studio__stage import-studio__stage--results"
               aria-labelledby={`${titleId}-results`}
             >
-              <div className="import-studio__result-hero">
+              <div
+                className={clsx(
+                  "import-studio__result-hero",
+                  importDiagnostic && "import-studio__result-hero--paused",
+                )}
+              >
                 <span className="import-studio__result-mark" aria-hidden="true">
-                  <CheckCircle2 size={24} strokeWidth={1.6} />
+                  {importDiagnostic ? (
+                    <RefreshCw size={22} strokeWidth={1.6} />
+                  ) : (
+                    <CheckCircle2 size={24} strokeWidth={1.6} />
+                  )}
                 </span>
                 <div>
-                  <span className="import-studio__eyebrow">Ready for your atlas</span>
+                  <span className="import-studio__eyebrow">
+                    {importDiagnostic ? "Import paused" : "Ready for your atlas"}
+                  </span>
                   <h3 id={`${titleId}-results`}>
-                    {result.notes.length}{" "}
-                    {result.notes.length === 1 ? "page" : "pages"} found
+                    {importDiagnostic
+                      ? importDiagnostic.summary
+                      : `${result.notes.length} ${
+                          result.notes.length === 1 ? "note" : "notes"
+                        } prepared`}
                   </h3>
                   <p>
-                    Orion shaped your source material into connected notes that
-                    can keep evolving with this Space.
+                    {importDiagnostic
+                      ? diagnosticProgressText(importDiagnostic)
+                      : "Orion shaped your source material into connected notes that can keep evolving with this Space."}
                   </p>
                 </div>
               </div>
+
+              {importDiagnostic && (
+                <section
+                  className="import-studio__diagnostic"
+                  aria-label="Import diagnostic"
+                  role="alert"
+                >
+                  <div className="import-studio__diagnostic-heading">
+                    <span>
+                      <small>Stopped during</small>
+                      <strong>{diagnosticStageLabel(importDiagnostic.stage)}</strong>
+                    </span>
+                    <i>{importDiagnostic.code.replace(/-/g, " ")}</i>
+                  </div>
+                  <p>{importDiagnostic.technicalDetail}</p>
+                  <div className="import-studio__diagnostic-progress">
+                    {importDiagnostic.totalReadings > 0 && (
+                      <span>
+                        <strong>{importDiagnostic.completedReadings}</strong>
+                        <small>of {importDiagnostic.totalReadings} readings retained</small>
+                      </span>
+                    )}
+                    {importDiagnostic.totalWrites > 0 && (
+                      <span>
+                        <strong>{importDiagnostic.completedWrites}</strong>
+                        <small>of {importDiagnostic.totalWrites} notes retained</small>
+                      </span>
+                    )}
+                    <span>
+                      <strong>{importDiagnostic.resumable ? "Resume" : "Retry"}</strong>
+                      <small>
+                        {importDiagnostic.resumable
+                          ? "continues from the saved checkpoint"
+                          : "starts a fresh knowledge run"}
+                      </small>
+                    </span>
+                  </div>
+                  <details>
+                    <summary>
+                      Technical details
+                      <ChevronDown aria-hidden="true" size={14} />
+                    </summary>
+                    <dl>
+                      <div>
+                        <dt>Run</dt>
+                        <dd>{importDiagnostic.runId}</dd>
+                      </div>
+                      <div>
+                        <dt>Model</dt>
+                        <dd>{importDiagnostic.model}</dd>
+                      </div>
+                      <div>
+                        <dt>Recorded</dt>
+                        <dd>{new Date(importDiagnostic.occurredAt).toLocaleString()}</dd>
+                      </div>
+                    </dl>
+                  </details>
+                  <p className="import-studio__diagnostic-preservation">
+                    {manualFallbackCount === 1
+                      ? "The complete source remains in Sources. Orion also created an editable preview note."
+                      : "The complete sources remain in Sources. Orion also created editable preview notes."}
+                  </p>
+                </section>
+              )}
 
               <div className="import-studio__result-stats">
                 <span>
@@ -1935,7 +3008,7 @@ export function ImportStudio({
                 </span>
               </div>
 
-              {organizeIssues.length > 0 && (
+              {!importDiagnostic && organizeIssues.length > 0 && (
                 <div className="import-studio__issues">
                   <div className="import-studio__issues-heading">
                     <AlertTriangle aria-hidden="true" size={15} />
@@ -1944,13 +3017,18 @@ export function ImportStudio({
                   {organizeIssues.map((issue) => (
                     <p key={`${issue.itemId}:${issue.message}`}>
                       <strong>{issue.fileName}</strong>
-                      <span>
-                        {issue.message}
-                        {issue.usedManualFallback &&
-                          " Orion preserved it as an editable local note instead."}
-                      </span>
+                      <span>{issue.message}</span>
                     </p>
                   ))}
+                  {manualFallbackCount > 0 && (
+                    <p className="import-studio__preservation-note">
+                      <span>
+                        {manualFallbackCount === 1
+                          ? "The complete source remains in Sources. Orion also created an editable preview note."
+                          : "The complete sources remain in Sources. Orion also created editable preview notes."}
+                      </span>
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -2207,13 +3285,19 @@ export function ImportStudio({
                   className="button ghost"
                   type="button"
                   disabled={applying}
-                  onClick={() => setStage("review")}
+                  onClick={() => {
+                    clearImportRecovery();
+                    setStage("review");
+                  }}
                 >
                   <ArrowLeft aria-hidden="true" size={15} />
                   Adjust import
                 </button>
                 <button
-                  className="button primary"
+                  className={clsx(
+                    "button",
+                    importDiagnostic ? "ghost" : "primary",
+                  )}
                   type="button"
                   disabled={applying || result.notes.length === 0}
                   onClick={() => void applyResult()}
@@ -2227,8 +3311,29 @@ export function ImportStudio({
                   ) : (
                     <Check aria-hidden="true" size={15} />
                   )}
-                  {applying ? "Adding to Orion…" : "Add to Orion"}
+                  {applying
+                    ? "Adding to Orion…"
+                    : importDiagnostic
+                      ? "Keep preview"
+                      : "Add to Orion"}
                 </button>
+                {importDiagnostic && (
+                  <button
+                    className="button primary"
+                    type="button"
+                    disabled={applying}
+                    onClick={() =>
+                      void organize(
+                        importDiagnostic.resumable
+                          ? importCheckpoint ?? undefined
+                          : undefined,
+                      )
+                    }
+                  >
+                    <RefreshCw aria-hidden="true" size={15} />
+                    {importDiagnostic.resumable ? "Resume import" : "Retry import"}
+                  </button>
+                )}
               </>
             )}
           </div>

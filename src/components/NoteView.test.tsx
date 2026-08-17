@@ -14,6 +14,43 @@ import { NoteView } from "./NoteView";
 const NOW = "2026-07-29T01:00:00.000Z";
 
 describe("NoteView", () => {
+  it("renders Orion-managed note images without treating them as external links", () => {
+    const note: Note = {
+      id: "note-image",
+      title: "Illustrated note",
+      slug: "illustrated-note",
+      summary: "A note with an image.",
+      body: "![System map](orion-image://localhost/image_123456789012345678)",
+      aliases: [],
+      tags: [],
+      kind: "article",
+      status: "ready",
+      conceptIds: [],
+      sourceIds: [],
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+
+    render(
+      <NoteView
+        note={note}
+        notes={[note]}
+        concepts={[]}
+        onOpenNote={vi.fn()}
+        onOpenConcept={vi.fn()}
+        onUpdateNote={vi.fn()}
+        onDeleteNote={vi.fn()}
+        onRegisterConcept={vi.fn()}
+        onDisableConceptAutoLink={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("img", { name: "System map" })).toHaveAttribute(
+      "src",
+      "orion-image://localhost/image_123456789012345678",
+    );
+  });
+
   it("finds and cycles through text in the reading surface", () => {
     const note: Note = {
       id: "note-search",
@@ -381,7 +418,7 @@ describe("NoteView", () => {
       updatedAt: NOW,
     };
 
-    render(
+    const { container } = render(
       <NoteView
         note={note}
         notes={[note]}
@@ -395,6 +432,17 @@ describe("NoteView", () => {
       />,
     );
 
+    expect(
+      screen
+        .getByRole("button", { name: "Favorite" })
+        .querySelector('[data-orion-icon="favorite"]'),
+    ).toBeInTheDocument();
+    expect(
+      container.querySelector('[data-orion-icon="favorite"] path'),
+    ).toHaveAttribute(
+      "d",
+      "m67 6.7h-34c-7.6 0-14.4 6.2-14.4 14.2v67.6c0 2.7 3 4.1 5.2 2.4l26.2-18.6 25.9 18.3c2.1 1.6 5.4 0.6 5.4-2.3v-67.4c0-7.8-6.4-14.2-14.3-14.2zm7.7 74.8-22.8-16.5c-1.1-0.8-2.7-0.8-3.8 0l-22.7 16.5v-60.6c0-4.1 3.2-7.6 7.8-7.6h33.8c3.9 0 7.7 2.8 7.7 7.6v60.6z",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
     expect(onDeleteNote).toHaveBeenCalledWith(note.id);
   });
@@ -487,6 +535,80 @@ describe("NoteView", () => {
     expect(
       screen.getByRole("button", { name: "Edit" }),
     ).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("keeps linked task text in one flowing content container", () => {
+    const note: Note = {
+      id: "note-improvements",
+      title: "Improvements",
+      slug: "improvements",
+      summary: "Editor improvements.",
+      body:
+        "- [ ] [Shader](orion-concept://concept-shader) on homepage, needs to reflect [theme](orion-concept://concept-theme) of the workspace",
+      aliases: [],
+      tags: [],
+      kind: "project",
+      status: "ready",
+      conceptIds: ["concept-shader", "concept-theme"],
+      sourceIds: [],
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+    const destination: Note = {
+      ...note,
+      id: "note-theme",
+      title: "Theme",
+      slug: "theme",
+      body: "A workspace theme.",
+      conceptIds: ["concept-shader", "concept-theme"],
+    };
+    const concepts: Concept[] = [
+      {
+        id: "concept-shader",
+        label: "Shader",
+        aliases: [],
+        description: "A rendered atmosphere.",
+        noteIds: [destination.id],
+        canonicalNoteId: destination.id,
+        color: "#8798ff",
+        autoLink: true,
+      },
+      {
+        id: "concept-theme",
+        label: "Theme",
+        aliases: [],
+        description: "The workspace appearance.",
+        noteIds: [destination.id],
+        canonicalNoteId: destination.id,
+        color: "#8798ff",
+        autoLink: true,
+      },
+    ];
+    const { container } = render(
+      <NoteView
+        note={note}
+        notes={[note, destination]}
+        concepts={concepts}
+        onOpenNote={vi.fn()}
+        onOpenConcept={vi.fn()}
+        onUpdateNote={vi.fn()}
+        onDeleteNote={vi.fn()}
+        onRegisterConcept={vi.fn()}
+        onDisableConceptAutoLink={vi.fn()}
+      />,
+    );
+
+    const task = container.querySelector("li.task-list-item");
+    const content = task?.querySelector<HTMLElement>(
+      ":scope > .task-list-content",
+    );
+    expect(task?.children).toHaveLength(2);
+    expect(content).not.toBeNull();
+    expect(content).toHaveTextContent(
+      "Shader on homepage, needs to reflect theme of the workspace",
+    );
+    expect(task?.querySelector(":scope > .wiki-link")).toBeNull();
+    expect(content?.querySelectorAll(".wiki-link")).toHaveLength(2);
   });
 
   it("renders known concepts as links in the reading surface", () => {

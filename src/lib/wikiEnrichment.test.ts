@@ -46,7 +46,7 @@ describe("automatic wiki enrichment", () => {
       "return an empty notes array",
     );
     expect(request.taskInstructions).toContain(
-      "every supplied existing canonical wiki article",
+      "compact directory records",
     );
     expect(request.taskInstructions).toContain(
       "never for a relabelled version, summary, plan, list, checklist, or paraphrase",
@@ -55,6 +55,10 @@ describe("automatic wiki enrichment", () => {
       "never copy its task list into a wiki article",
     );
     expect(request.existingNotes?.[0].title).toBe("Positivism");
+    expect(request.existingNotes?.[0].semanticSketch).toContain(
+      "carefully edited overview",
+    );
+    expect(request.existingNotes?.[0]).not.toHaveProperty("body");
   });
 
   it("applies coherent integrated revisions and creates missing canonical articles", () => {

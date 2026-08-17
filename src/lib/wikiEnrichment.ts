@@ -13,9 +13,9 @@ import {
   reconcileConceptVocabulary,
   type ConceptSeed,
 } from "./concepts";
+import { buildCompactOrganizerContext } from "./organizerContext";
 
 const MAX_NOTE_CHARS = 48_000;
-const MAX_EXISTING_NOTES = 80;
 const TASK_LINE = /^\s*[-+*]\s+\[[ xX]\]\s+(.+?)\s*$/;
 const COMPANION_TITLE_WORDS = new Set([
   "agenda",
@@ -83,30 +83,16 @@ export function buildWikiEnrichmentRequest(
   snapshot: AppSnapshot,
   note: Note,
 ): OrganizeContentRequest {
-  const existingNotes = snapshot.settings.includeExistingNotesInAIContext
-    ? [...snapshot.notes]
-        .filter((candidate) => candidate.id !== note.id)
-        .sort(
-          (left, right) =>
-            Number(right.kind === "wiki") - Number(left.kind === "wiki"),
-        )
-        .slice(0, MAX_EXISTING_NOTES)
-        .map((candidate) => ({
-          id: candidate.id,
-          title: candidate.title,
-          aliases: [...candidate.aliases],
-          summary: candidate.summary,
-          reference: candidate.kind === "wiki",
-          ...(candidate.kind === "wiki"
-            ? { body: candidate.body.slice(0, 6_000) }
-            : {}),
-        }))
-    : undefined;
+  const existingNotes = buildCompactOrganizerContext(snapshot, {
+    focusNoteIds: [note.id],
+    excludeNoteIds: [note.id],
+    matchText: [note.title, note.summary, note.body].join("\n"),
+  });
   const task = [
     "Knowledge-refresh task: this is an already-saved project note, so return an empty notes array.",
     "Return a wikiArticles entry for every durable person, place, technology, method, organization, or idea in this note that gains meaningful new context.",
-    "Include every supplied existing canonical wiki article that should be enriched by this note, even when that article already has a body. Return a new canonical article only for a clearly important durable subject, never for a relabelled version, summary, plan, list, checklist, or paraphrase of this source note.",
-    "For each returned existing article, rewrite wikiArticles.body as a complete coherent revision that preserves worthwhile existing knowledge and cross-pollinates the new material into the sections where it naturally belongs. Never append a provenance section named “Context from”, “From the new note”, “From the imported material”, or similar.",
+    "The supplied existing notes are compact directory records, not opened article bodies. Use them to reuse canonical titles and avoid duplicates, but do not return or rewrite a bodyless existing article. Return a new canonical article only for a clearly important durable subject, never for a relabelled version, summary, plan, list, checklist, or paraphrase of this source note.",
+    "Never append a provenance section named “Context from”, “From the new note”, “From the imported material”, or similar.",
     "Keep every action and Markdown task in this project note; never copy its task list into a wiki article. Infer concepts from meaning, relationships, and aliases rather than keyword frequency. Do not return generic topic words, unrelated articles, or concepts supported only by lexical overlap. Source-grounded details must come from this note. Use ordinary prose and never [[wiki-link]] brackets.",
   ].join(" ");
   return {

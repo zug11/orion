@@ -5,7 +5,6 @@ import {
   MessageCircle,
   Plus,
   Settings,
-  Star,
   Trash2,
 } from "../lib/icons";
 import type { AppSnapshot, Note } from "../types";
@@ -13,6 +12,7 @@ import {
   linkedArticleStageLabel,
   type LinkedArticleJob,
 } from "../lib/linkedArticle";
+import { FavoriteMark } from "./icons/FavoriteMark";
 import { SpaceSwitcher } from "./SpaceSwitcher";
 
 export type WorkspaceView =
@@ -34,6 +34,7 @@ interface SidebarProps {
   onDeleteNote: (noteId: string) => void;
   onNewNote: () => void;
   onCreateSpace: (name: string) => void;
+  onDeleteSpace: (spaceId: string) => boolean;
   onSwitchSpace: (spaceId: string) => void;
   onRestartLinkedArticle: (job: LinkedArticleJob) => void;
   onDeleteLinkedArticle: (job: LinkedArticleJob) => void;
@@ -73,12 +74,7 @@ function SidebarNoteRow({
       >
         <span className="note-nav-title">{note.title}</span>
         {note.pinned ? (
-          <Star
-            className="note-nav-favorite"
-            size={11}
-            fill="currentColor"
-            aria-label="Favorite"
-          />
+          <FavoriteMark className="note-nav-favorite" size={11} />
         ) : null}
       </button>
       <button
@@ -106,6 +102,7 @@ export function Sidebar({
   onDeleteNote,
   onNewNote,
   onCreateSpace,
+  onDeleteSpace,
   onSwitchSpace,
   onRestartLinkedArticle,
   onDeleteLinkedArticle,
@@ -122,6 +119,7 @@ export function Sidebar({
         spaces={spaces}
         activeSpaceId={activeSpaceId}
         onCreateSpace={onCreateSpace}
+        onDeleteSpace={onDeleteSpace}
         onSwitchSpace={onSwitchSpace}
       />
 
@@ -227,7 +225,7 @@ export function Sidebar({
           <section className="sidebar-section" aria-label="Favorites">
             <div className="sidebar-heading">
               <span>Favorites</span>
-              <Star size={12} />
+              <FavoriteMark size={12} />
             </div>
             {favorites.map((note) => (
               <SidebarNoteRow

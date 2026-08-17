@@ -1,0 +1,44 @@
+{
+  "name": "orion",
+  "version": "0.4.1",
+  "description": "Browse, cite, and write to your local Orion knowledge Spaces from Codex.",
+  "author": {
+    "name": "Orion",
+    "url": "https://github.com/zug11/orion"
+  },
+  "homepage": "https://github.com/zug11/orion",
+  "repository": "https://github.com/zug11/orion",
+  "keywords": [
+    "knowledge",
+    "notes",
+    "wiki",
+    "citations",
+    "local-first",
+    "spaces"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Orion",
+    "shortDescription": "Your local knowledge atlas, available in Codex.",
+    "longDescription": "Bring Orion's structured, local knowledge atlas into Codex. Discover Spaces, orient with living overviews, search and open evidence-bearing notes and sources, follow native Orion citations, and create, update, or delete notes when you ask—without cloud sync or connector path setup.",
+    "developerName": "Orion",
+    "category": "Productivity",
+    "capabilities": [
+      "Local knowledge",
+      "Citations",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/zug11/orion",
+    "defaultPrompt": [
+      "Summarize my active Orion Space with citations.",
+      "Find what Orion says about this topic and cite the notes.",
+      "Create a note in my Orion Space from this conversation."
+    ],
+    "brandColor": "#8999FF",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/orion-mark.svg",
+    "logoDark": "./assets/orion-mark.svg"
+  }
+}

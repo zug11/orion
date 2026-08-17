@@ -7,7 +7,6 @@ import {
   Link2,
   Quote,
   Search,
-  Star,
   Trash2,
   X,
 } from "../lib/icons";
@@ -28,7 +27,10 @@ import {
 } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { isSafeNoteImageUrl } from "../lib/noteImages";
 import type { RegisterWikiLinkInput } from "../lib/concepts";
+import type { AIWritingRequestInput } from "../lib/aiWriting";
+import type { AIImageProposal, AIImageRequestInput } from "../lib/aiImages";
 import {
   expandOrionWikiLinks,
   restoreMarkdownFrontmatter,
@@ -46,6 +48,7 @@ import {
 import { canonicalizeSourceCitations } from "../lib/sourceCitations";
 import { decorateAutoLinks } from "../lib/wiki";
 import type { Concept, Note, Source } from "../types";
+import { FavoriteMark } from "./icons/FavoriteMark";
 import { NoteOutline } from "./NoteOutline";
 import { SourceReferences } from "./SourceReferences";
 
@@ -70,13 +73,23 @@ interface NoteViewProps {
   onDeleteNote: (noteId: string) => void;
   onFinishEditing?: (noteId: string) => void;
   onRegisterConcept: (input: RegisterWikiLinkInput) => string;
+  onGenerateLinkTitle?: (selectedContext: string) => Promise<string>;
+  onGenerateAIWriting?: (
+    input: Omit<AIWritingRequestInput, "originNoteId">,
+  ) => Promise<string>;
+  onGenerateAIImage?: (
+    input: Omit<AIImageRequestInput, "originNoteId">,
+    signal: AbortSignal,
+  ) => Promise<AIImageProposal>;
   onDisableConceptAutoLink: (conceptId: string) => void;
   aiArticleWritingEnabled?: boolean;
+  aiImageGenerationEnabled?: boolean;
   aiProviderName?: string;
 }
 
 function safeUrl(url: string) {
   if (
+    isSafeNoteImageUrl(url) ||
     url.startsWith("orion-note://") ||
     url.startsWith("orion-concept://") ||
     url.startsWith("orion-source://") ||
@@ -101,8 +114,12 @@ export function NoteView({
   onDeleteNote,
   onFinishEditing,
   onRegisterConcept,
+  onGenerateLinkTitle,
+  onGenerateAIWriting,
+  onGenerateAIImage,
   onDisableConceptAutoLink,
   aiArticleWritingEnabled = false,
+  aiImageGenerationEnabled = false,
   aiProviderName,
 }: NoteViewProps) {
   const [editing, setEditing] = useState(note.title === "Untitled note");
@@ -536,29 +553,31 @@ export function NoteView({
         ? readTaskByVisibleLine.get(visibleLine)
         : undefined;
       const renderedChildren = renderLinkedChildren(children);
-      const taskChildren = task
-        ? Children.map(renderedChildren, (child) =>
-            isValidElement(child) && child.type === "input" ? (
-              <input
-                type="checkbox"
-                checked={task.checked}
-                aria-label={`${task.checked ? "Mark incomplete" : "Complete"} ${task.text}`}
-                onChange={(event) =>
-                  update({
-                    body: setTaskChecked(
-                      note.body,
-                      task.lineIndex,
-                      event.currentTarget.checked,
-                    ),
-                  })
-                }
-              />
-            ) : (
-              child
-            ),
-          )
-        : renderedChildren;
-      return <li className={className}>{taskChildren}</li>;
+      if (!task) {
+        return <li className={className}>{renderedChildren}</li>;
+      }
+      const taskBody = Children.toArray(renderedChildren).filter(
+        (child) => !(isValidElement(child) && child.type === "input"),
+      );
+      return (
+        <li className={className}>
+          <input
+            type="checkbox"
+            checked={task.checked}
+            aria-label={`${task.checked ? "Mark incomplete" : "Complete"} ${task.text}`}
+            onChange={(event) =>
+              update({
+                body: setTaskChecked(
+                  note.body,
+                  task.lineIndex,
+                  event.currentTarget.checked,
+                ),
+              })
+            }
+          />
+          <div className="task-list-content">{taskBody}</div>
+        </li>
+      );
     },
     h1: ({ children }: { children?: ReactNode }) => (
       <h1>{renderLinkedChildren(children)}</h1>
@@ -733,7 +752,7 @@ export function NoteView({
               aria-label={note.pinned ? "Unfavorite" : "Favorite"}
               onClick={() => update({ pinned: !note.pinned })}
             >
-              <Star size={17} fill={note.pinned ? "currentColor" : "none"} />
+              <FavoriteMark size={17} />
             </button>
             <button
               type="button"
@@ -865,8 +884,12 @@ export function NoteView({
               }
               onOpenSource={onOpenSource}
               onRegisterConcept={onRegisterConcept}
+              onGenerateLinkTitle={onGenerateLinkTitle}
+              onGenerateAIWriting={onGenerateAIWriting}
+              onGenerateAIImage={onGenerateAIImage}
               onDisableConceptAutoLink={onDisableConceptAutoLink}
               aiArticleWritingEnabled={aiArticleWritingEnabled}
+              aiImageGenerationEnabled={aiImageGenerationEnabled}
               aiProviderName={aiProviderName}
               findQuery={findQuery}
               onFindDecorationsChanged={() =>

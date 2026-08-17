@@ -5,11 +5,14 @@ import type {
   OrganizeContentResult,
   SpaceOverview,
 } from "../types";
+import { decorateAutoLinks, resolveConceptDestination } from "./wiki";
+import { stableKnowledgeHash } from "./spaceKnowledge";
 
 const MAX_NOTES = 64;
 const MAX_SOURCES = 24;
 const MAX_NOTE_BODY_CHARS = 1_100;
 const MAX_SOURCE_TEXT_CHARS = 500;
+const MAX_OVERVIEW_CONTEXT_NOTES = 8;
 
 /**
  * Overview eligibility is intentionally broader than wiki-enrichment
@@ -32,12 +35,21 @@ export function hasSubstantiveOverviewNote(
 }
 
 export function markSpaceOverviewStale(snapshot: AppSnapshot): AppSnapshot {
-  if (!snapshot.spaceOverview || snapshot.spaceOverview.stale) {
+  const overviewAlreadyStale =
+    !snapshot.spaceOverview || snapshot.spaceOverview.stale;
+  const knowledgeAlreadyStale =
+    !snapshot.spaceKnowledge || snapshot.spaceKnowledge.stale;
+  if (overviewAlreadyStale && knowledgeAlreadyStale) {
     return snapshot;
   }
   return {
     ...snapshot,
-    spaceOverview: { ...snapshot.spaceOverview, stale: true },
+    ...(snapshot.spaceOverview
+      ? { spaceOverview: { ...snapshot.spaceOverview, stale: true } }
+      : {}),
+    ...(snapshot.spaceKnowledge
+      ? { spaceKnowledge: { ...snapshot.spaceKnowledge, stale: true } }
+      : {}),
   };
 }
 
@@ -52,6 +64,7 @@ export function spaceKnowledgeFingerprint(snapshot: AppSnapshot): string {
       snapshot.settings.model,
       snapshot.settings.reasoningEffort,
       snapshot.settings.organizationInstructions,
+      snapshot.settings.includeExistingNotesInAIContext,
     ],
     notes: [...snapshot.notes]
       .sort((left, right) => left.id.localeCompare(right.id))
@@ -59,12 +72,12 @@ export function spaceKnowledgeFingerprint(snapshot: AppSnapshot): string {
         note.id,
         note.updatedAt,
         note.title,
-        note.summary.length,
-        note.body.length,
-        note.aliases.length,
-        note.tags.length,
-        note.conceptIds.length,
-        note.sourceIds.length,
+        stableKnowledgeHash(note.summary),
+        stableKnowledgeHash(note.body),
+        note.aliases,
+        note.tags,
+        note.conceptIds,
+        note.sourceIds,
       ]),
     sources: [...snapshot.sources]
       .sort((left, right) => left.id.localeCompare(right.id))
@@ -72,7 +85,7 @@ export function spaceKnowledgeFingerprint(snapshot: AppSnapshot): string {
         source.id,
         source.importedAt,
         source.title,
-        source.text.length,
+        stableKnowledgeHash(source.text),
         source.noteIds.length,
       ]),
     concepts: [...snapshot.concepts]
@@ -83,6 +96,9 @@ export function spaceKnowledgeFingerprint(snapshot: AppSnapshot): string {
         concept.description,
         concept.noteIds,
       ]),
+    relationships: [...snapshot.relationships]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((relationship) => ({ ...relationship })),
   });
 }
 
@@ -223,6 +239,57 @@ export function buildLocalSpaceOverview(snapshot: AppSnapshot): SpaceOverview {
   };
 }
 
+/**
+ * Resolves the notes a reader can actually reach from Across this Space. This
+ * deliberately excludes the local overview's recency fallback unless the note
+ * is visibly named. Import uses the same link vocabulary as the Home card, so
+ * an overview cannot become a hidden invitation to crawl the whole Space.
+ */
+export function resolveSpaceOverviewNoteIds(
+  snapshot: AppSnapshot,
+  overview: SpaceOverview,
+): EntityId[] {
+  const validNotes = snapshot.notes.filter(hasSubstantiveOverviewNote);
+  const validNoteIds = new Set(validNotes.map(({ id }) => id));
+  const concepts = snapshot.concepts.filter((concept) =>
+    concept.noteIds.some((noteId) => validNoteIds.has(noteId)),
+  );
+  const conceptById = new Map(concepts.map((concept) => [concept.id, concept]));
+  const resolved: EntityId[] = [];
+  const append = (noteId: EntityId) => {
+    if (
+      validNoteIds.has(noteId) &&
+      !resolved.includes(noteId) &&
+      resolved.length < MAX_OVERVIEW_CONTEXT_NOTES
+    ) {
+      resolved.push(noteId);
+    }
+  };
+
+  for (const segment of decorateAutoLinks(overview.body, concepts)) {
+    if (segment.type !== "concept") continue;
+    const concept = conceptById.get(segment.conceptId);
+    if (!concept) continue;
+    const destination = resolveConceptDestination(concept, validNotes);
+    if (destination.kind === "note") append(destination.noteId);
+    else destination.noteIds.forEach(append);
+  }
+  const normalizedOverview = normalize(`${overview.title}\n${overview.body}`);
+  for (const noteId of overview.relatedNoteIds) {
+    const note = validNotes.find(({ id }) => id === noteId);
+    if (
+      note &&
+      [note.title, ...note.aliases].some((phrase) => {
+        const normalizedPhrase = normalize(phrase);
+        return normalizedPhrase && containsPhrase(normalizedOverview, normalizedPhrase);
+      })
+    ) {
+      append(noteId);
+    }
+  }
+  return resolved;
+}
+
 function relatedNotesForOverview(
   snapshot: AppSnapshot,
   overview: string,
@@ -235,7 +302,7 @@ function relatedNotesForOverview(
       updatedAt: note.updatedAt,
       score: [note.title, ...note.aliases].reduce(
         (score, phrase) =>
-          normalize(phrase) && normalizedOverview.includes(normalize(phrase))
+          normalize(phrase) && containsPhrase(normalizedOverview, normalize(phrase))
             ? score + Math.max(1, phrase.trim().split(/\s+/).length)
             : score,
         0,
@@ -296,6 +363,25 @@ function plainText(value: string): string {
 
 function normalize(value: string): string {
   return value.normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function containsPhrase(value: string, phrase: string): boolean {
+  const wordCharacter = /[\p{L}\p{N}_]/u;
+  let offset = 0;
+  while (offset <= value.length - phrase.length) {
+    const index = value.indexOf(phrase, offset);
+    if (index < 0) return false;
+    const before = index > 0 ? value[index - 1] : "";
+    const after = value[index + phrase.length] ?? "";
+    const startIsBounded =
+      !wordCharacter.test(phrase[0] ?? "") || !wordCharacter.test(before);
+    const endIsBounded =
+      !wordCharacter.test(phrase[phrase.length - 1] ?? "") ||
+      !wordCharacter.test(after);
+    if (startIsBounded && endIsBounded) return true;
+    offset = index + 1;
+  }
+  return false;
 }
 
 function joinNatural(values: readonly string[]): string {

@@ -6,6 +6,7 @@ import Vision
 
 private let maximumInputBytes = 25 * 1024 * 1024
 private let maximumPDFPages = 50
+private let maximumSelectedPDFPages = 512
 private let maximumImagePixels = 100_000_000
 private let maximumImageDimension = 4_096
 private let maximumPDFRenderDimension = 2_600
@@ -58,6 +59,48 @@ private func option(_ name: String, in arguments: [String]) -> String? {
         return nil
     }
     return arguments[index + 1]
+}
+
+private func selectedPDFPageNumbers(in arguments: [String]) throws -> [Int]? {
+    let optionIndices = arguments.indices.filter { arguments[$0] == "--page-numbers" }
+    guard !optionIndices.isEmpty else {
+        return nil
+    }
+    guard optionIndices.count <= 1 else {
+        throw OCRFailure.message("PDF page numbers may only be supplied once.")
+    }
+    guard
+        let optionIndex = optionIndices.first,
+        arguments.indices.contains(optionIndex + 1)
+    else {
+        throw OCRFailure.message("PDF page numbers are missing.")
+    }
+    let rawValue = arguments[optionIndex + 1]
+    let values = rawValue.split(separator: ",", omittingEmptySubsequences: false)
+    guard !values.isEmpty, values.count <= maximumSelectedPDFPages else {
+        throw OCRFailure.message(
+            "Choose between 1 and \(maximumSelectedPDFPages) PDF pages for selective OCR."
+        )
+    }
+
+    var pageNumbers: [Int] = []
+    pageNumbers.reserveCapacity(values.count)
+    var previousPageNumber = 0
+    for value in values {
+        guard
+            !value.isEmpty,
+            value.allSatisfy({ $0.isASCII && $0.isNumber }),
+            let pageNumber = Int(value),
+            pageNumber > previousPageNumber
+        else {
+            throw OCRFailure.message(
+                "PDF page numbers must be unique positive integers in ascending order."
+            )
+        }
+        pageNumbers.append(pageNumber)
+        previousPageNumber = pageNumber
+    }
+    return pageNumbers
 }
 
 private func normalizedMIMEType(_ value: String) throws -> String {
@@ -204,7 +247,11 @@ private func validatedPage(_ page: OCRPage) throws -> OCRPage {
     return page
 }
 
-private func recognizeDocument(at path: String, mimeType: String) throws -> OCRResult {
+private func recognizeDocument(
+    at path: String,
+    mimeType: String,
+    selectedPageNumbers: [Int]?
+) throws -> OCRResult {
     let url = URL(fileURLWithPath: path)
     let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
     guard let fileSize = attributes[.size] as? NSNumber, fileSize.intValue > 0 else {
@@ -222,21 +269,46 @@ private func recognizeDocument(at path: String, mimeType: String) throws -> OCRR
         guard let document = PDFDocument(data: data), document.pageCount > 0 else {
             throw OCRFailure.message("macOS could not open this PDF.")
         }
-        guard document.pageCount <= maximumPDFPages else {
+        guard selectedPageNumbers != nil || document.pageCount <= maximumPDFPages else {
             throw OCRFailure.message("OCR supports PDFs of up to 50 pages.")
         }
-        pages.reserveCapacity(document.pageCount)
-        for index in 0 ..< document.pageCount {
-            guard let page = document.page(at: index) else {
-                throw OCRFailure.message("macOS could not open page \(index + 1) of this PDF.")
+        let pageNumbers = selectedPageNumbers ?? Array(1 ... document.pageCount)
+        if let invalidPageNumber = pageNumbers.first(where: { $0 > document.pageCount }) {
+            throw OCRFailure.message(
+                "This PDF does not contain page \(invalidPageNumber)."
+            )
+        }
+        pages.reserveCapacity(pageNumbers.count)
+        for pageNumber in pageNumbers {
+            do {
+                guard let page = document.page(at: pageNumber - 1) else {
+                    throw OCRFailure.message(
+                        "macOS could not open page \(pageNumber) of this PDF."
+                    )
+                }
+                let text = try recognize(renderedPDFPage(page))
+                if text.isEmpty {
+                    warnings.append("No text was recognized on page \(pageNumber).")
+                }
+                pages.append(try validatedPage(OCRPage(pageNumber: pageNumber, text: text)))
+            } catch {
+                guard selectedPageNumbers != nil else {
+                    throw error
+                }
+                let detail = String(describing: error)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let boundedDetail = String(detail.prefix(180))
+                warnings.append(
+                    "Page \(pageNumber) could not be recognized"
+                        + (boundedDetail.isEmpty ? "." : ": \(boundedDetail)")
+                )
+                pages.append(OCRPage(pageNumber: pageNumber, text: ""))
             }
-            let text = try recognize(renderedPDFPage(page))
-            if text.isEmpty {
-                warnings.append("No text was recognized on page \(index + 1).")
-            }
-            pages.append(try validatedPage(OCRPage(pageNumber: index + 1, text: text)))
         }
     } else {
+        guard selectedPageNumbers == nil else {
+            throw OCRFailure.message("PDF page numbers cannot be used with an image.")
+        }
         let text = try recognize(decodedImage(from: data))
         pages = [try validatedPage(OCRPage(pageNumber: 1, text: text))]
     }
@@ -265,11 +337,16 @@ private func run() throws {
         let mimeType = option("--mime-type", in: arguments)
     else {
         throw OCRFailure.message(
-            "usage: orion-ocr --input <document> --mime-type <content-type>"
+            "usage: orion-ocr --input <document> --mime-type <content-type> "
+                + "[--page-numbers <1,2,3>]"
         )
     }
 
-    let result = try recognizeDocument(at: inputPath, mimeType: mimeType)
+    let result = try recognizeDocument(
+        at: inputPath,
+        mimeType: mimeType,
+        selectedPageNumbers: selectedPDFPageNumbers(in: arguments)
+    )
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.withoutEscapingSlashes]
     let output = try encoder.encode(result)

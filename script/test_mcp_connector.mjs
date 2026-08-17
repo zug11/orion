@@ -205,6 +205,25 @@ if (byId.get(1)?.result?.serverInfo?.name !== "orion") {
 if (byId.get(2)?.result?.tools?.length !== 9) {
   throw new Error("MCP tool list is invalid.");
 }
+for (const toolName of [
+  "orion_get_note",
+  "orion_create_note",
+  "orion_update_note",
+]) {
+  const tool = byId
+    .get(2)
+    ?.result?.tools?.find((candidate) => candidate.name === toolName);
+  const required = tool?.outputSchema?.required;
+  if (
+    !Array.isArray(required) ||
+    !required.includes("linksTo") ||
+    !required.includes("linkedFrom") ||
+    tool?.outputSchema?.properties?.linksTo?.maxItems !== 50 ||
+    tool?.outputSchema?.properties?.linkedFrom?.maxItems !== 50
+  ) {
+    throw new Error(`${toolName} does not advertise bounded note relationships.`);
+  }
+}
 if (
   byId.get(3)?.result?.structuredContent?.activeSpaceId !== "space-alpha"
 ) {
@@ -239,13 +258,20 @@ if (
     "orion://open?space_id=space-alpha&note_id=note-",
   ) ||
   created?.note?.kind !== undefined ||
-  created?.note?.status !== undefined
+  created?.note?.status !== undefined ||
+  !Array.isArray(created?.linksTo) ||
+  !Array.isArray(created?.linkedFrom)
 ) {
   throw new Error("MCP note creation or Orion citation is invalid.");
 }
+const openedNote = byId.get(8)?.result?.structuredContent;
 if (
-  byId.get(8)?.result?.structuredContent?.note?.citation !==
-  "[Auguste Comte](orion://open?space_id=space-alpha&note_id=note-comte)"
+  openedNote?.note?.citation !==
+    "[Auguste Comte](orion://open?space_id=space-alpha&note_id=note-comte)" ||
+  !Array.isArray(openedNote?.linksTo) ||
+  !Array.isArray(openedNote?.linkedFrom) ||
+  typeof openedNote?.linksToTruncated !== "boolean" ||
+  typeof openedNote?.linkedFromTruncated !== "boolean"
 ) {
   throw new Error("MCP note lookup did not include the Orion citation.");
 }

@@ -2618,7 +2618,7 @@ dependencies = [
 
 [[package]]
 name = "orion"
-version = "0.3.8"
+version = "0.4.1"
 dependencies = [
  "base64 0.22.1",
  "fs2",
@@ -2633,6 +2633,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "tempfile",
+ "tokio",
  "zeroize",
 ]
 
@@ -4422,7 +4423,19 @@ dependencies = [
  "mio",
  "pin-project-lite",
  "socket2",
+ "tokio-macros",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6328af13490e73a9b4694030fafd93f8c8c6a9dede33e821c3fc63eddf8042ba"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

@@ -27,6 +27,7 @@ describe("Sidebar linked article progress", () => {
         onDeleteNote={vi.fn()}
         onNewNote={vi.fn()}
         onCreateSpace={vi.fn()}
+        onDeleteSpace={vi.fn()}
         onSwitchSpace={vi.fn()}
         onRestartLinkedArticle={vi.fn()}
         onDeleteLinkedArticle={vi.fn()}
@@ -69,6 +70,7 @@ describe("Sidebar linked article progress", () => {
         onDeleteNote={vi.fn()}
         onNewNote={vi.fn()}
         onCreateSpace={vi.fn()}
+        onDeleteSpace={vi.fn()}
         onSwitchSpace={vi.fn()}
         onRestartLinkedArticle={vi.fn()}
         onDeleteLinkedArticle={vi.fn()}
@@ -123,6 +125,7 @@ describe("Sidebar linked article progress", () => {
         onDeleteNote={vi.fn()}
         onNewNote={vi.fn()}
         onCreateSpace={vi.fn()}
+        onDeleteSpace={vi.fn()}
         onSwitchSpace={vi.fn()}
         onRestartLinkedArticle={onRestartLinkedArticle}
         onDeleteLinkedArticle={onDeleteLinkedArticle}
@@ -180,6 +183,7 @@ describe("Sidebar linked article progress", () => {
         onDeleteNote={vi.fn()}
         onNewNote={vi.fn()}
         onCreateSpace={vi.fn()}
+        onDeleteSpace={vi.fn()}
         onSwitchSpace={vi.fn()}
         onRestartLinkedArticle={vi.fn()}
         onDeleteLinkedArticle={vi.fn()}
@@ -216,6 +220,9 @@ describe("Sidebar linked article progress", () => {
     expect(
       screen.getAllByRole("button", { name: /^Open Seven$/ }),
     ).toHaveLength(2);
+    expect(
+      container.querySelectorAll('[data-orion-icon="favorite"]'),
+    ).toHaveLength(3);
     expect(container.querySelector(".note-nav-dot")).toBeNull();
   });
 
@@ -238,6 +245,7 @@ describe("Sidebar linked article progress", () => {
         onDeleteNote={onDeleteNote}
         onNewNote={vi.fn()}
         onCreateSpace={vi.fn()}
+        onDeleteSpace={vi.fn()}
         onSwitchSpace={vi.fn()}
         onRestartLinkedArticle={vi.fn()}
         onDeleteLinkedArticle={vi.fn()}

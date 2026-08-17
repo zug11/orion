@@ -20,6 +20,11 @@ import {
   selectedAIProviderName,
 } from "../lib/ai";
 import { decorateAutoLinks } from "../lib/wiki";
+import {
+  resolveThemeMode,
+  resolveThemePalette,
+  type ThemePalette,
+} from "../lib/theme";
 import type { AppSnapshot, Note } from "../types";
 import BorderGlow from "./BorderGlow";
 import HomeAtmosphere from "./HomeAtmosphere";
@@ -35,6 +40,7 @@ interface HomeViewProps {
   overviewBusy?: boolean;
   overviewError?: string | null;
   onRefreshOverview: () => void;
+  themePalette?: ThemePalette;
 }
 
 function formatOverviewDate(value: string): string {
@@ -90,6 +96,7 @@ export function HomeView({
   overviewBusy = false,
   overviewError,
   onRefreshOverview,
+  themePalette,
 }: HomeViewProps) {
   const recent = [...snapshot.notes]
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -108,6 +115,17 @@ export function HomeView({
   const overviewConcepts = snapshot.concepts.filter(
     (concept) => concept.noteIds.length > 0,
   );
+  const activeThemePalette =
+    themePalette ??
+    resolveThemePalette(
+      snapshot.settings,
+      resolveThemeMode(
+        snapshot.settings.theme,
+        typeof window !== "undefined" &&
+          typeof window.matchMedia === "function" &&
+          window.matchMedia("(prefers-color-scheme: light)").matches,
+      ),
+    );
 
   return (
     <div className="view home-view">
@@ -116,6 +134,7 @@ export function HomeView({
           atmosphere={snapshot.settings.homeAtmosphere}
           tone={snapshot.settings.homeAtmosphereTone}
           motion={snapshot.settings.homeAtmosphereMotion}
+          themePalette={activeThemePalette}
         />
         <div className="home-hero-shade" />
         <div className="home-hero-content">

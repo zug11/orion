@@ -10,7 +10,9 @@ This local Claude Desktop extension gives Claude direct access to Orion.
 - The living overview is for orientation. Claude can search and open the
   underlying notes or sources when an answer needs evidence, citations,
   detailed facts, recent changes, or comprehensive coverage.
-- Note results include citations that open the exact note in Orion.
+- Note detail and successful write results include citations plus bounded
+  `linksTo` and `linkedFrom` note identities derived inside the same Space.
+  Connected note bodies are never duplicated into those relationship arrays.
 - It can create, edit, and delete ordinary notes in an explicit Space.
 - Writes are immediate and carry no Claude attribution or proposal state.
 - It makes no network request and needs no OpenAI key.

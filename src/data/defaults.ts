@@ -19,6 +19,7 @@ export const defaultSettings: Settings = {
   reasoningEffort: "low",
   apiKeyConfigured: false,
   anthropicApiKeyConfigured: false,
+  providerFailoverEnabled: false,
   autoLink: true,
   showHoverPreviews: true,
   includeExistingNotesInAIContext: true,

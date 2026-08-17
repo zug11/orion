@@ -14,19 +14,26 @@ AI is optional. Manual notes, local imports, linking, search, contextual navigat
 
 Each project can live in its own **Space**. Use the switcher at the top-left to create a completely blank Space or move between existing ones. Notes, imports, sources, concepts, relationships, link suggestions, navigation history, and the active note are isolated per Space, so matching vocabulary in two projects cannot accidentally cross-link. Existing single-project vaults migrate into the first Space automatically.
 
-Every Space also has **Chat**, one persistent AI conversation grounded in bounded context from that Space and its recent message history. Switching Spaces switches both the conversation and the material available to it. Chat is a single conversation surface; it has no card, dialectic, or canvas workflow.
+Every Space also has **Chat**, one persistent AI conversation grounded in bounded context from that Space and its recent message history. Switching Spaces switches both the conversation and the material available to it. Chat is a single conversation surface; it has no card, dialectic, or canvas workflow. When the current user prompt explicitly asks to create or save notes, Orion's host can authorize up to three validated creation actions as permanent editable notes in that Space; Space content and model output cannot authorize a write. Any ordinary reply can still be saved with **Keep as note**.
 
 ## Download
 
-[Download Orion for Apple Silicon](https://github.com/zug11/orion/releases/latest/download/Orion-0.3.8-Apple-Silicon.dmg). Orion requires macOS 13.3 or later. Release builds produced from this source include on-device Apple Vision text recognition, the offline Whisper model, `yt-dlp`, and Deno.
+[Download Orion for Apple Silicon](https://github.com/zug11/orion/releases/latest/download/Orion-0.4.1-Apple-Silicon.dmg). Orion requires macOS 13.3 or later. Release builds produced from this source include on-device Apple Vision text recognition, the offline Whisper model, `yt-dlp`, and Deno.
 
 ## What is included
 
 - A polished React/Tauri desktop workspace with home, notes, sources, Space-scoped Chat, settings, and contextual backlink views.
 - A top-left Space switcher for separate projects, with blank-space creation and strict concept/link isolation.
 - AI-assisted Import using the selected OpenAI or Anthropic model with strict
-  structured output.
-- A persistent per-Space AI conversation with bounded recent history and note, source, and concept context.
+  structured output. Short material can take a bounded direct one-call path;
+  longer batches use a Space-guided reading plan, an adaptive parallel reading
+  queue, a connected-note plan, parallel writing, and local final checks, with
+  up to six provider calls running at once.
+- A persistent per-Space AI conversation with bounded recent history and note,
+  source, and concept context. Host-verified explicit note requests can create
+  up to three ordinary active-Space notes immediately; normal conversation is
+  reply-only, and **Keep as note** saves any other assistant reply without
+  introducing proposals or review state.
 - Manual import fallback that creates one immediately editable note per source.
 - Local extraction for text, Markdown, JSON, CSV/TSV, HTML, PDF, and DOCX,
   plus on-device Apple Vision text recognition for PNG, JPEG, HEIC, and HEIF
@@ -51,6 +58,21 @@ Every Space also has **Chat**, one persistent AI conversation grounded in bounde
   its header with relationship, concept, provenance, and dead-link cleanup.
   Finishing a substantive note cross-pollinates every meaningfully affected wiki
   article in that Space as integrated prose.
+- Local note images from the toolbar, clipboard, or drag and drop. PNG, JPEG,
+  GIF, and WebP pixels stay in Orion's private data folder while the note keeps
+  a small portable Markdown reference and useful filename-derived alt text.
+  Offline web export embeds the images; Markdown export copies them into an
+  adjacent `orion-images` folder and uses relative links.
+- An opt-in inline AI writing mode in the editor: Continue at the caret, or
+  select anything from a phrase to a complete note and choose Rewrite, Clarify,
+  Tighten, Simplify, Expand, or Enrich. Enrich retrieves relevant knowledge only
+  from the active Space. Every result appears as a non-destructive proposal with
+  Accept, Try again, and Discard controls; accepting is one ordinary Undo step.
+  With an OpenAI key, the same selection overlay can also generate an editorial
+  image with `gpt-image-2`, using optional visual direction and bounded
+  **Across this Space** context. The image remains a disposable preview until
+  accepted, then becomes the same private, portable note-image attachment used
+  by pasted and dropped images without replacing the highlighted prose.
 - Automatic concept recognition from canonical article titles, deliberate aliases, semantically inferred AI vocabulary, and phrases explicitly taught through the Link tool. Tags remain organizational metadata rather than link vocabulary.
 - A scrollable Space to-do card on Home, derived from standard Markdown task lists in every note. Each open task retains its source note and best matching canonical concept and can be completed from Home or directly from the note’s reading surface without entering edit mode.
 - A living Space overview beside Tasks, with an editorial title and scrollable
@@ -58,6 +80,10 @@ Every Space also has **Chat**, one persistent AI conversation grounded in bounde
   deletions, or MCP writes change the Space. Orion keeps the previous overview
   readable during refresh and supplies a local keyless orientation when AI is
   unavailable.
+- A persistent semantic hierarchy behind that overview: deterministic
+  whole-body note digests feed stable 24–32-note clusters, recursively merged
+  blueprints, and one root Space blueprint. Ordinary changes update affected
+  clusters sequentially instead of asking a provider to reread every note.
 - Direct navigation to canonical Space articles, with the right-hand connections canvas retained only to disambiguate unresolved legacy terms.
 - Search and command palette across notes, concepts, sources, and actions.
 - Favorites above a complete per-Space sidebar note list, both ordered by when
@@ -71,21 +97,65 @@ Every Space also has **Chat**, one persistent AI conversation grounded in bounde
 - A bundled, local Claude Desktop connector that can search, cite, create,
   fully edit, and delete notes in an explicitly selected Space without making a
   sync copy or using an API key.
+- A bundled, zero-configuration Codex plugin with an Orion skill and the same
+  local, read-write Space tools. Orion opens it for installation in Codex
+  without asking the user to find `vault.json`, edit JSON, or understand MCP.
 - Automatic local persistence, OS-keychain API-key storage, and native export
   to either a self-contained interactive HTML article or portable Markdown
   files. Export scope can be the open note, that note plus one deliberate hop
   through its visible links, or the entire active Space.
 - Three persisted, reduced-motion-safe home atmospheres: Line Waves,
   pointer-reactive Signal Decay, and responsive Field. A compact tuner offers
-  four curated accents plus Still, Calm, and Alive motion characters.
+  a theme-derived accent, three deliberate alternatives, and Still, Calm, and
+  Alive motion characters. The canvas room and readable strokes inherit the
+  complete active appearance palette, including a live System-mode change.
 - Four curated reading-room presets with dark, light, and system modes, plus
   restrained accent, canvas, surface, warmth, and contrast tuning. Optional
   custom colors are clamped to the active mode and Orion derives accessible
   foregrounds automatically.
 
+## Codex plugin
+
+Open **Settings → Connections → Install in Codex**. Orion validates its
+bundled local marketplace and opens Orion's plugin page in the Codex app; choose
+**Install** there to confirm the per-user installation. The plugin includes the
+Orion skill and a self-contained Apple Silicon `orion-mcp` server. It resolves
+Orion's standard macOS library automatically, so there is no vault-path field,
+API key, background service, JSON editing, or manual MCP configuration. Open
+Orion once before first use so its local library exists.
+The install action is available only in the installed Orion desktop app, not
+the browser development preview.
+
+In Codex, ask to use Orion—for example, “find my notes about Comte”, “summarize
+this Space with citations”, or “write this as a note in my Research Space”. The
+plugin teaches Codex to discover the Space first, inspect the relevant notes or
+sources rather than treating the living overview as complete evidence, and use
+Orion citations when referring to a note. It exposes the same nine tools listed
+under the Claude connector below, including full create, update, and delete
+operations. Writes are direct ordinary Orion notes, not proposals or
+“AI-authored” records, and persist through the same lock-safe `vault.json` path.
+Orion can remain open; it reloads a newer external write when it returns to the
+foreground.
+
+Read operations default only to Orion's active Space when no `space_id` is
+given. Every write requires the exact Space ID, and neither reads nor writes can
+implicitly cross Spaces. The plugin rereads the vault on every call, makes no
+network request, and cannot read either provider key. Text that the user asks
+Codex to retrieve is then handled under their Codex product and account
+settings, just as text returned by any local MCP tool would be.
+
+Clicking **Install in Codex** again opens the same bundled marketplace
+page for update or reinstallation; Codex remains in control of whether the
+plugin is installed. The distributable source lives in `codex/orion`; build and
+release tooling stages a self-contained copy under
+`src-tauri/resources/Orion-Codex-Plugin` for the app bundle.
+The plugin build also produces
+`outputs/Orion-Codex-Plugin-<version>-Apple-Silicon.zip`, with one top-level
+`Orion-Codex-Plugin/` marketplace root for inspection or separate distribution.
+
 ## Claude connector
 
-Open **Settings → Claude → Install in Claude**. Orion opens its bundled
+Open **Settings → Connections → Install in Claude**. Orion opens its bundled
 `Orion-Claude-Connector.mcpb`; Claude Desktop then presents the local extension
 installation prompt. No vault path is requested: the connector automatically
 opens Orion's per-user macOS library. Open Orion once before first use so the
@@ -97,7 +167,8 @@ The connector supplies nine Space-scoped MCP tools:
 - list Spaces and their content counts;
 - browse the active Space by default, or one explicitly chosen Space;
 - search notes and concepts, defaulting to Orion's active Space;
-- read one note with its concepts, provenance, and connected notes;
+- read one note with its concepts, provenance, connected notes, and explicit
+  bounded `linksTo` / `linkedFrom` navigation;
 - read a bounded passage from one source;
 - read the bounded living Space overview with related note citations;
 - create a complete ordinary note;
@@ -115,6 +186,13 @@ still opens underlying notes or sources when evidence, citations, detailed
 facts, recent changes, or comprehensive coverage matter. Content writes mark an
 existing overview stale for Orion to refresh without giving the connector
 network or provider-key access.
+
+Note detail and successful create/update results expose `linksTo` and
+`linkedFrom`. Orion derives these directed, Space-local relationships from its
+explicit links, concept associations, and persisted relationship records. Each
+direction returns at most 50 citable note identities with an explicit
+truncation flag; it never embeds the connected notes' bodies. Browse and search
+remain compact discovery operations.
 
 ## Architecture and trust boundary
 
@@ -145,6 +223,12 @@ Claude Desktop extension (separate local process)
   • surfaces the living overview and related Orion note citations
   • shares Orion's cross-process vault lock and atomic replacement protocol
   • returns deep links to exact Orion notes and makes no network request
+
+Codex plugin (separate local process)
+  • opens its bundled marketplace in Codex with no vault-path or MCP configuration
+  • combines an Orion usage skill with the same bounded read-write MCP server
+  • requires an exact Space for writes and never reads provider credentials
+  • returns deep links to exact Orion notes and makes no network request
 ```
 
 The desktop renderer never receives either saved API key. It persists only the
@@ -156,13 +240,14 @@ provider request. The desktop
 content-security policy blocks arbitrary renderer network access.
 
 Document and pasted-text parsing happens locally in the renderer. Images and
-PDFs without meaningful selectable text use a bundled native helper linked to
-macOS's system-supplied Vision framework; normal selectable-text PDFs remain on
+Textless or materially damaged PDF pages use a bundled native helper linked to
+macOS's system-supplied Vision framework; healthy selectable-text pages remain on
 the faster pdf.js path. Ordinary webpages are fetched by a bounded native HTTPS
 command and their returned HTML or text is parsed through the same local
 extraction path. In AI mode, Orion sends the selected source text plus the
-enabled existing-note context to the selected provider. In manual mode, it
-makes no AI request. See
+enabled, overview-routed existing-note context to the selected provider. It
+never performs a provider-powered whole-Space context crawl. In manual mode,
+it makes no AI request. See
 [Privacy and data behavior](#privacy-and-data-behavior) for the precise payload
 and browser-preview caveat.
 
@@ -227,6 +312,8 @@ security model.
 | `npm run dev` | Start the browser-only Vite preview on port `1420`. |
 | `npm run build` | Type-check and build the renderer into `dist/`. |
 | `npm run build:mcp` | Build, sign, package, and protocol-test the local Claude connector. |
+| `npm run build:codex` | Build and contract-test the staged Codex plugin; pass `-- --use-existing` immediately after `build:mcp` to reuse its MCP binary. |
+| `npm run build:desktop` | Build native helpers, renderer, Claude connector, and Codex plugin in release dependency order. |
 | `npm run preview` | Serve the built renderer locally. |
 | `npm test` | Run the Vitest suite once. |
 | `npm run test:watch` | Run Vitest in watch mode. |
@@ -250,18 +337,23 @@ library-validation exception needed
 by its extracted PyInstaller runtime. Set `ORION_CODESIGN_IDENTITY` if more than
 one Developer ID identity is installed. Set `ORION_NOTARY_PROFILE` to a stored
 `notarytool` Keychain profile to submit, staple, and Gatekeeper-check the image.
-The release path builds the renderer and connector once before invoking Tauri
-with its nested pre-build hook disabled, so the assets fingerprinted by the
-script are the same assets Tauri embeds.
+The release path builds the renderer and Claude connector once, then stages the
+Codex plugin with `--use-existing` so the shared Rust MCP server is not compiled
+again, before invoking Tauri with its nested pre-build hook disabled. The assets
+fingerprinted by the script are therefore the same assets Tauri embeds.
 Every fresh release app is stamped with separate fingerprints for its source
 tree and production renderer. The release root is also required to be the
 canonical parent of Tauri's `frontendDist`; symlinked native trees that would
 silently embed another checkout's stale `dist/` are rejected. A later
 `--use-existing` pass is accepted only when both fingerprints still match, so
 an older app bundle or renderer cannot be republished after source fixes.
-The release check also extracts the exact Claude connector from the finished
-app, verifies its nested binary signature, and exercises its MCP lifecycle and
-Space isolation.
+The release check also validates the exact Claude connector and Codex plugin
+from the finished app and again from an app copied out of the final DMG. It
+verifies both nested MCP signatures and versions, checks the Codex marketplace,
+plugin, skill, and MCP contracts, and exercises lifecycle, citation, Space
+isolation, and persisted-write behavior. A `--use-existing` release rebuilds
+and replaces both bundled connector resources before resealing the app, so an
+old plugin tree cannot be carried into a new DMG.
 Do not copy directly over an installer that may still be mounted: mutating a
 mounted DMG's backing file can cause Finder error `-36` and leave a partial app
 in Applications.
@@ -277,7 +369,10 @@ public HTTPS webpage. Every input joins the same removable queue immediately,
 so more material can be added while earlier fetches or transcriptions run.
 Closing and reopening Import preserves that queue and its progress in the active
 Space. Review and AI organization are enabled only after preprocessing has
-produced parsed text.
+produced parsed text. If the selected material cannot fit one bounded AI
+synthesis, Orion partitions it locally into deterministic source-order batches,
+runs each through the same validated pipeline, and combines the results. It
+does not trim a source out of the queue merely to satisfy a batch limit.
 
 | Input | Behavior |
 | --- | --- |
@@ -286,7 +381,7 @@ produced parsed text.
 | `.json` | Validates and pretty-prints JSON; `title`, `name`, or `subject` can supply the source title. |
 | `.csv`, `.tsv` | Detects comma, tab, or semicolon delimiters and converts quoted rows to a Markdown table. |
 | `.html`, `.htm` | Extracts readable headings and text while removing scripts, styles, and other non-content elements. |
-| `.pdf` | Extracts meaningful selectable text page by page with pdf.js; when none is present, falls back to on-device Apple Vision recognition. |
+| `.pdf` | Extracts selectable text page by page with pdf.js, sends only textless or materially damaged physical pages through on-device Apple Vision, conservatively merges improved text, then removes repeated running heads/page numerals and line-break hyphenation while retaining every exact page marker. |
 | `.docx` | Extracts document text with Mammoth; layout, comments, and embedded media are not retained. |
 | `.png`, `.jpg`, `.jpeg`, `.heic`, `.heif` | Recognizes text on-device with Apple Vision for screenshots, scans, and whiteboard photographs. |
 | `.mp3`, `.m4a`, `.wav`, `.ogg`, `.flac` | Decodes locally with AVFoundation and transcribes with Orion's bundled model. |
@@ -299,13 +394,200 @@ once. Transcripts enter the same Review → Organize → Results flow as documen
 so manual mode keeps one verbatim note while AI mode can split a recording
 into focused notes and generate reusable concepts and links.
 
-The full extracted source text is retained locally in the source record. AI mode sends at most 60,000 characters from each selected source, produces at most eight project notes and 20 wiki-article updates per source with 30 generated notes per batch, and preserves the full local source if trimming was necessary. Manual mode creates one note per source using at most 200,000 characters for the note body while still preserving the full source record. The Review step includes one optional **Guide this import** field for telling Orion what to emphasize, preserve, connect, or turn into to-dos across the selected batch; the same field applies to documents, pasted text, webpages, media transcripts, and YouTube transcripts.
+The full extracted source text is always retained locally in its source record.
+A genuinely short batch can still finish through the legacy direct organizer,
+which retains its three-minute product boundary. Longer material follows an
+adaptive two-plan pipeline: Orion first takes a local orientation from the
+current root Space blueprint (or the bounded **Across this Space** fallback),
+plans what each part of the source needs to answer, reads those parts through a
+dynamic parallel queue, contracts and routes only the existing-note candidates
+made relevant by those readings, plans which connected notes actually belong,
+writes the planned notes in parallel, and finishes with local source/link
+checks. The long path has no
+shared 120- or 180-second cutoff. Each provider request instead has its own
+300-second emergency transport-safety ceiling, and the user can cancel the run
+throughout. This per-request ceiling is a stalled-transport safeguard, not a
+shared stage or product countdown.
+The orientation and last assembly step make no AI request; the assembler does
+not rewrite completed prose.
+
+A source with four or more stable pages uses page-aware ranges through the
+adaptive parallel reading path; unpaged text keeps the direct path until it
+exceeds the long-text threshold. If one source makes a batch long, shorter
+sources in that same batch still receive one complete reading so they cannot
+disappear from the shared plan. Initial ranges are derived from source density
+using soft targets of roughly 72 KiB and 12,000 estimated tokens, under hard
+per-packet ceilings of 100,000 UTF-8 bytes and roughly 25,000 tokens. A
+Hegel-sized, page-aware book is therefore expected to begin with about nine
+logical ranges. Logical range count is independent of physical concurrency:
+the initial canonical plan can contain up to twelve ranges, but twelve is not
+the final logical reading cap. A dense, incomplete, or range-local failed
+branch can be divided into narrower exact child ranges while successful
+siblings remain accepted. At most six provider calls run concurrently, so
+wider logical plans flow through more than one physical wave.
+
+Orion reassembles every successful child branch locally into one canonical
+evidence reading for its original source range. Claim identities are kept
+distinct, child support is mapped back to the canonical range, and the writing
+plan starts only after exact full coverage has been re-established. A branch
+that is already too small to divide receives one compact repair reading.
+Provider timeouts and provider-wide authentication, availability, or schema
+failures are not multiplied into recursive child work. With provider failover
+off they are terminal for that run; with failover explicitly enabled, an
+eligible timeout, availability/network, or rate-limit failure may retry that
+one assignment once through the other configured provider. If any branch
+remains invalid, Orion applies no partial synthesis and preserves the complete
+source. Orion automatically partitions a multi-source selection around the
+1,800,000-byte synthesis boundary; one source that individually exceeds it is
+preserved and lands visibly for a smaller follow-up import rather than being
+silently clipped.
+
+The first plan is deliberately Space-aware: it uses the existing project to ask
+better questions of the source. Readers still keep the boundary visible. Claims
+about the source carry exact range support; interpretations made through the
+Space carry their own claim and note references. Each reading separately judges
+source importance, Space relevance, and novelty, so unfamiliar useful evidence
+is not discarded merely because it does not match existing notes. The second
+plan may omit low-value repetition or tangential detail instead of mechanically
+forcing every passage into the notes, while the complete source remains locally
+available.
+
+For existing Space knowledge, Orion first uses its persisted root blueprint
+and a bounded set of relevance-ranked cluster blueprints. Those are derived
+from deterministic compact note digests and maintained outside the Import run,
+so Import performs no provider-powered whole-Space prepass. If the hierarchy is
+missing or stale, Orion falls back to the saved **Across this Space** title and
+summary plus bounded excerpts from at most eight valid same-Space notes listed
+or visibly linked by it. A missing overview uses the same keyless Home-card
+fallback; a saved overview without valid links remains summary-only. Deleted,
+invalid, duplicate, and cross-Space references are ignored.
+
+After source reading, Orion uses the grounded readings to contract one small
+hybrid candidate directory. A typed router classifies every exact candidate
+note/version before the writing plan, and only authorized relevant or uncertain
+notes may be opened exactly. Root/cluster blueprints, overview text, and linked
+excerpts are untrusted context for asking better questions, never evidence for
+a claim about the imported source. Turning off existing-note context sends no
+overview, hierarchy, digest, route, collision title, concept, relationship, or
+note body to the provider. When context is enabled, the writing planner also
+receives a title-only duplicate check capped at 500 titles and 48 KiB; it cannot
+authorize an existing-note revision.
+
+### Typed semantic routing boundary
+
+The short direct import path, fixed long import after source reading, and
+targeted enrichment can use a hybrid semantic router. Orion first selects
+explicit anchors and positive metadata/digest
+matches locally—even in a small Space—and caps that frozen universe at 71
+notes behind one virtual range. It does not send the complete Space merely
+because it would fit. A fixed long import does not route before reading; its
+grounded readings and persistent hierarchy contract the candidate range
+afterward, before the writing plan. This remains one bounded hybrid pass, never
+a whole-Space routing crawl.
+
+The host—not a model coordinator—creates router assignments from compact note
+digests. Every exact note ID and immutable version in the contracted universe
+must be classified once as `unrelated`, `duplicate`, `extends`, `contradicts`,
+or `uncertain`; missing, duplicate, extra, stale, substituted, or cross-Space
+coverage rejects the whole result. A separate consumer that genuinely needs a
+complete larger directory can use deterministic 24–32-note ranges, subject to
+the 100-range/3,200-note and identifier-size ceilings, but Import and enrichment
+do not use that form.
+
+The root sees only bounded routed metadata, never a full note body. A later
+assignment may open an `extends`, `contradicts`, or `uncertain` note only by
+citing its exact frozen note/version and the router artifact that classified
+it. A `duplicate` body can be opened only by the exclusive destination owner
+for that same note and base version; `unrelated` never opens. Routing therefore
+adds read eligibility, not write authority or source evidence, and ownership is
+still checked independently before one atomic revision. Turning off existing
+note context removes the overview, linked excerpts, compact digests, routing,
+collision titles, concepts, relationships, and other note-derived signals from
+provider requests.
+
+Compatibility organizer paths no longer send an arbitrary fixed-count payload
+of note-body slices. They share a deterministic, bodyless compact digest
+directory capped at 56 KiB; small Spaces may fit their metadata directory,
+while larger ones are filtered locally to graph anchors and positive semantic
+matches. These records support orientation, title reuse, and deduplication, but
+cannot authorize an existing-note rewrite.
+
+Validated source-range readings and router results may be reused from the
+installed app's bounded local fingerprint cache. Keys include the frozen Space,
+model, effort, assignment material, and exact note versions; every hit is
+rehydrated and revalidated, so a stale, corrupt, or incomplete entry behaves as
+an ordinary miss and correctness never depends on the cache.
+
+The reading plan, each source reading, the writing plan, and each writer receive
+independent transport windows rather than sharing a shrinking long-import
+clock. Typed plan and draft shape errors receive an immediate corrective pass.
+If the AI writing plan remains invalid after the source readings succeed, Orion
+automatically builds a safe create-only plan from those validated readings,
+groups the readers' compatible semantic synthesis seeds into durable knowledge
+objects, and fans those groups into at most six bounded note-writing calls.
+Seeds carry a semantic title, thesis, importance, exact claim IDs, and typed
+Space contribution. Readers write atomic claims, partition every claim into
+exactly one seed, and may combine at most four mutually supporting claims in a
+seed; seed titles and theses are unique within that reading. The writing plan
+must account for every seed as an output,
+justified merge, or low-importance omission. It combines compatible ideas
+across distant ranges and splits distinct ideas even when their evidence is
+adjacent. Evidence-rich books often support ten or more notes or exact
+revisions, without turning that expectation into a quota or adding filler. A
+malformed optional routing
+result safely falls back to new notes and never grants an existing-note rewrite.
+If one multi-note writing call remains contract-invalid, Orion retains its
+successful siblings and recursively narrows only that call. A final single-note
+contract failure is completed transparently from its planned thesis, exact
+selected claims, and selected Space interpretations—never a Part-N title,
+range-summary copy, or source-heading bullet dump. Provider outages,
+authentication failures, timeouts, and
+cancellation never cause this subdivision or multiply doomed requests. Bounded
+reader and writer recovery circuits prevent persistent malformed responses from
+turning adaptive width into an unbounded request tree.
+The user is not asked to click Resume for these recoverable failures.
+
+A missing, stale, invalid, or transport-failed final branch is never partially
+applied. A failed installed-app orchestration does not trigger a second network
+organizer: Orion preserves the complete source and creates an editable preview
+note instead. The full extracted text remains on its Source record. For long
+imports, canonical readings, validated adaptive child readings and their exact
+pending frontier, accepted routing, and completed per-note drafts are kept in a
+versioned session recovery checkpoint. Eligible transient, checkpoint-safe failures resume
+automatically at most twice with short bounded backoff; cancellation, a changed
+Space, and unsafe checkpoints always remain visible stops. Only after automatic
+recovery is genuinely exhausted does Results name the exact stopped stage, show
+the safe provider or validation detail and retained counts, and offer **Resume
+import** without repeating accepted work. A changed source, Space, model, or
+instruction invalidates that checkpoint and offers a clean **Retry import**
+instead. API keys and user-specific path components are redacted from visible
+diagnostics. Import presents these phases as Preparing
+the reading, Reading in parallel, Planning the notes, Writing in parallel, and
+Final checks. Reading totals may grow when one section needs a closer pass;
+progress remains indeterminate, reports real completed counts, and retains
+Cancel throughout. Each writer has room for up to 12,000 output tokens.
+
+Every existing article revision still names that exact note and its frozen base
+version; no two writing slots can own the same destination. Project notes, wiki
+revisions, links, and provenance are validated before one atomic Space update.
+AI output remains bounded to 30 returned project notes and canonical articles
+per batch; existing article revisions retain their independent version checks.
+Manual mode creates one note per source using at most 200,000 characters for the
+editable preview while preserving the full extracted text on its Source record.
+The Review step includes one
+optional **Guide this import** field for telling Orion what to emphasize,
+preserve, connect, or turn into to-dos across the selected batch; the same field
+applies to documents, pasted text, webpages, media transcripts, and YouTube
+transcripts.
 
 AI mode distinguishes faithful notes about imported material from durable, Space-scoped definitional wiki articles. A returned wiki body is a complete ready-to-read article: Orion integrates project relevance, source-grounded detail, and uncertainty into the sections where they naturally belong instead of appending provenance headings or change logs. Stable general knowledge may support the definition; citations, dates, statistics, contested specifics, and current claims must remain grounded in supplied material. Explicit actions in imported material can be retained as editable `- [ ]` tasks, but Orion does not invent work.
 
 Canonical articles are upserted rather than duplicated. Orion normalizes exact titles within the active Space, coalesces repeated articles in the same import, and reuses a uniquely matching existing canonical article or note instead of creating a suffixed copy. A new article is immediately part of the evolving Space rather than entering a visible review lifecycle. Updating an existing article preserves its identity, merges aliases, tags, and source provenance, and replaces the body only with the model’s complete integrated revision. Subsequent sources in a batch see the preceding revision so knowledge cross-pollinates instead of being stacked into programmed “Context from…” sections. Unrelated articles and lexical-only matches are excluded.
 
-If an AI call fails, Orion keeps the source and falls back to a manual note for that item rather than discarding the import.
+If an AI call fails, Orion keeps the complete Source record and prepares an
+editable preview note rather than discarding the import. Long-import Results
+also retain completed work for Resume when its recovery checkpoint still
+matches the current Space and source.
 
 ## Local Vision text recognition
 
@@ -316,16 +598,24 @@ send the original image or PDF to a recognition service. The imported source
 retains the recognized text, filename, MIME type, byte size, and resulting note
 provenance in `vault.json`, not a copy of the original image or PDF bytes.
 
-Selectable-text PDFs stay on the pdf.js fast path. Orion invokes Vision only
-when that first pass finds no meaningful text, then preserves recognized PDF
-pages with page headings in the extracted source. Recognition quality depends
+Healthy PDF pages stay on the pdf.js fast path. Orion selects only physical
+pages whose embedded layer is textless or materially damaged, sends their exact
+one-based page numbers and the original PDF to one local Vision invocation, and
+merges recognized text back onto those same page numbers. A damaged page is
+replaced only when recognition reduces broken glyphs while retaining plausible
+length and vocabulary overlap; otherwise Orion preserves its embedded text and
+warns. ClearScan-era books are then normalized locally by removing marginal
+page numerals, subsequent exact running-head copies, and soft line-wrap
+hyphenation while retaining every physical page boundary, including blank
+pages. Recognition quality depends
 on image sharpness, contrast, orientation, handwriting, layout, and the
 languages supported by the installed macOS version; review important names and
 numbers before relying on them. Images and PDFs share the 25 MiB per-file and
-12-source queue limits. OCR also rejects PDFs over 50 pages and source images
-over 100 megapixels; it bounds image decoding to a 4,096-pixel longest edge,
-PDF page rendering to 2,600 pixels, recognized text to 100,000 characters per
-page, and one million characters per document.
+12-source queue limits. Whole-PDF OCR remains limited to 50 pages; selective OCR
+may inspect at most 512 exact pages from a larger PDF and renders only those
+pages. OCR rejects source images over 100 megapixels and bounds image decoding
+to a 4,096-pixel longest edge, PDF page rendering to 2,600 pixels, recognized
+text to 100,000 characters per page, and one million characters per invocation.
 
 Browser preview has no native Vision helper. It reports that image and
 scanned-PDF recognition requires the installed Orion desktop app rather than
@@ -374,12 +664,17 @@ request.
 
 OpenAI organization uses `POST /v1/responses` with `store: false`; Anthropic
 organization uses `POST /v1/messages`. Both use strict JSON-schema output and a
-12,000-token response ceiling. Chat uses the selected provider with its own
-strict reply schema and a 6,000-token response ceiling. The default settings are:
+12,000-token response ceiling. Inline AI writing uses a writing-specific system
+boundary and the same 12,000-token ceiling. Chat uses its own conversational
+instructions. An ordinary request is reply-only with a 6,000-token ceiling and
+no write capability; only a host-verified explicit creation request enables the
+strict reply-plus-note-actions schema and 12,000-token ceiling. The default
+settings are:
 
 - Model: `gpt-5.6-sol`
 - Reasoning depth: `low`
 - Existing-note context: enabled
+- Provider failover: disabled
 
 The model choices exposed by the UI are:
 
@@ -393,8 +688,12 @@ The model choices exposed by the UI are:
 | `claude-sonnet-5` | Fast frontier intelligence with balanced cost. |
 
 Reasoning choices are `none`, `low`, `medium`, `high`, and `xhigh`. Model access
-and billing depend on the account behind the selected provider key; Orion does
-not silently substitute a different model or provider.
+and billing depend on the account behind the selected provider key. Orion does
+not silently substitute a different model or provider. If the user explicitly
+enables **Fall back to your other provider** and has configured both keys, one
+knowledge assignment that fails for an eligible timeout, network/availability,
+or rate-limit reason may retry once with the other provider's default model.
+Authentication/billing failures and cancellation never fail over.
 
 Organization guidance in Settings is appended to Orion's built-in knowledge-architect instructions. Source content is treated as untrusted data, and the built-in prompt explicitly tells the model not to follow instructions found inside imported material.
 
@@ -405,7 +704,39 @@ the active Space. Orion sends the current prompt, up to 12 recent conversation
 turns, and bounded context from that Space: up to 80 notes, 30 sources, and 120
 concepts. Switching Spaces changes both the history and context completely.
 Orion treats supplied note, source, concept, and conversation text as untrusted
-knowledge data rather than instructions.
+knowledge data rather than instructions. This 80-note projection is specific to
+Chat; Import and enrichment do not reuse it as an organizer fallback.
+
+Orion derives write intent only from the current user prompt, sends that
+authorization as a host field, and independently recomputes it at the native
+boundary and again before applying a result. A negated request, a question about
+whether or how to make notes, or ordinary conversation stays reply-only—even if
+a source, existing note, prior message, or model output asks for a write. These
+normal replies use a 6,000-token output ceiling and cannot create notes.
+
+Only when the user explicitly asks Chat to create, capture, or save notes may
+the provider return up to three complete creation-only actions alongside its
+reply, using a 12,000-token transport ceiling. Each action body is capped at
+6,000 Unicode characters; the combined titles, summaries, bodies, tags, and
+aliases of all accepted actions are capped at 24,000 characters. Actions cannot
+name another Space, update or delete an existing note, or create a proposal.
+
+Orion validates actions independently in both the renderer and native host. It
+drops an action with malformed or unknown fields, oversized content, invalid
+labels, disallowed control characters, hidden `<!-- orion-… -->` control
+comments, or the reserved tags `ai-draft`, `wiki-article`,
+`orion-link-draft`, and `orion-link-pending`. A rejected action does not discard
+the valid conversational reply or other safe actions. Accepted notes become
+permanent, editable notes only in the captured active Space, and each
+created-note chip opens the real note.
+
+Every assistant response that did not create a surviving note also offers
+**Keep as note**. This ordinary explicit UI action remains available for
+reply-only conversation: it strips Orion control comments and disallowed control
+characters, saves the reply as one ordinary note, and becomes an Open-note
+destination. Activating it repeatedly cannot duplicate the note. Both creation
+paths reconcile Orion's link vocabulary and refresh the Space overview just like
+other permanent note changes.
 
 Chat is intentionally one conversation surface. It does not create or curate
 cards and has no proposal, selection, promotion, dialectic, or canvas workflow.
@@ -413,13 +744,15 @@ For existing vaults, Chat history continues to use the legacy
 `studio.messages` field. Older card, selection, focus, view, zoom, and
 panel-layout fields remain dormant and are accepted solely for vault
 compatibility; Chat does not display them or send them to either provider.
+The optional created-note IDs stored on assistant messages are backward
+compatible with older vaults.
 
 ## Links, concepts, and navigation
 
 Each Space owns an independent canonical link vocabulary. A concept label and its deliberate aliases identify one primary wiki article or note in that Space; the concept's canonical title must match that destination's title. Contextual project notes can support or relate to the article without becoming alternate link destinations. Tags remain useful for organization, filtering, and export, but Orion does not turn tags into automatic hyperlinks. Markdown remains a portable storage and export format behind the editor, but users never need to write it.
 
 - Click **Edit** to write directly on the note; the compact word-processing toolbar animates into place without swapping to a separate editor.
-- Select words and click **Link**, or click **Link** first and type a phrase. Choose **Write with AI**—optionally telling Orion what the page should explain—or **Blank page**. Orion creates or reuses the named Space article, and future occurrences become hyperlinks automatically. The destination picker remains available only when deliberately preserving a multi-note legacy branch.
+- Select a short phrase and click **Link** to make those exact words the reusable link without an AI request. For a whole passage or code block, enter a separate page title or leave it blank for the configured AI provider to name from the selection and the Space. Orion keeps contextual selections untouched, adds only the title as a link above them, and gives the selected passage special weight when writing the page. Choose **Write with AI**—optionally telling Orion what the page should explain—or **Blank page**. Orion creates or reuses the named Space article, and future title occurrences become hyperlinks automatically. The destination picker remains available only when deliberately preserving a multi-note legacy branch.
 - Select linked words and click **Unlink** to keep the prose and destination article while stopping that concept from linking automatically across the Space. Teaching the phrase again re-enables it.
 - With **Write with AI**, a newly created link article is populated from the originating note, its direct imported sources, bounded Space context, and the optional page instruction. A compact sidebar card reports the real workflow phases—gathering sources, reading the Space, writing, and connecting—and opens the article when clicked. Progress spans a 90-second response budget instead of appearing to freeze early. Failed or timed-out generation leaves the unfinished page visible with **Restart** and **Delete** actions, and Restart retains the page-specific instruction. **Blank page** creates the canonical article without queuing AI.
 - When **Done** is clicked after writing a substantive non-wiki note, Orion checks that note against the active Space and rewrites every meaningfully affected canonical article as a coherent integrated revision. It does not append note-labelled context sections. This automatic refresh requires the key for the selected provider and never crosses Space boundaries.
@@ -485,9 +818,11 @@ text, source filenames, Chat, settings, provider keys, import queue state, and
 other Spaces are excluded. Destinations outside the selected scope remain
 readable but inert. User-authored HTML is not executed, the export loads no
 remote scripts, styles, fonts, or images, and a restrictive content-security
-policy keeps the snapshot offline. Desktop saves through a native file picker
-using a flushed temporary file plus atomic replacement; browser preview uses a
-normal download.
+policy keeps the snapshot offline. Its derived colors inherit the active
+preset, accent, canvas, surface, text warmth, contrast, and safe custom colors;
+explicit light or dark stays fixed while System remains adaptive. Desktop saves
+through a native file picker using a flushed temporary file plus atomic
+replacement; browser preview uses a normal download.
 
 **Markdown files** uses the same scope selection. Desktop export asks for a
 folder and writes one UTF-8 file per selected note with YAML `title` and `tags`
@@ -503,9 +838,67 @@ Browser preview downloads the selected notes as one combined Markdown file.
   an explicitly selected Space. It does not contact Orion, OpenAI, Anthropic,
   or another network service itself; material returned to Claude is then
   subject to the user's Claude product and account settings.
-- AI mode sends the selected source text, source name, Space name and description, import-scoped guidance/rules and the general Space preference (independently bounded to 2,000 characters so one never truncates the other), and—when enabled—up to 80 existing note titles, hidden reference roles, aliases, and summaries to the selected OpenAI or Anthropic model. Existing canonical wiki articles are prioritized in that bound and may also contribute up to 6,000 characters of body text so the organizer can reuse and extend them without duplication; other note bodies and unrelated source records are not added.
-- Finishing a substantive note with AI configured sends that note’s title, summary, and up to 48,000 characters of body text through the same organizer. When existing-note context is enabled, the same bounded Space context is included. Complete integrated revisions are applied only to that Space’s relevant canonical articles.
-- A Chat message sends only bounded material from the active Space: the prompt, up to 12 recent turns, and context for up to 80 notes, 30 sources, and 120 concepts. It sends no legacy card or layout state. Switching Spaces changes the history and context completely.
+- The optional Codex plugin has the same local read and explicit-Space write
+  boundary. It can create, fully edit, and delete notes when the user asks Codex
+  to use those tools, but it cannot inspect provider keys, call Orion's AI
+  providers, or access another Space implicitly. The plugin itself makes no
+  network request; Orion text returned through a tool is then subject to the
+  user's Codex product and account settings.
+- AI mode sends the selected source text or bounded source-range material,
+  source identity, Space name and description, import-scoped guidance/rules,
+  and the general Space preference to the selected OpenAI or Anthropic model.
+  When existing-note context is enabled, planning stages may receive the
+  current persisted root Space blueprint and bounded relevant cluster
+  blueprints, or the saved **Across this Space** overview and excerpts from at
+  most eight valid same-Space notes as a fallback. Orion selects that packet
+  locally with zero Import-time provider calls. After long-source reading, one
+  bounded hybrid router may classify a contracted candidate directory so later
+  assignments can open only authorized exact versions. None of these paths
+  sends every note body or performs a provider-powered whole-Space prepass.
+  Blueprint, overview, route, and note material is untrusted orientation only,
+  never imported-source evidence.
+  When context is disabled, no overview, linked-note excerpt, compact digest,
+  route, collision title, concept, relationship, prior-source association, or
+  other note-derived signal is sent. Later assignments receive only their
+  declared exact references and never inherit parent transcripts or unrelated
+  Spaces. With context enabled, the long-path writing planner has one narrow
+  extra disclosure: up to 500 note titles within a 48-KiB collision directory,
+  without bodies or summaries and without revision authority. At most six
+  calls run at once. The adaptive long path has no shared wall-clock
+  deadline: its reading plan, source readings, writing plan, and writers each
+  have an independent 300-second emergency transport-safety ceiling, and
+  cancellation stops the run. This is not a shared stage or product countdown.
+  A failed installed-app run starts no second network workflow; Orion keeps the
+  full extracted text in Sources and creates a bounded editable preview note.
+  The genuinely short direct organizer retains its legacy 180-second bounded
+  runtime.
+- Finishing a substantive note with AI configured enters the same knowledge-orchestration boundary. The origin note and its direct sources are frozen evidence; an existing canonical article can change only through an exclusive owner proposal against its exact base version. Orion rechecks the origin and every owned destination before applying one coherent set of revisions to that Space.
+- Inline AI writing sends the exact selected Markdown or bounded material around
+  the caret, the active note title and summary, and the optional one-request
+  instruction to the selected provider. Rewrite, Clarify, Tighten, Simplify,
+  Expand, and Continue receive no unrelated Space records. Enrich may also send
+  a relevance-ranked, bounded set of notes, concepts, and source passages from
+  the active Space only so it can integrate grounded context and citations.
+  Proposals stay outside the saved note until the user accepts one.
+- Selected-passage image generation is OpenAI-only and uses `gpt-image-2` through
+  the Image API. It sends the exact highlighted passage, optional one-request
+  visual direction, and—only when existing-note context is enabled—the bounded
+  **Across this Space** overview plus excerpts from at most six notes visibly
+  linked or mentioned there. It does not scan the Space or send source bodies.
+  Orion requests one medium-quality landscape JPEG; returned bytes remain
+  transient until Accept, and Cancel invalidates the native request and any late
+  result. Accept stores the pixels in Orion's private image directory and adds
+  one portable Markdown image after the unchanged selection as a single Undo
+  step.
+- A Chat message sends only bounded material from the active Space: the prompt,
+  up to 12 recent turns, and context for up to 80 notes, 30 sources, and 120
+  concepts. It sends no legacy card or layout state. The host enables the note
+  action schema only when the current prompt independently matches an explicit
+  creation request; untrusted context and model output cannot grant that
+  authority. Up to three creation-only actions then pass the local field,
+  content, aggregate-size, control-marker, and reserved-tag firewall before they
+  can apply to the captured active Space. Switching Spaces changes the history
+  and context completely.
 - OpenAI requests set `store: false`; each provider's account-level data controls
   and applicable retention policies still apply.
 - API use can incur charges. A valid key does not guarantee access to every model.
@@ -546,7 +939,10 @@ URL validation, temporary-media deletion, `yt-dlp` metadata, Responses API outpu
 extraction, portable export names, bounded self-contained HTML generation,
 one-hop link scope, citation privacy, atomic web-file replacement, atomic vault
 round-trips, MCP protocol shape,
-bounded source reads, and Space isolation. Release QA also
+bounded source reads, and Space isolation. The Codex plugin contract harness
+also validates its local marketplace metadata, manifest paths, skill, MCP
+configuration, shared binary version, Orion citations, and persisted writes.
+Release QA also
 uses only the executables inside the finished app to download and transcribe a
 real short YouTube source, and runs the MCP harness against the connector
 extracted from the packaged application.
@@ -583,4 +979,10 @@ src-tauri/
   vendor/           official whisper.cpp macOS framework
   src/lib.rs        vault, keychain, AI providers, offline media, export, and Tauri commands
   tauri.conf.json   window, bundled runtime files, identity, and CSP configuration
+codex/orion/         canonical zero-config Codex plugin source
+src-tauri/resources/Orion-Codex-Plugin/
+                    generated marketplace/plugin tree embedded in Orion.app
+script/
+  build_codex_plugin.sh  stage and validate the bundled Codex plugin
+  test_codex_plugin.mjs  plugin contract and read-write MCP harness
 ```

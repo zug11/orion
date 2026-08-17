@@ -39,6 +39,17 @@ mkdir -p "$OUTPUT_DIR" "$RESOURCE_DIR"
 
 (
   cd "$ROOT_DIR"
+  encoded_rustflags="${CARGO_ENCODED_RUSTFLAGS:-}"
+  for remap_flag in \
+    "--remap-path-prefix=$ROOT_DIR=/orion" \
+    "--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo" \
+    "--remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup"; do
+    if [[ -n "$encoded_rustflags" ]]; then
+      encoded_rustflags+=$'\x1f'
+    fi
+    encoded_rustflags+="$remap_flag"
+  done
+  export CARGO_ENCODED_RUSTFLAGS="$encoded_rustflags"
   cargo test --locked --manifest-path "$MCP_CRATE" \
     --target-dir "$ROOT_DIR/src-tauri/target"
   cargo build --locked --release --manifest-path "$MCP_CRATE" \
@@ -48,6 +59,11 @@ mkdir -p "$OUTPUT_DIR" "$RESOURCE_DIR"
 if [[ ! -x "$RELEASE_BINARY" ]] ||
   ! file "$RELEASE_BINARY" | grep -q "Mach-O 64-bit executable arm64"; then
   echo "orion-mcp is missing or is not an Apple Silicon executable." >&2
+  exit 1
+fi
+/usr/bin/strip -S -x "$RELEASE_BINARY"
+if LC_ALL=C grep -a -F -q "$HOME/" "$RELEASE_BINARY"; then
+  echo "orion-mcp contains a build-user path after release cleanup." >&2
   exit 1
 fi
 if [[ "$CODE_SIGN_IDENTITY" == "-" ]]; then

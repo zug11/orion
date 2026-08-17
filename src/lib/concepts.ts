@@ -38,6 +38,7 @@ export interface RegisterWikiLinkInput {
   destinationNoteIds: readonly EntityId[];
   articleMode: "ai" | "blank";
   articleInstructions?: string;
+  selectedContext?: string;
   description?: string;
 }
 

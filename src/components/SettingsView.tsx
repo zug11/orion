@@ -32,11 +32,13 @@ import {
   themePresetOptions,
   themeSurfaceOptions,
   themeWarmthOptions,
+  type ThemePalette,
 } from "../lib/theme";
 import {
   checkTranscriptionSetup,
   isTauriRuntime,
   openClaudeConnector,
+  openCodexPlugin,
 } from "../lib/storage";
 import type {
   HomeAtmosphere,
@@ -119,6 +121,7 @@ function ThemeColorOverride({
 
 interface SettingsViewProps {
   settings: Settings;
+  themePalette?: ThemePalette;
   onChange: (settings: Settings) => void;
   onSaveApiKey: (apiKey: string) => Promise<void>;
   onDeleteApiKey: () => Promise<void>;
@@ -199,6 +202,7 @@ const atmosphereOptions: Array<{
 
 export function SettingsView({
   settings,
+  themePalette,
   onChange,
   onSaveApiKey,
   onDeleteApiKey,
@@ -221,8 +225,14 @@ export function SettingsView({
   );
   const [setupBusy, setSetupBusy] = useState(false);
   const [setupMessage, setSetupMessage] = useState<string | null>(null);
-  const [connectorBusy, setConnectorBusy] = useState(false);
-  const [connectorMessage, setConnectorMessage] = useState<string | null>(null);
+  const [claudeConnectorBusy, setClaudeConnectorBusy] = useState(false);
+  const [claudeConnectorMessage, setClaudeConnectorMessage] = useState<
+    string | null
+  >(null);
+  const [codexPluginBusy, setCodexPluginBusy] = useState(false);
+  const [codexPluginMessage, setCodexPluginMessage] = useState<string | null>(
+    null,
+  );
   const [activeSection, setActiveSection] = useState<
     | "intelligence"
     | "claude"
@@ -239,7 +249,8 @@ export function SettingsView({
     settings.theme,
     prefersLight,
   );
-  const activeThemePalette = resolveThemePalette(settings, previewMode);
+  const activeThemePalette =
+    themePalette ?? resolveThemePalette(settings, previewMode);
 
   useEffect(() => {
     setKeyMessage(null);
@@ -335,19 +346,36 @@ export function SettingsView({
   }
 
   async function installClaudeConnector() {
-    setConnectorBusy(true);
-    setConnectorMessage(null);
+    setClaudeConnectorBusy(true);
+    setClaudeConnectorMessage(null);
     try {
       await openClaudeConnector();
-      setConnectorMessage(
+      setClaudeConnectorMessage(
         "Claude Desktop should now ask you to install the Orion extension.",
       );
     } catch (error) {
-      setConnectorMessage(
+      setClaudeConnectorMessage(
         error instanceof Error ? error.message : String(error),
       );
     } finally {
-      setConnectorBusy(false);
+      setClaudeConnectorBusy(false);
+    }
+  }
+
+  async function installCodexPlugin() {
+    setCodexPluginBusy(true);
+    setCodexPluginMessage(null);
+    try {
+      await openCodexPlugin();
+      setCodexPluginMessage(
+        "Codex should now show Orion’s plugin page. Choose Install to connect your atlas.",
+      );
+    } catch (error) {
+      setCodexPluginMessage(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setCodexPluginBusy(false);
     }
   }
 
@@ -375,7 +403,7 @@ export function SettingsView({
             className={activeSection === "claude" ? "active" : ""}
             onClick={() => setActiveSection("claude")}
           >
-            <Cable size={15} /> Claude
+            <Cable size={15} /> Connections
           </a>
           <a
             href="#transcription"
@@ -415,7 +443,7 @@ export function SettingsView({
               </span>
               <span>
                 <h2>OpenAI connection</h2>
-                <p>Used for AI organisation during import and for Chat.</p>
+                <p>Used for AI organisation, inline writing, and Chat.</p>
               </span>
             </div>
 
@@ -578,8 +606,9 @@ export function SettingsView({
                 <span>
                   <strong>Use existing note context</strong>
                   <small>
-                    Send a compact manifest of titles, aliases, and summaries so
-                    imports can reuse your established vocabulary.
+                    Let Orion locally find relevant note digests, then open only
+                    the exact notes its router selects. Turn this off to send no
+                    existing Space context during imports or enrichment.
                   </small>
                 </span>
                 <input
@@ -589,6 +618,25 @@ export function SettingsView({
                   onChange={(event) =>
                     patch({
                       includeExistingNotesInAIContext: event.target.checked,
+                    })
+                  }
+                />
+              </label>
+              <label className="setting-row divided">
+                <span>
+                  <strong>Fall back to your other provider</strong>
+                  <small>
+                    Use your other configured provider automatically when one
+                    fails mid-import.
+                  </small>
+                </span>
+                <input
+                  className="switch"
+                  type="checkbox"
+                  checked={settings.providerFailoverEnabled}
+                  onChange={(event) =>
+                    patch({
+                      providerFailoverEnabled: event.target.checked,
                     })
                   }
                 />
@@ -619,8 +667,8 @@ export function SettingsView({
                 <Cable size={18} />
               </span>
               <span>
-                <h2>Claude connector</h2>
-                <p>Let Claude read and write directly in your Orion Spaces.</p>
+                <h2>Claude &amp; Codex</h2>
+                <p>Bring your Orion Spaces into either assistant.</p>
               </span>
             </div>
 
@@ -752,11 +800,12 @@ export function SettingsView({
             <div className="setting-card claude-connector-card">
               <div className="claude-connector-intro">
                 <span>
-                  <strong>Your atlas, available in conversation</strong>
+                  <strong>Your atlas, available where you think</strong>
                   <small>
-                    Claude can find Spaces, search concepts, and read the notes
-                    or source passages you ask about. It can also create, edit,
-                    and delete notes directly in the Space you choose.
+                    Claude and Codex can find Spaces, search concepts, and read
+                    the notes or source passages you ask about. They can also
+                    create, edit, and delete notes directly in the Space you
+                    choose. Neither connection needs an Orion API key.
                   </small>
                 </span>
                 <span className="status-pill success">
@@ -771,34 +820,70 @@ export function SettingsView({
                 <span>Bounded source evidence</span>
               </div>
 
-              <div className="claude-connector-actions">
-                <small>
-                  Installs as a local Claude Desktop extension with no vault
-                  path to configure. Open Orion once, then Claude finds your
-                  local atlas automatically. Search stays in the active Space
-                  unless you explicitly choose another one.
-                </small>
-                <button
-                  className="button primary compact"
-                  type="button"
-                  disabled={!desktopRuntime || connectorBusy}
-                  onClick={installClaudeConnector}
-                >
-                  {connectorBusy ? (
-                    <LoaderCircle size={14} className="spin" />
-                  ) : (
-                    <ExternalLink size={14} />
+              <div className="connector-install-options">
+                <div className="connector-install-option">
+                  <span>
+                    <strong>Claude Desktop</strong>
+                    <small>
+                      Add Orion as a local extension. Open Orion once and your
+                      atlas is ready—there are no folders or paths to configure.
+                    </small>
+                  </span>
+                  <button
+                    className="button primary compact"
+                    type="button"
+                    aria-busy={claudeConnectorBusy}
+                    disabled={!desktopRuntime || claudeConnectorBusy}
+                    onClick={installClaudeConnector}
+                  >
+                    {claudeConnectorBusy ? (
+                      <LoaderCircle size={14} className="spin" />
+                    ) : (
+                      <ExternalLink size={14} />
+                    )}
+                    Install in Claude
+                  </button>
+                  {claudeConnectorMessage && (
+                    <p className="setting-message" role="status">
+                      {claudeConnectorMessage}
+                    </p>
                   )}
-                  Install in Claude
-                </button>
+                </div>
+
+                <div className="connector-install-option">
+                  <span>
+                    <strong>Codex</strong>
+                    <small>
+                      Open Orion’s bundled plugin in Codex, then choose Install.
+                      It connects to the same local atlas automatically.
+                    </small>
+                  </span>
+                  <button
+                    className="button primary compact"
+                    type="button"
+                    aria-busy={codexPluginBusy}
+                    disabled={!desktopRuntime || codexPluginBusy}
+                    onClick={installCodexPlugin}
+                  >
+                    {codexPluginBusy ? (
+                      <LoaderCircle size={14} className="spin" />
+                    ) : (
+                      <ExternalLink size={14} />
+                    )}
+                    Install in Codex
+                  </button>
+                  {codexPluginMessage && (
+                    <p className="setting-message" role="status">
+                      {codexPluginMessage}
+                    </p>
+                  )}
+                </div>
               </div>
               {!desktopRuntime && (
                 <p className="setting-message">
-                  Connector installation is available in the Orion desktop app.
+                  Claude and Codex installation is available in the installed
+                  Orion desktop app.
                 </p>
-              )}
-              {connectorMessage && (
-                <p className="setting-message">{connectorMessage}</p>
               )}
             </div>
           </section>
@@ -1175,39 +1260,60 @@ export function SettingsView({
                   role="radiogroup"
                   aria-label="Home atmosphere"
                 >
-                  {atmosphereOptions.map((option) => (
-                    <button
-                      key={option.id}
-                      type="button"
-                      role="radio"
-                      aria-checked={settings.homeAtmosphere === option.id}
-                      aria-label={`${option.name}: ${option.description}`}
-                      className={
-                        settings.homeAtmosphere === option.id ? "active" : ""
-                      }
-                      onClick={() =>
-                        patch({ homeAtmosphere: option.id })
-                      }
-                    >
-                      <span
-                        className={`atmosphere-preview ${option.id}`}
-                        aria-hidden="true"
+                  {atmosphereOptions.map((option) => {
+                    const previewPalette = resolveAtmospherePalette(
+                      option.id,
+                      settings.homeAtmosphereTone,
+                      activeThemePalette,
+                    );
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={settings.homeAtmosphere === option.id}
+                        aria-label={`${option.name}: ${option.description}`}
+                        className={
+                          settings.homeAtmosphere === option.id ? "active" : ""
+                        }
+                        onClick={() =>
+                          patch({ homeAtmosphere: option.id })
+                        }
                       >
-                        <i />
-                        <i />
-                        <i />
-                      </span>
-                      <span>
-                        <strong>{option.name}</strong>
-                        <small>{option.description}</small>
-                      </span>
-                      <i className="atmosphere-selection">
-                        {settings.homeAtmosphere === option.id && (
-                          <Check size={12} />
-                        )}
-                      </i>
-                    </button>
-                  ))}
+                        <span
+                          className={`atmosphere-preview ${option.id}`}
+                          style={
+                            {
+                              "--atmosphere-background":
+                                previewPalette.background,
+                              "--atmosphere-background-secondary":
+                                previewPalette.backgroundSecondary,
+                              "--atmosphere-primary": previewPalette.primary,
+                              "--atmosphere-secondary":
+                                previewPalette.secondary,
+                              "--atmosphere-tertiary": previewPalette.tertiary,
+                              "--atmosphere-bright": previewPalette.bright,
+                              "--atmosphere-muted": previewPalette.muted,
+                            } as CSSProperties
+                          }
+                          aria-hidden="true"
+                        >
+                          <i />
+                          <i />
+                          <i />
+                        </span>
+                        <span>
+                          <strong>{option.name}</strong>
+                          <small>{option.description}</small>
+                        </span>
+                        <i className="atmosphere-selection">
+                          {settings.homeAtmosphere === option.id && (
+                            <Check size={12} />
+                          )}
+                        </i>
+                      </button>
+                    );
+                  })}
                 </div>
                 <div
                   className="atmosphere-tuner"
@@ -1221,6 +1327,7 @@ export function SettingsView({
                           resolveAtmospherePalette(
                             settings.homeAtmosphere,
                             settings.homeAtmosphereTone,
+                            activeThemePalette,
                           ).primary
                         }
                       </small>
@@ -1233,6 +1340,7 @@ export function SettingsView({
                         const color = resolveAtmospherePalette(
                           settings.homeAtmosphere,
                           option.id,
+                          activeThemePalette,
                         ).primary;
                         return (
                           <button
@@ -1305,9 +1413,11 @@ export function SettingsView({
                   <strong>Local-first by design</strong>
                   <small>
                     Notes, relationships, and sources stay in Orion’s application
-                    data folder. AI Import sends selected material; Chat sends
-                    bounded context from the current Space through only the AI
-                    provider and model you select.
+                    data folder. AI Import sends selected material; inline
+                    writing sends only its editor context and, for Enrich,
+                    relevant active-Space knowledge; Chat sends bounded Space
+                    context. Every request uses only the provider and model you
+                    select.
                   </small>
                 </span>
               </div>

@@ -3,6 +3,7 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::{
     cmp::Reverse,
+    collections::{BTreeMap, BTreeSet},
     env,
     ffi::{OsStr, OsString},
     fs::{self, File, OpenOptions},
@@ -31,6 +32,7 @@ const DEFAULT_OVERVIEW_CHARS: usize = 12_000;
 const OVERVIEW_PREVIEW_CHARS: usize = 800;
 const MAX_OVERVIEW_TITLE_CHARS: usize = 300;
 const MAX_OVERVIEW_RELATED_NOTES: usize = 25;
+const MAX_NOTE_LINKS: usize = 50;
 const MAX_CONTENT_CHARS: usize = 50_000;
 const MAX_NOTE_BODY_CHARS: usize = 500_000;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
@@ -185,6 +187,14 @@ struct Relationship {
     concept_id: Option<String>,
     source_id: Option<String>,
     context: Option<String>,
+}
+
+#[derive(Debug)]
+struct NoteLinkProjection {
+    links_to: Vec<Value>,
+    linked_from: Vec<Value>,
+    links_to_truncated: bool,
+    linked_from_truncated: bool,
 }
 
 fn deserialize_optional_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -409,7 +419,7 @@ fn expand_home_prefix(path: OsString, home_directory: Option<&OsStr>) -> Result<
 
 fn usable_home_directory(home_directory: Option<&OsStr>) -> Result<&OsStr, String> {
     home_directory.filter(|value| !value.is_empty()).ok_or_else(|| {
-        "Orion could not determine your user Library folder. Open Orion once, then relaunch Claude. Advanced connector launches can set ORION_VAULT_PATH or pass --vault.".to_string()
+        "Orion could not determine your user Library folder. Open Orion once, then restart this connector. Advanced connector launches can set ORION_VAULT_PATH or pass --vault.".to_string()
     })
 }
 
@@ -582,15 +592,62 @@ impl Server {
     fn contextualize_vault_error(&self, error: ToolFailure) -> ToolFailure {
         if self.uses_default_vault_path && error.error_code == Some("vault_not_found") {
             return ToolFailure {
-                message: "Orion's local library has not been created yet. Open Orion once to create it, then retry this action in Claude.".to_string(),
+                message: "Orion's local library has not been created yet. Open Orion once to create it, then retry this action.".to_string(),
                 error_code: Some("orion_not_initialized"),
                 recovery: Some(json!({
-                    "instruction": "Open Orion once to create its local library, then retry this action in Claude."
+                    "instruction": "Open Orion once to create its local library, then retry this action."
                 })),
             };
         }
         error
     }
+}
+
+fn note_links_output_schema() -> Value {
+    let linked_note = json!({
+        "type": "object",
+        "properties": {
+            "id": { "type": "string" },
+            "title": { "type": "string" },
+            "orionUrl": { "type": "string" },
+            "citation": { "type": "string" },
+            "via": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                    "type": "string",
+                    "enum": ["concept", "explicit", "relationship"]
+                }
+            }
+        },
+        "required": ["id", "title", "orionUrl", "citation", "via"],
+        "additionalProperties": false
+    });
+    json!({
+        "type": "object",
+        "properties": {
+            "linksTo": {
+                "type": "array",
+                "maxItems": MAX_NOTE_LINKS,
+                "items": linked_note.clone()
+            },
+            "linkedFrom": {
+                "type": "array",
+                "maxItems": MAX_NOTE_LINKS,
+                "items": linked_note
+            },
+            "linksToTruncated": { "type": "boolean" },
+            "linkedFromTruncated": { "type": "boolean" }
+        },
+        "required": [
+            "linksTo",
+            "linkedFrom",
+            "linksToTruncated",
+            "linkedFromTruncated"
+        ],
+        "additionalProperties": true
+    })
 }
 
 fn tool_definitions() -> Vec<Value> {
@@ -612,6 +669,7 @@ fn tool_definitions() -> Vec<Value> {
         "idempotentHint": true,
         "openWorldHint": false
     });
+    let note_links_output_schema = note_links_output_schema();
     vec![
         json!({
             "name": "orion_list_spaces",
@@ -682,7 +740,7 @@ fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "orion_get_note",
             "title": "Read an Orion Note",
-            "description": "Read, open, or retrieve one Orion note plus its Space-scoped concepts, sources, connected notes, and native Orion citation. Defaults only to the active Space when space_id is omitted.",
+            "description": "Read, open, or retrieve one Orion note plus its Space-scoped concepts, sources, connected notes, native Orion citation, and bounded linksTo/linkedFrom note relationships. Defaults only to the active Space when space_id is omitted.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -705,6 +763,7 @@ fn tool_definitions() -> Vec<Value> {
                 "required": ["note_id"],
                 "additionalProperties": false
             },
+            "outputSchema": note_links_output_schema.clone(),
             "annotations": read_annotations.clone()
         }),
         json!({
@@ -761,7 +820,7 @@ fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "orion_create_note",
             "title": "Create an Orion Note",
-            "description": "Write, add, create, and immediately save a complete ordinary note in one explicitly selected Orion Space. An explicit space_id is always required; no agent attribution or review state is added.",
+            "description": "Write, add, create, and immediately save a complete ordinary note in one explicitly selected Orion Space. The result includes bounded linksTo/linkedFrom note relationships. An explicit space_id is always required; no agent attribution or review state is added.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -801,12 +860,13 @@ fn tool_definitions() -> Vec<Value> {
                 "required": ["space_id", "title", "body"],
                 "additionalProperties": false
             },
+            "outputSchema": note_links_output_schema.clone(),
             "annotations": write_annotations.clone()
         }),
         json!({
             "name": "orion_update_note",
             "title": "Edit an Orion Note",
-            "description": "Write, edit, update, and immediately save supplied fields on an existing note in one explicitly selected Orion Space. An explicit space_id is always required; omitted fields remain unchanged.",
+            "description": "Write, edit, update, and immediately save supplied fields on an existing note in one explicitly selected Orion Space. The result includes bounded linksTo/linkedFrom note relationships. An explicit space_id is always required; omitted fields remain unchanged.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -836,6 +896,7 @@ fn tool_definitions() -> Vec<Value> {
                 "required": ["space_id", "note_id"],
                 "additionalProperties": false
             },
+            "outputSchema": note_links_output_schema,
             "annotations": write_annotations
         }),
         json!({
@@ -910,7 +971,7 @@ fn validate_vault_value(value: Value) -> Result<Vault, ToolFailure> {
         .map_err(|error| ToolFailure::new(format!("Orion's vault JSON is invalid: {error}")))?;
     if vault.schema_version != VAULT_SCHEMA_VERSION {
         return Err(ToolFailure::new(format!(
-            "Unsupported Orion vault schema {} (expected {}). Update Orion and its Claude connector together.",
+            "Unsupported Orion vault schema {} (expected {}). Update Orion and this connector together.",
             vault.schema_version, VAULT_SCHEMA_VERSION
         )));
     }
@@ -1218,6 +1279,7 @@ fn get_note(vault: &Vault, arguments: &Map<String, Value>) -> ToolResult {
         .iter()
         .filter_map(|relationship| relationship_for_note(space, relationship, &note.id))
         .collect::<Vec<_>>();
+    let note_links = note_link_projection(space, &note.id);
 
     Ok(json!({
         "space": space_metadata(space),
@@ -1239,7 +1301,11 @@ fn get_note(vault: &Vault, arguments: &Map<String, Value>) -> ToolResult {
         },
         "sources": sources,
         "concepts": concepts,
-        "connections": connections
+        "connections": connections,
+        "linksTo": note_links.links_to,
+        "linkedFrom": note_links.linked_from,
+        "linksToTruncated": note_links.links_to_truncated,
+        "linkedFromTruncated": note_links.linked_from_truncated
     }))
 }
 
@@ -1391,6 +1457,7 @@ fn create_note(path: &Path, arguments: &Map<String, Value>) -> ToolResult {
         notes.insert(0, note.clone());
         mark_space_overview_stale(space);
         set_updated_at(space, &now);
+        let note_links = note_link_projection_from_space_value(space, &note_id)?;
         set_updated_at(
             vault
                 .as_object_mut()
@@ -1403,7 +1470,11 @@ fn create_note(path: &Path, arguments: &Map<String, Value>) -> ToolResult {
             "created": true,
             "note": returned_note,
             "orionUrl": orion_note_url(&space_id, &note_id),
-            "citation": citation_markdown(&title, &space_id, &note_id)
+            "citation": citation_markdown(&title, &space_id, &note_id),
+            "linksTo": note_links.links_to,
+            "linkedFrom": note_links.linked_from,
+            "linksToTruncated": note_links.links_to_truncated,
+            "linkedFromTruncated": note_links.linked_from_truncated
         }))
     })
 }
@@ -1479,6 +1550,7 @@ fn update_note(path: &Path, arguments: &Map<String, Value>) -> ToolResult {
             mark_space_overview_stale(space);
         }
         set_updated_at(space, &now);
+        let note_links = note_link_projection_from_space_value(space, &note_id)?;
         set_updated_at(
             vault
                 .as_object_mut()
@@ -1490,7 +1562,11 @@ fn update_note(path: &Path, arguments: &Map<String, Value>) -> ToolResult {
             "updated": true,
             "note": updated_note,
             "orionUrl": orion_note_url(&space_id, &note_id),
-            "citation": citation_markdown(&updated_title, &space_id, &note_id)
+            "citation": citation_markdown(&updated_title, &space_id, &note_id),
+            "linksTo": note_links.links_to,
+            "linkedFrom": note_links.linked_from,
+            "linksToTruncated": note_links.links_to_truncated,
+            "linkedFromTruncated": note_links.linked_from_truncated
         }))
     })
 }
@@ -1639,6 +1715,12 @@ fn mark_space_overview_stale(space: &mut Map<String, Value>) {
         .and_then(Value::as_object_mut)
     {
         overview.insert("stale".to_string(), json!(true));
+    }
+    if let Some(knowledge) = space
+        .get_mut("spaceKnowledge")
+        .and_then(Value::as_object_mut)
+    {
+        knowledge.insert("stale".to_string(), json!(true));
     }
 }
 
@@ -1796,6 +1878,348 @@ fn concept_metadata(concept: &Concept, space_id: &str) -> Value {
             .as_ref()
             .map(|note_id| orion_note_url(space_id, note_id))
     })
+}
+
+fn note_link_projection_from_space_value(
+    space: &Map<String, Value>,
+    note_id: &str,
+) -> Result<NoteLinkProjection, ToolFailure> {
+    let space: Space = serde_json::from_value(Value::Object(space.clone())).map_err(|error| {
+        ToolFailure::new(format!(
+            "Orion could not derive the saved note relationships: {error}"
+        ))
+    })?;
+    Ok(note_link_projection(&space, note_id))
+}
+
+fn note_link_projection(space: &Space, note_id: &str) -> NoteLinkProjection {
+    let mut links_to = space
+        .notes
+        .iter()
+        .find(|note| note.id == note_id)
+        .map(|note| note_content_links(space, note))
+        .unwrap_or_default();
+    let mut linked_from = BTreeMap::<String, BTreeSet<&'static str>>::new();
+
+    for note in &space.notes {
+        if note.id == note_id {
+            continue;
+        }
+        if let Some(via) = note_content_links(space, note).get(note_id) {
+            linked_from
+                .entry(note.id.clone())
+                .or_default()
+                .extend(via.iter().copied());
+        }
+    }
+
+    for relationship in &space.relationships {
+        if relationship.from_note_id == note_id {
+            add_valid_note_link(
+                space,
+                note_id,
+                &relationship.to_note_id,
+                "relationship",
+                &mut links_to,
+            );
+        }
+        if relationship.to_note_id == note_id {
+            add_valid_note_link(
+                space,
+                note_id,
+                &relationship.from_note_id,
+                "relationship",
+                &mut linked_from,
+            );
+        }
+    }
+
+    let (links_to, links_to_truncated) = linked_note_values(space, links_to);
+    let (linked_from, linked_from_truncated) = linked_note_values(space, linked_from);
+    NoteLinkProjection {
+        links_to,
+        linked_from,
+        links_to_truncated,
+        linked_from_truncated,
+    }
+}
+
+fn note_content_links(space: &Space, note: &Note) -> BTreeMap<String, BTreeSet<&'static str>> {
+    let mut links = BTreeMap::<String, BTreeSet<&'static str>>::new();
+    let linkable_markdown = mask_markdown_code(&note.body);
+    add_protocol_note_links(
+        space,
+        &note.id,
+        &linkable_markdown,
+        "note",
+        "explicit",
+        &mut links,
+    );
+    add_protocol_note_links(
+        space,
+        &note.id,
+        &linkable_markdown,
+        "concept",
+        "concept",
+        &mut links,
+    );
+    add_wiki_note_links(space, &note.id, &linkable_markdown, &mut links);
+
+    for concept_id in &note.concept_ids {
+        if let Some(concept) = space
+            .concepts
+            .iter()
+            .find(|concept| concept.id == *concept_id)
+        {
+            add_concept_note_links(space, &note.id, concept, &mut links);
+        }
+    }
+    links
+}
+
+fn add_protocol_note_links(
+    space: &Space,
+    origin_note_id: &str,
+    markdown: &str,
+    kind: &str,
+    via: &'static str,
+    links: &mut BTreeMap<String, BTreeSet<&'static str>>,
+) {
+    let marker = format!("](orion-{kind}://");
+    let mut remaining = markdown;
+    while let Some(marker_start) = remaining.find(&marker) {
+        let target_start = marker_start + marker.len();
+        let target_and_rest = &remaining[target_start..];
+        let Some(target_end) = target_and_rest.find(')') else {
+            break;
+        };
+        let target_id = &target_and_rest[..target_end];
+        if !target_id.is_empty() && target_id.chars().count() <= 200 {
+            if kind == "note" {
+                add_valid_note_link(space, origin_note_id, target_id, via, links);
+            } else if let Some(concept) = space
+                .concepts
+                .iter()
+                .find(|concept| concept.id == target_id)
+            {
+                add_concept_note_links(space, origin_note_id, concept, links);
+            }
+        }
+        remaining = &target_and_rest[target_end + 1..];
+    }
+}
+
+fn add_wiki_note_links(
+    space: &Space,
+    origin_note_id: &str,
+    markdown: &str,
+    links: &mut BTreeMap<String, BTreeSet<&'static str>>,
+) {
+    let mut remaining = markdown;
+    while let Some(open) = remaining.find("[[") {
+        let after_open = &remaining[open + 2..];
+        let Some(close) = after_open.find("]]") else {
+            break;
+        };
+        let inner = &after_open[..close];
+        let raw_query = inner.split('|').next().unwrap_or_default().trim();
+        if !raw_query.is_empty() && raw_query.chars().count() <= 200 {
+            let (namespace, query) = raw_query
+                .split_once(':')
+                .map(|(namespace, query)| (normalize_link_query(namespace), query.trim()))
+                .filter(|(namespace, _)| namespace == "note" || namespace == "concept")
+                .unwrap_or_else(|| (String::new(), raw_query));
+
+            let concept_matches = if namespace != "note" {
+                space
+                    .concepts
+                    .iter()
+                    .filter(|concept| concept_matches_link_query(concept, query))
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            if !concept_matches.is_empty() {
+                for concept in concept_matches {
+                    add_concept_note_links(space, origin_note_id, concept, links);
+                }
+            } else if namespace != "concept" {
+                for target in space
+                    .notes
+                    .iter()
+                    .filter(|target| note_matches_link_query(target, query))
+                {
+                    add_valid_note_link(space, origin_note_id, &target.id, "explicit", links);
+                }
+            }
+        }
+        remaining = &after_open[close + 2..];
+    }
+}
+
+fn mask_markdown_code(markdown: &str) -> String {
+    let mut output = String::with_capacity(markdown.len());
+    let mut active_fence: Option<(char, usize)> = None;
+    for line in markdown.split_inclusive('\n') {
+        let without_newline = line.strip_suffix('\n').unwrap_or(line);
+        let trimmed = without_newline.trim_start();
+        let fence = trimmed
+            .chars()
+            .next()
+            .filter(|character| *character == '`' || *character == '~')
+            .map(|character| {
+                (
+                    character,
+                    trimmed
+                        .chars()
+                        .take_while(|candidate| *candidate == character)
+                        .count(),
+                )
+            })
+            .filter(|(_, length)| *length >= 3);
+
+        if let Some((fence_character, fence_length)) = active_fence {
+            output.extend(std::iter::repeat_n(' ', without_newline.len()));
+            if fence.is_some_and(|(character, length)| {
+                character == fence_character && length >= fence_length
+            }) {
+                active_fence = None;
+            }
+        } else if let Some(fence) = fence {
+            output.extend(std::iter::repeat_n(' ', without_newline.len()));
+            active_fence = Some(fence);
+        } else {
+            output.push_str(&mask_inline_code(without_newline));
+        }
+        if line.ends_with('\n') {
+            output.push('\n');
+        }
+    }
+    output
+}
+
+fn mask_inline_code(line: &str) -> String {
+    let mut output = String::with_capacity(line.len());
+    let mut remaining = line;
+    while let Some(open) = remaining.find('`') {
+        output.push_str(&remaining[..open]);
+        let after_open = &remaining[open..];
+        let delimiter_length = after_open.bytes().take_while(|byte| *byte == b'`').count();
+        let delimiter = "`".repeat(delimiter_length);
+        let content = &after_open[delimiter_length..];
+        let Some(close) = content.find(&delimiter) else {
+            output.push_str(after_open);
+            return output;
+        };
+        let masked_length = delimiter_length + close + delimiter_length;
+        output.extend(std::iter::repeat_n(' ', masked_length));
+        remaining = &content[close + delimiter_length..];
+    }
+    output.push_str(remaining);
+    output
+}
+
+fn add_concept_note_links(
+    space: &Space,
+    origin_note_id: &str,
+    concept: &Concept,
+    links: &mut BTreeMap<String, BTreeSet<&'static str>>,
+) {
+    for target_id in &concept.note_ids {
+        add_valid_note_link(space, origin_note_id, target_id, "concept", links);
+    }
+}
+
+fn add_valid_note_link(
+    space: &Space,
+    origin_note_id: &str,
+    target_note_id: &str,
+    via: &'static str,
+    links: &mut BTreeMap<String, BTreeSet<&'static str>>,
+) {
+    if target_note_id == origin_note_id || !space.notes.iter().any(|note| note.id == target_note_id)
+    {
+        return;
+    }
+    links
+        .entry(target_note_id.to_string())
+        .or_default()
+        .insert(via);
+}
+
+fn linked_note_values(
+    space: &Space,
+    links: BTreeMap<String, BTreeSet<&'static str>>,
+) -> (Vec<Value>, bool) {
+    let mut resolved = links
+        .into_iter()
+        .filter_map(|(note_id, via)| {
+            space
+                .notes
+                .iter()
+                .find(|note| note.id == note_id)
+                .map(|note| (note, via))
+        })
+        .collect::<Vec<_>>();
+    resolved.sort_by(|(left, _), (right, _)| {
+        normalize_link_query(&left.title)
+            .cmp(&normalize_link_query(&right.title))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let truncated = resolved.len() > MAX_NOTE_LINKS;
+    let values = resolved
+        .into_iter()
+        .take(MAX_NOTE_LINKS)
+        .map(|(note, via)| {
+            json!({
+                "id": note.id,
+                "title": note.title,
+                "orionUrl": orion_note_url(&space.workspace.id, &note.id),
+                "citation": citation_markdown(&note.title, &space.workspace.id, &note.id),
+                "via": via.into_iter().collect::<Vec<_>>()
+            })
+        })
+        .collect();
+    (values, truncated)
+}
+
+fn concept_matches_link_query(concept: &Concept, query: &str) -> bool {
+    let query = normalize_link_query(query);
+    normalize_link_query(&concept.id) == query
+        || normalize_link_query(concept.id.strip_prefix("concept-").unwrap_or(&concept.id)) == query
+        || normalize_link_query(&concept.label) == query
+        || concept
+            .aliases
+            .iter()
+            .any(|alias| normalize_link_query(alias) == query)
+}
+
+fn note_matches_link_query(note: &Note, query: &str) -> bool {
+    let query = normalize_link_query(query);
+    normalize_link_query(&note.id) == query
+        || normalize_link_query(note.id.strip_prefix("note-").unwrap_or(&note.id)) == query
+        || normalize_link_query(&note.slug) == query
+        || normalize_link_query(&note.title) == query
+        || note
+            .aliases
+            .iter()
+            .any(|alias| normalize_link_query(alias) == query)
+}
+
+fn normalize_link_query(value: &str) -> String {
+    let punctuation_normalized = value
+        .chars()
+        .map(|character| match character {
+            '‐' | '‑' | '‒' | '–' | '—' | '−' => '-',
+            '‘' | '’' => '\'',
+            other => other,
+        })
+        .collect::<String>();
+    punctuation_normalized
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 fn relationship_for_note(
@@ -2260,6 +2684,26 @@ mod tests {
         })
     }
 
+    fn fixture_note(id: &str, title: &str, body: &str, concept_ids: &[&str]) -> Value {
+        json!({
+            "id": id,
+            "title": title,
+            "slug": slugify_title(title, id),
+            "summary": "",
+            "body": body,
+            "aliases": [],
+            "tags": [],
+            "kind": "article",
+            "status": "ready",
+            "conceptIds": concept_ids,
+            "sourceIds": [],
+            "createdAt": "2026-07-30T00:00:00.000Z",
+            "updatedAt": "2026-07-31T00:00:00.000Z",
+            "pinned": false,
+            "color": "#8798ff"
+        })
+    }
+
     fn server_with_fixture() -> (tempfile::TempDir, Server) {
         let directory = tempdir().expect("tempdir");
         let path = directory.path().join("vault.json");
@@ -2354,6 +2798,7 @@ mod tests {
 
         assert!(error.contains("Open Orion once"));
         assert!(error.contains("ORION_VAULT_PATH"));
+        assert!(!error.contains("Claude"));
     }
 
     #[test]
@@ -2380,9 +2825,11 @@ mod tests {
             response["result"]["structuredContent"]["errorCode"],
             "orion_not_initialized"
         );
-        assert!(response["result"]["structuredContent"]["error"]
+        let message = response["result"]["structuredContent"]["error"]
             .as_str()
-            .is_some_and(|message| message.contains("Open Orion once")));
+            .expect("structured error message");
+        assert!(message.contains("Open Orion once"));
+        assert!(!message.contains("Claude"));
     }
 
     #[test]
@@ -2443,6 +2890,45 @@ mod tests {
             .expect("create tool");
         assert!(create["inputSchema"]["properties"]["kind"].is_null());
         assert!(create["inputSchema"]["properties"]["status"].is_null());
+    }
+
+    #[test]
+    fn note_detail_and_write_tools_advertise_bounded_link_relationships() {
+        let definitions = tool_definitions();
+        for tool_name in ["orion_get_note", "orion_create_note", "orion_update_note"] {
+            let tool = definitions
+                .iter()
+                .find(|tool| tool["name"] == tool_name)
+                .expect("note tool");
+            let schema = &tool["outputSchema"];
+            assert_eq!(schema["type"], "object");
+            assert_eq!(schema["properties"]["linksTo"]["maxItems"], MAX_NOTE_LINKS);
+            assert_eq!(
+                schema["properties"]["linkedFrom"]["maxItems"],
+                MAX_NOTE_LINKS
+            );
+            assert!(schema["required"]
+                .as_array()
+                .expect("required fields")
+                .iter()
+                .any(|field| field == "linksTo"));
+            assert!(schema["required"]
+                .as_array()
+                .expect("required fields")
+                .iter()
+                .any(|field| field == "linkedFrom"));
+        }
+
+        let browse = definitions
+            .iter()
+            .find(|tool| tool["name"] == "orion_browse_space")
+            .expect("browse tool");
+        let search = definitions
+            .iter()
+            .find(|tool| tool["name"] == "orion_search")
+            .expect("search tool");
+        assert!(browse["outputSchema"].is_null());
+        assert!(search["outputSchema"].is_null());
     }
 
     #[test]
@@ -2819,6 +3305,46 @@ mod tests {
     }
 
     #[test]
+    fn create_and_update_results_return_current_note_links() {
+        let (_directory, server) = server_with_fixture();
+        let created = server
+            .call_tool(
+                "orion_create_note",
+                json!({
+                    "space_id": "space-alpha",
+                    "title": "Linked field notes",
+                    "body": "Read [Comte](orion-note://note-comte) and [his concept](orion-concept://concept-comte)."
+                })
+                .as_object()
+                .expect("arguments"),
+            )
+            .expect("create linked note");
+        let note_id = created["note"]["id"].as_str().expect("note id");
+        assert_eq!(created["linksTo"].as_array().map(Vec::len), Some(1));
+        assert_eq!(created["linksTo"][0]["id"], "note-comte");
+        assert_eq!(created["linksTo"][0]["via"], json!(["concept", "explicit"]));
+        assert_eq!(created["linkedFrom"], json!([]));
+
+        let updated = server
+            .call_tool(
+                "orion_update_note",
+                json!({
+                    "space_id": "space-alpha",
+                    "note_id": "note-comte",
+                    "body": format!("Continue with [Linked field notes](orion-note://{note_id}).")
+                })
+                .as_object()
+                .expect("arguments"),
+            )
+            .expect("update note links");
+        assert_eq!(updated["linksTo"].as_array().map(Vec::len), Some(1));
+        assert_eq!(updated["linksTo"][0]["id"], note_id);
+        assert_eq!(updated["linkedFrom"].as_array().map(Vec::len), Some(1));
+        assert_eq!(updated["linkedFrom"][0]["id"], note_id);
+        assert!(updated["linksTo"][0]["body"].is_null());
+    }
+
+    #[test]
     fn content_writes_mark_existing_overview_stale_but_pin_only_does_not() {
         let (_directory, server) = server_with_fixture();
         server
@@ -2872,6 +3398,18 @@ mod tests {
     }
 
     #[test]
+    fn content_writes_also_mark_the_persistent_space_index_stale() {
+        let mut value = json!({
+            "spaceOverview": { "stale": false },
+            "spaceKnowledge": { "schemaVersion": 1, "stale": false }
+        });
+        let space = value.as_object_mut().expect("space object");
+        mark_space_overview_stale(space);
+        assert_eq!(value["spaceOverview"]["stale"], true);
+        assert_eq!(value["spaceKnowledge"]["stale"], true);
+    }
+
+    #[test]
     fn read_results_include_clickable_orion_note_citations() {
         let (_directory, server) = server_with_fixture();
         let response = server
@@ -2896,6 +3434,116 @@ mod tests {
             response["result"]["structuredContent"]["note"]["citation"],
             "[Auguste Comte](orion://open?space_id=space-alpha&note_id=note-comte)"
         );
+    }
+
+    #[test]
+    fn note_links_are_derived_from_links_concepts_and_directed_relationships() {
+        let mut fixture = fixture_vault();
+        let notes = fixture["spaces"][0]["notes"].as_array_mut().expect("notes");
+        notes.push(fixture_note(
+            "note-origin",
+            "Origin",
+            "See [Comte](orion-note://note-comte), [the concept](orion-concept://concept-comte), and [[Auguste Comte]].\n\n```markdown\n[Code only](orion-note://note-code-only)\n```\n`[Also code](orion-note://note-code-only)`",
+            &["concept-comte"],
+        ));
+        notes.push(fixture_note(
+            "note-code-only",
+            "Code only",
+            "This target appears only inside code in Origin.",
+            &[],
+        ));
+        notes.push(fixture_note(
+            "note-inbound",
+            "Inbound",
+            "This points to [Origin](orion-note://note-origin).",
+            &[],
+        ));
+        fixture["spaces"][0]["relationships"] = json!([
+            {
+                "id": "relationship-origin-comte",
+                "fromNoteId": "note-origin",
+                "toNoteId": "note-comte",
+                "kind": "related",
+                "label": "develops",
+                "strength": 0.9,
+                "conceptId": "concept-comte",
+                "sourceId": null,
+                "context": "Origin develops the Comte material."
+            },
+            {
+                "id": "relationship-inbound-origin",
+                "fromNoteId": "note-inbound",
+                "toNoteId": "note-origin",
+                "kind": "related",
+                "label": "supports",
+                "strength": 0.8,
+                "conceptId": null,
+                "sourceId": null,
+                "context": "Inbound supports Origin."
+            }
+        ]);
+        fixture["spaces"][1]["notes"][0]["body"] =
+            json!("[Origin](orion-note://note-origin) must not cross Spaces.");
+
+        let vault = validate_vault_value(fixture).expect("valid linked vault");
+        let result = get_note(
+            &vault,
+            json!({ "space_id": "space-alpha", "note_id": "note-origin" })
+                .as_object()
+                .expect("arguments"),
+        )
+        .expect("linked note");
+
+        assert_eq!(result["linksTo"].as_array().map(Vec::len), Some(1));
+        assert_eq!(result["linksTo"][0]["id"], "note-comte");
+        assert_eq!(
+            result["linksTo"][0]["citation"],
+            "[Auguste Comte](orion://open?space_id=space-alpha&note_id=note-comte)"
+        );
+        assert_eq!(
+            result["linksTo"][0]["via"],
+            json!(["concept", "explicit", "relationship"])
+        );
+        assert!(result["linksTo"][0]["body"].is_null());
+        assert_eq!(result["linkedFrom"].as_array().map(Vec::len), Some(1));
+        assert_eq!(result["linkedFrom"][0]["id"], "note-inbound");
+        assert_eq!(
+            result["linkedFrom"][0]["via"],
+            json!(["explicit", "relationship"])
+        );
+        assert_eq!(result["linksToTruncated"], false);
+        assert_eq!(result["linkedFromTruncated"], false);
+        assert_eq!(result["connections"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn note_link_results_are_bounded_and_report_truncation() {
+        let mut fixture = fixture_vault();
+        let notes = fixture["spaces"][0]["notes"].as_array_mut().expect("notes");
+        for index in 0..=MAX_NOTE_LINKS {
+            notes.push(fixture_note(
+                &format!("note-backlink-{index:02}"),
+                &format!("Backlink {index:02}"),
+                "[Comte](orion-note://note-comte)",
+                &[],
+            ));
+        }
+        let vault = validate_vault_value(fixture).expect("valid bounded-link vault");
+        let result = get_note(
+            &vault,
+            json!({ "space_id": "space-alpha", "note_id": "note-comte" })
+                .as_object()
+                .expect("arguments"),
+        )
+        .expect("note links");
+
+        assert_eq!(
+            result["linkedFrom"].as_array().map(Vec::len),
+            Some(MAX_NOTE_LINKS)
+        );
+        assert_eq!(result["linkedFromTruncated"], true);
+        assert_eq!(result["linksTo"], json!([]));
+        assert_eq!(result["linksToTruncated"], false);
     }
 
     #[test]
@@ -2954,6 +3602,7 @@ mod tests {
         .expect("write fixture");
         let error = read_vault(&path).expect_err("schema should be rejected");
         assert!(error.message.contains("Unsupported Orion vault schema"));
+        assert!(!error.message.contains("Claude"));
     }
 
     #[test]

@@ -26,9 +26,16 @@ export const SUPPORTED_IMPORT_EXTENSIONS = [
 export const IMPORT_ACCEPT =
   ".txt,.md,.markdown,.json,.csv,.tsv,.html,.htm,.pdf,.docx,.png,.jpg,.jpeg,.heic,.heif,text/plain,text/markdown,text/csv,text/html,application/json,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg,image/heic,image/heif";
 
+export interface DocumentTextRecognitionOptions {
+  pageNumbers?: number[];
+}
+
 export type DocumentTextRecognizer = (
   file: File,
+  options?: DocumentTextRecognitionOptions,
 ) => Promise<RecognizedDocumentText>;
+
+export type PdfVisionOcrReason = "textless" | "damaged";
 
 export class UnsupportedImportError extends Error {
   constructor(
@@ -292,7 +299,8 @@ async function parsePdf(
     useWorkerFetch: false,
   });
   const document = await loadingTask.promise;
-  const pages: Array<{ pageNumber: number; text: string }> = [];
+  const rawPages: Array<{ pageNumber: number; text: string }> = [];
+  const warnings: string[] = [];
 
   try {
     for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
@@ -310,40 +318,85 @@ async function parsePdf(
         .replace(/[ \t]+\n/g, "\n")
         .replace(/[ \t]{2,}/g, " ")
         .trim();
-      if (normalized) {
-        pages.push({ pageNumber, text: normalized });
+      rawPages.push({ pageNumber, text: normalized });
+    }
+
+    const selectedPages = rawPages.flatMap((page) => {
+      const reason = pdfVisionOcrReason(page.text);
+      return reason ? [{ ...page, reason }] : [];
+    });
+    const selectableText = rawPages.map(({ text }) => text).join("\n");
+    const hadMeaningfulSelectableText = hasMeaningfulText(selectableText);
+
+    if (selectedPages.length > 0) {
+      if (!recognizeDocumentText) {
+        if (!hadMeaningfulSelectableText) {
+          await requireDocumentTextRecognition(file, recognizeDocumentText);
+        }
+        warnings.push(
+          `PDF ${pluralizePages(selectedPages.map(({ pageNumber }) => pageNumber))} may benefit from on-device text recognition. Orion kept the embedded selectable text because page recognition is available in the installed Orion desktop app.`,
+        );
+      } else {
+        const pageNumbers = selectedPages.map(({ pageNumber }) => pageNumber);
+        try {
+          const recognized = await recognizeDocumentText(file, { pageNumbers });
+          const recognizedByPage = new Map(
+            recognized.pages
+              .filter(({ pageNumber }) => pageNumbers.includes(pageNumber))
+              .map(({ pageNumber, text }) => [pageNumber, text.trim()]),
+          );
+          const improvedPages: number[] = [];
+          const unimprovedPages: number[] = [];
+          for (const selected of selectedPages) {
+            const recognizedText = recognizedByPage.get(selected.pageNumber) ?? "";
+            if (
+              shouldUsePdfVisionText(
+                selected.text,
+                recognizedText,
+                selected.reason,
+              )
+            ) {
+              selected.text = recognizedText;
+              improvedPages.push(selected.pageNumber);
+            } else {
+              unimprovedPages.push(selected.pageNumber);
+            }
+          }
+          const selectedByPage = new Map(
+            selectedPages.map(({ pageNumber, text }) => [pageNumber, text]),
+          );
+          for (const page of rawPages) {
+            page.text = selectedByPage.get(page.pageNumber) ?? page.text;
+          }
+          warnings.push(
+            ...pdfVisionBatchWarnings(
+              pageNumbers,
+              improvedPages,
+              unimprovedPages,
+              hadMeaningfulSelectableText,
+              recognized.warnings,
+            ),
+          );
+        } catch (error) {
+          if (!hadMeaningfulSelectableText) {
+            throw error;
+          }
+          warnings.push(
+            `On-device text recognition failed for PDF ${pluralizePages(pageNumbers)}. Orion kept every page's embedded selectable text. ${errorMessage(error)}`,
+          );
+        }
       }
     }
   } finally {
     await loadingTask.destroy();
   }
 
-  const selectableText = pages.map(({ text }) => text).join("\n");
-  if (!hasMeaningfulText(selectableText)) {
-    const recognized = await requireDocumentTextRecognition(
-      file,
-      recognizeDocumentText,
+  const pages = normalizePdfPages(rawPages);
+  const finalText = pages.map(({ text }) => text).join("\n");
+  if (!hasMeaningfulText(finalText)) {
+    throw new Error(
+      `No meaningful text could be read from “${file.name}”. Try a clearer scan or a PDF with selectable text.`,
     );
-    return {
-      title: titleFromFileName(file.name),
-      fileName: file.name,
-      mimeType: file.type || "application/pdf",
-      format: "pdf",
-      byteSize: file.size,
-      text: recognized.pages.length > 0
-        ? recognized.pages
-            .filter(({ text }) => text.trim())
-            .map(
-              ({ pageNumber, text }) =>
-                `## Page ${pageNumber}\n\n${text.trim()}`,
-            )
-            .join("\n\n")
-        : recognized.text.trim(),
-      warnings: [
-        "No meaningful selectable text was found, so Orion used on-device text recognition.",
-        ...recognized.warnings,
-      ],
-    };
   }
 
   return {
@@ -352,11 +405,248 @@ async function parsePdf(
     mimeType: file.type || "application/pdf",
     format: "pdf",
     byteSize: file.size,
-    text: pages
-      .map(({ pageNumber, text }) => `## Page ${pageNumber}\n\n${text}`)
-      .join("\n\n"),
-    warnings: [],
+    text: formatPdfPages(pages),
+    warnings: [...warnings, ...pdfSelectableTextWarnings(finalText)],
   };
+}
+
+/**
+ * Select only physically textless pages or pages whose embedded layer has a
+ * material concentration of Unicode replacement glyphs.
+ */
+export function pdfVisionOcrReason(text: string): PdfVisionOcrReason | null {
+  if (!text.trim()) {
+    return "textless";
+  }
+  const damage = pdfReplacementGlyphCount(text);
+  const density = damage / Math.max(1, text.length);
+  return damage >= 5 && density >= 0.002 ? "damaged" : null;
+}
+
+/**
+ * Textless pages accept meaningful local recognition. A damaged selectable
+ * layer is replaced only when the candidate reduces replacement glyphs, stays
+ * close to the original signal size, and retains enough normalized vocabulary
+ * to be recognizably the same physical page.
+ */
+export function shouldUsePdfVisionText(
+  originalText: string,
+  recognizedText: string,
+  reason = pdfVisionOcrReason(originalText),
+): boolean {
+  const candidate = recognizedText.trim();
+  if (!reason || !hasMeaningfulPdfOcrText(candidate)) {
+    return false;
+  }
+  if (reason === "textless") {
+    return true;
+  }
+
+  const originalDamage = pdfReplacementGlyphCount(originalText);
+  const candidateDamage = pdfReplacementGlyphCount(candidate);
+  const originalSignal = pdfTextSignal(originalText);
+  const candidateSignal = pdfTextSignal(candidate);
+  const signalRatio = candidateSignal / Math.max(1, originalSignal);
+  return (
+    candidateDamage < originalDamage &&
+    signalRatio >= 0.6 &&
+    signalRatio <= 1.6 &&
+    normalizedPdfTokenOverlap(originalText, candidate) >= 0.45
+  );
+}
+
+function hasMeaningfulPdfOcrText(value: string): boolean {
+  return hasMeaningfulText(value);
+}
+
+function pdfReplacementGlyphCount(value: string): number {
+  return value.match(/\uFFFD/g)?.length ?? 0;
+}
+
+function pdfTextSignal(value: string): number {
+  return value.match(/[\p{L}\p{N}]/gu)?.length ?? 0;
+}
+
+function normalizedPdfTokenOverlap(
+  originalText: string,
+  candidateText: string,
+): number {
+  const originalTokens = normalizedPdfTokens(originalText);
+  if (originalTokens.length === 0) return 0;
+  const candidateCounts = new Map<string, number>();
+  for (const token of normalizedPdfTokens(candidateText)) {
+    candidateCounts.set(token, (candidateCounts.get(token) ?? 0) + 1);
+  }
+  let overlap = 0;
+  for (const token of originalTokens) {
+    const remaining = candidateCounts.get(token) ?? 0;
+    if (remaining <= 0) continue;
+    overlap += 1;
+    candidateCounts.set(token, remaining - 1);
+  }
+  return overlap / originalTokens.length;
+}
+
+function normalizedPdfTokens(value: string): string[] {
+  return (
+    value
+      .normalize("NFKC")
+      .toLocaleLowerCase()
+      .match(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu) ?? []
+  );
+}
+
+function pdfVisionBatchWarnings(
+  selectedPageNumbers: readonly number[],
+  improved: readonly number[],
+  notImproved: readonly number[],
+  hadMeaningfulSelectableText: boolean,
+  recognitionWarnings: readonly string[],
+): string[] {
+  const warnings = [
+    hadMeaningfulSelectableText
+      ? `Orion used page-selective on-device text recognition only for PDF ${pluralizePages(selectedPageNumbers)}.`
+      : `No meaningful selectable text was found, so Orion used page-selective on-device text recognition for PDF ${pluralizePages(selectedPageNumbers)}.`,
+  ];
+
+  if (improved.length > 0) {
+    warnings.push(
+      `On-device text recognition materially improved PDF ${pluralizePages(improved)}.`,
+    );
+  }
+  if (notImproved.length > 0) {
+    warnings.push(
+      `On-device text recognition did not materially improve PDF ${pluralizePages(notImproved)}. Orion kept the embedded text where available and left textless pages empty rather than inventing text.`,
+    );
+  }
+  for (const warning of new Set(recognitionWarnings.map((value) => value.trim()))) {
+    if (warning) warnings.push(warning);
+  }
+  return warnings;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function pluralizePages(pageNumbers: readonly number[]): string {
+  const pages = [...new Set(pageNumbers)].sort((left, right) => left - right);
+  const ranges: string[] = [];
+  for (let index = 0; index < pages.length; index += 1) {
+    const start = pages[index];
+    let end = start;
+    while (index + 1 < pages.length && pages[index + 1] === end + 1) {
+      end = pages[index + 1];
+      index += 1;
+    }
+    ranges.push(start === end ? String(start) : `${start}\u2013${end}`);
+  }
+  return `${pages.length === 1 ? "page" : "pages"} ${ranges.join(", ")}`;
+}
+
+function formatPdfPages(
+  pages: ReadonlyArray<{ pageNumber: number; text: string }>,
+): string {
+  return pages
+    .map(({ pageNumber, text }) => {
+      const normalized = text.trim();
+      return normalized
+        ? `## Page ${pageNumber}\n\n${normalized}`
+        : `## Page ${pageNumber}`;
+    })
+    .join("\n\n");
+}
+
+/**
+ * Remove deterministic scan furniture without weakening page provenance.
+ * ClearScan-era books often expose printed page numbers and running heads as
+ * selectable text, then break a hyphenated word at every physical line. Those
+ * tokens otherwise get repeated in every parallel reader packet. The first
+ * occurrence of a recurring head is retained as useful structure; subsequent
+ * copies and marginal page numerals are removed.
+ */
+export function normalizePdfPages(
+  pages: ReadonlyArray<{ pageNumber: number; text: string }>,
+): Array<{ pageNumber: number; text: string }> {
+  const lineCounts = new Map<string, number>();
+  for (const { text } of pages) {
+    const lines = pdfLines(text);
+    const candidates = new Set([
+      ...lines.slice(0, 3),
+      ...lines.slice(Math.max(0, lines.length - 2)),
+    ]);
+    for (const line of candidates) {
+      if (!isPossibleRunningHead(line)) continue;
+      const key = normalizedFurnitureLine(line);
+      lineCounts.set(key, (lineCounts.get(key) ?? 0) + 1);
+    }
+  }
+  const recurring = new Set(
+    [...lineCounts]
+      .filter(([, count]) => count >= 3)
+      .map(([line]) => line),
+  );
+  const retainedHeads = new Set<string>();
+
+  return pages.map(({ pageNumber, text }) => {
+    const lines = pdfLines(text);
+    const kept = lines.filter((line, index) => {
+      const nearEdge = index < 3 || index >= lines.length - 2;
+      if (nearEdge && isPrintedPageNumber(line)) return false;
+      const key = normalizedFurnitureLine(line);
+      if (!nearEdge || !recurring.has(key)) return true;
+      if (retainedHeads.has(key)) return false;
+      retainedHeads.add(key);
+      return true;
+    });
+    return {
+      pageNumber,
+      text: dehyphenatePdfLineBreaks(kept.join("\n")).trim(),
+    };
+  });
+}
+
+function pdfLines(value: string): string[] {
+  return value
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+/g, " ").trim())
+    .filter(Boolean);
+}
+
+function isPrintedPageNumber(value: string): boolean {
+  return /^(?:\d{1,4}|[ivxlcdm]{1,8})$/i.test(value.trim());
+}
+
+function isPossibleRunningHead(value: string): boolean {
+  const normalized = value.trim();
+  return (
+    normalized.length >= 3 &&
+    normalized.length <= 120 &&
+    !isPrintedPageNumber(normalized) &&
+    !/[.!?;:]$/.test(normalized)
+  );
+}
+
+function normalizedFurnitureLine(value: string): string {
+  return value.normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function dehyphenatePdfLineBreaks(value: string): string {
+  return value
+    .replace(/([\p{L}\p{N}]{2,})[-‐‑]\n([\p{Ll}][\p{L}\p{N}'’]*)/gu, "$1$2")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+function pdfSelectableTextWarnings(value: string): string[] {
+  const replacements = value.match(/\uFFFD/g)?.length ?? 0;
+  if (replacements < 24 && replacements / Math.max(1, value.length) < 0.001) {
+    return [];
+  }
+  return [
+    `The PDF's embedded selectable-text layer contains ${replacements.toLocaleString("en-US")} damaged glyphs. Orion preserved them as visible uncertainty rather than silently guessing the scanned words.`,
+  ];
 }
 
 async function parseImage(

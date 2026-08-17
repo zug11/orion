@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Orion Frames — icon proposal</title>
+    <link rel="stylesheet" href="./OrionIcons.css" />
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        background: #0b0c10;
+        color: #f5f2eb;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        background:
+          radial-gradient(circle at 18% 0%, #252448 0, transparent 31rem),
+          radial-gradient(circle at 85% 15%, #3a291c 0, transparent 28rem),
+          #0b0c10;
+      }
+
+      main {
+        width: min(1120px, calc(100% - 48px));
+        margin: 0 auto;
+        padding: 72px 0 88px;
+      }
+
+      header {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 32px;
+        margin-bottom: 40px;
+      }
+
+      .kicker {
+        margin: 0 0 14px;
+        color: #b9c2ff;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        max-width: 660px;
+        margin: 0;
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: clamp(44px, 7vw, 74px);
+        font-weight: 400;
+        letter-spacing: -0.045em;
+        line-height: 0.96;
+      }
+
+      .lede {
+        max-width: 600px;
+        margin: 22px 0 0;
+        color: #aaa9b3;
+        font-size: 16px;
+        line-height: 1.65;
+      }
+
+      .play {
+        display: inline-flex;
+        flex: 0 0 auto;
+        align-items: center;
+        gap: 10px;
+        min-height: 42px;
+        padding: 0 17px;
+        border: 1px solid #45465a;
+        border-radius: 999px;
+        background: #18191f;
+        color: #f5f2eb;
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      .play:hover,
+      .play:focus-visible {
+        border-color: #8c98ee;
+        outline: none;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .icon-card {
+        position: relative;
+        display: flex;
+        min-height: 184px;
+        padding: 22px;
+        border: 1px solid #292a31;
+        border-radius: 22px;
+        background:
+          linear-gradient(145deg, rgb(255 255 255 / 4%), transparent 52%),
+          #121318;
+        color: #d8dcff;
+        text-align: left;
+        cursor: pointer;
+        transition:
+          border-color 180ms ease,
+          background 180ms ease,
+          transform 180ms ease;
+      }
+
+      .icon-card:hover,
+      .icon-card:focus-visible {
+        border-color: #5c6286;
+        background:
+          linear-gradient(145deg, rgb(131 145 255 / 11%), transparent 58%),
+          #15161d;
+        outline: none;
+        transform: translateY(-2px);
+      }
+
+      .icon-card:nth-child(3n + 2) {
+        color: #e8bc82;
+      }
+
+      .icon-card:nth-child(3n + 3) {
+        color: #94d5bd;
+      }
+
+      .icon-card svg {
+        width: 46px;
+        height: 46px;
+      }
+
+      .icon-card__copy {
+        position: absolute;
+        right: 20px;
+        bottom: 18px;
+        left: 20px;
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .icon-card strong {
+        color: #f5f2eb;
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 18px;
+        font-weight: 400;
+      }
+
+      .icon-card small {
+        color: #6f707b;
+        font-size: 10px;
+        letter-spacing: 0.13em;
+        text-transform: uppercase;
+      }
+
+      footer {
+        display: flex;
+        justify-content: space-between;
+        gap: 28px;
+        margin-top: 30px;
+        color: #71727c;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      footer span:last-child {
+        text-align: right;
+      }
+
+      @media (max-width: 900px) {
+        .grid {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 620px) {
+        main {
+          width: min(100% - 28px, 1120px);
+          padding-top: 42px;
+        }
+
+        header {
+          align-items: start;
+          flex-direction: column;
+        }
+
+        .grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .icon-card {
+          min-height: 160px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="kicker">Visual proposal · not installed</p>
+          <h1>Orion Frames</h1>
+          <p class="lede">
+            A quieter, product-specific icon language: open geometry, rounded
+            strokes, and one meaningful motion per action. Hover or focus a tile
+            to see its frames.
+          </p>
+        </div>
+        <button class="play" id="play-all" type="button">
+          <span>Play every motion</span>
+          <span aria-hidden="true">↗</span>
+        </button>
+      </header>
+
+      <section class="grid" aria-label="Proposed Orion icon pack">
+        <button class="icon-card" type="button">
+          <svg class="orion-icon orion-icon--mark orion-icon--motion-interaction" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="oi-mark-orbit" d="M18.8 6.5A8 8 0 1 0 20 14.7" pathLength="1"/>
+            <circle class="oi-belt-dot oi-belt-dot--one" cx="8.1" cy="13.5" r="1"/>
+            <circle class="oi-belt-dot oi-belt-dot--two" cx="12" cy="11.7" r="1"/>
+            <circle class="oi-belt-dot oi-belt-dot--three" cx="15.9" cy="9.9" r="1"/>
+            <path class="oi-mark-tail" d="m17.8 17.9 2.2-3.2-3.6-.3"/>
+          </svg>
+          <span class="icon-card__copy"><strong>Orion</strong><small>identity</small></span>
+        </button>
+
+        <button class="icon-card" type="button">
+          <svg class="orion-icon orion-icon--atlas orion-icon--motion-interaction" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle class="oi-atlas-ring" cx="12" cy="12" r="8.2"/>
+            <path class="oi-atlas-horizon" d="M4.5 13.2c2.5-1.8 5-2.4 7.5-1.8 2.6.6 4.7.3 7.3-1.4"/>
+            <path class="oi-atlas-needle" d="m10.1 14.7 1.3-5.1 2.5-.3-1.4 5.1-2.4.3Z"/>
+            <circle class="oi-atlas-point" cx="17.4" cy="6.9" r=".75"/>
+          </svg>
+          <span class="icon-card__copy"><strong>Atlas</strong><small>home</small></span>
+        </button>
+
+        <button class="icon-card" type="button">
+          <svg class="orion-icon orion-icon--articles orion-icon--motion-interaction" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="oi-page oi-page--left" d="M11.7 6.5C9.8 5.2 7.5 4.6 5 4.8v13.4c2.5-.2 4.7.4 6.7 1.7V6.5Z"/>
+            <path class="oi-page oi-page--right" d="M12.3 6.5c1.9-1.3 4.2-1.9 6.7-1.7v13.4c-2.5-.2-4.7.4-6.7 1.7V6.5Z"/>
+            <path class="oi-page-line oi-page-line--left" d="M7.4 9.1h2.1M7.4 12h2.1"/>
+            <path class="oi-page-line oi-page-line--right" d="M14.5 9.1h2.1M14.5 12h2.1"/>
+          </svg>
+          <span class="icon-card__copy"><strong>Articles</strong><small>library</small></span>
+        </button>
+
+        <button class="icon-card" type="button">
+          <svg class="orion-icon orion-icon--sources orion-icon--motion-interaction" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="oi-source-sheet oi-source-sheet--back" d="M7.1 3.8h9.8v12.6H7.1z"/>
+            <path class="oi-source-sheet oi-source-sheet--middle" d="M5.2 6.1h12.6v12.1H5.2z"/>
+            <path class="oi-source-sheet oi-source-sheet--front" d="M3.8 8.4h13.8v11.8H3.8z"/>
+            <path class="oi-source-line" d="M6.8 12h7.7M6.8 15.1h5.4"/>
+          </svg>
+          <span class="icon-card__copy"><strong>Sources</strong><small>archive</small></span>
+        </button>
+
+        <button class="icon-card" type="button">
+          <svg class="orion-icon orion-icon--chat orion-icon--motion-interaction" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="oi-chat-shell" d="M4.1 5.3h15.8v11.3H11l-4.6 3v-3H4.1V5.3Z"/>
+            <circle class="oi-chat-dot oi-chat-dot--one" cx="8.3" cy="10.9" r=".8"/>
+            <circle class="oi-chat-dot oi-chat-dot--two" cx="12" cy="10.9" r=".8"/>
+            <circle class="oi-chat-dot oi-chat-dot--three" cx="15.7" cy="10.9" r=".8"/>
+          </svg>
+          <span class="icon-card__copy"><strong>Chat</strong><small>thinking</small></span>
+        </button>
+
+        <button class="icon-card" type="button">
+          <svg class="orion-icon orion-icon--space orion-icon--motion-interaction" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="oi-space-orbit oi-space-orbit--outer" d="M3.7 12c0-4.5 3.7-8.2 8.3-8.2 3 0 5.6 1.6 7 4"/>
+            <path class="oi-space-orbit oi-space-orbit--inner" d="M20.3 12c0 4.5-3.7 8.2-8.3 8.2-3 0-5.6-1.6-7-4"/>
+            <circle class="oi-space-point oi-space-point--one" cx="19.2" cy="8.4" r="1.3"/>
+            <circle class="oi-space-point oi-space-point--two" cx="4.8" cy="15.6" r="1.3"/>
+            <circle class="oi-space-core" cx="12" cy="12" r="2.2"/>
+          </svg>
+          <span class="icon-card__copy"><strong>Space</strong><small>project</small></span>
+        </button>
+
+        <button class="icon-card" type="button">
+          <svg class="orion-icon orion-icon--new-note orion-icon--motion-interaction" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="oi-note-shell" d="M5.4 3.8h8.4l4.8 4.8v11.6H5.4V3.8Z"/>
+            <path class="oi-note-fold" d="M13.8 3.8v4.8h4.8"/>
+            <path class="oi-note-plus oi-note-plus--horizontal" d="M8.3 14h5.8" pathLength="1"/>
+            <path class="oi-note-plus oi-note-plus--vertical" d="M11.2 11.1v5.8" pathLength="1"/>
+          </svg>
+          <span class="icon-card__copy"><strong>New note</strong><small>create</small></span>
+        </button>
+
+        <button class="icon-card" type="button">
+          <svg class="orion-icon orion-icon--import orion-icon--motion-interaction" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="oi-import-page" d="M4.2 15.1v4.1h15.6v-4.1"/>
+            <path class="oi-import-arrow" d="M12 3.8v10.3m-3.5-3.4 3.5 3.5 3.5-3.5"/>
+            <circle class="oi-import-point oi-import-point--one" cx="5.7" cy="8.1" r=".7"/>
+            <circle class="oi-import-point oi-import-point--two" cx="18.3" cy="8.1" r=".7"/>
+          </svg>
+          <span class="icon-card__copy"><strong>Import</strong><small>ingest</small></span>
+        </button>
+
+        <button class="icon-card" type="button">
+          <svg class="orion-icon orion-icon--concept orion-icon--motion-interaction" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle class="oi-concept-core" cx="12" cy="12" r="2.5"/>
+            <path class="oi-concept-arc oi-concept-arc--one" d="M5.2 14.2A7.2 7.2 0 0 1 9.8 5"/>
+            <path class="oi-concept-arc oi-concept-arc--two" d="M13.4 4.9a7.2 7.2 0 0 1 5.3 4.4"/>
+            <path class="oi-concept-arc oi-concept-arc--three" d="M18.8 13.4a7.2 7.2 0 0 1-9.7 6"/>
+            <circle class="oi-concept-point oi-concept-point--one" cx="5.1" cy="14.6" r="1"/>
+            <circle class="oi-concept-point oi-concept-point--two" cx="13.1" cy="4.8" r="1"/>
+            <circle class="oi-concept-point oi-concept-point--three" cx="18.9" cy="12.8" r="1"/>
+          </svg>
+          <span class="icon-card__copy"><strong>Concept</strong><small>resolve</small></span>
+        </button>
+
+        <button class="icon-card" type="button">
+          <svg class="orion-icon orion-icon--link orion-icon--motion-interaction" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="oi-link-half oi-link-half--left" d="m10.2 14.1-1.4 1.4a3.2 3.2 0 0 1-4.5-4.5l3-3a3.2 3.2 0 0 1 4.5 0"/>
+            <path class="oi-link-half oi-link-half--right" d="m13.8 9.9 1.4-1.4a3.2 3.2 0 0 1 4.5 4.5l-3 3a3.2 3.2 0 0 1-4.5 0"/>
+            <path class="oi-link-bridge" d="m8.9 12 6.2 0" pathLength="1"/>
+          </svg>
+          <span class="icon-card__copy"><strong>Link</strong><small>connect</small></span>
+        </button>
+
+        <button class="icon-card" type="button">
+          <svg class="orion-icon orion-icon--search orion-icon--motion-interaction" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle class="oi-search-lens" cx="10.6" cy="10.6" r="6.3"/>
+            <path class="oi-search-handle" d="m15.2 15.2 4.6 4.6"/>
+            <path class="oi-search-orbit" d="M6.4 8.2a4.8 4.8 0 0 1 5.8-2.1"/>
+            <circle class="oi-search-point" cx="13.2" cy="6.7" r=".8"/>
+          </svg>
+          <span class="icon-card__copy"><strong>Search</strong><small>discover</small></span>
+        </button>
+
+        <button class="icon-card" type="button">
+          <svg class="orion-icon orion-icon--controls orion-icon--motion-interaction" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M6 4v16M12 4v16M18 4v16"/>
+            <circle class="oi-control-knob oi-control-knob--one" cx="6" cy="9" r="1.8"/>
+            <circle class="oi-control-knob oi-control-knob--two" cx="12" cy="15" r="1.8"/>
+            <circle class="oi-control-knob oi-control-knob--three" cx="18" cy="7" r="1.8"/>
+          </svg>
+          <span class="icon-card__copy"><strong>Controls</strong><small>settings</small></span>
+        </button>
+
+        <button class="icon-card" type="button">
+          <svg class="orion-icon orion-icon--export orion-icon--motion-interaction" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="oi-export-tray" d="M4.2 14.7v4.5h15.6v-4.5"/>
+            <path class="oi-export-arrow" d="M12 15V4.3m-3.6 3.5L12 4.2l3.6 3.6"/>
+            <path class="oi-export-horizon" d="M7.4 11.5h9.2"/>
+          </svg>
+          <span class="icon-card__copy"><strong>Export</strong><small>release</small></span>
+        </button>
+
+        <button class="icon-card" type="button">
+          <svg class="orion-icon orion-icon--context orion-icon--motion-interaction" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect class="oi-context-shell" height="15.6" rx="2" width="17.2" x="3.4" y="4.2"/>
+            <path class="oi-context-divider" d="M14.1 4.4v15.2"/>
+            <path class="oi-context-line" d="M6.6 8.1h4.5M6.6 11.2h4.5M6.6 14.3h3"/>
+            <circle class="oi-context-point" cx="17.3" cy="8.1" r=".8"/>
+          </svg>
+          <span class="icon-card__copy"><strong>Context</strong><small>panel</small></span>
+        </button>
+
+        <button class="icon-card" type="button">
+          <svg class="orion-icon orion-icon--send orion-icon--motion-interaction" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="oi-send-shell" d="m4.1 12 15.8-7-5.6 15-2.6-6.1L4.1 12Z"/>
+            <path class="oi-send-line" d="m11.7 13.9 4.6-5.1"/>
+          </svg>
+          <span class="icon-card__copy"><strong>Send</strong><small>dispatch</small></span>
+        </button>
+      </section>
+
+      <footer>
+        <span>24 px grid · 1.65 px stroke · action-specific frames</span>
+        <span>Motion stays off until interaction and respects reduced motion.</span>
+      </footer>
+    </main>
+
+    <script>
+      const playButton = document.querySelector("#play-all");
+      const icons = [...document.querySelectorAll(".orion-icon")];
+      playButton.addEventListener("click", () => {
+        icons.forEach((icon) => {
+          icon.classList.remove("orion-icon--motion-interaction");
+          icon.classList.add("orion-icon--motion-always");
+        });
+        playButton.querySelector("span").textContent = "Playing every motion";
+        window.setTimeout(() => {
+          icons.forEach((icon) => {
+            icon.classList.remove("orion-icon--motion-always");
+            icon.classList.add("orion-icon--motion-interaction");
+          });
+          playButton.querySelector("span").textContent = "Play every motion";
+        }, 3200);
+      });
+    </script>
+  </body>
+</html>

@@ -3,6 +3,7 @@ import {
   ChevronDown,
   Layers3,
   Plus,
+  Trash2,
   X,
 } from "../lib/icons";
 import {
@@ -19,6 +20,7 @@ interface SpaceSwitcherProps {
   spaces: readonly AppSnapshot[];
   activeSpaceId: string;
   onCreateSpace: (name: string) => void;
+  onDeleteSpace: (spaceId: string) => boolean;
   onSwitchSpace: (spaceId: string) => void;
 }
 
@@ -43,9 +45,11 @@ export function SpaceSwitcher({
   spaces,
   activeSpaceId,
   onCreateSpace,
+  onDeleteSpace,
   onSwitchSpace,
 }: SpaceSwitcherProps) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -71,8 +75,7 @@ export function SpaceSwitcher({
     const closeOutside = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) {
         setOpen(false);
-        setCreating(false);
-        setName("");
+        closeCreator();
       }
     };
     document.addEventListener("pointerdown", closeOutside);
@@ -93,14 +96,20 @@ export function SpaceSwitcher({
       return;
     }
     onCreateSpace(normalizedName);
-    setOpen(false);
-    setCreating(false);
-    setName("");
+    closePopover(true);
   }
 
   function closeCreator() {
     setCreating(false);
     setName("");
+  }
+
+  function closePopover(restoreFocus = false) {
+    setOpen(false);
+    closeCreator();
+    if (restoreFocus) {
+      triggerRef.current?.focus();
+    }
   }
 
   return (
@@ -110,12 +119,12 @@ export function SpaceSwitcher({
       onKeyDown={(event) => {
         if (event.key === "Escape" && open) {
           event.stopPropagation();
-          setOpen(false);
-          closeCreator();
+          closePopover(true);
         }
       }}
     >
       <button
+        ref={triggerRef}
         type="button"
         className={open ? "space-switcher-trigger open" : "space-switcher-trigger"}
         aria-label={`${activeSpace.workspace.name} space, ${activeSpace.notes.length} ${
@@ -168,41 +177,65 @@ export function SpaceSwitcher({
             {spaces.map((space) => {
               const active = space.workspace.id === activeSpaceId;
               return (
-                <button
-                  type="button"
+                <div
                   key={space.workspace.id}
-                  className={active ? "space-option active" : "space-option"}
-                  aria-current={active ? "true" : undefined}
-                  onClick={() => {
-                    if (!active) {
-                      onSwitchSpace(space.workspace.id);
-                    }
-                    setOpen(false);
-                    closeCreator();
-                  }}
+                  className="space-option-row"
                 >
-                  <span
-                    className="space-option-orbit"
-                    style={
-                      {
-                        "--space-color": spaceColor(space.workspace.id),
-                      } as CSSProperties
+                  <button
+                    type="button"
+                    className={active ? "space-option active" : "space-option"}
+                    aria-current={active ? "true" : undefined}
+                    aria-label={
+                      space.workspace.name +
+                      ", " +
+                      space.notes.length +
+                      " " +
+                      (space.notes.length === 1 ? "note" : "notes")
                     }
+                    onClick={() => {
+                      if (!active) {
+                        onSwitchSpace(space.workspace.id);
+                      }
+                      closePopover(true);
+                    }}
                   >
-                    <i />
-                  </span>
-                  <span>
-                    <strong>{space.workspace.name}</strong>
-                    <small>
-                      {space.notes.length}{" "}
-                      {space.notes.length === 1 ? "note" : "notes"}
-                      {space.sources.length > 0
-                        ? ` · ${space.sources.length} sources`
-                        : ""}
-                    </small>
-                  </span>
-                  {active && <Check size={14} aria-hidden="true" />}
-                </button>
+                    <span
+                      className="space-option-orbit"
+                      style={
+                        {
+                          "--space-color": spaceColor(space.workspace.id),
+                        } as CSSProperties
+                      }
+                    >
+                      <i />
+                    </span>
+                    <span>
+                      <strong>{space.workspace.name}</strong>
+                      <small>
+                        {space.notes.length}{" "}
+                        {space.notes.length === 1 ? "note" : "notes"}
+                        {space.sources.length > 0
+                          ? " · " + space.sources.length + " sources"
+                          : ""}
+                      </small>
+                    </span>
+                    {active && <Check size={14} aria-hidden="true" />}
+                  </button>
+                  {spaces.length > 1 ? (
+                    <button
+                      type="button"
+                      className="space-option-delete"
+                      aria-label={"Delete " + space.workspace.name + " space"}
+                      title={"Delete " + space.workspace.name}
+                      onClick={() => {
+                        if (!onDeleteSpace(space.workspace.id)) return;
+                        closePopover(true);
+                      }}
+                    >
+                      <Trash2 size={13} aria-hidden="true" />
+                    </button>
+                  ) : null}
+                </div>
               );
             })}
           </div>

@@ -4,21 +4,67 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptySnapshot } from "../data/defaults";
-import { fetchWebPage, recognizeDocumentText } from "../lib/storage";
-import type { ParsedImport } from "../types";
+import {
+  fetchWebPage,
+  organizeWithAI,
+  recognizeDocumentText,
+  runKnowledgeAssignment,
+} from "../lib/storage";
+import type {
+  AppSnapshot,
+  OrganizeContentResult,
+  ParsedImport,
+} from "../types";
 import {
   ImportStudio,
+  knowledgeImportFailureMessage,
+  orchestrationEyebrow,
+  orchestrationReassurance,
+  progressFromKnowledgeTelemetry,
   type ImportStudioApplyPayload,
 } from "./ImportStudio";
+import type { KnowledgeTelemetry } from "../lib/knowledgeOrchestration/protocol";
+import {
+  KnowledgeDeadlineExceededError,
+  KnowledgeProviderTimeoutError,
+} from "../lib/knowledgeOrchestration/service";
 
 vi.mock("../lib/storage", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/storage")>();
+  const runKnowledgeAssignment = vi.fn();
   return {
     ...actual,
     fetchWebPage: vi.fn(),
+    organizeWithAI: vi.fn(),
     recognizeDocumentText: vi.fn(),
+    runKnowledgeAssignment,
+    // Import Studio wraps the assignment driver in the opt-in provider
+    // failover; with failover off by default the wrapper only delegates, so
+    // the harness keeps asserting against the same mocked driver seam.
+    createFailoverKnowledgeDriver: () => runKnowledgeAssignment,
   };
 });
+
+const pdfUiState = vi.hoisted(() => ({ pages: [] as string[] }));
+
+vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
+  GlobalWorkerOptions: { workerSrc: "test-pdf-worker" },
+  getDocument: () => ({
+    promise: Promise.resolve({
+      get numPages() {
+        return pdfUiState.pages.length;
+      },
+      getPage: async (pageNumber: number) => ({
+        getTextContent: async () => ({
+          items: pdfUiState.pages[pageNumber - 1]
+            ? [{ str: pdfUiState.pages[pageNumber - 1], hasEOL: true }]
+            : [],
+        }),
+      }),
+    }),
+    destroy: vi.fn(),
+  }),
+}));
 
 const snapshot = createEmptySnapshot(
   "Import test Space",
@@ -27,10 +73,12 @@ const snapshot = createEmptySnapshot(
 
 function Harness({
   onApply = () => undefined,
+  testSnapshot = snapshot,
 }: {
   onApply?: (
     payload: ImportStudioApplyPayload,
   ) => void | Promise<void>;
+  testSnapshot?: AppSnapshot;
 }) {
   const [open, setOpen] = useState(true);
   return (
@@ -40,7 +88,7 @@ function Harness({
       </button>
       <ImportStudio
         open={open}
-        snapshot={snapshot}
+        snapshot={testSnapshot}
         onClose={() => setOpen(false)}
         onApply={onApply}
       />
@@ -71,10 +119,180 @@ function parsedPage(title: string, url: string): ParsedImport {
   };
 }
 
+function organizedResult(title: string): OrganizeContentResult {
+  return {
+    notes: [
+      {
+        title,
+        summary: `A reading note about ${title}.`,
+        body: `# ${title}\n\nA durable reading note.`,
+        tags: ["reading"],
+        aliases: [],
+        links: [],
+      },
+    ],
+    wikiArticles: [],
+    concepts: [],
+    suggestedConnections: [],
+  };
+}
+
+function longPageText(pageCount = 206, charactersPerPage = 1_900): string {
+  return Array.from(
+    { length: pageCount },
+    (_, index) =>
+      `## Page ${index + 1}\n\n${`Argument on page ${index + 1}. `.repeat(charactersPerPage).slice(0, charactersPerPage)}`,
+  ).join("\n\n");
+}
+
 describe("Import unified intake", () => {
   beforeEach(() => {
+    pdfUiState.pages = [];
     vi.mocked(fetchWebPage).mockReset();
+    vi.mocked(organizeWithAI).mockReset();
     vi.mocked(recognizeDocumentText).mockReset();
+    vi.mocked(runKnowledgeAssignment).mockReset();
+    delete (window as Window & { __TAURI_INTERNALS__?: unknown })
+      .__TAURI_INTERNALS__;
+  });
+
+  it("translates the long-import pipeline into calm, concrete progress", () => {
+    const telemetry: KnowledgeTelemetry = {
+      runId: "run-progress",
+      logicalWidth: 4,
+      physicalWidth: 3,
+      writeWidth: 0,
+      completedAssignments: 0,
+      failedAssignments: 0,
+      activeAssignments: 3,
+      waitingAssignments: 1,
+      currentPrimitives: [],
+      status: "running",
+      pipelineStage: "reading-plan",
+      readingCompleted: 0,
+      readingTotal: 6,
+      writingCompleted: 0,
+      writingTotal: 3,
+    };
+    const expected = [
+      {
+        stage: "reading-plan" as const,
+        eyebrow: "Preparing the reading",
+        operation: "Orion is mapping what to look for",
+        detail: "Using this Space to guide the reading",
+      },
+      {
+        stage: "reading" as const,
+        eyebrow: "Reading in parallel",
+        operation: "Orion is reading every part",
+        detail: "0 of 6 readings ready",
+      },
+      {
+        stage: "writing-plan" as const,
+        eyebrow: "Planning the notes",
+        operation: "Orion is deciding what belongs together",
+        detail: "0 readings ready · planning what is relevant and new",
+      },
+      {
+        stage: "writing" as const,
+        eyebrow: "Writing in parallel",
+        operation: "Orion is preparing 3 connected notes",
+        detail: "0 of 3 ready",
+      },
+      {
+        stage: "assembling" as const,
+        eyebrow: "Final checks",
+        operation: "Orion is connecting and checking the notes",
+        detail: "Checking sources, links, and repeated material",
+      },
+    ];
+
+    for (const item of expected) {
+      const progress = progressFromKnowledgeTelemetry(
+        { ...telemetry, pipelineStage: item.stage },
+        1,
+        "Hegel",
+      );
+      expect(orchestrationEyebrow(progress.orchestrationStage)).toBe(
+        item.eyebrow,
+      );
+      expect(progress.operationLabel).toBe(item.operation);
+      expect(progress.detailLabel).toBe(item.detail);
+      expect(orchestrationReassurance(progress.orchestrationStage)).not.toMatch(
+        /worker|blueprint|fan.?out/i,
+      );
+    }
+  });
+
+  it("keeps Space readings in the visible total until all reading is complete", () => {
+    const telemetry: KnowledgeTelemetry = {
+      runId: "run-space-reading-progress",
+      logicalWidth: 16,
+      physicalWidth: 4,
+      writeWidth: 0,
+      completedAssignments: 14,
+      failedAssignments: 0,
+      activeAssignments: 2,
+      waitingAssignments: 0,
+      currentPrimitives: [],
+      status: "running",
+      pipelineStage: "reading",
+      sourceSummaryCompleted: 12,
+      sourceSummaryTotal: 12,
+      spaceSummaryCompleted: 2,
+      spaceSummaryTotal: 4,
+      readingCompleted: 12,
+      readingTotal: 12,
+      writingCompleted: 0,
+      writingTotal: 3,
+    };
+
+    expect(
+      progressFromKnowledgeTelemetry(telemetry, 1, "Hegel").detailLabel,
+    ).toBe("14 of 16 readings ready");
+    expect(
+      progressFromKnowledgeTelemetry(
+        {
+          ...telemetry,
+          completedAssignments: 16,
+          activeAssignments: 0,
+          spaceSummaryCompleted: 4,
+        },
+        1,
+        "Hegel",
+      ).detailLabel,
+    ).toBe("16 of 16 readings ready");
+  });
+
+  it("uses calm stage-aware copy for hidden import diagnostics", () => {
+    const diagnostic = new Error(
+      "Invalid schema in writing blueprint artifact:42 for writer slot writer-2; parser rejected payload.",
+    );
+    const expected = new Map([
+      ["reading-plan", "Orion could not finish preparing the reading."],
+      ["reading", "Orion could not finish reading every part of this import."],
+      [
+        "writing-plan",
+        "Orion finished the reading but could not complete the note plan.",
+      ],
+      [
+        "writing",
+        "Orion finished the reading but could not complete every planned note.",
+      ],
+      [
+        "assembling",
+        "Orion prepared the notes but could not finish the final checks.",
+      ],
+      ["direct", "Orion could not finish shaping these notes."],
+    ] as const);
+
+    for (const [stage, copy] of expected) {
+      const message = knowledgeImportFailureMessage(diagnostic, stage);
+      expect(message).toBe(copy);
+      expect(message).not.toMatch(
+        /assignment|artifact|blueprint|parser|payload|schema|writer slot/i,
+      );
+    }
   });
 
   it("uses one file affordance and a focused paste sheet", () => {
@@ -189,6 +407,46 @@ describe("Import unified intake", () => {
     expect(screen.queryByText("Import queue")).not.toBeInTheDocument();
   });
 
+  it("forwards the PDF parser's exact selective page list to native Vision", async () => {
+    pdfUiState.pages = [
+      `A damaged philosophical page ${"�".repeat(8)} still contains enough words to preserve its argument.`,
+    ];
+    const recognition = deferred<Awaited<ReturnType<typeof recognizeDocumentText>>>();
+    vi.mocked(recognizeDocumentText).mockReturnValueOnce(recognition.promise);
+    const result = {
+      text: "A repaired philosophical page still contains enough words to preserve its argument.",
+      pageCount: 1,
+      pages: [
+        {
+          pageNumber: 1,
+          text: "A repaired philosophical page still contains enough words to preserve its argument.",
+        },
+      ],
+      warnings: [],
+    };
+    const { container } = render(<Harness />);
+    const input = container.querySelector<HTMLInputElement>(
+      `input[type="file"][accept*=".pdf"]`,
+    );
+    const pdf = new File([new TextEncoder().encode("%PDF-fixture")], "book.pdf", {
+      type: "application/pdf",
+    });
+
+    fireEvent.change(input!, { target: { files: [pdf] } });
+
+    await waitFor(() => {
+      expect(recognizeDocumentText).toHaveBeenCalledWith(pdf, {
+        pageNumbers: [1],
+      });
+    });
+    expect(screen.getByText("Repairing 1 PDF page locally…")).toBeVisible();
+    await act(async () => {
+      recognition.resolve(result);
+      await recognition.promise;
+    });
+    expect(await screen.findByText("Book")).toBeVisible();
+  });
+
   it("clears the completed batch only after it is successfully applied", async () => {
     const onApply = vi.fn();
     render(<Harness onApply={onApply} />);
@@ -202,7 +460,7 @@ describe("Import unified intake", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create notes" }));
 
     expect(
-      await screen.findByRole("heading", { name: "1 page found" }),
+      await screen.findByRole("heading", { name: "1 note prepared" }),
     ).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Add to Orion" }));
     await waitFor(() => expect(onApply).toHaveBeenCalledOnce());
@@ -210,5 +468,538 @@ describe("Import unified intake", () => {
 
     expect(screen.queryByText("Import queue")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Review sources" })).toBeDisabled();
+  });
+
+  it("reads long documents with six parallel section workers before synthesis", async () => {
+    const firstWave = deferred<OrganizeContentResult>();
+    let sectionCalls = 0;
+    vi.mocked(organizeWithAI).mockImplementation((request) => {
+      if (request.taskInstructions?.includes("Final editorial synthesis")) {
+        return Promise.resolve(organizedResult("Hegel's three studies"));
+      }
+      sectionCalls += 1;
+      if (sectionCalls <= 6) return firstWave.promise;
+      return Promise.resolve(organizedResult(`Reading ${sectionCalls}`));
+    });
+    const aiSnapshot: AppSnapshot = {
+      ...snapshot,
+      settings: { ...snapshot.settings, apiKeyConfigured: true },
+    };
+    render(<Harness testSnapshot={aiSnapshot} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Paste text" }));
+    fireEvent.change(screen.getByLabelText(/Title/), {
+      target: { value: "Hegel" },
+    });
+    fireEvent.change(screen.getByLabelText("Text"), {
+      target: { value: longPageText() },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add to queue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review sources" }));
+    fireEvent.click(screen.getByRole("button", { name: "Organize with AI" }));
+
+    await waitFor(() => expect(organizeWithAI).toHaveBeenCalledTimes(6));
+    expect(screen.getByText("Reading in parallel")).toBeVisible();
+    expect(screen.getByText("Hegel")).toBeVisible();
+    expect(screen.getByText("1 of 1")).toBeVisible();
+    expect(screen.getByText("Reading 9 sections")).toBeVisible();
+    expect(screen.getByText("Section 1 of 9")).toBeVisible();
+
+    await act(async () => {
+      firstWave.resolve(organizedResult("Opening reading"));
+      await firstWave.promise;
+    });
+
+    expect(
+      await screen.findByRole("heading", { name: "1 note prepared" }),
+    ).toBeVisible();
+    expect(organizeWithAI).toHaveBeenCalledTimes(10);
+    const synthesisRequest = vi.mocked(organizeWithAI).mock.calls[9]?.[0];
+    expect(synthesisRequest?.content).toContain("# Reading map for Hegel");
+    expect(synthesisRequest?.taskInstructions).toContain(
+      "Final editorial synthesis",
+    );
+  });
+
+  it("uses page-aware parallel readings for a modest five-page installed import", async () => {
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
+      {};
+    const readingGate = deferred<void>();
+    const readingRangeIds: string[] = [];
+    let plannedReadingCount = 0;
+    let activeReadingCount = 0;
+    let maximumConcurrentReadings = 0;
+    let failWriterOnce = true;
+    vi.mocked(runKnowledgeAssignment).mockImplementation(async (request) => {
+      if (request.assignment.output.kind === "reading-blueprint") {
+        plannedReadingCount = request.assignment.output.sourceRanges.length;
+        return {
+          response: {
+            kind: "complete",
+            payload: {
+              spaceExplanation: "A Space-aware frame for the imported source.",
+              spaceFocusConcepts: [],
+              spaceQuestions: ["What does the source establish?"],
+              readers: request.assignment.output.sourceRanges.map(
+                ({ sourceId, rangeId }, index) => ({
+                  readerId: `reader-${index + 1}`,
+                  sourceId,
+                  rangeId,
+                  focusQuestions: ["What matters in this complete range?"],
+                  focusConcepts: [],
+                  comparisons: [],
+                  mustPreserve: [`Source range ${sourceId}/${rangeId}`],
+                }),
+              ),
+              warnings: [],
+            },
+          },
+        };
+      }
+      if (request.assignment.output.kind === "source-reading") {
+        const { sourceId, rangeId } = request.assignment.output;
+        readingRangeIds.push(rangeId);
+        activeReadingCount += 1;
+        maximumConcurrentReadings = Math.max(
+          maximumConcurrentReadings,
+          activeReadingCount,
+        );
+        await readingGate.promise.finally(() => {
+          activeReadingCount -= 1;
+        });
+        return {
+          response: {
+            kind: "complete",
+            payload: {
+              sourceId,
+              rangeId,
+              summary: `Summary for ${rangeId}`,
+              coverage: { complete: true, limitations: [] },
+              sourceAssessment: {
+                importance: "high",
+                rationale: "This section advances the source argument.",
+              },
+              spaceAssessment: {
+                relevance: "medium",
+                novelty: "medium",
+                focusConcepts: ["argument"],
+                deprioritizedConcepts: [],
+                reviewedNoteIds: [],
+                rationale: "This section advances the source argument.",
+              },
+              sourceClaims: [
+                {
+                  claimId: "claim-1",
+                  text: `A grounded claim from ${rangeId}.`,
+                  support: [{ sourceId, rangeId }],
+                },
+              ],
+              synthesisSeeds: [
+                {
+                  seedId: "seed-1",
+                  proposedTitle: "The structure of the argument",
+                  thesis: `The claim from ${rangeId} contributes to one shared argument.`,
+                  claimIds: ["claim-1"],
+                  importance: "high",
+                  contribution: "new",
+                  relatedNoteIds: [],
+                  rationale: "Each page range develops the same durable idea.",
+                },
+              ],
+              spaceInterpretations: [],
+              mustPreserve: request.assignment.constraints.mustPreserve,
+            },
+          },
+        };
+      }
+      if (request.assignment.output.kind === "writing-blueprint") {
+        const readings = request.context.pipelineMaterials
+          ?.filter(({ kind }) => kind === "source-reading")
+          .map(({ payload }) => payload as {
+            artifactId: string;
+            reading: {
+              sourceId: string;
+              sourceClaims: Array<{ claimId: string }>;
+              synthesisSeeds: Array<{ seedId: string }>;
+              mustPreserve: string[];
+            };
+          }) ?? [];
+        const sourceIds = [readings[0].reading.sourceId];
+        return {
+          response: {
+            kind: "complete",
+            payload: {
+              spaceThesis: "The source ranges form one note.",
+              outputs: [
+                {
+                  outputId: "output-1",
+                  operation: "create",
+                  kind: "note",
+                  title: "Five-page reading",
+                  editorialBrief: "Synthesize the selected claims.",
+                  sourceIds,
+                  claimSelections: readings.map(({ artifactId, reading }) => ({
+                    artifactId,
+                    claimIds: [reading.sourceClaims[0].claimId],
+                  })),
+                  lensSelections: [],
+                  mustPreserve: [
+                    ...new Set(
+                      readings.flatMap(({ reading }) => reading.mustPreserve),
+                    ),
+                  ],
+                  estimatedTokens: 700,
+                  writerSlotId: "writer-1",
+                  existingDestination: null,
+                },
+              ],
+              seedDispositions: readings.map(
+                ({ artifactId, reading }, index) => ({
+                  artifactId,
+                  seedId: reading.synthesisSeeds[0].seedId,
+                  disposition: index === 0 ? "output" : "merged",
+                  outputId: "output-1",
+                  rationale:
+                    index === 0
+                      ? "This seed defines the shared argument."
+                      : "This range extends the same shared argument.",
+                }),
+              ),
+              writerSlots: [
+                {
+                  writerSlotId: "writer-1",
+                  objective: "Write the note.",
+                  outputIds: ["output-1"],
+                },
+              ],
+              concepts: [],
+              suggestedConnections: [],
+              warnings: [],
+            },
+          },
+        };
+      }
+      if (request.assignment.output.kind === "writer-result") {
+        if (failWriterOnce) {
+          failWriterOnce = false;
+          throw new KnowledgeProviderTimeoutError(
+            "OpenAI did not respond while writing this note.",
+          );
+        }
+        const planned = request.context.pipelineMaterials?.find(
+          ({ kind }) => kind === "writing-blueprint",
+        )?.payload as {
+          assignedOutputs: Array<{
+            outputId: string;
+            operation: "create";
+            kind: "note";
+            title: string;
+            sourceIds: string[];
+            claimSelections: Array<{ artifactId: string; claimIds: string[] }>;
+            lensSelections: [];
+            mustPreserve: string[];
+            existingDestination: null;
+          }>;
+        };
+        return {
+          response: {
+            kind: "complete",
+            payload: {
+              writerSlotId: request.assignment.output.writerSlotId,
+              drafts: planned.assignedOutputs.map((output) => ({
+                outputId: output.outputId,
+                operation: output.operation,
+                kind: output.kind,
+                title: output.title,
+                summary: "A complete five-page reading.",
+                body: "# Five-page reading\n\nA complete five-page reading.",
+                tags: [],
+                aliases: [],
+                links: [],
+                overview: "",
+                spaceRelevance: "",
+                sourceGroundedDetails: [],
+                uncertainties: [],
+                sourceIds: output.sourceIds,
+                claimSelections: output.claimSelections,
+                lensSelections: output.lensSelections,
+                mustPreserve: output.mustPreserve,
+                existingDestination: output.existingDestination,
+              })),
+              warnings: [],
+            },
+          },
+        };
+      }
+      return {
+        response: {
+          kind: "complete",
+          payload: {
+            ...organizedResult("Unexpected"),
+            provenance: [
+              {
+                kind: "note",
+                title: "Unexpected",
+                sourceIds: [],
+                evidenceReferences: [],
+              },
+            ],
+            ownerProposals: [],
+            warnings: [],
+          },
+        },
+      };
+    });
+    const aiSnapshot: AppSnapshot = {
+      ...snapshot,
+      settings: { ...snapshot.settings, apiKeyConfigured: true },
+    };
+    render(<Harness testSnapshot={aiSnapshot} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Paste text" }));
+    fireEvent.change(screen.getByLabelText(/Title/), {
+      target: { value: "Five pages" },
+    });
+    fireEvent.change(screen.getByLabelText("Text"), {
+      target: { value: longPageText(5, 500) },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add to queue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review sources" }));
+    fireEvent.click(screen.getByRole("button", { name: "Organize with AI" }));
+
+    await waitFor(() => {
+      expect(plannedReadingCount).toBeGreaterThan(1);
+      expect(readingRangeIds).toHaveLength(plannedReadingCount);
+    });
+    expect(await screen.findByText("Reading in parallel")).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "Orion is reading every part" }),
+    ).toBeVisible();
+    expect(
+      screen.getByText(`0 of ${plannedReadingCount} readings ready`),
+    ).toBeVisible();
+    expect(
+      screen.getByText("Every planned part is read before note writing begins."),
+    ).toBeVisible();
+    expect(new Set(readingRangeIds).size).toBe(plannedReadingCount);
+    expect(maximumConcurrentReadings).toBe(plannedReadingCount);
+
+    await act(async () => {
+      readingGate.resolve();
+      await readingGate.promise;
+    });
+    // A writer timeout is auto-resumable: Orion recovers from the saved
+    // checkpoint on its own instead of pausing for a manual resume. The
+    // doubled writer-result call count asserted below is the durable proof of
+    // the silent recovery; the transient recovery label is timing-dependent.
+    expect(
+      await screen.findByRole("heading", { name: "1 note prepared" }, {
+        timeout: 6_000,
+      }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("heading", {
+        name: "Orion paused while writing the notes.",
+      }),
+    ).not.toBeInTheDocument();
+    const assignmentKinds = vi
+      .mocked(runKnowledgeAssignment)
+      .mock.calls.map(([request]) => request.assignment.output.kind);
+    expect(
+      assignmentKinds.filter((kind) => kind === "reading-blueprint"),
+    ).toHaveLength(1);
+    expect(
+      assignmentKinds.filter((kind) => kind === "source-reading"),
+    ).toHaveLength(plannedReadingCount);
+    expect(
+      assignmentKinds.filter((kind) => kind === "writing-blueprint"),
+    ).toHaveLength(1);
+    expect(
+      assignmentKinds.filter((kind) => kind === "writer-result"),
+    ).toHaveLength(2);
+  });
+
+  it("shows the fast direct-reading path without forecasting a total", async () => {
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
+      {};
+    const gate = deferred<void>();
+    vi.mocked(runKnowledgeAssignment).mockImplementation(async (request) => {
+      await gate.promise;
+      const sourceId = request.context.runManifest?.sources[0].sourceId ?? "missing";
+      return {
+        response: {
+          kind: "complete",
+          payload: {
+            result: organizedResult("Observed reading"),
+            provenance: [
+              {
+                kind: "note",
+                title: "Observed reading",
+                sourceIds: [sourceId],
+                evidenceReferences: [{ kind: "source", sourceId }],
+              },
+            ],
+            ownerProposals: [],
+            warnings: [],
+          },
+        },
+      };
+    });
+    const aiSnapshot: AppSnapshot = {
+      ...snapshot,
+      settings: { ...snapshot.settings, apiKeyConfigured: true },
+    };
+    render(<Harness testSnapshot={aiSnapshot} />);
+    fireEvent.click(screen.getByRole("button", { name: "Paste text" }));
+    fireEvent.change(screen.getByLabelText("Text"), {
+      target: { value: "A compact but conceptually dense source." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add to queue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review sources" }));
+    fireEvent.click(screen.getByRole("button", { name: "Organize with AI" }));
+
+    await waitFor(() => expect(runKnowledgeAssignment).toHaveBeenCalledOnce());
+    expect(screen.getByText("Organizing")).toBeVisible();
+    expect(await screen.findByText("Reading the source in one pass")).toBeVisible();
+    const progress = screen.getByRole("progressbar");
+    expect(progress).not.toHaveAttribute("aria-valuenow");
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
+
+    await act(async () => {
+      gate.resolve();
+      await gate.promise;
+    });
+    expect(
+      await screen.findByRole("heading", {
+        name: "1 note prepared",
+      }),
+    ).toBeVisible();
+    expect(organizeWithAI).not.toHaveBeenCalled();
+  });
+
+  it("returns to review cleanly when an installed import is cancelled", async () => {
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
+      {};
+    vi.mocked(runKnowledgeAssignment).mockImplementation(
+      async (_request, signal) =>
+        await new Promise((_, reject) => {
+          const rejectFromAbort = () => reject(signal.reason);
+          if (signal.aborted) rejectFromAbort();
+          else signal.addEventListener("abort", rejectFromAbort, { once: true });
+        }),
+    );
+    const aiSnapshot: AppSnapshot = {
+      ...snapshot,
+      settings: { ...snapshot.settings, apiKeyConfigured: true },
+    };
+    render(<Harness testSnapshot={aiSnapshot} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Paste text" }));
+    fireEvent.change(screen.getByLabelText("Text"), {
+      target: { value: "A source whose reading the user cancels." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add to queue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review sources" }));
+    fireEvent.click(screen.getByRole("button", { name: "Organize with AI" }));
+
+    await waitFor(() => expect(runKnowledgeAssignment).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Review what Orion will import",
+      }),
+    ).toBeVisible();
+    expect(screen.queryByText("Import notes")).not.toBeInTheDocument();
+  });
+
+  it("lands a deadline-limited import plainly instead of failing", async () => {
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
+      {};
+    const warningSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.mocked(runKnowledgeAssignment).mockRejectedValue(
+      new KnowledgeDeadlineExceededError(),
+    );
+    const aiSnapshot: AppSnapshot = {
+      ...snapshot,
+      settings: { ...snapshot.settings, apiKeyConfigured: true },
+    };
+    render(<Harness testSnapshot={aiSnapshot} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Paste text" }));
+    fireEvent.change(screen.getByLabelText("Text"), {
+      target: { value: "A complete source that reaches the import limit." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add to queue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review sources" }));
+    fireEvent.click(screen.getByRole("button", { name: "Organize with AI" }));
+
+    // The time limit is a deliberate stop, so there is no silent retry — but
+    // the import still lands as real notes instead of a failure card.
+    expect(
+      await screen.findByRole("heading", { name: "1 note prepared" }),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/Orion landed this import plainly/),
+    ).toBeVisible();
+    expect(warningSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[Orion import]"),
+      expect.objectContaining({
+        message: expect.stringMatching(/knowledge-import limit/i),
+      }),
+    );
+    warningSpy.mockRestore();
+  });
+
+  it("lands the source as a first-class note without a second AI workflow", async () => {
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
+      {};
+    const diagnostic = new Error(
+      "Invalid schema in writing blueprint artifact:42 for writer slot writer-2; parser rejected payload.",
+    );
+    const warningSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.mocked(runKnowledgeAssignment).mockRejectedValue(
+      diagnostic,
+    );
+    const onApply = vi.fn();
+    const aiSnapshot: AppSnapshot = {
+      ...snapshot,
+      settings: { ...snapshot.settings, apiKeyConfigured: true },
+    };
+    render(<Harness testSnapshot={aiSnapshot} onApply={onApply} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Paste text" }));
+    fireEvent.change(screen.getByLabelText(/Title/), {
+      target: { value: "Safe source" },
+    });
+    fireEvent.change(screen.getByLabelText("Text"), {
+      target: { value: "Every paragraph must survive the provider failure." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add to queue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review sources" }));
+    fireEvent.click(screen.getByRole("button", { name: "Organize with AI" }));
+
+    // A persistent provider failure lands the source as a real note built
+    // locally from the preserved text — no failure card, no second workflow.
+    expect(
+      await screen.findByRole("heading", { name: "1 note prepared" }, {
+        timeout: 6_000,
+      }),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/Orion landed this import plainly/),
+    ).toBeVisible();
+    expect(warningSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[Orion import]"),
+      diagnostic,
+    );
+    expect(organizeWithAI).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add to Orion" }));
+    await waitFor(() => expect(onApply).toHaveBeenCalledOnce());
+    expect(onApply.mock.calls[0]?.[0].notes[0]?.body).toContain(
+      "Every paragraph must survive the provider failure.",
+    );
+    warningSpy.mockRestore();
   });
 });

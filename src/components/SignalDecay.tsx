@@ -43,6 +43,9 @@ uniform vec3 uSecondary;
 uniform vec3 uTertiary;
 uniform vec3 uBright;
 uniform vec3 uMuted;
+uniform vec3 uBackground;
+uniform vec3 uBackgroundSecondary;
+uniform float uLightMode;
 
 #define TAU 6.28318530
 #define NUM_TRACKS 9
@@ -180,6 +183,7 @@ void main() {
 
   float glitchOffset = glitch(yFromTop, uTime, decay);
   vec3 color = vec3(0.0);
+  float signalPresence = 0.0;
   float trackHeight = 1.0 / float(NUM_TRACKS);
 
   for (int i = 0; i < NUM_TRACKS; i++) {
@@ -229,6 +233,7 @@ void main() {
     trackColor =
       mix(trackColor, uBright, smoothstep(0.54, 0.84, trackDecay));
     color += trackColor * line;
+    signalPresence = max(signalPresence, clamp(line, 0.0, 1.0));
   }
 
   float noiseFloor =
@@ -245,15 +250,26 @@ void main() {
     float band =
       valueNoise(vec2(uTime * 2.2, gl_FragCoord.y * 0.07));
     float noise = broadNoise * 0.56 + scanNoise * 0.29 + band * 0.15;
-    color += uMuted * noise * noiseFloor * 0.38;
+    float noisePresence = noise * noiseFloor * 0.38;
+    color += uMuted * noisePresence;
+    signalPresence = max(signalPresence, noisePresence);
   }
 
   vec3 background = mix(
-    vec3(0.025, 0.039, 0.065),
-    vec3(0.041, 0.045, 0.061),
+    uBackground,
+    uBackgroundSecondary,
     yFromTop
   );
-  color += background;
+  if (uLightMode > 0.5) {
+    vec3 signalColor = clamp(
+      color / max(signalPresence, 0.001),
+      0.0,
+      1.0
+    );
+    color = mix(background, signalColor, clamp(signalPresence, 0.0, 1.0));
+  } else {
+    color += background;
+  }
 
   vec2 vignettePoint = uv - 0.5;
   float vignette =
@@ -263,7 +279,12 @@ void main() {
       vignettePoint * vec2(0.86, 0.54)
     ) *
       1.2;
-  color *= clamp(0.5 + 0.5 * vignette, 0.0, 1.0);
+  float vignetteStrength = clamp(0.5 + 0.5 * vignette, 0.0, 1.0);
+  if (uLightMode > 0.5) {
+    color = mix(uBackground, color, mix(0.82, 1.0, vignetteStrength));
+  } else {
+    color *= vignetteStrength;
+  }
 
   float grain =
     (hash(gl_FragCoord.xy + fract(uTime * 0.05) * 137.0) - 0.5) *
@@ -315,6 +336,11 @@ export default function SignalDecay({
         uTertiary: { value: hexToVec3(palette.tertiary) },
         uBright: { value: hexToVec3(palette.bright) },
         uMuted: { value: hexToVec3(palette.muted) },
+        uBackground: { value: hexToVec3(palette.background) },
+        uBackgroundSecondary: {
+          value: hexToVec3(palette.backgroundSecondary),
+        },
+        uLightMode: { value: palette.isLight ? 1 : 0 },
       },
     });
     const mesh = new Mesh(gl, { geometry, program });

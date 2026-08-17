@@ -7,7 +7,7 @@ import { SpaceSwitcher } from "./SpaceSwitcher";
 
 const NOW = "2026-07-28T04:30:00.000Z";
 
-function renderSwitcher() {
+function renderSwitcher(deleteResult = true) {
   const main = createEmptySnapshot("Main project", NOW, "space-main");
   const research = createEmptySnapshot(
     "Research project",
@@ -15,6 +15,7 @@ function renderSwitcher() {
     "space-research",
   );
   const onCreateSpace = vi.fn();
+  const onDeleteSpace = vi.fn(() => deleteResult);
   const onSwitchSpace = vi.fn();
 
   render(
@@ -22,11 +23,12 @@ function renderSwitcher() {
       spaces={[main, research]}
       activeSpaceId={main.workspace.id}
       onCreateSpace={onCreateSpace}
+      onDeleteSpace={onDeleteSpace}
       onSwitchSpace={onSwitchSpace}
     />,
   );
 
-  return { onCreateSpace, onSwitchSpace };
+  return { onCreateSpace, onDeleteSpace, onSwitchSpace };
 }
 
 describe("SpaceSwitcher", () => {
@@ -34,7 +36,9 @@ describe("SpaceSwitcher", () => {
     const { onSwitchSpace } = renderSwitcher();
 
     fireEvent.click(screen.getByRole("button", { name: /Main project/i }));
-    fireEvent.click(screen.getByRole("button", { name: /Research project/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Research project, 0 notes" }),
+    );
 
     expect(onSwitchSpace).toHaveBeenCalledOnce();
     expect(onSwitchSpace).toHaveBeenCalledWith("space-research");
@@ -65,5 +69,58 @@ describe("SpaceSwitcher", () => {
     expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
     expect(screen.getByText("That name is already in use.")).toBeVisible();
     expect(onCreateSpace).not.toHaveBeenCalled();
+  });
+
+  it("deletes from a sibling trash control without switching Spaces", () => {
+    const { onDeleteSpace, onSwitchSpace } = renderSwitcher();
+
+    fireEvent.click(screen.getByRole("button", { name: /Main project/i }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Delete Research project space",
+      }),
+    );
+
+    expect(onDeleteSpace).toHaveBeenCalledOnce();
+    expect(onDeleteSpace).toHaveBeenCalledWith("space-research");
+    expect(onSwitchSpace).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: /Main project space/i }),
+    ).toHaveFocus();
+    expect(
+      screen.queryByRole("dialog", { name: "Switch space" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the Space list open when deletion is cancelled", () => {
+    renderSwitcher(false);
+
+    fireEvent.click(screen.getByRole("button", { name: /Main project/i }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Delete Research project space",
+      }),
+    );
+
+    expect(screen.getByRole("dialog", { name: "Switch space" })).toBeVisible();
+  });
+
+  it("does not offer deletion for the final Space", () => {
+    const only = createEmptySnapshot("Only space", NOW, "space-only");
+
+    render(
+      <SpaceSwitcher
+        spaces={[only]}
+        activeSpaceId={only.workspace.id}
+        onCreateSpace={vi.fn()}
+        onDeleteSpace={vi.fn(() => false)}
+        onSwitchSpace={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Only space/i }));
+    expect(
+      screen.queryByRole("button", { name: /Delete Only space/i }),
+    ).not.toBeInTheDocument();
   });
 });

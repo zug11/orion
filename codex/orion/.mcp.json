@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "orion": {
+      "command": "./server/orion-mcp",
+      "args": [],
+      "cwd": "."
+    }
+  }
+}

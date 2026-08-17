@@ -1,0 +1,22 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="orion-mark-stroke" x1="13" y1="10" x2="50" y2="54" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C5CCFF"/>
+      <stop offset="0.52" stop-color="#8999FF"/>
+      <stop offset="1" stop-color="#E7B879"/>
+    </linearGradient>
+    <radialGradient id="orion-mark-star">
+      <stop stop-color="#FFF8EA"/>
+      <stop offset="0.38" stop-color="#E9D3AC"/>
+      <stop offset="1" stop-color="#B18143"/>
+    </radialGradient>
+  </defs>
+  <path d="M49.7 17.7C56.6 25.6 52.6 39.8 40.8 48.2C29 56.7 13.7 56.1 7.7 47.7C1.8 39.4 7.4 26.6 20 18.6C32.6 10.6 43.1 10.1 49.7 17.7Z" stroke="url(#orion-mark-stroke)" stroke-width="2.2"/>
+  <path d="M17.1 11.8C24.5 7.4 38 14.3 45.7 27C53.3 39.7 51.6 52.7 43.3 56.3C35 59.9 23.6 52.2 16.6 39.8C9.6 27.4 9.3 16.4 17.1 11.8Z" stroke="url(#orion-mark-stroke)" stroke-opacity=".42" stroke-width="1.4"/>
+  <path d="M14.8 37.5L25.9 32.6L36.5 28.2L48.7 23.5" stroke="#CDD3FF" stroke-opacity=".38" stroke-width="1.1" stroke-dasharray="2 3"/>
+  <circle cx="25.9" cy="32.6" r="3.15" fill="url(#orion-mark-star)"/>
+  <circle cx="36.5" cy="28.2" r="2.65" fill="#A9B4FF"/>
+  <circle cx="14.8" cy="37.5" r="1.85" fill="#8496FF"/>
+  <circle cx="48.7" cy="23.5" r="1.85" fill="#E7B879"/>
+  <circle cx="25.9" cy="32.6" r="6" stroke="#E7B879" stroke-opacity=".18"/>
+</svg>

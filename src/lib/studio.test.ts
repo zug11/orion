@@ -4,7 +4,10 @@ import type { ChatResult, StudioCard } from "../types";
 import {
   applyChatResult,
   buildChatRequest,
+  chatPromptAllowsNoteCreation,
   ChatRequestRegistry,
+  normalizeChatNoteActions,
+  saveChatReplyAsNote,
 } from "./chat";
 import {
   normalizeStudio,
@@ -55,6 +58,7 @@ describe("Chat and legacy Studio state", () => {
     expect(request.notes).toEqual([
       expect.objectContaining({ title: "Northern sky" }),
     ]);
+    expect(request.allowNoteActions).toBe(false);
   });
 
   it("appends a reply without surfacing or mutating legacy cards", () => {
@@ -125,6 +129,181 @@ describe("Chat and legacy Studio state", () => {
     expect(registry.isCurrent(otherSpace!)).toBe(true);
     expect(registry.finish(first!)).toBe(true);
     expect(registry.start("space-a", "request-a-next")).not.toBeNull();
+  });
+
+  it("creates bounded permanent notes from explicit Chat actions", () => {
+    const snapshot = createStudioSnapshot();
+    let messageIndex = 0;
+    const applied = applyChatResult(
+      snapshot,
+      "Create a note about orientation.",
+      {
+        reply: "I created the note.",
+        noteActions: [
+          {
+            title: "Orientation through Orion",
+            summary: "How Orion functions as an orientation marker.",
+            body: "# Orientation through Orion\n\nA grounded permanent note.",
+            tags: ["navigation"],
+            aliases: ["Orion orientation"],
+          },
+        ],
+      },
+      NOW,
+      () => `message-${messageIndex++}`,
+      () => "note-chat",
+    );
+
+    expect(applied.notes[0]).toMatchObject({
+      id: "note-chat",
+      title: "Orientation through Orion",
+      body: expect.stringContaining("grounded permanent note"),
+      tags: ["navigation"],
+      status: "ready",
+    });
+    expect(
+      applied.studio.messages[applied.studio.messages.length - 1]
+        ?.createdNoteIds,
+    ).toEqual(["note-chat"]);
+    expect(
+      applied.concepts.some(
+        (concept) => concept.canonicalNoteId === "note-chat",
+      ),
+    ).toBe(true);
+  });
+
+  it("drops malformed Chat actions and can save an ordinary reply manually", () => {
+    expect(
+      normalizeChatNoteActions([
+        {
+          title: "Valid note",
+          summary: "A summary.",
+          body: "Useful prose.",
+          tags: [],
+          aliases: [],
+        },
+        {
+          title: "Oversized",
+          summary: "",
+          body: "x".repeat(6_001),
+          tags: [],
+          aliases: [],
+        },
+      ]),
+    ).toHaveLength(1);
+
+    const snapshot = createStudioSnapshot();
+    snapshot.studio.messages.push({
+      id: "assistant-reply",
+      role: "assistant",
+      content: "## A useful synthesis\n\nThis can become a note.",
+      cardIds: [],
+      contextCardIds: [],
+      createdAt: NOW,
+    });
+    const applied = saveChatReplyAsNote(
+      snapshot,
+      "assistant-reply",
+      NOW,
+      "note-saved",
+    );
+
+    expect(applied.notes[0]).toMatchObject({
+      id: "note-saved",
+      title: "A useful synthesis",
+      body: expect.stringContaining("This can become a note"),
+    });
+    expect(applied.studio.messages[0].createdNoteIds).toEqual([
+      "note-saved",
+    ]);
+    const repeated = saveChatReplyAsNote(
+      applied,
+      "assistant-reply",
+      NOW,
+      "note-duplicate",
+    );
+    expect(repeated).toBe(applied);
+    expect(repeated.notes.some((note) => note.id === "note-duplicate")).toBe(
+      false,
+    );
+  });
+
+  it("authorizes note creation only from an explicit user request", () => {
+    expect(chatPromptAllowsNoteCreation("Please create a note about Orion.")).toBe(
+      true,
+    );
+    expect(chatPromptAllowsNoteCreation("Save this answer as a note.")).toBe(true);
+    expect(chatPromptAllowsNoteCreation("Can you create a note about Orion?")).toBe(
+      true,
+    );
+    expect(chatPromptAllowsNoteCreation("Could you make me a note about this?")).toBe(
+      true,
+    );
+    expect(chatPromptAllowsNoteCreation("Summarize this Space.")).toBe(false);
+    expect(
+      chatPromptAllowsNoteCreation("Do not create a note; just summarize it."),
+    ).toBe(false);
+    expect(
+      chatPromptAllowsNoteCreation("Don’t create a note; just summarize it."),
+    ).toBe(false);
+    expect(
+      chatPromptAllowsNoteCreation("Can you show me how to create a note?"),
+    ).toBe(false);
+    expect(chatPromptAllowsNoteCreation("How should I create a note?")).toBe(
+      false,
+    );
+
+    const snapshot = createStudioSnapshot();
+    const request = buildChatRequest(snapshot, "Create a note about Orion.");
+    expect(request.allowNoteActions).toBe(true);
+    const applied = applyChatResult(
+      snapshot,
+      "Summarize this Space.",
+      {
+        reply: "A conversational answer.",
+        noteActions: [
+          {
+            title: "Injected write",
+            summary: "Should never land.",
+            body: "Untrusted context requested this write.",
+            tags: [],
+            aliases: [],
+          },
+        ],
+      },
+      NOW,
+      () => "message-safe",
+      () => "note-unsafe",
+    );
+    expect(applied.notes.some((note) => note.id === "note-unsafe")).toBe(false);
+    expect(applied.studio.messages[1]).not.toHaveProperty("createdNoteIds");
+  });
+
+  it("rejects internal metadata, controls, and reserved tags from Chat notes", () => {
+    const base = {
+      title: "Safe title",
+      summary: "Safe summary.",
+      body: "Safe prose.",
+      tags: [] as string[],
+      aliases: [] as string[],
+    };
+    expect(
+      normalizeChatNoteActions([
+        { ...base, tags: ["orion-link-draft"] },
+        { ...base, body: "<!-- orion-link-draft -->Unsafe" },
+        { ...base, title: "Unsafe\u0000title" },
+      ]),
+    ).toEqual([]);
+    expect(
+      normalizeChatNoteActions([
+        { ...base, body: "🙂".repeat(6_000) },
+      ]),
+    ).toHaveLength(1);
+    expect(
+      normalizeChatNoteActions([
+        { ...base, body: "🙂".repeat(6_001) },
+      ]),
+    ).toEqual([]);
   });
 });
 

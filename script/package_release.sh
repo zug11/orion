@@ -14,6 +14,9 @@ APP_BUNDLE="$ROOT_DIR/src-tauri/target/release/bundle/macos/Orion.app"
 FINAL_DMG="$OUTPUT_DIR/Orion-$RELEASE_LABEL-Apple-Silicon.dmg"
 FIXTURE_VAULT="$ROOT_DIR/src-tauri/tests/fixtures/mcp-vault.json"
 CONNECTOR_RELATIVE_PATH="Contents/Resources/Orion-Claude-Connector.mcpb"
+CODEX_PLUGIN_RELATIVE_PATH="Contents/Resources/Orion-Codex-Plugin"
+CODEX_PLUGIN_BINARY_RELATIVE_PATH="$CODEX_PLUGIN_RELATIVE_PATH/plugins/orion/server/orion-mcp"
+CODEX_PLUGIN_RESOURCE="$ROOT_DIR/src-tauri/resources/Orion-Codex-Plugin"
 SOURCE_STAMP_RELATIVE_PATH="Contents/Resources/orion-source.sha256"
 RENDERER_STAMP_RELATIVE_PATH="Contents/Resources/orion-renderer.sha256"
 HELPER_ENTITLEMENTS="$ROOT_DIR/src-tauri/entitlements/helper-runtime.plist"
@@ -25,11 +28,11 @@ if [[ -z "$APP_VERSION" ]]; then
   exit 1
 fi
 
+identity_lines="$(
+  security find-identity -v -p codesigning 2>/dev/null |
+    sed -n '/"Developer ID Application:/p'
+)"
 if [[ -z "$CODE_SIGN_IDENTITY" ]]; then
-  identity_lines="$(
-    security find-identity -v -p codesigning 2>/dev/null |
-      sed -n '/"Developer ID Application:/p'
-  )"
   identity_count="$(printf '%s\n' "$identity_lines" | sed '/^$/d' | wc -l | tr -d ' ')"
   if [[ "$identity_count" != "1" ]]; then
     echo "Set ORION_CODESIGN_IDENTITY to one installed Developer ID Application identity." >&2
@@ -42,6 +45,27 @@ if [[ -z "$CODE_SIGN_IDENTITY" ]]; then
   )"
 fi
 
+valid_developer_id=false
+while IFS= read -r identity_line; do
+  identity_hash="$(
+    printf '%s\n' "$identity_line" |
+      sed -nE 's/^[[:space:]]*[0-9]+\) ([0-9A-F]+) .*/\1/p'
+  )"
+  identity_name="$(
+    printf '%s\n' "$identity_line" |
+      sed -nE 's/.*"(Developer ID Application: [^"]+)".*/\1/p'
+  )"
+  if [[ "$CODE_SIGN_IDENTITY" == "$identity_hash" ]] ||
+    [[ "$CODE_SIGN_IDENTITY" == "$identity_name" ]]; then
+    valid_developer_id=true
+    break
+  fi
+done <<< "$identity_lines"
+if [[ "$valid_developer_id" != true ]]; then
+  echo "ORION_CODESIGN_IDENTITY must identify an installed Developer ID Application certificate." >&2
+  exit 1
+fi
+
 if [[ ! -f "$HELPER_ENTITLEMENTS" ]]; then
   echo "missing helper entitlements: $HELPER_ENTITLEMENTS" >&2
   exit 1
@@ -52,6 +76,21 @@ export ORION_CODESIGN_IDENTITY="$CODE_SIGN_IDENTITY"
 # rustc then cannot reload (E0463). Defer symbol trimming until after linking;
 # this keeps the release build deterministic without weakening app signing.
 export CARGO_PROFILE_RELEASE_STRIP=false
+
+configure_release_rustflags() {
+  local encoded_rustflags remap_flag
+  encoded_rustflags="${CARGO_ENCODED_RUSTFLAGS:-}"
+  for remap_flag in \
+    "--remap-path-prefix=$ROOT_DIR=/orion" \
+    "--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo" \
+    "--remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup"; do
+    if [[ -n "$encoded_rustflags" ]]; then
+      encoded_rustflags+=$'\x1f'
+    fi
+    encoded_rustflags+="$remap_flag"
+  done
+  export CARGO_ENCODED_RUSTFLAGS="$encoded_rustflags"
+}
 
 if [[ ! "$RELEASE_LABEL" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]{0,79}$ ]] ||
   [[ "$RELEASE_LABEL" == *".."* ]]; then
@@ -86,13 +125,53 @@ verify_connector_package() (
     "$connector_binary" "$FIXTURE_VAULT" "$verification_dir/manifest.json"
 )
 
+verify_codex_plugin() (
+  set -euo pipefail
+
+  local resource_root plugin_binary marketplace_manifest
+  resource_root="${1:?missing Codex plugin resource root}"
+  plugin_binary="$resource_root/plugins/orion/server/orion-mcp"
+  marketplace_manifest="$resource_root/.agents/plugins/marketplace.json"
+
+  if [[ ! -f "$marketplace_manifest" ]]; then
+    echo "missing Codex marketplace manifest: $marketplace_manifest" >&2
+    exit 1
+  fi
+  if [[ ! -x "$plugin_binary" ]]; then
+    echo "missing executable Codex MCP server: $plugin_binary" >&2
+    exit 1
+  fi
+
+  codesign --verify --strict --verbose=2 "$plugin_binary"
+  "$plugin_binary" --version
+  node "$ROOT_DIR/script/test_codex_plugin.mjs" \
+    "$resource_root" "$FIXTURE_VAULT"
+)
+
+verify_no_build_user_paths() {
+  local app_bundle candidate
+  app_bundle="${1:?missing Orion app bundle}"
+  for candidate in \
+    "$app_bundle/Contents/MacOS/orion" \
+    "$app_bundle/Contents/MacOS/orion-ocr" \
+    "$app_bundle/Contents/MacOS/orion-whisper" \
+    "$app_bundle/Contents/MacOS/yt-dlp" \
+    "$app_bundle/Contents/MacOS/deno" \
+    "$app_bundle/$CODEX_PLUGIN_BINARY_RELATIVE_PATH"; do
+    if [[ -f "$candidate" ]] && LC_ALL=C grep -a -F -q "$HOME/" "$candidate"; then
+      echo "release executable contains a build-user path: $candidate" >&2
+      exit 1
+    fi
+  done
+}
+
 source_fingerprint() (
   set -euo pipefail
   cd "$ROOT_DIR"
 
   {
     find src src-tauri/src src-tauri/native src-tauri/mcp-server/src \
-      mcp/orion-claude -type f ! -name '.DS_Store'
+      mcp/orion-claude codex/orion -type f ! -name '.DS_Store'
     printf '%s\n' \
       AGENTS.md \
       index.html \
@@ -106,10 +185,12 @@ source_fingerprint() (
       src-tauri/mcp-server/Cargo.toml \
       src-tauri/mcp-server/Cargo.lock \
       src-tauri/tauri.conf.json \
+      script/build_codex_plugin.sh \
       script/build_mcp_connector.sh \
       script/build_ocr_sidecar.sh \
       script/build_transcription_sidecar.sh \
       script/package_release.sh \
+      script/test_codex_plugin.mjs \
       script/test_mcp_connector.mjs
   } |
     LC_ALL=C sort -u |
@@ -256,6 +337,11 @@ sign_app_bundle() {
   fi
   verify_connector_package "$APP_BUNDLE/$CONNECTOR_RELATIVE_PATH"
 
+  # Remove Finder/resource metadata before sealing the final Developer ID
+  # signatures. Tauri's input framework may carry File Provider attributes,
+  # and code-sign verification correctly rejects those after distribution.
+  xattr -cr "$APP_BUNDLE"
+
   # Sign every nested executable before sealing the main binary and app. All
   # executable code uses Developer ID, a secure timestamp, and Hardened Runtime
   # for notarization. yt-dlp retains only the narrow library-validation
@@ -273,65 +359,60 @@ sign_app_bundle() {
     --entitlements "$HELPER_ENTITLEMENTS" \
     "$APP_BUNDLE/Contents/MacOS/yt-dlp"
   codesign --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
+    "$APP_BUNDLE/$CODEX_PLUGIN_BINARY_RELATIVE_PATH"
+  codesign --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
     "$APP_BUNDLE/Contents/MacOS/orion"
   codesign --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
     "$APP_BUNDLE"
   codesign --verify --deep --strict --verbose=4 "$APP_BUNDLE"
+  verify_codex_plugin "$APP_BUNDLE/$CODEX_PLUGIN_RELATIVE_PATH"
 }
 
-prepare_existing_connector() {
+prepare_existing_connectors() {
   (
     cd "$ROOT_DIR"
     npm run build:mcp
+    npm run build:codex -- --use-existing
   )
   ditto "$ROOT_DIR/src-tauri/resources/Orion-Claude-Connector.mcpb" \
     "$APP_BUNDLE/$CONNECTOR_RELATIVE_PATH"
+  # `ditto` merges directories. Remove the previous tree first so a renamed or
+  # deleted plugin file cannot survive a --use-existing release.
+  rm -rf -- "$APP_BUNDLE/$CODEX_PLUGIN_RELATIVE_PATH"
+  ditto "$CODEX_PLUGIN_RESOURCE" \
+    "$APP_BUNDLE/$CODEX_PLUGIN_RELATIVE_PATH"
 }
 
 repack_signed_app() (
   set -euo pipefail
 
-  local staging_dir mount_dir rw_dmg rebuilt_dmg attach_output device
-  staging_dir="$(mktemp -d "$OUTPUT_DIR/.orion-resign.XXXXXX")"
-  mount_dir="$staging_dir/mount"
-  rw_dmg="$staging_dir/Orion-read-write.dmg"
+  local staging_dir contents_dir rebuilt_dmg
+  # Keep the image source outside Documents/iCloud File Provider. Staging an
+  # app tree there can attach FinderInfo to nested framework directories while
+  # hdiutil reads it, even after the signed source tree was sanitized.
+  staging_dir="$(mktemp -d /private/tmp/orion-resign.XXXXXX)"
+  contents_dir="$staging_dir/contents"
   rebuilt_dmg="$staging_dir/$(basename "$SOURCE_DMG")"
-  device=""
-  mkdir "$mount_dir"
+  mkdir "$contents_dir"
 
   cleanup_repack() {
-    if [[ -n "$device" ]]; then
-      hdiutil detach "$device" >/dev/null 2>&1 ||
-        hdiutil detach -force "$device" >/dev/null 2>&1 ||
-        true
+    if [[ "$staging_dir" == /private/tmp/orion-resign.* ]]; then
+      rm -rf -- "$staging_dir"
     fi
-    rm -f "$rw_dmg" "$rebuilt_dmg"
-    rmdir "$mount_dir" "$staging_dir" >/dev/null 2>&1 || true
   }
   trap cleanup_repack EXIT
 
-  # Preserve Tauri's Finder layout and Applications link while replacing only
-  # the app payload with the completely signed bundle.
-  hdiutil convert "$SOURCE_DMG" -format UDRW -o "$rw_dmg"
-  attach_output="$(
-    hdiutil attach -readwrite -nobrowse -noautoopen \
-      -mountpoint "$mount_dir" "$rw_dmg"
-  )"
-  device="$(
-    printf '%s\n' "$attach_output" |
-      awk '/^\/dev\// { print $1; exit }'
-  )"
-  if [[ -z "$device" ]]; then
-    echo "could not identify the temporary DMG device" >&2
-    exit 1
-  fi
-
-  rm -rf "$mount_dir/Orion.app"
-  ditto "$APP_BUNDLE" "$mount_dir/Orion.app"
-  hdiutil detach "$device"
-  device=""
-  hdiutil convert "$rw_dmg" -format UDZO -imagekey zlib-level=9 \
-    -o "$rebuilt_dmg"
+  # Build the finished image on APFS. HFS+ synthesizes FinderInfo on nested
+  # dotfiles such as `.mcp.json` when the app is copied out, invalidating the
+  # sealed Codex plugin. Tauri's generated `.DS_Store` and volume icon are also
+  # omitted because importing them causes Finder to attach metadata to the
+  # nested whisper framework. The resulting installer remains the conventional
+  # Orion.app + Applications drag-install surface.
+  ditto --norsrc --noextattr --noqtn \
+    "$APP_BUNDLE" "$contents_dir/Orion.app"
+  ln -s /Applications "$contents_dir/Applications"
+  hdiutil create -srcfolder "$contents_dir" -volname Orion -fs APFS \
+    -format UDZO -imagekey zlib-level=9 "$rebuilt_dmg"
   hdiutil verify "$rebuilt_dmg"
 
   # `rebuilt_dmg` is a new inode; replacing the Tauri artifact by rename avoids
@@ -460,7 +541,9 @@ verify_final_dmg() (
   "$copied_app/Contents/MacOS/orion-ocr" --version
   "$copied_app/Contents/MacOS/yt-dlp" --version
   "$copied_app/Contents/MacOS/deno" --version
+  verify_no_build_user_paths "$copied_app"
   verify_connector_package "$copied_app/$CONNECTOR_RELATIVE_PATH"
+  verify_codex_plugin "$copied_app/$CODEX_PLUGIN_RELATIVE_PATH"
 )
 
 case "$BUILD_MODE" in
@@ -477,15 +560,23 @@ case "$BUILD_MODE" in
       # Nesting Vite under Tauri's beforeBuildCommand can also obscure which
       # dist/ tree is about to be embedded.
       npm run build:mcp
+      npm run build:codex -- --use-existing
+      configure_release_rustflags
       npm run tauri -- build \
         --config '{"build":{"beforeBuildCommand":""}}'
     )
+    # Cargo must keep release symbols until linking so proc-macro dylibs remain
+    # loadable on current macOS/Rust. Strip the finished executable here,
+    # before Developer-ID signing, to remove archive/member source paths from
+    # Rust stdlib and C/assembly dependencies such as ring.
+    /usr/bin/strip -S -x "$APP_BUNDLE/Contents/MacOS/orion"
+    verify_no_build_user_paths "$APP_BUNDLE"
     stamp_app_source
     ;;
   --use-existing)
     verify_release_layout
     verify_app_source_stamp
-    prepare_existing_connector
+    prepare_existing_connectors
     ;;
   *)
     echo "usage: $0 [release-label] [build|--use-existing]" >&2

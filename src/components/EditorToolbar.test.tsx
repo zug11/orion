@@ -136,4 +136,56 @@ describe("EditorToolbar", () => {
     expect(history).toContainElement(undo);
     expect(history).toContainElement(redo);
   });
+
+  it("toggles AI writing without changing the editor selection or document", () => {
+    const editor = createEditor();
+    editor.commands.setTextSelection({ from: 1, to: 6 });
+    const beforeSelection = editor.state.selection.toJSON();
+    const beforeMarkdown = editor.getMarkdown();
+    const onToggleAIWriting = vi.fn();
+    render(
+      <EditorToolbar
+        editor={editor}
+        concepts={[]}
+        onOpenLink={vi.fn()}
+        onUnlink={vi.fn()}
+        citationAvailable={false}
+        onOpenCitation={vi.fn()}
+        aiWritingAvailable
+        onToggleAIWriting={onToggleAIWriting}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Turn on AI writing" }));
+
+    expect(onToggleAIWriting).toHaveBeenCalledOnce();
+    expect(editor.state.selection.toJSON()).toEqual(beforeSelection);
+    expect(editor.getMarkdown()).toBe(beforeMarkdown);
+  });
+
+  it("opens a raster image picker and returns every selected image", () => {
+    const editor = createEditor();
+    const onInsertImages = vi.fn();
+    const { container } = render(
+      <EditorToolbar
+        editor={editor}
+        concepts={[]}
+        onOpenLink={vi.fn()}
+        onUnlink={vi.fn()}
+        citationAvailable={false}
+        onOpenCitation={vi.fn()}
+        onInsertImages={onInsertImages}
+      />,
+    );
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+    const files = [
+      new File(["one"], "one.png", { type: "image/png" }),
+      new File(["two"], "two.webp", { type: "image/webp" }),
+    ];
+
+    expect(input).not.toBeNull();
+    expect(input).toHaveAttribute("multiple");
+    fireEvent.change(input!, { target: { files } });
+    expect(onInsertImages).toHaveBeenCalledWith(files);
+  });
 });

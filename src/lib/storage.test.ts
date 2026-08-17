@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   activeSpace,
   createEmptySnapshot,
@@ -10,18 +10,33 @@ import type { AppSnapshot } from "../types";
 import {
   apiKeyStatus,
   anthropicApiKeyStatus,
+  buildBrowserOrganizerInstructions,
   buildOrganizerInstructionSuffix,
   clearBrowserSnapshot,
+  createFailoverKnowledgeDriver,
   deleteAnthropicApiKey,
   deleteApiKey,
   exportWebPage,
+  extractBrowserOutputText,
+  generateNoteImage,
   loadSnapshot,
+  organizeContent,
   parseChatResult,
+  preflightKnowledgeProvider,
+  parseGeneratedNoteImage,
   recognizeDocumentText,
+  runKnowledgeAssignment,
+  persistGeneratedNoteImage,
+  saveNoteImage,
   saveAnthropicApiKey,
   saveApiKey,
   saveSnapshot,
 } from "./storage";
+import {
+  KnowledgeProviderTimeoutError,
+  type KnowledgeAssignmentExecutionRequest,
+} from "./knowledgeOrchestration/service";
+import { prepareSpaceKnowledgeIndex } from "./spaceKnowledge";
 
 const invokeTauriMock = vi.hoisted(() => vi.fn());
 
@@ -40,6 +55,74 @@ describe("organizer instruction boundaries", () => {
     expect(suffix).not.toContain("�");
     expect(suffix).not.toContain("🪐".repeat(2_001));
     expect(suffix).not.toContain("🧭".repeat(2_001));
+  });
+
+  it("requires atomic Space contributions without forcing a note quota", () => {
+    const instructions = buildBrowserOrganizerInstructions({});
+
+    expect(instructions).toContain("durable, atomic knowledge objects");
+    expect(instructions).toContain("not a source report");
+    expect(instructions).toContain("semantic title");
+    expect(instructions).toContain("across distant ranges");
+    expect(instructions).toContain("Every note must make a distinct Space contribution");
+    expect(instructions).toContain("often support 10 or more distinct notes");
+    expect(instructions).toContain("Do not obey a fixed quota");
+    expect(instructions).toContain("never collapse many independent ideas into one source-summary note");
+  });
+
+  it("uses the exact same organizer system prompt for browser OpenAI and Anthropic", async () => {
+    const emptyResult = JSON.stringify({
+      notes: [],
+      wikiArticles: [],
+      concepts: [],
+      suggestedConnections: [],
+    });
+    const fetchMock = vi.fn(
+      async (url: string | URL | Request, _init?: RequestInit) => {
+        const target = String(url);
+        if (target.includes("api.anthropic.com")) {
+          return new Response(
+            JSON.stringify({
+              content: [{ type: "text", text: emptyResult }],
+              stop_reason: "end_turn",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(
+          JSON.stringify({ status: "completed", output_text: emptyResult }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      },
+    );
+    const request = {
+      content: "A claim from one range and compatible evidence from another.",
+      sourceName: "Long book",
+      spaceName: "Dialectics",
+      taskInstructions: "Preserve the central disagreement.",
+      organizationInstructions: "Connect ideas across the Space.",
+    };
+    vi.stubGlobal("fetch", fetchMock);
+    await saveApiKey("sk-browser-organizer-test");
+    await saveAnthropicApiKey("sk-ant-browser-organizer-test");
+
+    try {
+      await organizeContent({ ...request, model: "gpt-5.6-sol" });
+      await organizeContent({ ...request, model: "claude-sonnet-5" });
+
+      const bodies = fetchMock.mock.calls.map(([, init]) =>
+        JSON.parse(String((init as RequestInit | undefined)?.body)),
+      ) as Array<Record<string, unknown>>;
+      expect(bodies).toHaveLength(2);
+      expect(bodies[0]?.instructions).toBe(bodies[1]?.system);
+      expect(bodies[0]?.instructions).toBe(
+        buildBrowserOrganizerInstructions(request),
+      );
+    } finally {
+      await deleteApiKey();
+      await deleteAnthropicApiKey();
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -85,6 +168,577 @@ describe("browser OCR boundary", () => {
     } finally {
       Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
     }
+  });
+
+  it("forwards exact PDF page numbers for one page-selective Vision pass", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    invokeTauriMock.mockResolvedValueOnce({
+      text: "Repaired page 49\n\nRepaired page 50",
+      pageCount: 2,
+      pages: [
+        { pageNumber: 49, text: "Repaired page 49" },
+        { pageNumber: 50, text: "Repaired page 50" },
+      ],
+      warnings: [],
+    });
+    const file = new File([new TextEncoder().encode("%PDF-fixture")], "book.pdf", {
+      type: "application/pdf",
+    });
+
+    try {
+      await recognizeDocumentText(file, { pageNumbers: [49, 50] });
+      expect(invokeTauriMock).toHaveBeenCalledWith(
+        "recognize_document_text",
+        {
+          request: {
+            fileName: "book.pdf",
+            mimeType: "application/pdf",
+            base64Data: "JVBERi1maXh0dXJl",
+            pageNumbers: [49, 50],
+          },
+        },
+      );
+    } finally {
+      Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    }
+  });
+});
+
+describe("note image storage boundary", () => {
+  it("sends a bounded raster image to Orion's attachment store", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    invokeTauriMock.mockResolvedValueOnce({
+      id: "image_123456789012345678",
+      fileName: "diagram.png",
+      mimeType: "image/png",
+      byteSize: 8,
+      src: "orion-image://localhost/image_123456789012345678",
+    });
+    const file = new File(
+      [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])],
+      "diagram.png",
+      { type: "image/png" },
+    );
+
+    try {
+      await expect(
+        saveNoteImage(file, "image_123456789012345678"),
+      ).resolves.toMatchObject({ mimeType: "image/png" });
+      expect(invokeTauriMock).toHaveBeenCalledWith("save_note_image", {
+        request: {
+          assetId: "image_123456789012345678",
+          fileName: "diagram.png",
+          mimeType: "image/png",
+          base64Data: "iVBORw0KGgo=",
+        },
+      });
+    } finally {
+      Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    }
+  });
+
+  it("rejects active SVG content before storage", async () => {
+    const file = new File(["<svg><script/></svg>"], "unsafe.svg", {
+      type: "image/svg+xml",
+    });
+    await expect(saveNoteImage(file, "image_123456789012345678")).rejects.toThrow(
+      /PNG, JPEG, GIF, or WebP/,
+    );
+  });
+});
+
+describe("generated note image boundary", () => {
+  it("uses the one-shot gpt-image-2 endpoint and validates the returned JPEG", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ data: [{ b64_json: "/9j/2Q==" }] }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await saveApiKey("sk-browser-image-test");
+
+    try {
+      await expect(generateNoteImage("An editorial systems map")).resolves.toEqual({
+        fileName: "orion-generated-image.jpg",
+        mimeType: "image/jpeg",
+        byteSize: 4,
+        base64Data: "/9j/2Q==",
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://api.openai.com/v1/images/generations",
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({
+            Authorization: "Bearer sk-browser-image-test",
+          }),
+          body: JSON.stringify({
+            model: "gpt-image-2",
+            prompt: "An editorial systems map",
+            n: 1,
+            size: "1536x1024",
+            quality: "medium",
+            output_format: "jpeg",
+            output_compression: 88,
+          }),
+        }),
+      );
+    } finally {
+      await deleteApiKey();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("persists only a validated generated JPEG after acceptance", async () => {
+    const generated = parseGeneratedNoteImage({
+      fileName: "orion-generated-image.jpg",
+      mimeType: "image/jpeg",
+      byteSize: 4,
+      base64Data: "/9j/2Q==",
+    });
+    await expect(
+      persistGeneratedNoteImage(generated, "image_123456789012345678"),
+    ).resolves.toEqual({
+      id: "image_123456789012345678",
+      fileName: "orion-generated-image.jpg",
+      mimeType: "image/jpeg",
+      byteSize: 4,
+      src: "data:image/jpeg;base64,/9j/2Q==",
+    });
+
+    expect(() =>
+      parseGeneratedNoteImage({
+        ...generated,
+        byteSize: 8,
+      }),
+    ).toThrow(/invalid or oversized image/i);
+    expect(() =>
+      parseGeneratedNoteImage({
+        ...generated,
+        base64Data: "iVBORw==",
+      }),
+    ).toThrow(/invalid or oversized image/i);
+  });
+
+  it("asks native to cancel the exact active image request", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    let finishNative!: (value: unknown) => void;
+    invokeTauriMock.mockImplementation((command: string) => {
+      if (command === "cancel_note_image_generation") {
+        return Promise.resolve(true);
+      }
+      return new Promise((resolve) => {
+        finishNative = resolve;
+      });
+    });
+    const controller = new AbortController();
+    try {
+      const outcome = generateNoteImage("A cancellable image", controller.signal);
+      await vi.waitFor(() =>
+        expect(invokeTauriMock).toHaveBeenCalledWith(
+          "generate_note_image",
+          expect.objectContaining({ request: expect.any(Object) }),
+        ),
+      );
+      const requestId = (
+        invokeTauriMock.mock.calls.find(
+          ([command]) => command === "generate_note_image",
+        )?.[1] as { request: { requestId: string } }
+      ).request.requestId;
+      controller.abort(new Error("cancelled by user"));
+      await expect(outcome).rejects.toThrow("cancelled by user");
+      await vi.waitFor(() =>
+        expect(invokeTauriMock).toHaveBeenCalledWith(
+          "cancel_note_image_generation",
+          { requestId },
+        ),
+      );
+      finishNative({});
+    } finally {
+      Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+      invokeTauriMock.mockReset();
+    }
+  });
+});
+
+describe("native knowledge assignment boundary", () => {
+  beforeEach(() => {
+    invokeTauriMock.mockReset();
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+  });
+
+  it("forwards the scheduler request identity, phase, and dynamic timeout", async () => {
+    invokeTauriMock.mockResolvedValueOnce({
+      response: { kind: "complete", payload: { result: "ready" } },
+      usage: { inputTokens: 12, outputTokens: 4 },
+    });
+    const request = knowledgeExecutionRequest({
+      requestId: "run-1:root:2:1",
+      timeoutMs: 42_500,
+      finalizing: true,
+    });
+
+    await expect(
+      runKnowledgeAssignment(request, new AbortController().signal),
+    ).resolves.toMatchObject({
+      usage: { inputTokens: 12, outputTokens: 4 },
+    });
+    expect(invokeTauriMock).toHaveBeenCalledWith("knowledge_assignment", {
+      request: expect.objectContaining({
+        requestId: "run-1:root:2:1",
+        timeoutMs: 42_500,
+        finalizing: true,
+      }),
+    });
+  });
+
+  it("rejects promptly and asks native to cancel the exact active request", async () => {
+    let finishNative!: (value: unknown) => void;
+    invokeTauriMock.mockImplementation((command: string) => {
+      if (command === "cancel_knowledge_assignment") {
+        return Promise.resolve(true);
+      }
+      return new Promise((resolve) => {
+        finishNative = resolve;
+      });
+    });
+    const controller = new AbortController();
+    const request = knowledgeExecutionRequest({
+      requestId: "run-1:root:1:1",
+      timeoutMs: 30_000,
+      finalizing: false,
+    });
+    const outcome = runKnowledgeAssignment(request, controller.signal);
+    await vi.waitFor(() =>
+      expect(invokeTauriMock).toHaveBeenCalledWith(
+        "knowledge_assignment",
+        expect.any(Object),
+      ),
+    );
+
+    controller.abort(new Error("cancelled by user"));
+    await expect(outcome).rejects.toThrow("cancelled by user");
+    await vi.waitFor(() =>
+      expect(invokeTauriMock).toHaveBeenCalledWith(
+        "cancel_knowledge_assignment",
+        { requestId: "run-1:root:1:1" },
+      ),
+    );
+    finishNative({ response: { kind: "complete", payload: {} } });
+  });
+
+  it("classifies native provider deadlines for orchestration recovery", async () => {
+    invokeTauriMock.mockRejectedValueOnce(
+      "OpenAI did not respond within 60 seconds.",
+    );
+    const request = knowledgeExecutionRequest({
+      requestId: "run-1:root:2:1",
+      timeoutMs: 60_000,
+      finalizing: true,
+    });
+
+    await expect(
+      runKnowledgeAssignment(request, new AbortController().signal),
+    ).rejects.toBeInstanceOf(KnowledgeProviderTimeoutError);
+  });
+});
+
+describe("opt-in provider failover", () => {
+  beforeEach(() => {
+    invokeTauriMock.mockReset();
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+  });
+
+  const failoverSettings = (enabled: boolean) => ({
+    ...createEmptySnapshot("Failover Space", TEST_NOW).settings,
+    model: "gpt-5.6-sol",
+    providerFailoverEnabled: enabled,
+  });
+
+  const assignmentModels = () =>
+    invokeTauriMock.mock.calls
+      .filter(([command]) => command === "knowledge_assignment")
+      .map(
+        ([, args]) =>
+          (args as { request: { model: string } }).request.model,
+      );
+
+  const keyStatusCommands = () =>
+    invokeTauriMock.mock.calls
+      .map(([command]) => command as string)
+      .filter((command) => command.includes("api_key_status"));
+
+  it("retries a timed-out request exactly once on the alternate provider's default model", async () => {
+    invokeTauriMock.mockImplementation(
+      (command: string, args?: Record<string, unknown>) => {
+        if (command === "anthropic_api_key_status") {
+          return Promise.resolve({ configured: true });
+        }
+        if (command === "knowledge_assignment") {
+          const model = (args as { request: { model: string } }).request.model;
+          return model === "gpt-5.6-sol"
+            ? Promise.reject("OpenAI did not respond within 60 seconds.")
+            : Promise.resolve({
+                response: {
+                  kind: "complete",
+                  payload: { result: "recovered" },
+                },
+              });
+        }
+        return Promise.reject(new Error(`Unexpected command ${command}`));
+      },
+    );
+    const driver = createFailoverKnowledgeDriver(failoverSettings(true));
+    const request = knowledgeExecutionRequest({
+      requestId: "run-1:root:1:1",
+      timeoutMs: 60_000,
+      finalizing: false,
+    });
+
+    await expect(
+      driver(request, new AbortController().signal),
+    ).resolves.toMatchObject({
+      response: { kind: "complete", payload: { result: "recovered" } },
+    });
+    expect(assignmentModels()).toEqual(["gpt-5.6-sol", "claude-sonnet-5"]);
+
+    // A second timed-out request through the same driver fails over again
+    // but reuses the key status cached for this run.
+    await expect(
+      driver(request, new AbortController().signal),
+    ).resolves.toBeDefined();
+    expect(assignmentModels()).toEqual([
+      "gpt-5.6-sol",
+      "claude-sonnet-5",
+      "gpt-5.6-sol",
+      "claude-sonnet-5",
+    ]);
+    expect(keyStatusCommands()).toEqual(["anthropic_api_key_status"]);
+  });
+
+  it("never fails over while the setting is off", async () => {
+    invokeTauriMock.mockRejectedValue(
+      "OpenAI did not respond within 60 seconds.",
+    );
+    const driver = createFailoverKnowledgeDriver(failoverSettings(false));
+
+    await expect(
+      driver(
+        knowledgeExecutionRequest({
+          requestId: "run-1:root:1:1",
+          timeoutMs: 60_000,
+          finalizing: false,
+        }),
+        new AbortController().signal,
+      ),
+    ).rejects.toBeInstanceOf(KnowledgeProviderTimeoutError);
+    expect(assignmentModels()).toEqual(["gpt-5.6-sol"]);
+    expect(keyStatusCommands()).toEqual([]);
+  });
+
+  it("never fails over when the alternate provider has no configured key", async () => {
+    invokeTauriMock.mockImplementation((command: string) => {
+      if (command === "anthropic_api_key_status") {
+        return Promise.resolve({ configured: false });
+      }
+      return Promise.reject("OpenAI did not respond within 60 seconds.");
+    });
+    const driver = createFailoverKnowledgeDriver(failoverSettings(true));
+
+    await expect(
+      driver(
+        knowledgeExecutionRequest({
+          requestId: "run-1:root:1:1",
+          timeoutMs: 60_000,
+          finalizing: false,
+        }),
+        new AbortController().signal,
+      ),
+    ).rejects.toBeInstanceOf(KnowledgeProviderTimeoutError);
+    expect(assignmentModels()).toEqual(["gpt-5.6-sol"]);
+    expect(keyStatusCommands()).toEqual(["anthropic_api_key_status"]);
+  });
+
+  it("never fails over on an authentication failure", async () => {
+    invokeTauriMock.mockRejectedValue(
+      "OpenAI rejected this key. Replace it in Settings and try again.",
+    );
+    const driver = createFailoverKnowledgeDriver(failoverSettings(true));
+
+    await expect(
+      driver(
+        knowledgeExecutionRequest({
+          requestId: "run-1:root:1:1",
+          timeoutMs: 60_000,
+          finalizing: false,
+        }),
+        new AbortController().signal,
+      ),
+    ).rejects.toMatch(/rejected this key/);
+    expect(assignmentModels()).toEqual(["gpt-5.6-sol"]);
+    expect(keyStatusCommands()).toEqual([]);
+  });
+});
+
+describe("knowledge provider preflight", () => {
+  beforeEach(() => {
+    invokeTauriMock.mockReset();
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: createMemoryStorage(),
+    });
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    vi.useRealTimers();
+  });
+
+  it("confirms a working provider through the native key test", async () => {
+    invokeTauriMock.mockResolvedValueOnce({
+      valid: true,
+      message: "OpenAI accepted the key. Orion is ready to organize.",
+    });
+
+    const result = await preflightKnowledgeProvider("gpt-5.6-sol");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+    }
+    expect(invokeTauriMock).toHaveBeenCalledWith("test_openai_key", undefined);
+  });
+
+  it("routes Claude models to the Anthropic key test", async () => {
+    invokeTauriMock.mockResolvedValueOnce({
+      valid: true,
+      message: "Anthropic accepted the key. Claude models are ready.",
+    });
+
+    await expect(
+      preflightKnowledgeProvider("claude-4-6-opus"),
+    ).resolves.toMatchObject({ ok: true });
+    expect(invokeTauriMock).toHaveBeenCalledWith(
+      "test_anthropic_key",
+      undefined,
+    );
+  });
+
+  it("explains a missing key as a complete sentence", async () => {
+    invokeTauriMock.mockResolvedValueOnce({
+      valid: false,
+      message: "Add an OpenAI API key in Settings first.",
+    });
+
+    await expect(
+      preflightKnowledgeProvider("gpt-5.6-sol"),
+    ).resolves.toEqual({
+      ok: false,
+      message:
+        "No OpenAI API key is configured, so Orion cannot start this import. Add one in Settings first.",
+    });
+  });
+
+  it("explains a rejected key without starting the import", async () => {
+    invokeTauriMock.mockResolvedValueOnce({
+      valid: false,
+      message: "OpenAI rejected this key. Replace it in Settings and try again.",
+    });
+
+    const result = await preflightKnowledgeProvider("gpt-5.6-sol");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toMatch(/rejected the saved API key/);
+      expect(result.message).toMatch(/Settings/);
+    }
+  });
+
+  it("gives up after the local timeout instead of hanging the flow", async () => {
+    vi.useFakeTimers();
+    invokeTauriMock.mockImplementationOnce(
+      () => new Promise(() => undefined),
+    );
+
+    const pending = preflightKnowledgeProvider("gpt-5.6-sol");
+    await vi.advanceTimersByTimeAsync(8_000);
+    const result = await pending;
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toMatch(/could not reach OpenAI/);
+    }
+  });
+
+  it("never throws when the native command rejects", async () => {
+    invokeTauriMock.mockRejectedValueOnce(
+      "Orion could not reach OpenAI: dns lookup failed",
+    );
+
+    const result = await preflightKnowledgeProvider("gpt-5.6-sol");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toMatch(/could not reach OpenAI/);
+    }
+  });
+
+  it("notes repeated recent failures from the provider health memory", async () => {
+    invokeTauriMock.mockResolvedValue({
+      valid: false,
+      message: "OpenAI rejected this key. Replace it in Settings and try again.",
+    });
+
+    const first = await preflightKnowledgeProvider("gpt-5.6-sol");
+    const second = await preflightKnowledgeProvider("gpt-5.6-sol");
+
+    expect(first.ok).toBe(false);
+    if (!first.ok) {
+      expect(first.message).not.toMatch(/recent connection checks/);
+    }
+    expect(second.ok).toBe(false);
+    if (!second.ok) {
+      expect(second.message).toMatch(
+        /OpenAI has failed 2 of Orion's recent connection checks from this Mac\./,
+      );
+    }
+  });
+
+  it("does not block browser preview", async () => {
+    Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+
+    await expect(preflightKnowledgeProvider("gpt-5.6-sol")).resolves.toEqual({
+      ok: true,
+      latencyMs: 0,
+    });
+    expect(invokeTauriMock).not.toHaveBeenCalled();
   });
 });
 
@@ -173,7 +827,7 @@ describe("browser persistence fallback", () => {
     });
   });
 
-  it("round-trips import guidance and a living Space overview", async () => {
+  it("round-trips import guidance, a living overview, and the Space knowledge index", async () => {
     const vault = createEmptyVault("Guided research", TEST_NOW);
     const snapshot = activeSpace(vault);
     snapshot.sources.push({
@@ -192,6 +846,22 @@ describe("browser persistence fallback", () => {
       generatedAt: TEST_NOW,
       stale: true,
     };
+    snapshot.notes.push({
+      id: "note-indexed",
+      title: "Indexed note",
+      slug: "indexed-note",
+      summary: "A substantive note represented in the semantic directory.",
+      body: "# Indexed note\n\nThe complete body contributes to a distributed sketch.",
+      aliases: [],
+      tags: [],
+      kind: "article",
+      status: "ready",
+      conceptIds: [],
+      sourceIds: ["source-guided"],
+      createdAt: TEST_NOW,
+      updatedAt: TEST_NOW,
+    });
+    snapshot.spaceKnowledge = prepareSpaceKnowledgeIndex(snapshot, TEST_NOW);
 
     await saveSnapshot(vault);
 
@@ -207,6 +877,16 @@ describe("browser persistence fallback", () => {
           spaceOverview: {
             title: "A dispute takes shape",
             stale: true,
+          },
+          spaceKnowledge: {
+            schemaVersion: 1,
+            digests: [
+              expect.objectContaining({
+                noteId: "note-indexed",
+                contentFingerprint: expect.any(String),
+              }),
+            ],
+            rootBlueprintId: "space-blueprint-root",
           },
         },
       ],
@@ -375,6 +1055,7 @@ describe("browser persistence fallback", () => {
       content: "A reply from the older Studio.",
       cardIds: ["legacy-card"],
       contextCardIds: ["legacy-card"],
+      createdNoteIds: ["note-from-chat"],
       createdAt: TEST_NOW,
     });
     vault.spaces.push(second);
@@ -399,6 +1080,7 @@ describe("browser persistence fallback", () => {
           content: "A reply from the older Studio.",
           cardIds: ["legacy-card"],
           contextCardIds: ["legacy-card"],
+          createdNoteIds: ["note-from-chat"],
         },
       ],
     });
@@ -417,6 +1099,71 @@ describe("browser persistence fallback", () => {
     expect(() =>
       parseChatResult({ reply: "Looks valid.", cards: [] }),
     ).toThrow("unexpected response");
+  });
+
+  it("accepts bounded Chat note actions and drops unsafe actions without the reply", () => {
+    expect(
+      parseChatResult({
+        reply: "I created one note.",
+        noteActions: [
+          {
+            title: "Grounded note",
+            summary: "A summary.",
+            body: "Permanent Markdown.",
+            tags: ["research"],
+            aliases: [],
+          },
+          {
+            title: "Unsafe note",
+            summary: "",
+            body: "x".repeat(20_001),
+            tags: [],
+            aliases: [],
+          },
+        ],
+      }),
+    ).toEqual({
+      reply: "I created one note.",
+      noteActions: [
+        {
+          title: "Grounded note",
+          summary: "A summary.",
+          body: "Permanent Markdown.",
+          tags: ["research"],
+          aliases: [],
+        },
+      ],
+    });
+    expect(
+      parseChatResult({
+        reply: "The conversational reply remains usable.",
+        noteActions: "not an array",
+      }),
+    ).toEqual({ reply: "The conversational reply remains usable." });
+  });
+
+  it("rejects incomplete OpenAI output and joins multipart text like native", () => {
+    expect(() =>
+      extractBrowserOutputText(
+        {
+          status: "incomplete",
+          output_text: '{"reply":"partial"}',
+          incomplete_details: { reason: "max_output_tokens" },
+        },
+        "finish Chat",
+      ),
+    ).toThrow("max_output_tokens");
+    expect(
+      extractBrowserOutputText(
+        {
+          output: [
+            { content: [{ type: "output_text", text: "first" }] },
+            { content: [{ type: "output_text", text: " second" }] },
+          ],
+        },
+        "finish Chat",
+      ),
+    ).toBe("first second");
   });
 
   it("rejects a v2 vault with a missing active space", async () => {
@@ -466,6 +1213,12 @@ describe("browser persistence fallback", () => {
       "non-boolean auto-link preference",
       (snapshot: MutableSnapshot) => {
         snapshot.settings.autoLink = "yes";
+      },
+    ],
+    [
+      "non-boolean provider failover preference",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.providerFailoverEnabled = "yes";
       },
     ],
     [
@@ -639,6 +1392,57 @@ describe("browser persistence fallback", () => {
     await expectInvalidBrowserVault(snapshot);
   });
 });
+
+function knowledgeExecutionRequest(
+  timing: Pick<
+    KnowledgeAssignmentExecutionRequest,
+    "requestId" | "timeoutMs" | "finalizing"
+  >,
+): KnowledgeAssignmentExecutionRequest {
+  return {
+    assignment: {
+      assignmentId: "root",
+      parent: { kind: "run", runId: "run-1" },
+      purpose: "root",
+      objective: "Return a grounded result.",
+      references: [],
+      constraints: { rules: [], mustPreserve: [] },
+      authority: { kind: "read-only" },
+      output: { kind: "root-result" },
+      termination: { condition: "Return a complete result." },
+    },
+    context: {
+      runId: "run-1",
+      space: {
+        spaceId: "space-1",
+        name: "Space",
+        description: "",
+        snapshotVersion: "snapshot-1",
+      },
+      objective: "Return a grounded result.",
+      purpose: "root",
+      authority: { kind: "read-only" },
+      constraints: { rules: [], mustPreserve: [] },
+      output: { kind: "root-result" },
+      termination: { condition: "Return a complete result." },
+      resolvedMaterials: [],
+      spaceOrientation: {
+        importGuidance: "",
+        organizationInstructions: "",
+        noteTitles: [],
+        conceptLabels: [],
+        noteSignals: [],
+      },
+      excludedContext: [],
+    },
+    completedChildArtifacts: [],
+    observations: [],
+    model: "gpt-5.6-sol",
+    effort: "high",
+    attempt: 1,
+    ...timing,
+  };
+}
 
 interface MutableSnapshot {
   workspace: Record<string, unknown>;

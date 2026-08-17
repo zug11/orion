@@ -7,9 +7,18 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultSettings } from "../data/defaults";
 import { SettingsView } from "./SettingsView";
+
+const invokeTauriMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeTauriMock }));
+
+afterEach(() => {
+  invokeTauriMock.mockReset();
+  Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+});
 
 describe("SettingsView appearance", () => {
   it("offers the three curated home atmospheres with Line Waves first", () => {
@@ -194,5 +203,109 @@ describe("SettingsView appearance", () => {
     await waitFor(() =>
       expect(onSaveAnthropicApiKey).toHaveBeenCalledWith("sk-ant-api03-test"),
     );
+  });
+
+  it("offers independent zero-configuration Claude and Codex installs on desktop", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    let finishClaudeInstall: ((value: string) => void) | undefined;
+    invokeTauriMock.mockImplementation((command: string) => {
+      if (command === "open_claude_connector") {
+        return new Promise<string>((resolve) => {
+          finishClaudeInstall = resolve;
+        });
+      }
+      if (command === "open_codex_plugin") {
+        return Promise.resolve(
+          "codex://plugins/orion?marketplacePath=%2FApplications%2FOrion.app",
+        );
+      }
+      return Promise.reject(new Error(`Unexpected command: ${command}`));
+    });
+
+    render(
+      <SettingsView
+        settings={{ ...defaultSettings }}
+        onChange={vi.fn()}
+        onSaveApiKey={vi.fn(async () => undefined)}
+        onDeleteApiKey={vi.fn(async () => undefined)}
+        onTestApiKey={vi.fn(async () => ({
+          valid: true,
+          message: "Connected.",
+        }))}
+        onSaveAnthropicApiKey={vi.fn(async () => undefined)}
+        onDeleteAnthropicApiKey={vi.fn(async () => undefined)}
+        onTestAnthropicApiKey={vi.fn(async () => ({
+          valid: true,
+          message: "Connected.",
+        }))}
+        onOpenDataLocation={vi.fn()}
+        onEraseVault={vi.fn()}
+      />,
+    );
+
+    const claudeButton = screen.getByRole("button", {
+      name: "Install in Claude",
+    });
+    const codexButton = screen.getByRole("button", {
+      name: "Install in Codex",
+    });
+    fireEvent.click(claudeButton);
+
+    await waitFor(() => expect(claudeButton).toBeDisabled());
+    expect(codexButton).toBeEnabled();
+    fireEvent.click(codexButton);
+
+    await waitFor(() => {
+      expect(invokeTauriMock).toHaveBeenCalledWith(
+        "open_codex_plugin",
+        undefined,
+      );
+      expect(
+        screen.getByText(/Codex should now show Orion’s plugin page/i),
+      ).toBeVisible();
+    });
+
+    finishClaudeInstall?.("/Applications/Orion-Claude-Connector.mcpb");
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Claude Desktop should now ask you to install/i),
+      ).toBeVisible();
+    });
+  });
+
+  it("keeps connector installation desktop-only in browser preview", () => {
+    render(
+      <SettingsView
+        settings={{ ...defaultSettings }}
+        onChange={vi.fn()}
+        onSaveApiKey={vi.fn(async () => undefined)}
+        onDeleteApiKey={vi.fn(async () => undefined)}
+        onTestApiKey={vi.fn(async () => ({
+          valid: true,
+          message: "Connected.",
+        }))}
+        onSaveAnthropicApiKey={vi.fn(async () => undefined)}
+        onDeleteAnthropicApiKey={vi.fn(async () => undefined)}
+        onTestAnthropicApiKey={vi.fn(async () => ({
+          valid: true,
+          message: "Connected.",
+        }))}
+        onOpenDataLocation={vi.fn()}
+        onEraseVault={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Install in Claude" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Install in Codex" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByText(/installation is available in the installed Orion desktop app/i),
+    ).toBeVisible();
   });
 });

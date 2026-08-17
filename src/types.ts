@@ -158,6 +158,8 @@ export interface Settings {
   reasoningEffort: ReasoningEffort;
   apiKeyConfigured: boolean;
   anthropicApiKeyConfigured: boolean;
+  /** Opt-in: retry a failed knowledge request once on the other provider. */
+  providerFailoverEnabled: boolean;
   autoLink: boolean;
   showHoverPreviews: boolean;
   includeExistingNotesInAIContext: boolean;
@@ -190,6 +192,56 @@ export interface SpaceOverview {
   body: string;
   relatedNoteIds: EntityId[];
   generatedAt: ISODateString;
+  stale: boolean;
+}
+
+export type SpaceDigestQuality = "complete" | "weak" | "fallback";
+
+export interface SpaceNoteDigest {
+  noteId: EntityId;
+  noteVersion: string;
+  title: string;
+  aliases: string[];
+  tags: string[];
+  summary: string;
+  headings: string[];
+  wholeBodySketch: string;
+  conceptLabels: string[];
+  relationshipHints: string[];
+  sourceIds: EntityId[];
+  reference: boolean;
+  bodyCharacters: number;
+  contentFingerprint: string;
+  quality: SpaceDigestQuality;
+  qualityReason: string;
+}
+
+export interface SpaceKnowledgeBlueprint {
+  id: EntityId;
+  level: number;
+  noteIds: EntityId[];
+  childBlueprintIds: EntityId[];
+  fingerprint: string;
+  title: string;
+  body: string;
+  focusConcepts: string[];
+  tensions: string[];
+  openQuestions: string[];
+  generatedAt: ISODateString;
+  origin: "local" | "provider";
+}
+
+/**
+ * Rebuildable Space-local semantic hierarchy. It is persisted so imports and
+ * overview refreshes can inherit compact context without rereading every note.
+ */
+export interface SpaceKnowledgeIndex {
+  schemaVersion: 1;
+  snapshotFingerprint: string;
+  digests: SpaceNoteDigest[];
+  blueprints: SpaceKnowledgeBlueprint[];
+  rootBlueprintId: EntityId | null;
+  updatedAt: ISODateString;
   stale: boolean;
 }
 
@@ -242,6 +294,8 @@ export interface StudioMessage {
   content: string;
   cardIds: EntityId[];
   contextCardIds: EntityId[];
+  /** Notes created from this reply, shown as permanent Space destinations. */
+  createdNoteIds?: EntityId[];
   createdAt: ISODateString;
 }
 
@@ -267,6 +321,7 @@ export interface AppSnapshot {
   studio: ConceptStudioState;
   settings: Settings;
   spaceOverview?: SpaceOverview;
+  spaceKnowledge?: SpaceKnowledgeIndex;
   activeNoteId: EntityId | null;
   updatedAt: ISODateString;
 }
@@ -387,10 +442,23 @@ export interface SearchResult {
 
 export interface ExistingNoteContext {
   id: EntityId;
+  /** Frozen content identity for compact directory records. */
+  version?: string;
   title: string;
   aliases: string[];
   summary: string;
   reference: boolean;
+  tags?: string[];
+  headings?: string[];
+  conceptLabels?: string[];
+  relationshipHints?: string[];
+  semanticSketch?: string;
+  bodyCharacters?: number;
+  digestQuality?: "strong" | "weak";
+  /**
+   * Legacy compatibility only. Shared organizer context builders never attach
+   * arbitrary note prose; full bodies require a separately authorized read.
+   */
   body?: string;
 }
 
@@ -478,18 +546,30 @@ export interface ChatHistoryItem {
 }
 
 export interface ChatRequest {
+  mode?: "chat" | "inline-writing";
   prompt: string;
   workspaceName: string;
   notes: ChatNoteContext[];
   sources: ChatSourceContext[];
   concepts: ChatConceptContext[];
   history: ChatHistoryItem[];
+  /** Host-derived authorization for creation-only Chat note actions. */
+  allowNoteActions?: boolean;
   model?: string;
   effort?: ReasoningEffort;
 }
 
 export interface ChatResult {
   reply: string;
+  noteActions?: ChatNoteAction[];
+}
+
+export interface ChatNoteAction {
+  title: string;
+  summary: string;
+  body: string;
+  tags: string[];
+  aliases: string[];
 }
 
 export interface ApiKeyStatus {
@@ -516,4 +596,21 @@ export interface ExportMarkdownResult {
 export interface ExportWebResult {
   path: string;
   cancelled: boolean;
+}
+
+export interface NoteImageAttachment {
+  id: EntityId;
+  fileName: string;
+  mimeType: string;
+  byteSize: number;
+  /** A portable Orion URL in desktop builds, or a data URL in browser preview. */
+  src: string;
+}
+
+export interface GeneratedNoteImage {
+  fileName: string;
+  mimeType: "image/jpeg";
+  byteSize: number;
+  /** Transient provider output. Persist it only after the user accepts the preview. */
+  base64Data: string;
 }

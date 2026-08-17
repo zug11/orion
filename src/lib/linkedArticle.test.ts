@@ -61,12 +61,19 @@ describe("linked article generation", () => {
       origin,
       "SQL",
       "Focus on joins and relational algebra.",
+      "SELECT users.id FROM users WHERE users.active = true;",
     );
 
     expect(request.spaceName).toBe("Data systems");
     expect(request.sourceName).toBe("Link created in Database lecture");
     expect(request.content).toContain(origin.body);
     expect(request.content).toContain(source.text);
+    expect(request.content).toContain(
+      "Selected context for this link",
+    );
+    expect(request.content).toContain(
+      "SELECT users.id FROM users WHERE users.active = true;",
+    );
     expect(request.taskInstructions).toContain(
       "exactly one canonical wiki article titled “SQL”",
     );
@@ -77,6 +84,40 @@ describe("linked article generation", () => {
       "Focus on joins and relational algebra.",
     );
     expect(request.timeoutMs).toBe(90_000);
+  });
+
+  it("uses relevant compact Space records without leaking existing article bodies", () => {
+    const snapshot = createEmptySnapshot("Data systems", NOW, "space-data");
+    const origin = makeOrigin();
+    const sql: Note = {
+      ...makeOrigin(),
+      id: "note-sql-existing",
+      title: "SQL",
+      summary: "A canonical article about relational queries and joins.",
+      body: "A long, carefully edited SQL article that must not be dumped.",
+      kind: "wiki",
+      sourceIds: [],
+    };
+    snapshot.notes = [
+      origin,
+      sql,
+      ...Array.from({ length: 80 }, (_, index): Note => ({
+        ...makeOrigin(),
+        id: `note-unrelated-${index}`,
+        title: `Ceramics ${index}`,
+        summary: "Glaze and pigment experiments.",
+        body: "Unrelated pottery notes.",
+        sourceIds: [],
+      })),
+    ];
+
+    const request = buildLinkedArticleRequest(snapshot, origin, "SQL");
+
+    expect(request.existingNotes?.map(({ id }) => id)).toEqual([sql.id]);
+    expect(request.existingNotes?.[0].semanticSketch).toContain(
+      "carefully edited SQL article",
+    );
+    expect(request.existingNotes?.[0]).not.toHaveProperty("body");
   });
 
   it("turns the matching returned wiki article into a rich canonical page", () => {

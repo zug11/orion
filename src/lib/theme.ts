@@ -263,7 +263,13 @@ export function themeCssVariables(
   preferences: ThemePreferences,
   mode: ResolvedThemeMode,
 ): Record<`--${string}`, string> {
-  const palette = resolveThemePalette(preferences, mode);
+  return themePaletteCssVariables(resolveThemePalette(preferences, mode));
+}
+
+export function themePaletteCssVariables(
+  palette: ThemePalette,
+): Record<`--${string}`, string> {
+  const mode = palette.mode;
   return {
     "--ink": palette.canvas,
     "--ink-deep": palette.canvasDeep,

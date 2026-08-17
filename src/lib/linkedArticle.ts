@@ -3,6 +3,7 @@ import {
 } from "./concepts";
 import { truncateUnicode } from "./text";
 import { deleteNoteFromSnapshot } from "./noteDeletion";
+import { buildCompactOrganizerContext } from "./organizerContext";
 import type {
   AppSnapshot,
   Note,
@@ -12,6 +13,7 @@ import type {
 } from "../types";
 
 const MAX_ORIGIN_CHARS = 24_000;
+const MAX_SELECTED_CONTEXT_CHARS = 12_000;
 const MAX_SOURCE_CHARS = 56_000;
 export const LINKED_ARTICLE_TIMEOUT_MS = 90_000;
 const LINKED_ARTICLE_START_PROGRESS = 12;
@@ -35,6 +37,7 @@ export interface LinkedArticleJob {
   progress: number;
   stage: LinkedArticleJobStage;
   instructions?: string;
+  selectedContext?: string;
   error?: string;
 }
 
@@ -205,6 +208,7 @@ export function buildLinkedArticleRequest(
   originNote: Note,
   phrase: string,
   customInstructions = "",
+  selectedContext = "",
 ): OrganizeContentRequest {
   const directSources = originNote.sourceIds
     .map((sourceId) =>
@@ -229,6 +233,10 @@ export function buildLinkedArticleRequest(
     "This is a user-created link page, so write a definitional wiki article rather than an import summary. Return the requested article in wikiArticles and a matching canonical concept. Its body must be one coherent, ready-to-read article: weave source context into the relevant explanation instead of adding sections named “Context from”, “From the linked source”, or other provenance/change-log headings. Do not create unrelated project notes or unrelated wiki articles. Use ordinary readable prose, never [[wiki-link]] brackets. Clearly preserve uncertainty when the supplied material is incomplete.",
   ].join(" ");
   const pageInstructions = truncateUnicode(customInstructions.trim(), 1_250);
+  const focusedContext = truncateUnicode(
+    selectedContext.trim(),
+    MAX_SELECTED_CONTEXT_CHARS,
+  );
 
   return {
     content: [
@@ -236,6 +244,9 @@ export function buildLinkedArticleRequest(
       `Origin note: ${originNote.title}`,
       originNote.summary
         ? `Origin summary: ${originNote.summary}`
+        : "",
+      focusedContext
+        ? `Selected context for this link (give this passage special weight while keeping the article coherent):\n${focusedContext}`
         : "",
       `Origin note body:\n${originNote.body.slice(0, MAX_ORIGIN_CHARS)}`,
       sourceSections.length
@@ -247,21 +258,18 @@ export function buildLinkedArticleRequest(
     sourceName: `Link created in ${originNote.title}`,
     spaceName: snapshot.workspace.name,
     spaceDescription: snapshot.workspace.description,
-    existingNotes: snapshot.settings.includeExistingNotesInAIContext
-      ? snapshot.notes
-          .filter((note) => note.id !== originNote.id)
-          .slice(0, 80)
-          .map((note) => ({
-            id: note.id,
-            title: note.title,
-            aliases: [...note.aliases],
-            summary: note.summary,
-            reference: note.kind === "wiki",
-            ...(note.kind === "wiki"
-              ? { body: note.body.slice(0, 6_000) }
-              : {}),
-          }))
-      : undefined,
+    existingNotes: buildCompactOrganizerContext(snapshot, {
+      focusNoteIds: [originNote.id],
+      excludeNoteIds: [originNote.id],
+      matchText: [
+        phrase,
+        pageInstructions,
+        focusedContext,
+        originNote.title,
+        originNote.summary,
+        originNote.body,
+      ].join("\n"),
+    }),
     model: snapshot.settings.model,
     effort: snapshot.settings.reasoningEffort,
     timeoutMs: LINKED_ARTICLE_TIMEOUT_MS,

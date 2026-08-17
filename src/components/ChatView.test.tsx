@@ -24,6 +24,8 @@ describe("ChatView", () => {
         busy={false}
         onSend={vi.fn()}
         onClear={vi.fn()}
+        onOpenNote={vi.fn()}
+        onSaveReply={vi.fn()}
         onOpenSettings={onOpenSettings}
       />,
     );
@@ -57,6 +59,8 @@ describe("ChatView", () => {
         busy={false}
         onSend={onSend}
         onClear={vi.fn()}
+        onOpenNote={vi.fn()}
+        onSaveReply={vi.fn()}
         onOpenSettings={vi.fn()}
       />,
     );
@@ -97,6 +101,8 @@ describe("ChatView", () => {
         busy={false}
         onSend={vi.fn()}
         onClear={onClear}
+        onOpenNote={vi.fn()}
+        onSaveReply={vi.fn()}
         onOpenSettings={vi.fn()}
       />,
     );
@@ -105,5 +111,65 @@ describe("ChatView", () => {
     expect(screen.queryByText(/legacy-card/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "New chat" }));
     expect(onClear).toHaveBeenCalledOnce();
+  });
+
+  it("opens notes created by Chat and offers a one-click save for ordinary replies", () => {
+    const snapshot = createEmptySnapshot("Research Space", NOW, "space-research");
+    snapshot.settings.apiKeyConfigured = true;
+    snapshot.notes.push({
+      id: "note-created",
+      title: "Created from Chat",
+      slug: "created-from-chat",
+      summary: "A permanent note.",
+      body: "Permanent prose.",
+      aliases: [],
+      tags: [],
+      kind: "article",
+      status: "ready",
+      conceptIds: [],
+      sourceIds: [],
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    snapshot.studio.messages.push(
+      {
+        id: "chat-created",
+        role: "assistant",
+        content: "I created the requested note.",
+        cardIds: [],
+        contextCardIds: [],
+        createdNoteIds: ["note-created"],
+        createdAt: NOW,
+      },
+      {
+        id: "chat-saveable",
+        role: "assistant",
+        content: "An ordinary useful reply.",
+        cardIds: [],
+        contextCardIds: [],
+        createdAt: NOW,
+      },
+    );
+    const onOpenNote = vi.fn();
+    const onSaveReply = vi.fn();
+
+    render(
+      <ChatView
+        snapshot={snapshot}
+        busy={false}
+        onSend={vi.fn()}
+        onClear={vi.fn()}
+        onOpenNote={onOpenNote}
+        onSaveReply={onSaveReply}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open note: Created from Chat" }),
+    );
+    expect(onOpenNote).toHaveBeenCalledWith("note-created");
+    fireEvent.click(screen.getByRole("button", { name: "Keep as note" }));
+    expect(onSaveReply).toHaveBeenCalledWith("chat-saveable");
   });
 });

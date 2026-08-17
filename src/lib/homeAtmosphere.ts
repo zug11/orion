@@ -3,6 +3,7 @@ import type {
   HomeAtmosphereMotion,
   HomeAtmosphereTone,
 } from "../types";
+import { contrastRatio, type ThemePalette } from "./theme";
 
 export interface AtmospherePalette {
   primary: string;
@@ -10,11 +11,19 @@ export interface AtmospherePalette {
   tertiary: string;
   bright: string;
   muted: string;
+  background: string;
+  backgroundSecondary: string;
+  isLight: boolean;
 }
+
+type AtmosphereStrokePalette = Omit<
+  AtmospherePalette,
+  "background" | "backgroundSecondary" | "isLight"
+>;
 
 const tonePalettes: Record<
   Exclude<HomeAtmosphereTone, "signature">,
-  AtmospherePalette
+  AtmosphereStrokePalette
 > = {
   violet: {
     primary: "#A8B3FF",
@@ -39,7 +48,7 @@ const tonePalettes: Record<
   },
 };
 
-const signaturePalettes: Record<HomeAtmosphere, AtmospherePalette> = {
+const signaturePalettes: Record<HomeAtmosphere, AtmosphereStrokePalette> = {
   "line-waves": {
     primary: "#7BC9B0",
     secondary: "#8FA1E8",
@@ -67,7 +76,7 @@ export const atmosphereToneOptions: Array<{
   id: HomeAtmosphereTone;
   name: string;
 }> = [
-  { id: "signature", name: "Orion" },
+  { id: "signature", name: "Theme" },
   { id: "violet", name: "Violet" },
   { id: "mint", name: "Mint" },
   { id: "gold", name: "Gold" },
@@ -85,10 +94,105 @@ export const atmosphereMotionOptions: Array<{
 export function resolveAtmospherePalette(
   atmosphere: HomeAtmosphere,
   tone: HomeAtmosphereTone,
+  themePalette?: ThemePalette,
 ): AtmospherePalette {
-  return tone === "signature"
-    ? signaturePalettes[atmosphere]
-    : tonePalettes[tone];
+  const strokes =
+    tone === "signature"
+      ? themePalette
+        ? themeSignaturePalette(atmosphere, themePalette)
+        : signaturePalettes[atmosphere]
+      : tonePalettes[tone];
+  const resolvedStrokes = themePalette
+    ? {
+        primary: ensureSignalContrast(strokes.primary, themePalette),
+        secondary: ensureSignalContrast(strokes.secondary, themePalette),
+        tertiary: ensureSignalContrast(strokes.tertiary, themePalette),
+        bright: themePalette.text,
+        muted: themePalette.muted,
+      }
+    : strokes;
+
+  return {
+    ...resolvedStrokes,
+    background: themePalette?.canvasDeep ?? "#09101d",
+    backgroundSecondary: themePalette?.surface0 ?? "#101726",
+    isLight: themePalette?.mode === "light",
+  };
+}
+
+function ensureSignalContrast(
+  color: string,
+  palette: ThemePalette,
+  minimum = 3,
+): string {
+  const backgrounds = [palette.canvasDeep, palette.surface0];
+  const hasEnoughContrast = (candidate: string) =>
+    backgrounds.every(
+      (background) => contrastRatio(candidate, background) >= minimum,
+    );
+  if (hasEnoughContrast(color)) return color;
+
+  const target = palette.mode === "dark" ? "#FFFFFF" : "#000000";
+  let low = 0;
+  let high = 1;
+  for (let iteration = 0; iteration < 18; iteration += 1) {
+    const amount = (low + high) / 2;
+    if (hasEnoughContrast(mixHex(color, target, amount))) {
+      high = amount;
+    } else {
+      low = amount;
+    }
+  }
+  return mixHex(color, target, high);
+}
+
+function mixHex(left: string, right: string, amount: number): string {
+  const parse = (hex: string) => {
+    const value = hex.replace(/^#/, "");
+    return [
+      Number.parseInt(value.slice(0, 2), 16),
+      Number.parseInt(value.slice(2, 4), 16),
+      Number.parseInt(value.slice(4, 6), 16),
+    ] as const;
+  };
+  const start = parse(left);
+  const end = parse(right);
+  const component = (index: number) =>
+    Math.round(start[index] + (end[index] - start[index]) * amount)
+      .toString(16)
+      .padStart(2, "0");
+  return `#${component(0)}${component(1)}${component(2)}`;
+}
+
+function themeSignaturePalette(
+  atmosphere: HomeAtmosphere,
+  palette: ThemePalette,
+): AtmosphereStrokePalette {
+  if (atmosphere === "line-waves") {
+    return {
+      primary: palette.mint,
+      secondary: palette.accent,
+      tertiary: palette.accentStrong,
+      bright: palette.text,
+      muted: palette.muted,
+    };
+  }
+  if (atmosphere === "field") {
+    return {
+      primary: palette.accentStrong,
+      secondary: palette.accent,
+      tertiary: palette.mint,
+      bright: palette.text,
+      muted: palette.muted,
+    };
+  }
+  return {
+    primary: palette.accent,
+    secondary: palette.gold,
+    tertiary: palette.accentStrong,
+    bright: palette.text,
+    muted: palette.muted,
+  };
 }
 
 export function atmosphereMotionValue(

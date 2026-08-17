@@ -1,0 +1,20 @@
+{
+  "name": "orion-desktop",
+  "interface": {
+    "displayName": "Orion"
+  },
+  "plugins": [
+    {
+      "name": "orion",
+      "source": {
+        "source": "local",
+        "path": "./plugins/orion"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

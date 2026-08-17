@@ -1,0 +1,6 @@
+interface:
+  display_name: "Orion"
+  short_description: "Work with your local Orion knowledge atlas"
+  default_prompt: "Use $orion:orion to find and cite relevant knowledge from my active Space."
+policy:
+  allow_implicit_invocation: true

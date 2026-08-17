@@ -34,8 +34,11 @@ export function spacesNeedingOverviewRefresh(
       if (!knowledgeChanged) return false;
       const hasKnowledge = space.notes.some(hasSubstantiveOverviewNote);
       return hasKnowledge
-        ? !space.spaceOverview || space.spaceOverview.stale
-        : Boolean(space.spaceOverview);
+        ? !space.spaceOverview ||
+            space.spaceOverview.stale ||
+            !space.spaceKnowledge ||
+            space.spaceKnowledge.stale
+        : Boolean(space.spaceOverview || space.spaceKnowledge);
     })
     .map((space) => space.workspace.id);
 }

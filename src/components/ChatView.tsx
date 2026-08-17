@@ -2,18 +2,20 @@ import {
   ArrowUp,
   Bot,
   BookOpenText,
+  FileText,
   MessageCircle,
   Plus,
   Settings2,
 } from "../lib/icons";
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
   type KeyboardEvent,
 } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { AppSnapshot, ChatResult } from "../types";
 import {
@@ -26,6 +28,8 @@ interface ChatViewProps {
   busy: boolean;
   onSend: (prompt: string) => Promise<ChatResult>;
   onClear: () => void;
+  onOpenNote: (noteId: string) => void;
+  onSaveReply: (messageId: string) => void;
   onOpenSettings: () => void;
 }
 
@@ -36,11 +40,21 @@ const QUICK_PROMPTS = [
   "Challenge a weak assumption in these notes.",
 ] as const;
 
+const CHAT_MARKDOWN_COMPONENTS: Components = {
+  a: ({ children, ...props }) => (
+    <a {...props} target="_blank" rel="noreferrer noopener">
+      {children}
+    </a>
+  ),
+};
+
 export function ChatView({
   snapshot,
   busy,
   onSend,
   onClear,
+  onOpenNote,
+  onSaveReply,
   onOpenSettings,
 }: ChatViewProps) {
   const [draft, setDraft] = useState("");
@@ -49,6 +63,10 @@ export function ChatView({
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messages = snapshot.studio.messages;
+  const noteById = useMemo(
+    () => new Map(snapshot.notes.map((note) => [note.id, note])),
+    [snapshot.notes],
+  );
   const hasKnowledge =
     snapshot.notes.length > 0 ||
     snapshot.sources.length > 0 ||
@@ -195,11 +213,15 @@ export function ChatView({
               )}
             </div>
           ) : (
-            messages.map((message) => (
-              <article
-                className={`chat-message chat-message--${message.role}`}
-                key={message.id}
-              >
+            messages.map((message) => {
+              const createdNotes = (message.createdNoteIds ?? [])
+                .map((noteId) => noteById.get(noteId))
+                .filter((note) => note !== undefined);
+              return (
+                <article
+                  className={`chat-message chat-message--${message.role}`}
+                  key={message.id}
+                >
                 <div className="chat-message__identity">
                   {message.role === "assistant" ? (
                     <>
@@ -212,32 +234,49 @@ export function ChatView({
                     <span>You</span>
                   )}
                 </div>
-                {message.role === "assistant" ? (
-                  <div className="chat-message__body">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        a: ({ children, ...props }) => (
-                          <a
-                            {...props}
-                            target="_blank"
-                            rel="noreferrer noopener"
+                  {message.role === "assistant" ? (
+                    <>
+                      <div className="chat-message__body">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={CHAT_MARKDOWN_COMPONENTS}
+                        >
+                          {message.content}
+                        </ReactMarkdown>
+                      </div>
+                      <div className="chat-message__note-actions">
+                        {createdNotes.length > 0 ? (
+                          createdNotes.map((note) => (
+                            <button
+                              type="button"
+                              key={note.id}
+                              onClick={() => onOpenNote(note.id)}
+                              aria-label={`Open note: ${note.title}`}
+                            >
+                              <FileText size={12} />
+                              <span>{note.title}</span>
+                            </button>
+                          ))
+                        ) : (
+                          <button
+                            type="button"
+                            className="chat-message__keep-note"
+                            onClick={() => onSaveReply(message.id)}
                           >
-                            {children}
-                          </a>
-                        ),
-                      }}
-                    >
+                            <FileText size={12} />
+                            Keep as note
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <p className="chat-message__body chat-message__body--plain">
                       {message.content}
-                    </ReactMarkdown>
-                  </div>
-                ) : (
-                  <p className="chat-message__body chat-message__body--plain">
-                    {message.content}
-                  </p>
-                )}
-              </article>
-            ))
+                    </p>
+                  )}
+                </article>
+              );
+            })
           )}
 
           {pendingPrompt && (
