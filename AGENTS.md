@@ -1338,7 +1338,7 @@ claiming end-to-end OCR coverage.
 
 ## Offline transcription contract
 
-Orion 0.4.1 is self-contained on Apple Silicon macOS 13.3 or later. It bundles:
+Orion 0.4.2 is self-contained on Apple Silicon macOS 13.3 or later. It bundles:
 
 - `whisper.cpp` 1.9.1 as `Contents/Frameworks/whisper.framework`;
 - the custom `Contents/MacOS/orion-whisper` sidecar;
@@ -1533,6 +1533,36 @@ Canonical articles are upserts:
 
 Never search another Space for an upsert target.
 
+## Generate from New note
+
+**+ New note** and `⌘N` still create a blank page. When a writing key is
+configured, the chevron opens one Generate composer: kind (Note, Podcast, Slide
+deck, Slide deck with narration), optional instructions, one Generate action.
+Each kind is an ordinary note. Do not add presentation or podcast schema, a
+Playground route, or Share-as-create.
+
+Generation is a transient job (linked-article pattern: attempt ownership, late
+results ignored, Restart/Delete). Import topology is unchanged. Slide copy may
+be one writing pass; each slide is then a complete `gpt-image-2` 16:9 image
+that letters the title and bullets in distinctive fonts, in same-kind waves
+of at most six, never mixed with copy. The slideshow shows that image only:
+no HTML type overlay even as a fallback, and speaker notes stay off-screen
+for Play. Play on the note
+header speaks existing prose, or times a deck to its speaker notes, with
+System speech by default, `gpt-4o-mini-tts` if an OpenAI key is selected, or
+ElevenLabs if that optional keychain account is selected. ElevenLabs is voice
+only: never a writing provider, never Wave 2 failover, never a knowledge-base
+upload. The vault stores `elevenLabsApiKeyConfigured`, `speechVoice`, and an
+optional `elevenLabsVoiceId` (not a secret). Empty uses Orion’s default voice;
+a pasted ID must be 8–40 ASCII alphanumeric characters.
+Settings → Voice also stores `elevenLabsVoices`, a list of `{ name, voiceId }`
+presets with non-empty names of at most 80 characters. Older vaults may omit
+the list; hydration preserves an existing valid ID as “Saved voice”. Adding,
+renaming, removing, and selecting voices stay entirely in Settings. The active
+`elevenLabsVoiceId` still drives Play; removing its preset resets it to the
+Orion default. Presets are local metadata, never credentials or provider-side
+voice changes, and share the existing application-wide settings scope.
+
 ## Inline AI writing mode
 
 This editor interaction is shipped and regression-protected. Keep its request
@@ -1702,7 +1732,7 @@ Treat every action as untrusted output behind a host firewall. Drop an action
 with unknown/missing fields, an empty/oversized required field, an invalid label
 array, a disallowed control character, an Orion control comment beginning
 `<!-- orion-`, or a reserved lifecycle tag: `ai-draft`, `wiki-article`,
-`orion-link-draft`, or `orion-link-pending`. Aggregate overflow drops the action
+`orion-link-draft`, `orion-link-pending`, or `orion-generate-pending`. Aggregate overflow drops the action
 that would cross the cap. Preserve the valid conversational reply and other safe
 actions. Apply the same checks in TypeScript and Rust, then recompute explicit
 intent before mutation. Accepted notes are created only in the request's

@@ -5,3 +5,4 @@ export * from "./service";
 export * from "./import";
 export * from "./enrichment";
 export * from "./evaluation";
+export * from "./waves";

@@ -3,7 +3,7 @@
   "manifest_version": "0.4",
   "name": "orion-knowledge-atlas",
   "display_name": "Orion",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Browse, summarize, cite, and edit your local Orion Spaces from Claude.",
   "long_description": "A local bridge between Claude Desktop and Orion. Discover projects and workspaces, browse the active Space by default, read its living overview, search one Space at a time, open citation links in Orion, retrieve bounded source evidence, and directly create, edit, or delete notes without cloud sync or an API key.",
   "author": {

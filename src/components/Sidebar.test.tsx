@@ -9,6 +9,78 @@ import { Sidebar } from "./Sidebar";
 
 const NOW = "2026-07-29T01:00:00.000Z";
 
+describe("Sidebar generate composer", () => {
+  it("keeps New note blank and opens Generate from the chevron", () => {
+    const onNewNote = vi.fn();
+    const onGenerate = vi.fn();
+    const snapshot = createEmptySnapshot("Data systems", NOW, "space-data");
+
+    render(
+      <Sidebar
+        view="home"
+        notes={[]}
+        spaces={[snapshot]}
+        activeSpaceId={snapshot.workspace.id}
+        activeNoteId={null}
+        linkedArticleJobs={[]}
+        generateEnabled
+        onGenerate={onGenerate}
+        onViewChange={vi.fn()}
+        onOpenNote={vi.fn()}
+        onDeleteNote={vi.fn()}
+        onNewNote={onNewNote}
+        onCreateSpace={vi.fn()}
+        onDeleteSpace={vi.fn()}
+        onSwitchSpace={vi.fn()}
+        onRestartLinkedArticle={vi.fn()}
+        onDeleteLinkedArticle={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "New note" }));
+    expect(onNewNote).toHaveBeenCalledTimes(1);
+    expect(onGenerate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Generate options" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Podcast" }));
+    fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+    expect(onGenerate).toHaveBeenCalledWith({
+      kind: "podcast",
+      instruction: "",
+    });
+  });
+
+  it("collapses to an icon rail without text labels", () => {
+    const snapshot = createEmptySnapshot("Data systems", NOW, "space-data");
+    const onToggleCollapsed = vi.fn();
+    render(
+      <Sidebar
+        view="home"
+        notes={[]}
+        spaces={[snapshot]}
+        activeSpaceId={snapshot.workspace.id}
+        activeNoteId={null}
+        linkedArticleJobs={[]}
+        collapsed
+        onToggleCollapsed={onToggleCollapsed}
+        onViewChange={vi.fn()}
+        onOpenNote={vi.fn()}
+        onDeleteNote={vi.fn()}
+        onNewNote={vi.fn()}
+        onCreateSpace={vi.fn()}
+        onDeleteSpace={vi.fn()}
+        onSwitchSpace={vi.fn()}
+        onRestartLinkedArticle={vi.fn()}
+        onDeleteLinkedArticle={vi.fn()}
+      />,
+    );
+
+    expect(document.querySelector(".sidebar")).toHaveClass("is-collapsed");
+    fireEvent.click(screen.getByRole("button", { name: "Expand sidebar" }));
+    expect(onToggleCollapsed).toHaveBeenCalled();
+  });
+});
+
 describe("Sidebar linked article progress", () => {
   it("keeps settings as the only footer control", () => {
     const snapshot = createEmptySnapshot("Data systems", NOW, "space-data");

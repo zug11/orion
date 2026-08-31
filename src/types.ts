@@ -153,11 +153,34 @@ export type ThemeSurfaceLift = "quiet" | "balanced" | "lifted";
 export type ThemeTextWarmth = "cool" | "neutral" | "warm";
 export type ThemeContrast = "soft" | "balanced" | "high";
 
+export type SpeechVoice = "system" | "openai" | "elevenlabs";
+
+export interface SavedElevenLabsVoice {
+  name: string;
+  voiceId: string;
+}
+
 export interface Settings {
   model: string;
   reasoningEffort: ReasoningEffort;
   apiKeyConfigured: boolean;
   anthropicApiKeyConfigured: boolean;
+  /** Optional. Used only to speak notes and narrated decks. */
+  elevenLabsApiKeyConfigured: boolean;
+  /**
+   * ElevenLabs voice ID from the user's library. Empty uses Orion's default
+   * editorial voice. This is not a secret.
+   */
+  elevenLabsVoiceId: string;
+  /** Named local voice presets. Optional in older vaults; never credentials. */
+  elevenLabsVoices: SavedElevenLabsVoice[];
+  /**
+   * Who speaks Play and narrated decks. System works with no cloud key.
+   * OpenAI and ElevenLabs require their respective keys.
+   */
+  speechVoice: SpeechVoice;
+  /** Narrow icon rail. Text labels stay hidden while collapsed. */
+  sidebarCollapsed: boolean;
   /** Opt-in: retry a failed knowledge request once on the other provider. */
   providerFailoverEnabled: boolean;
   autoLink: boolean;
@@ -612,5 +635,11 @@ export interface GeneratedNoteImage {
   mimeType: "image/jpeg";
   byteSize: number;
   /** Transient provider output. Persist it only after the user accepts the preview. */
+  base64Data: string;
+}
+
+export interface GeneratedSpeech {
+  mimeType: "audio/mpeg";
+  byteSize: number;
   base64Data: string;
 }

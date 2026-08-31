@@ -4,6 +4,9 @@ import {
   normalizeHomeAtmosphere,
   normalizeHomeAtmosphereMotion,
   normalizeHomeAtmosphereTone,
+  normalizeElevenLabsVoiceId,
+  normalizeElevenLabsVoices,
+  normalizeSpeechVoice,
   normalizeThemeAccent,
   normalizeThemeCanvasTone,
   normalizeThemeColor,
@@ -45,6 +48,39 @@ describe("home atmosphere tuning defaults", () => {
   it("falls back when older or malformed vaults omit tuning", () => {
     expect(normalizeHomeAtmosphereTone(undefined)).toBe("signature");
     expect(normalizeHomeAtmosphereMotion("fast")).toBe("calm");
+  });
+});
+
+describe("speech voice defaults", () => {
+  it("preserves a legacy voice and makes migration repeatable", () => {
+    const voiceId = "21m00Tcm4TlvDq8ikWAM";
+    const migrated = normalizeElevenLabsVoices(undefined, voiceId);
+    expect(migrated).toEqual([{ name: "Saved voice", voiceId }]);
+    expect(normalizeElevenLabsVoices(migrated, voiceId)).toEqual(migrated);
+    expect(normalizeElevenLabsVoices(undefined, "../bad")).toEqual([]);
+    expect(defaultSettings.elevenLabsVoices).toEqual([]);
+  });
+
+  it("keeps names and order while removing duplicate IDs and invalid presets", () => {
+    const voice = { name: "  Everyday reading  ", voiceId: "21m00Tcm4TlvDq8ikWAM" };
+    expect(normalizeElevenLabsVoices([
+      voice,
+      { ...voice, name: "Duplicate" },
+      { name: "Bad ID", voiceId: "../voice" },
+      { name: "", voiceId: "JBFqnCBsd6RMkjVDRZzb" },
+    ], voice.voiceId)).toEqual([{ ...voice, name: "Everyday reading" }]);
+  });
+
+  it("keeps supported engines and hydrates older vaults to System", () => {
+    expect(normalizeSpeechVoice("elevenlabs")).toBe("elevenlabs");
+    expect(normalizeSpeechVoice(undefined)).toBe("system");
+    expect(defaultSettings.speechVoice).toBe("system");
+    expect(defaultSettings.elevenLabsApiKeyConfigured).toBe(false);
+    expect(defaultSettings.elevenLabsVoiceId).toBe("");
+    expect(normalizeElevenLabsVoiceId("21m00Tcm4TlvDq8ikWAM")).toBe(
+      "21m00Tcm4TlvDq8ikWAM",
+    );
+    expect(normalizeElevenLabsVoiceId("../voice")).toBe("");
   });
 });
 

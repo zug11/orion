@@ -5,6 +5,8 @@ const RESERVED_NOTE_TAGS = new Set([
   "wiki-article",
   "orion-link-draft",
   "orion-link-pending",
+  "orion-generate-pending",
+  "orion-slide-deck",
 ]);
 
 export function visibleNoteTags(note: Pick<Note, "tags">): string[] {

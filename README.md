@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.4.1-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.4.2-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
   ·
   <a href="#the-orchestration-topology">How it works</a>
   ·
@@ -22,7 +22,7 @@
   <a href="#local-first-by-construction">Privacy</a>
 </p>
 
-> Orion 0.4.1 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
+> Orion 0.4.2 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
 
 ## Knowledge work should produce knowledge, not another inbox
 
@@ -75,6 +75,13 @@ Choose **Manual** to create one editable note per source without an AI request. 
 There is no Markdown mode and no read/write split. Click **Edit**, write with a lightweight word-processing toolbar, and return to the same page. Headings, tables, task lists, code, quotes, images, links, and numbered source citations remain portable Markdown underneath.
 
 Inline AI writing is deliberately non-destructive. Continue at the caret or select a passage to Rewrite, Clarify, Tighten, Simplify, Expand, or Enrich from the active Space. A proposal is never saved until you accept it, and acceptance is one ordinary Undo step. An OpenAI key also enables selected-passage image generation; image bytes remain transient until accepted.
+
+**New note** still opens a blank page. When a writing key is configured, the chevron next to it opens **Generate**: a note, a podcast script, a slide deck, or a slide deck written to be heard. Each lands as an ordinary note. **Play** in the note header reads the open page with System speech, OpenAI `gpt-4o-mini-tts`, or an optional ElevenLabs key. Slide decks generate complete `gpt-image-2` slides that letter the title and bullets in distinctive fonts, hide speaker notes on screen, and Play times those slides to the narration.
+
+In **Settings → Voice**, save ElevenLabs voice IDs with names and choose the
+voice used by Play throughout Orion. You can rename or remove saved voices
+there without changing your ElevenLabs library. Your previously selected voice
+is preserved when upgrading.
 
 ### A wiki that maintains itself
 
@@ -228,7 +235,7 @@ The connector rereads the real vault for every call, shares Orion's advisory loc
 
 ## Download
 
-[**Download Orion 0.4.1 for Apple Silicon**](https://github.com/zug11/orion/releases/latest/download/Orion-0.4.1-Apple-Silicon.dmg)
+[**Download Orion 0.4.2 for Apple Silicon**](https://github.com/zug11/orion/releases/latest/download/Orion-0.4.2-Apple-Silicon.dmg)
 
 Requirements:
 

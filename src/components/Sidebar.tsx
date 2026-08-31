@@ -1,13 +1,25 @@
 import {
   BookOpen,
+  ChevronDown,
   GalleryVerticalEnd,
   Home,
   MessageCircle,
+  PanelLeft,
+  PanelLeftClose,
   Plus,
   Settings,
   Trash2,
 } from "../lib/icons";
+import { useEffect, useRef, useState } from "react";
 import type { AppSnapshot, Note } from "../types";
+import {
+  GENERATE_KINDS,
+  generateKindLabel,
+  generateStageLabel,
+  truncateGenerateInstruction,
+  type GenerateJob,
+  type GenerateKind,
+} from "../lib/generate";
 import {
   linkedArticleStageLabel,
   type LinkedArticleJob,
@@ -33,11 +45,18 @@ interface SidebarProps {
   onOpenNote: (noteId: string) => void;
   onDeleteNote: (noteId: string) => void;
   onNewNote: () => void;
+  generateEnabled?: boolean;
+  generateJobs?: readonly GenerateJob[];
+  onGenerate?: (input: { kind: GenerateKind; instruction: string }) => void;
+  onRestartGenerate?: (job: GenerateJob) => void;
+  onDeleteGenerate?: (job: GenerateJob) => void;
   onCreateSpace: (name: string) => void;
   onDeleteSpace: (spaceId: string) => boolean;
   onSwitchSpace: (spaceId: string) => void;
   onRestartLinkedArticle: (job: LinkedArticleJob) => void;
   onDeleteLinkedArticle: (job: LinkedArticleJob) => void;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
 }
 
 const navigation = [
@@ -101,20 +120,56 @@ export function Sidebar({
   onOpenNote,
   onDeleteNote,
   onNewNote,
+  generateEnabled = false,
+  generateJobs = [],
+  onGenerate,
+  onRestartGenerate,
+  onDeleteGenerate,
   onCreateSpace,
   onDeleteSpace,
   onSwitchSpace,
   onRestartLinkedArticle,
   onDeleteLinkedArticle,
+  collapsed = false,
+  onToggleCollapsed,
 }: SidebarProps) {
+  const [generateOpen, setGenerateOpen] = useState(false);
+  const [generateKind, setGenerateKind] = useState<GenerateKind>("note");
+  const [generateInstruction, setGenerateInstruction] = useState("");
+  const generatePanelRef = useRef<HTMLDivElement>(null);
   const favorites = notes.filter((note) => note.pinned);
   const visibleLinkedArticleJobs = [
     ...linkedArticleJobs.filter((job) => job.stage === "error"),
     ...linkedArticleJobs.filter((job) => job.stage !== "error"),
   ].slice(0, 3);
+  const visibleGenerateJobs = [
+    ...generateJobs.filter((job) => job.stage === "error"),
+    ...generateJobs.filter((job) => job.stage !== "error"),
+  ].slice(0, 3);
+
+  useEffect(() => {
+    if (!generateOpen) return undefined;
+    const onPointer = (event: MouseEvent) => {
+      if (!generatePanelRef.current?.contains(event.target as Node)) {
+        setGenerateOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setGenerateOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onPointer);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onPointer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [generateOpen]);
 
   return (
-    <aside className="sidebar">
+    <aside className={collapsed ? "sidebar is-collapsed" : "sidebar"}>
       <SpaceSwitcher
         spaces={spaces}
         activeSpaceId={activeSpaceId}
@@ -123,16 +178,80 @@ export function Sidebar({
         onSwitchSpace={onSwitchSpace}
       />
 
-      <button
-        className="new-note-button"
-        type="button"
-        aria-label="New note"
-        onClick={onNewNote}
-      >
-        <Plus size={16} strokeWidth={2} />
-        <span>New note</span>
-        <kbd>⌘N</kbd>
-      </button>
+      <div className="new-note-split" ref={generatePanelRef}>
+        <button
+          className="new-note-button"
+          type="button"
+          aria-label="New note"
+          onClick={onNewNote}
+        >
+          <Plus size={16} strokeWidth={2} />
+          <span>New note</span>
+          <kbd>⌘N</kbd>
+        </button>
+        {generateEnabled && onGenerate ? (
+          <button
+            type="button"
+            className={
+              generateOpen
+                ? "new-note-generate-toggle is-open"
+                : "new-note-generate-toggle"
+            }
+            aria-label="Generate options"
+            aria-expanded={generateOpen}
+            aria-haspopup="dialog"
+            onClick={() => setGenerateOpen((open) => !open)}
+          >
+            <ChevronDown size={14} />
+          </button>
+        ) : null}
+        {generateOpen && onGenerate ? (
+          <form
+            className="new-note-generate-composer"
+            role="dialog"
+            aria-label="Generate"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onGenerate({
+                kind: generateKind,
+                instruction: truncateGenerateInstruction(generateInstruction),
+              });
+              setGenerateInstruction("");
+              setGenerateOpen(false);
+            }}
+          >
+            <span className="new-note-generate-kinds" role="radiogroup" aria-label="Generate kind">
+              {GENERATE_KINDS.map((kind) => (
+                <button
+                  key={kind}
+                  type="button"
+                  role="radio"
+                  aria-checked={generateKind === kind}
+                  className={generateKind === kind ? "active" : ""}
+                  onClick={() => setGenerateKind(kind)}
+                >
+                  {generateKindLabel(kind)}
+                </button>
+              ))}
+            </span>
+            <label htmlFor="orion-generate-instruction">
+              <span>Instructions</span>
+              <small>Optional</small>
+            </label>
+            <textarea
+              id="orion-generate-instruction"
+              value={generateInstruction}
+              maxLength={1_250}
+              rows={3}
+              placeholder="Leave blank for Orion’s best page from this Space…"
+              onChange={(event) => setGenerateInstruction(event.target.value)}
+            />
+            <button type="submit" className="button primary compact">
+              Generate
+            </button>
+          </form>
+        ) : null}
+      </div>
 
       <nav className="primary-nav" aria-label="Workspace">
         {navigation.map(({ id, label, icon: Icon }) => (
@@ -149,6 +268,74 @@ export function Sidebar({
           </button>
         ))}
       </nav>
+
+      {generateJobs.length > 0 && (
+        <section
+          className="sidebar-generation-queue"
+          aria-label="Generated pages"
+        >
+          <div className="sidebar-generation-queue__heading">
+            <span>Generating</span>
+            <em>{generateJobs.length}</em>
+          </div>
+          {visibleGenerateJobs.map((job) => (
+            <article
+              key={job.id}
+              className={
+                job.stage === "error"
+                  ? "sidebar-generation-job is-error"
+                  : job.stage === "complete"
+                    ? "sidebar-generation-job is-complete"
+                    : "sidebar-generation-job"
+              }
+              title={job.error}
+            >
+              <button
+                type="button"
+                className="sidebar-generation-job__open"
+                aria-label={`${job.title}. ${generateStageLabel(job.stage)}. Open note.`}
+                onClick={() => onOpenNote(job.noteId)}
+              >
+                <span className="sidebar-generation-job__copy">
+                  <strong>{job.title}</strong>
+                  <small>
+                    {generateStageLabel(job.stage)} · {generateKindLabel(job.kind)}
+                    {job.error ? ` · ${job.error}` : ""}
+                  </small>
+                </span>
+                <span
+                  className="sidebar-generation-job__progress"
+                  role="progressbar"
+                  aria-label={`Creating ${job.title}`}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(job.progress)}
+                >
+                  <i style={{ width: `${job.progress}%` }} />
+                </span>
+              </button>
+              {job.stage === "error" && onRestartGenerate && onDeleteGenerate ? (
+                <div
+                  className="sidebar-generation-job__actions"
+                  role="group"
+                  aria-label={`${job.title} generate actions`}
+                >
+                  <button type="button" onClick={() => onRestartGenerate(job)}>
+                    Restart
+                  </button>
+                  <button
+                    type="button"
+                    className="is-danger"
+                    onClick={() => onDeleteGenerate(job)}
+                  >
+                    Delete
+                  </button>
+                </div>
+              ) : null}
+            </article>
+          ))}
+        </section>
+      )}
 
       {linkedArticleJobs.length > 0 && (
         <section
@@ -260,6 +447,21 @@ export function Sidebar({
       </div>
 
       <div className="sidebar-footer">
+        {onToggleCollapsed ? (
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            onClick={onToggleCollapsed}
+          >
+            {collapsed ? (
+              <PanelLeft size={16} />
+            ) : (
+              <PanelLeftClose size={16} />
+            )}
+          </button>
+        ) : null}
         <button
           type="button"
           className={view === "settings" ? "icon-button active" : "icon-button"}

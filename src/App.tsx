@@ -35,6 +35,9 @@ import {
   normalizeHomeAtmosphere,
   normalizeHomeAtmosphereMotion,
   normalizeHomeAtmosphereTone,
+  normalizeElevenLabsVoiceId,
+  normalizeElevenLabsVoices,
+  normalizeSpeechVoice,
   normalizeThemeAccent,
   normalizeThemeCanvasTone,
   normalizeThemeColor,
@@ -55,9 +58,11 @@ import {
   chatWithOrion,
   deleteAnthropicApiKey,
   deleteApiKey,
+  deleteElevenLabsApiKey,
   exportMarkdown,
   exportWebPage,
   generateNoteImage,
+  saveNoteImage,
   clearBrowserSnapshot,
   isTauriRuntime,
   loadSnapshot,
@@ -66,9 +71,12 @@ import {
   runKnowledgeAssignment,
   saveAnthropicApiKey,
   saveApiKey,
+  saveElevenLabsApiKey,
   saveSnapshot,
   testAnthropicKey,
+  testElevenLabsKey,
   testOpenAIKey,
+  generateSpeech,
 } from "./lib/storage";
 import {
   applyChatResult,
@@ -87,6 +95,38 @@ import {
   waitForLinkedArticle,
   type LinkedArticleJob,
 } from "./lib/linkedArticle";
+import {
+  buildGenerateWritingRequest,
+  createGeneratePlaceholderNote,
+  GENERATE_TIMEOUT_MS,
+  GenerateRequestRegistry,
+  insertImageForSlide,
+  titleFromGenerateInstruction,
+  truncateGenerateInstruction,
+  type GenerateJob,
+  type GenerateKind,
+} from "./lib/generate";
+import {
+  buildSlideImagePrompt,
+  MAX_DECK_SLIDE_IMAGES,
+  parseDeckSlides,
+  SLIDE_DECK_TAG,
+} from "./lib/slideDeck";
+import { runPresentationWaves } from "./lib/knowledgeOrchestration/waves";
+import {
+  chunkSpeechText,
+  cloudSpeechCacheKey,
+  decodeBase64Audio,
+  openSpeechPlaybackContext,
+  playDecodedSpeech,
+  PreparedSpeechCache,
+  resolveElevenLabsVoiceId,
+  resolveSpeechEngine,
+  speechChunkLimit,
+  speakWithSystemVoice,
+  type GeneratedSpeech,
+  type SpeechPlaybackProgress,
+} from "./lib/speech";
 import {
   buildLinkTitleRequest,
   normalizeGeneratedLinkTitle,
@@ -266,6 +306,10 @@ function App() {
   const [linkedArticleJobs, setLinkedArticleJobs] = useState<
     LinkedArticleJob[]
   >([]);
+  const [generateJobs, setGenerateJobs] = useState<GenerateJob[]>([]);
+  const generateRequests = useRef(new GenerateRequestRegistry());
+  const preparedSpeech = useRef(new PreparedSpeechCache());
+  const speechPlaybackContext = useRef<AudioContext | null>(null);
   const [history, setHistory] = useState<NavigationEntry[]>(() => [
     createNavigationEntry({ screen: "home" }),
   ]);
@@ -680,6 +724,18 @@ function App() {
               anthropicApiKeyConfigured: isTauriRuntime()
                 ? (base.settings.anthropicApiKeyConfigured ?? false)
                 : false,
+              elevenLabsApiKeyConfigured: isTauriRuntime()
+                ? (base.settings.elevenLabsApiKeyConfigured ?? false)
+                : false,
+              speechVoice: normalizeSpeechVoice(base.settings.speechVoice),
+              sidebarCollapsed: base.settings.sidebarCollapsed === true,
+              elevenLabsVoiceId: normalizeElevenLabsVoiceId(
+                base.settings.elevenLabsVoiceId,
+              ),
+              elevenLabsVoices: normalizeElevenLabsVoices(
+                base.settings.elevenLabsVoices,
+                base.settings.elevenLabsVoiceId,
+              ),
               themePreset: normalizeThemePreset(base.settings.themePreset),
               themeAccent: normalizeThemeAccent(base.settings.themeAccent),
               themeAccentCustom: normalizeThemeColor(
@@ -779,6 +835,16 @@ function App() {
     showToast,
     vault,
   ]);
+
+  useEffect(() => {
+    const cache = preparedSpeech.current;
+    return () => {
+      cache.clear();
+      const context = speechPlaybackContext.current;
+      speechPlaybackContext.current = null;
+      if (context && context.state !== "closed") void context.close();
+    };
+  }, []);
 
   useEffect(() => {
     if (
@@ -1368,6 +1434,210 @@ function App() {
       input?.select();
     }, 80);
   }, [openNote]);
+
+  const startGenerate = useCallback(
+    (input: { kind: GenerateKind; instruction: string }) => {
+      if (!isSelectedAIConfigured(snapshotRef.current.settings)) return;
+      const instruction = truncateGenerateInstruction(input.instruction);
+      const now = new Date().toISOString();
+      const noteId = `note-${nanoid(10)}`;
+      const jobId = `generate-${nanoid(10)}`;
+      const title = titleFromGenerateInstruction(instruction, input.kind);
+      const note = createGeneratePlaceholderNote({
+        id: noteId,
+        title,
+        kind: input.kind,
+        now,
+      });
+      const job: GenerateJob = {
+        id: jobId,
+        workspaceId: snapshotRef.current.workspace.id,
+        noteId,
+        kind: input.kind,
+        title,
+        instruction,
+        progress: 12,
+        stage: "preparing",
+      };
+      const requestKey = `${job.workspaceId}:${noteId}`;
+      if (!generateRequests.current.begin(requestKey, jobId)) return;
+      const snapshotWithNote = {
+        ...snapshotRef.current,
+        notes: [note, ...snapshotRef.current.notes],
+        activeNoteId: noteId,
+        updatedAt: now,
+      };
+      snapshotRef.current = snapshotWithNote;
+      setSnapshot(snapshotWithNote);
+      setGenerateJobs((current) => [job, ...current]);
+      openNote(noteId);
+
+      const patchJob = (patch: Partial<GenerateJob>) => {
+        setGenerateJobs((current) =>
+          current.map((candidate) =>
+            candidate.id === jobId ? { ...candidate, ...patch } : candidate,
+          ),
+        );
+      };
+
+      void (async () => {
+        let timeout: number | undefined;
+        try {
+          patchJob({ stage: "writing", progress: 28 });
+          const request = buildGenerateWritingRequest(snapshotWithNote, {
+            originNoteId: noteId,
+            kind: input.kind,
+            instruction,
+          });
+          const result = await Promise.race([
+            chatWithOrion(request),
+            new Promise<never>((_, reject) => {
+              timeout = window.setTimeout(() => {
+                reject(
+                  new Error(
+                    "Orion paused this page after 180 seconds without a response.",
+                  ),
+                );
+              }, GENERATE_TIMEOUT_MS);
+            }),
+          ]);
+          if (timeout !== undefined) window.clearTimeout(timeout);
+          if (!generateRequests.current.owns(requestKey, jobId)) return;
+          if (snapshotRef.current.workspace.id !== job.workspaceId) return;
+          let body = normalizeAIWritingReply(result.reply);
+          const wantsPlates =
+            (input.kind === "slide-deck" ||
+              input.kind === "slide-deck-narrated") &&
+            snapshotWithNote.settings.apiKeyConfigured;
+          if (wantsPlates) {
+            patchJob({ stage: "illustrating", progress: 62 });
+            const pendingSlides = parseDeckSlides(body)
+              .map((slide, index) => ({ slide, index }))
+              .filter(({ slide }) => !slide.imageSrc)
+              .slice(0, MAX_DECK_SLIDE_IMAGES);
+            const illustrated = await runPresentationWaves({
+              jobs: pendingSlides.map(({ slide, index }) => ({
+                id: `slide-${index}`,
+                kind: "image" as const,
+                heading: slide.title,
+                index,
+                bullets: slide.bullets,
+                brief: slide.visualBrief ?? "",
+              })),
+              execute: async (imageJob) => {
+                const prompt = buildSlideImagePrompt({
+                  deckTitle: title,
+                  slideTitle: imageJob.heading,
+                  bullets: imageJob.bullets,
+                  visualBrief: imageJob.brief,
+                });
+                const image = await generateNoteImage(prompt.prompt);
+                const bytes = Uint8Array.from(atob(image.base64Data), (ch) =>
+                  ch.charCodeAt(0),
+                );
+                const file = new File(
+                  [bytes],
+                  `${imageJob.heading.replace(/[^a-z0-9]+/gi, "-").slice(0, 40) || "slide"}.jpg`,
+                  { type: "image/jpeg" },
+                );
+                const saved = await saveNoteImage(
+                  file,
+                  `image_${nanoid(16)}`,
+                );
+                return { index: imageJob.index, saved, alt: prompt.alt };
+              },
+            });
+            const plates = [...illustrated.results].sort(
+              (left, right) => left.result.index - right.result.index,
+            );
+            for (const { result: plate } of plates) {
+              body = insertImageForSlide(
+                body,
+                plate.index,
+                `![${plate.alt}](${plate.saved.src})`,
+              );
+            }
+          }
+          if (!generateRequests.current.owns(requestKey, jobId)) return;
+          const finishedAt = new Date().toISOString();
+          setSnapshot((current) => ({
+            ...current,
+            notes: current.notes.map((candidate) =>
+              candidate.id === noteId
+                ? {
+                    ...candidate,
+                    body,
+                    summary: candidate.summary,
+                    tags: [
+                      ...new Set([
+                        ...candidate.tags.filter(
+                          (tag) => tag !== "orion-generate-pending",
+                        ),
+                        ...(input.kind === "slide-deck" ||
+                        input.kind === "slide-deck-narrated"
+                          ? [SLIDE_DECK_TAG]
+                          : []),
+                      ]),
+                    ],
+                    updatedAt: finishedAt,
+                  }
+                : candidate,
+            ),
+            updatedAt: finishedAt,
+          }));
+          patchJob({ stage: "complete", progress: 100 });
+          window.setTimeout(() => {
+            setGenerateJobs((current) =>
+              current.filter((candidate) => candidate.id !== jobId),
+            );
+          }, 2_400);
+        } catch (error) {
+          if (timeout !== undefined) window.clearTimeout(timeout);
+          if (!generateRequests.current.owns(requestKey, jobId)) return;
+          patchJob({
+            stage: "error",
+            progress: 100,
+            error:
+              error instanceof Error ? error.message : String(error),
+          });
+        } finally {
+          generateRequests.current.finish(requestKey, jobId);
+        }
+      })();
+    },
+    [openNote],
+  );
+
+  const restartGenerate = useCallback(
+    (job: GenerateJob) => {
+      generateRequests.current.cancel(`${job.workspaceId}:${job.noteId}`);
+      setGenerateJobs((current) =>
+        current.filter((candidate) => candidate.id !== job.id),
+      );
+      const now = new Date().toISOString();
+      setSnapshot((current) => {
+        if (current.workspace.id !== job.workspaceId) return current;
+        return deleteNoteFromSnapshot(current, job.noteId, now).snapshot;
+      });
+      startGenerate({ kind: job.kind, instruction: job.instruction });
+    },
+    [startGenerate],
+  );
+
+  const deleteGenerate = useCallback(
+    (job: GenerateJob) => {
+      generateRequests.current.cancel(`${job.workspaceId}:${job.noteId}`);
+      setGenerateJobs((current) =>
+        current.filter((candidate) => candidate.id !== job.id),
+      );
+      const now = new Date().toISOString();
+      setSnapshot((current) => {
+        if (current.workspace.id !== job.workspaceId) return current;
+        return deleteNoteFromSnapshot(current, job.noteId, now).snapshot;
+      });
+    },
+    [],
+  );
 
   const updateNote = useCallback((nextNote: Note) => {
     const normalized: Note = {
@@ -2790,6 +3060,167 @@ function App() {
     });
   }
 
+  async function handleSaveElevenLabsKey(apiKey: string) {
+    await saveElevenLabsApiKey(apiKey);
+    updateSettings({
+      ...snapshot.settings,
+      elevenLabsApiKeyConfigured: true,
+      speechVoice: "elevenlabs",
+    });
+  }
+
+  async function handleDeleteElevenLabsKey() {
+    await deleteElevenLabsApiKey();
+    updateSettings({
+      ...snapshot.settings,
+      elevenLabsApiKeyConfigured: false,
+    });
+  }
+
+  function acquireSpeechPlaybackContext(): AudioContext {
+    const existing = speechPlaybackContext.current;
+    if (existing && existing.state !== "closed") {
+      if (existing.state === "suspended") void existing.resume();
+      return existing;
+    }
+    const created = openSpeechPlaybackContext();
+    if (!created) {
+      throw new Error("This environment cannot play spoken notes.");
+    }
+    speechPlaybackContext.current = created;
+    return created;
+  }
+
+  function cloudSpeechKey(
+    engine: "openai" | "elevenlabs",
+    text: string,
+  ): string {
+    const voiceId =
+      engine === "elevenlabs"
+        ? resolveElevenLabsVoiceId(snapshot.settings)
+        : "";
+    return cloudSpeechCacheKey(engine, text, voiceId);
+  }
+
+  async function loadCloudSpeechChunks(
+    text: string,
+    signal?: AbortSignal,
+  ): Promise<GeneratedSpeech[]> {
+    const engine = resolveSpeechEngine(snapshot.settings);
+    if (engine === "system") return [];
+    if (engine === "elevenlabs" && !snapshot.settings.elevenLabsApiKeyConfigured) {
+      throw new Error(
+        "Add an ElevenLabs API key in Settings before listening with ElevenLabs.",
+      );
+    }
+    if (engine === "openai" && !snapshot.settings.apiKeyConfigured) {
+      throw new Error(
+        "Add an OpenAI API key in Settings before listening with OpenAI.",
+      );
+    }
+    const voiceId =
+      engine === "elevenlabs"
+        ? resolveElevenLabsVoiceId(snapshot.settings)
+        : undefined;
+    return preparedSpeech.current.set(cloudSpeechKey(engine, text), async () => {
+      const parts = chunkSpeechText(text, speechChunkLimit(engine));
+      const spoken: GeneratedSpeech[] = [];
+      for (const chunk of parts) {
+        if (signal?.aborted) {
+          throw signal.reason ?? new Error("Reading was cancelled.");
+        }
+        spoken.push(await generateSpeech(engine, chunk, voiceId));
+      }
+      return spoken;
+    });
+  }
+
+  async function prepareSpeech(
+    text: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const engine = resolveSpeechEngine(snapshot.settings);
+    if (engine === "system") return;
+    await loadCloudSpeechChunks(text, signal);
+  }
+
+  async function speakNoteText(
+    text: string,
+    signal?: AbortSignal,
+    onProgress?: (progress: SpeechPlaybackProgress) => void,
+  ): Promise<void> {
+    const engine = resolveSpeechEngine(snapshot.settings);
+    if (engine === "elevenlabs" && !snapshot.settings.elevenLabsApiKeyConfigured) {
+      throw new Error(
+        "Add an ElevenLabs API key in Settings before listening with ElevenLabs.",
+      );
+    }
+    if (engine === "openai" && !snapshot.settings.apiKeyConfigured) {
+      throw new Error(
+        "Add an OpenAI API key in Settings before listening with OpenAI.",
+      );
+    }
+    if (engine === "system") {
+      await speakWithSystemVoice(text, signal, onProgress);
+      return;
+    }
+    const alreadyQueued = preparedSpeech.current.has(
+      cloudSpeechKey(engine, text),
+    );
+    if (!alreadyQueued) {
+      onProgress?.({
+        elapsedSeconds: 0,
+        durationSeconds: 0,
+        ratio: 0,
+        loading: true,
+      });
+    }
+    const chunks = await loadCloudSpeechChunks(text, signal);
+    if (signal?.aborted) {
+      throw signal.reason ?? new Error("Reading was cancelled.");
+    }
+    const playback = acquireSpeechPlaybackContext();
+    const textChunks = chunkSpeechText(text, speechChunkLimit(engine));
+    const charTotal = Math.max(
+      1,
+      textChunks.reduce((sum, chunk) => sum + chunk.length, 0),
+    );
+    let charsCompleted = 0;
+    let elapsedBefore = 0;
+    for (const [index, spoken] of chunks.entries()) {
+      if (signal?.aborted) {
+        throw signal.reason ?? new Error("Reading was cancelled.");
+      }
+      const chunkChars = textChunks[index]?.length ?? 1;
+      let chunkDuration = 0;
+      await playDecodedSpeech(
+        playback,
+        decodeBase64Audio(spoken.base64Data),
+        signal,
+        (localElapsed, localDuration) => {
+          chunkDuration = localDuration;
+          const safeDuration = Math.max(localDuration, 0.001);
+          const charsInChunk =
+            chunkChars * Math.min(1, localElapsed / safeDuration);
+          const ratio = Math.min(
+            1,
+            (charsCompleted + charsInChunk) / charTotal,
+          );
+          const elapsed = elapsedBefore + localElapsed;
+          onProgress?.({
+            elapsedSeconds: elapsed,
+            durationSeconds:
+              ratio > 0.02 ? elapsed / ratio : elapsedBefore + localDuration,
+            ratio,
+            loading: false,
+          });
+        },
+      );
+      charsCompleted += chunkChars;
+      elapsedBefore += chunkDuration;
+    }
+  }
+
   function eraseCurrentSpace() {
     if (
       !window.confirm(
@@ -2851,6 +3282,8 @@ function App() {
           aiArticleWritingEnabled={isSelectedAIConfigured(snapshot.settings)}
           aiImageGenerationEnabled={snapshot.settings.apiKeyConfigured}
           aiProviderName={selectedAIProviderName(snapshot.settings)}
+          onSpeakNote={speakNoteText}
+          onPrepareSpeech={prepareSpeech}
         />
       );
     }
@@ -2897,6 +3330,9 @@ function App() {
           onSaveAnthropicApiKey={handleSaveAnthropicKey}
           onDeleteAnthropicApiKey={handleDeleteAnthropicKey}
           onTestAnthropicApiKey={testAnthropicKey}
+          onSaveElevenLabsApiKey={handleSaveElevenLabsKey}
+          onDeleteElevenLabsApiKey={handleDeleteElevenLabsKey}
+          onTestElevenLabsApiKey={testElevenLabsKey}
           onOpenDataLocation={() => {
             void openDataDirectory().catch((error) =>
               showToast(
@@ -2928,9 +3364,13 @@ function App() {
     );
   }
 
-  const shellClassName = connectionConcept
-    ? "app-shell with-context with-connection-canvas"
-    : "app-shell";
+  const shellClassName = [
+    "app-shell",
+    connectionConcept ? "with-context with-connection-canvas" : "",
+    snapshot.settings.sidebarCollapsed ? "is-sidebar-collapsed" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <div className={shellClassName}>
@@ -2943,6 +3383,13 @@ function App() {
         linkedArticleJobs={linkedArticleJobs.filter(
           (job) => job.workspaceId === snapshot.workspace.id,
         )}
+        generateEnabled={isSelectedAIConfigured(snapshot.settings)}
+        generateJobs={generateJobs.filter(
+          (job) => job.workspaceId === snapshot.workspace.id,
+        )}
+        onGenerate={startGenerate}
+        onRestartGenerate={restartGenerate}
+        onDeleteGenerate={deleteGenerate}
         onViewChange={openView}
         onOpenNote={openNote}
         onDeleteNote={deleteNote}
@@ -2952,6 +3399,13 @@ function App() {
         onSwitchSpace={switchSpace}
         onRestartLinkedArticle={restartLinkedArticle}
         onDeleteLinkedArticle={deletePausedLinkedArticle}
+        collapsed={snapshot.settings.sidebarCollapsed}
+        onToggleCollapsed={() =>
+          updateSettings({
+            ...snapshot.settings,
+            sidebarCollapsed: !snapshot.settings.sidebarCollapsed,
+          })
+        }
       />
       <div className="workspace-shell">
         <Topbar

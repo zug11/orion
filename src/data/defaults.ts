@@ -4,7 +4,9 @@ import type {
   HomeAtmosphereMotion,
   HomeAtmosphereTone,
   OrionVault,
+  SavedElevenLabsVoice,
   Settings,
+  SpeechVoice,
   ThemeAccent,
   ThemeCanvasTone,
   ThemeContrast,
@@ -19,6 +21,11 @@ export const defaultSettings: Settings = {
   reasoningEffort: "low",
   apiKeyConfigured: false,
   anthropicApiKeyConfigured: false,
+  elevenLabsApiKeyConfigured: false,
+  elevenLabsVoiceId: "",
+  elevenLabsVoices: [],
+  speechVoice: "system",
+  sidebarCollapsed: false,
   providerFailoverEnabled: false,
   autoLink: true,
   showHoverPreviews: true,
@@ -40,6 +47,60 @@ export const defaultSettings: Settings = {
   homeAtmosphereTone: "signature",
   homeAtmosphereMotion: "calm",
 };
+
+export function normalizeSpeechVoice(value: unknown): SpeechVoice {
+  if (value === "system" || value === "openai" || value === "elevenlabs") {
+    return value;
+  }
+  return defaultSettings.speechVoice;
+}
+
+const ELEVENLABS_VOICE_ID = /^[A-Za-z0-9]{8,40}$/;
+
+export function normalizeElevenLabsVoiceId(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  return ELEVENLABS_VOICE_ID.test(trimmed) ? trimmed : "";
+}
+
+export const MAX_VOICE_NAME_LENGTH = 80;
+
+export function isSavedElevenLabsVoice(
+  value: unknown,
+): value is SavedElevenLabsVoice {
+  if (!value || typeof value !== "object") return false;
+  const voice = value as Partial<SavedElevenLabsVoice>;
+  return (
+    typeof voice.name === "string" &&
+    voice.name.trim().length > 0 &&
+    voice.name.length <= MAX_VOICE_NAME_LENGTH &&
+    !/[\u0000-\u001f\u007f]/.test(voice.name) &&
+    typeof voice.voiceId === "string" &&
+    voice.voiceId === voice.voiceId.trim() &&
+    ELEVENLABS_VOICE_ID.test(voice.voiceId)
+  );
+}
+
+export function normalizeElevenLabsVoices(
+  value: unknown,
+  currentVoiceId?: unknown,
+): SavedElevenLabsVoice[] {
+  const voices: SavedElevenLabsVoice[] = [];
+  const seen = new Set<string>();
+  if (Array.isArray(value)) {
+    for (const voice of value) {
+      if (!isSavedElevenLabsVoice(voice) || seen.has(voice.voiceId)) continue;
+      voices.push({ name: voice.name.trim(), voiceId: voice.voiceId });
+      seen.add(voice.voiceId);
+    }
+  }
+  // Keep a previously pasted voice selectable when upgrading an older vault.
+  const current = normalizeElevenLabsVoiceId(currentVoiceId);
+  if (current && !seen.has(current)) {
+    voices.unshift({ name: "Saved voice", voiceId: current });
+  }
+  return voices;
+}
 
 export function normalizeThemePreset(value: unknown): ThemePreset {
   if (

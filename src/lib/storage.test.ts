@@ -800,6 +800,42 @@ describe("browser persistence fallback", () => {
     });
   });
 
+  it("round-trips named voices and the active selection", async () => {
+    const vault = createEmptyVault("Voice preferences", TEST_NOW);
+    const settings = activeSpace(vault).settings;
+    settings.elevenLabsVoices = [
+      { name: "Everyday reading", voiceId: "21m00Tcm4TlvDq8ikWAM" },
+      { name: "Storyteller", voiceId: "JBFqnCBsd6RMkjVDRZzb" },
+    ];
+    settings.elevenLabsVoiceId = settings.elevenLabsVoices[1].voiceId;
+    await saveSnapshot(vault);
+    const loaded = await loadSnapshot();
+    expect(activeSpace(loaded!).settings).toEqual(settings);
+  });
+
+  it("accepts older settings without saved voices", async () => {
+    const legacy = mutablePopulatedSnapshot();
+    delete legacy.settings.elevenLabsVoices;
+    legacy.settings.elevenLabsVoiceId = "21m00Tcm4TlvDq8ikWAM";
+    window.localStorage.setItem("orion:vault:v1", JSON.stringify(legacy));
+    const loaded = await loadSnapshot();
+    expect(activeSpace(loaded!).settings.elevenLabsVoiceId).toBe("21m00Tcm4TlvDq8ikWAM");
+  });
+
+  it.each([
+    "not a list",
+    [null],
+    [{ name: "Reading", voiceId: "../voice" }],
+    [{ name: "Reading", voiceId: "21m00Tcm4TlvDq8ikWAM\n" }],
+    [{ name: "  ", voiceId: "21m00Tcm4TlvDq8ikWAM" }],
+    [{ name: "A".repeat(81), voiceId: "21m00Tcm4TlvDq8ikWAM" }],
+    [{ name: "Hidden\u0000name", voiceId: "21m00Tcm4TlvDq8ikWAM" }],
+  ].map((voices) => [voices]))("rejects malformed saved voices (%j) without clearing the vault", async (voices) => {
+    const snapshot = mutablePopulatedSnapshot();
+    snapshot.settings.elevenLabsVoices = voices;
+    await expectInvalidBrowserVault(snapshot);
+  });
+
   it("round-trips a fully populated import draft", async () => {
     const vault = createEmptyVault("Test vault", TEST_NOW);
     const snapshot = activeSpace(vault);

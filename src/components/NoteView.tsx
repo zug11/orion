@@ -5,6 +5,8 @@ import {
   CircleDot,
   Edit3,
   Link2,
+  Pause,
+  Play,
   Quote,
   Search,
   Trash2,
@@ -45,11 +47,27 @@ import {
   extractNoteOutline,
   resolveActiveOutlineHeading,
 } from "../lib/noteOutline";
+import {
+  dwellSpeech,
+  formatSpeechClock,
+  speakableNoteText,
+  type SpeechPlaybackProgress,
+} from "../lib/speech";
 import { canonicalizeSourceCitations } from "../lib/sourceCitations";
 import { decorateAutoLinks } from "../lib/wiki";
 import type { Concept, Note, Source } from "../types";
+import { isGeneratePlaceholder } from "../lib/generate";
+import {
+  buildDeckPlaybackCues,
+  cueIndexAtElapsed,
+  deckPlaybackDuration,
+  isSlideDeckNote,
+  parseDeckSlides,
+  upcomingDeckSpeechTexts,
+} from "../lib/slideDeck";
 import { FavoriteMark } from "./icons/FavoriteMark";
 import { NoteOutline } from "./NoteOutline";
+import { SlideDeckView } from "./SlideDeckView";
 import { SourceReferences } from "./SourceReferences";
 
 const RichNoteEditor = lazy(() =>
@@ -81,6 +99,12 @@ interface NoteViewProps {
     input: Omit<AIImageRequestInput, "originNoteId">,
     signal: AbortSignal,
   ) => Promise<AIImageProposal>;
+  onSpeakNote?: (
+    text: string,
+    signal?: AbortSignal,
+    onProgress?: (progress: SpeechPlaybackProgress) => void,
+  ) => Promise<void>;
+  onPrepareSpeech?: (text: string, signal?: AbortSignal) => Promise<void>;
   onDisableConceptAutoLink: (conceptId: string) => void;
   aiArticleWritingEnabled?: boolean;
   aiImageGenerationEnabled?: boolean;
@@ -117,6 +141,8 @@ export function NoteView({
   onGenerateLinkTitle,
   onGenerateAIWriting,
   onGenerateAIImage,
+  onSpeakNote,
+  onPrepareSpeech,
   onDisableConceptAutoLink,
   aiArticleWritingEnabled = false,
   aiImageGenerationEnabled = false,
@@ -129,6 +155,13 @@ export function NoteView({
   const [findResultCount, setFindResultCount] = useState(0);
   const [activeFindIndex, setActiveFindIndex] = useState(0);
   const [findRevision, setFindRevision] = useState(0);
+  const [listening, setListening] = useState(false);
+  const [listenError, setListenError] = useState<string | null>(null);
+  const [listenProgress, setListenProgress] =
+    useState<SpeechPlaybackProgress | null>(null);
+  const [deckIndex, setDeckIndex] = useState(0);
+  const listenAbortRef = useRef<AbortController | null>(null);
+  const playGenerationRef = useRef(0);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
   const editButtonRef = useRef<HTMLButtonElement>(null);
   const findButtonRef = useRef<HTMLButtonElement>(null);
@@ -164,7 +197,34 @@ export function NoteView({
     () => extractNoteOutline(visibleMarkdown),
     [visibleMarkdown],
   );
-  const showOutline = !editing && outlineHeadings.length > 0;
+  const deckSlides = useMemo(
+    () => parseDeckSlides(visibleMarkdown),
+    [visibleMarkdown],
+  );
+  const deckCues = useMemo(
+    () => buildDeckPlaybackCues(deckSlides),
+    [deckSlides],
+  );
+  const showSlideshow =
+    !editing &&
+    isSlideDeckNote(note) &&
+    !isGeneratePlaceholder(note) &&
+    deckSlides.length > 0;
+  const showPlayhead = listening || (showSlideshow && Boolean(onSpeakNote));
+  const idleDeckProgress = useMemo((): SpeechPlaybackProgress | null => {
+    if (!showSlideshow || listening) return null;
+    const durationSeconds = deckPlaybackDuration(deckCues);
+    const startSeconds = deckCues[deckIndex]?.startSeconds ?? 0;
+    return {
+      elapsedSeconds: startSeconds,
+      durationSeconds,
+      ratio: durationSeconds > 0 ? startSeconds / durationSeconds : 0,
+      loading: false,
+    };
+  }, [deckCues, deckIndex, listening, showSlideshow]);
+  const playheadProgress = listening ? listenProgress : idleDeckProgress;
+  const showOutline =
+    !editing && !showSlideshow && outlineHeadings.length > 0;
   const headingIdByLine = useMemo(
     () => new Map(outlineHeadings.map((heading) => [heading.line, heading.id])),
     [outlineHeadings],
@@ -289,9 +349,199 @@ export function NoteView({
       if (savedPulseTimerRef.current !== null) {
         window.clearTimeout(savedPulseTimerRef.current);
       }
+      playGenerationRef.current += 1;
+      listenAbortRef.current?.abort();
+      globalThis.speechSynthesis?.cancel();
     },
     [],
   );
+
+  useEffect(() => {
+    playGenerationRef.current += 1;
+    listenAbortRef.current?.abort();
+    listenAbortRef.current = null;
+    globalThis.speechSynthesis?.cancel();
+    setListening(false);
+    setListenProgress(null);
+    setListenError(null);
+    setDeckIndex(0);
+  }, [note.id]);
+
+  function stopPlayback(options?: { keepProgress?: boolean }) {
+    playGenerationRef.current += 1;
+    listenAbortRef.current?.abort();
+    listenAbortRef.current = null;
+    globalThis.speechSynthesis?.cancel();
+    setListening(false);
+    if (!options?.keepProgress) {
+      setListenProgress(null);
+    }
+  }
+
+  function startDeckPlayback(from: number) {
+    if (!onSpeakNote) return;
+    const cues = buildDeckPlaybackCues(deckSlides);
+    if (cues.length === 0) {
+      setListenError("This deck has nothing to play yet.");
+      return;
+    }
+    stopPlayback({ keepProgress: true });
+    const generation = playGenerationRef.current;
+    const controller = new AbortController();
+    listenAbortRef.current = controller;
+    const startAt = Math.min(Math.max(0, from), cues.length - 1);
+    setListenError(null);
+    setListening(true);
+    setDeckIndex(startAt);
+    const total = deckPlaybackDuration(cues);
+    setListenProgress({
+      elapsedSeconds: cues[startAt]?.startSeconds ?? 0,
+      durationSeconds: total,
+      ratio: total > 0 ? (cues[startAt]?.startSeconds ?? 0) / total : 0,
+      loading: true,
+    });
+    const prefetchUpcoming = (fromIndex: number) => {
+      if (!onPrepareSpeech) return;
+      for (const text of upcomingDeckSpeechTexts(cues, fromIndex)) {
+        void onPrepareSpeech(text, controller.signal).catch(() => undefined);
+      }
+    };
+    prefetchUpcoming(startAt);
+    void (async () => {
+      try {
+        for (let index = startAt; index < cues.length; index += 1) {
+          if (
+            controller.signal.aborted ||
+            playGenerationRef.current !== generation
+          ) {
+            return;
+          }
+          setDeckIndex(index);
+          prefetchUpcoming(index + 1);
+          const cue = cues[index];
+          const reportProgress = (progress: SpeechPlaybackProgress) => {
+            if (playGenerationRef.current !== generation) return;
+            const durationSeconds =
+              cue.startSeconds +
+              (progress.durationSeconds || cue.durationSeconds) +
+              cues
+                .slice(index + 1)
+                .reduce((sum, item) => sum + item.durationSeconds, 0);
+            const elapsedSeconds = cue.startSeconds + progress.elapsedSeconds;
+            setListenProgress({
+              elapsedSeconds,
+              durationSeconds,
+              ratio:
+                durationSeconds > 0
+                  ? Math.min(1, elapsedSeconds / durationSeconds)
+                  : 0,
+              loading: progress.loading,
+            });
+          };
+          if (!cue.text.trim()) {
+            await dwellSpeech(
+              cue.durationSeconds,
+              controller.signal,
+              reportProgress,
+            );
+            continue;
+          }
+          await onSpeakNote(cue.text, controller.signal, reportProgress);
+        }
+        if (playGenerationRef.current !== generation) return;
+        listenAbortRef.current = null;
+        setListening(false);
+        setListenProgress({
+          elapsedSeconds: total,
+          durationSeconds: total,
+          ratio: 1,
+          loading: false,
+        });
+      } catch (error) {
+        if (
+          controller.signal.aborted ||
+          playGenerationRef.current !== generation
+        ) {
+          return;
+        }
+        listenAbortRef.current = null;
+        setListening(false);
+        setListenError(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    })();
+  }
+
+  function changeDeckIndex(next: number) {
+    const clamped = Math.min(
+      Math.max(0, next),
+      Math.max(0, deckSlides.length - 1),
+    );
+    setDeckIndex(clamped);
+    if (listening) startDeckPlayback(clamped);
+  }
+
+  function seekDeckPlayback(ratio: number) {
+    const duration = deckPlaybackDuration(deckCues);
+    if (duration <= 0 || deckCues.length === 0) return;
+    const next = cueIndexAtElapsed(
+      deckCues,
+      Math.min(1, Math.max(0, ratio)) * duration,
+    );
+    if (listening) startDeckPlayback(next);
+    else setDeckIndex(next);
+  }
+
+  async function togglePlayback() {
+    if (listening) {
+      stopPlayback({ keepProgress: showSlideshow });
+      return;
+    }
+    if (!onSpeakNote) return;
+    if (showSlideshow) {
+      const atEnd =
+        deckIndex >= deckSlides.length - 1 &&
+        (listenProgress?.ratio ?? idleDeckProgress?.ratio ?? 0) >= 0.98;
+      startDeckPlayback(atEnd ? 0 : deckIndex);
+      return;
+    }
+    const spoken = speakableNoteText(note);
+    if (!spoken) {
+      setListenError("This note has nothing to play.");
+      return;
+    }
+    stopPlayback();
+    const generation = playGenerationRef.current;
+    const controller = new AbortController();
+    listenAbortRef.current = controller;
+    setListenError(null);
+    setListening(true);
+    setListenProgress({
+      elapsedSeconds: 0,
+      durationSeconds: 0,
+      ratio: 0,
+      loading: true,
+    });
+    try {
+      await onSpeakNote(spoken, controller.signal, setListenProgress);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setListenError(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    } finally {
+      if (
+        listenAbortRef.current === controller &&
+        playGenerationRef.current === generation
+      ) {
+        listenAbortRef.current = null;
+        setListening(false);
+        setListenProgress(null);
+      }
+    }
+  }
 
   function update(patch: Partial<Note>) {
     if (editing) {
@@ -681,7 +931,7 @@ export function NoteView({
   return (
     <article
       ref={findScopeRef}
-      className={`note-view${editing ? " is-editing" : ""}${showOutline ? " has-outline" : ""}${findOpen ? " has-find" : ""}`}
+      className={`note-view${editing ? " is-editing" : ""}${showOutline ? " has-outline" : ""}${findOpen ? " has-find" : ""}${showPlayhead ? " is-listening" : ""}`}
     >
       {showOutline && (
         <NoteOutline
@@ -712,6 +962,36 @@ export function NoteView({
               <Check size={12} />
               {savedPulse ? "Queued" : "Autosave"}
             </span>
+            {onSpeakNote ? (
+              <button
+                type="button"
+                className={listening ? "icon-button active" : "icon-button"}
+                aria-label={
+                  listening
+                    ? showSlideshow
+                      ? "Pause slideshow"
+                      : "Pause"
+                    : showSlideshow
+                      ? "Play slideshow"
+                      : "Play note"
+                }
+                aria-pressed={listening}
+                title={
+                  listening
+                    ? showSlideshow
+                      ? "Pause slideshow"
+                      : "Pause"
+                    : showSlideshow
+                      ? "Play slideshow"
+                      : "Play this note"
+                }
+                onClick={() => {
+                  void togglePlayback();
+                }}
+              >
+                {listening ? <Pause size={16} /> : <Play size={16} fill="currentColor" />}
+              </button>
+            ) : null}
             <button
               ref={findButtonRef}
               type="button"
@@ -788,6 +1068,9 @@ export function NoteView({
               <Link2 size={12} />
               {note.sourceIds.length} sources
             </span>
+            {listenError ? (
+              <span role="status">{listenError}</span>
+            ) : null}
           </div>
         </div>
         </header>
@@ -897,6 +1180,15 @@ export function NoteView({
               }
             />
           </Suspense>
+        ) : showSlideshow ? (
+          <SlideDeckView
+            title={note.title}
+            slides={deckSlides}
+            index={deckIndex}
+            onIndexChange={changeDeckIndex}
+            playing={listening}
+            onTogglePlay={onSpeakNote ? () => void togglePlayback() : undefined}
+          />
         ) : (
           <div className="note-prose">
             <ReactMarkdown
@@ -930,6 +1222,82 @@ export function NoteView({
           </span>
         </footer>
       </div>
+      {showPlayhead ? (
+        <div
+          className="note-listen-playhead"
+          role="status"
+          aria-live="polite"
+          aria-label="Playback playhead"
+          data-testid="note-listen-playhead"
+        >
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={listening ? "Pause" : "Play"}
+            title={listening ? "Pause" : "Play"}
+            onClick={() => {
+              void togglePlayback();
+            }}
+          >
+            {listening ? <Pause size={13} /> : <Play size={13} fill="currentColor" />}
+          </button>
+          <span className="note-listen-playhead__time">
+            {formatSpeechClock(playheadProgress?.elapsedSeconds ?? 0)}
+          </span>
+          <div
+            className="note-listen-playhead__track"
+            role="progressbar"
+            aria-label="Playback progress"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round((playheadProgress?.ratio ?? 0) * 100)}
+            data-loading={playheadProgress?.loading ? "true" : "false"}
+            data-seekable={showSlideshow ? "true" : "false"}
+            onClick={
+              showSlideshow
+                ? (event) => {
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    if (rect.width <= 0) return;
+                    seekDeckPlayback(
+                      (event.clientX - rect.left) / rect.width,
+                    );
+                  }
+                : undefined
+            }
+          >
+            <i
+              style={{
+                width: `${Math.min(100, Math.max(0, (playheadProgress?.ratio ?? 0) * 100))}%`,
+              }}
+            />
+            {showSlideshow
+              ? deckCues.slice(1).map((cue) => {
+                  const duration = deckPlaybackDuration(deckCues);
+                  if (duration <= 0) return null;
+                  return (
+                    <span
+                      key={cue.index}
+                      className="note-listen-playhead__marker"
+                      style={{
+                        left: `${(cue.startSeconds / duration) * 100}%`,
+                      }}
+                    />
+                  );
+                })
+              : null}
+            <b
+              style={{
+                left: `${Math.min(100, Math.max(0, (playheadProgress?.ratio ?? 0) * 100))}%`,
+              }}
+            />
+          </div>
+          <span className="note-listen-playhead__time">
+            {playheadProgress?.loading
+              ? "…"
+              : formatSpeechClock(playheadProgress?.durationSeconds ?? 0)}
+          </span>
+        </div>
+      ) : null}
     </article>
   );
 }

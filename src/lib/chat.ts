@@ -308,6 +308,7 @@ const RESERVED_CHAT_NOTE_TAGS = new Set([
   "wiki-article",
   "orion-link-draft",
   "orion-link-pending",
+  "orion-generate-pending",
 ]);
 
 function hasUnsafeChatNoteText(value: string): boolean {

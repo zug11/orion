@@ -40,6 +40,12 @@ describe("SettingsView appearance", () => {
           valid: true,
           message: "Connected.",
         }))}
+        onSaveElevenLabsApiKey={vi.fn(async () => undefined)}
+        onDeleteElevenLabsApiKey={vi.fn(async () => undefined)}
+        onTestElevenLabsApiKey={vi.fn(async () => ({
+          valid: true,
+          message: "Connected.",
+        }))}
         onOpenDataLocation={vi.fn()}
         onEraseVault={vi.fn()}
       />,
@@ -113,6 +119,12 @@ describe("SettingsView appearance", () => {
           valid: true,
           message: "Connected.",
         }))}
+        onSaveElevenLabsApiKey={vi.fn(async () => undefined)}
+        onDeleteElevenLabsApiKey={vi.fn(async () => undefined)}
+        onTestElevenLabsApiKey={vi.fn(async () => ({
+          valid: true,
+          message: "Connected.",
+        }))}
         onOpenDataLocation={vi.fn()}
         onEraseVault={vi.fn()}
       />,
@@ -180,6 +192,12 @@ describe("SettingsView appearance", () => {
           valid: true,
           message: "Connected.",
         }))}
+        onSaveElevenLabsApiKey={vi.fn(async () => undefined)}
+        onDeleteElevenLabsApiKey={vi.fn(async () => undefined)}
+        onTestElevenLabsApiKey={vi.fn(async () => ({
+          valid: true,
+          message: "Connected.",
+        }))}
         onOpenDataLocation={vi.fn()}
         onEraseVault={vi.fn()}
       />,
@@ -241,6 +259,12 @@ describe("SettingsView appearance", () => {
           valid: true,
           message: "Connected.",
         }))}
+        onSaveElevenLabsApiKey={vi.fn(async () => undefined)}
+        onDeleteElevenLabsApiKey={vi.fn(async () => undefined)}
+        onTestElevenLabsApiKey={vi.fn(async () => ({
+          valid: true,
+          message: "Connected.",
+        }))}
         onOpenDataLocation={vi.fn()}
         onEraseVault={vi.fn()}
       />,
@@ -290,6 +314,12 @@ describe("SettingsView appearance", () => {
         onSaveAnthropicApiKey={vi.fn(async () => undefined)}
         onDeleteAnthropicApiKey={vi.fn(async () => undefined)}
         onTestAnthropicApiKey={vi.fn(async () => ({
+          valid: true,
+          message: "Connected.",
+        }))}
+        onSaveElevenLabsApiKey={vi.fn(async () => undefined)}
+        onDeleteElevenLabsApiKey={vi.fn(async () => undefined)}
+        onTestElevenLabsApiKey={vi.fn(async () => ({
           valid: true,
           message: "Connected.",
         }))}

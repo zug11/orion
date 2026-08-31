@@ -722,4 +722,354 @@ describe("NoteView", () => {
     );
     expect(onOpenSource).toHaveBeenCalledWith(source.id);
   });
+
+  it("presents a tagged slide deck as a slideshow instead of note prose", () => {
+    const note: Note = {
+      id: "note-deck",
+      title: "Space briefing",
+      slug: "space-briefing",
+      summary: "A deck.",
+      body: "## Thesis\n\n- Host owns the graph\n- Six calls at a time\n\nImage: glass planes\n\n> Hidden narration.\n",
+      aliases: [],
+      tags: ["orion-slide-deck"],
+      kind: "article",
+      status: "ready",
+      conceptIds: [],
+      sourceIds: [],
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+
+    render(
+      <NoteView
+        note={note}
+        notes={[note]}
+        concepts={[]}
+        onOpenNote={vi.fn()}
+        onOpenConcept={vi.fn()}
+        onUpdateNote={vi.fn()}
+        onDeleteNote={vi.fn()}
+        onRegisterConcept={vi.fn()}
+        onDisableConceptAutoLink={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("slide-deck-view")).toBeVisible();
+    expect(
+      screen.queryByRole("heading", { name: "Thesis" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Host owns the graph")).not.toBeInTheDocument();
+    expect(screen.queryByText("Image: glass planes")).not.toBeInTheDocument();
+    expect(screen.queryByText("Hidden narration.")).not.toBeInTheDocument();
+  });
+
+  it("shows a generated slide image without overlay copy or speaker notes", () => {
+    const note: Note = {
+      id: "note-deck-image",
+      title: "Space briefing",
+      slug: "space-briefing",
+      summary: "A deck.",
+      body: `## Thesis
+
+- Host owns the graph
+- Six calls at a time
+
+Image: glass planes
+
+![Thesis](orion-image://localhost/image_abc123456789)
+
+> Hidden narration.
+`,
+      aliases: [],
+      tags: ["orion-slide-deck"],
+      kind: "article",
+      status: "ready",
+      conceptIds: [],
+      sourceIds: [],
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+
+    render(
+      <NoteView
+        note={note}
+        notes={[note]}
+        concepts={[]}
+        onOpenNote={vi.fn()}
+        onOpenConcept={vi.fn()}
+        onUpdateNote={vi.fn()}
+        onDeleteNote={vi.fn()}
+        onRegisterConcept={vi.fn()}
+        onDisableConceptAutoLink={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("img", { name: "Thesis" })).toHaveAttribute(
+      "src",
+      "orion-image://localhost/image_abc123456789",
+    );
+    expect(
+      screen.queryByRole("heading", { name: "Thesis" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Host owns the graph")).not.toBeInTheDocument();
+    expect(screen.queryByText("Hidden narration.")).not.toBeInTheDocument();
+  });
+
+  it("keeps upcoming slide images mounted so playback does not reload plates", () => {
+    const note: Note = {
+      id: "note-deck-stack",
+      title: "Space briefing",
+      slug: "space-briefing",
+      summary: "A deck.",
+      body: `## Thesis
+
+![Thesis](orion-image://localhost/image_abc123456789)
+
+## Width
+
+![Width](orion-image://localhost/image_def987654321)
+`,
+      aliases: [],
+      tags: ["orion-slide-deck"],
+      kind: "article",
+      status: "ready",
+      conceptIds: [],
+      sourceIds: [],
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+
+    render(
+      <NoteView
+        note={note}
+        notes={[note]}
+        concepts={[]}
+        onOpenNote={vi.fn()}
+        onOpenConcept={vi.fn()}
+        onUpdateNote={vi.fn()}
+        onDeleteNote={vi.fn()}
+        onRegisterConcept={vi.fn()}
+        onDisableConceptAutoLink={vi.fn()}
+      />,
+    );
+
+    const images = screen.getAllByRole("img", { hidden: true });
+    expect(images).toHaveLength(2);
+    expect(images[0]).toHaveAttribute(
+      "src",
+      "orion-image://localhost/image_abc123456789",
+    );
+    expect(images[1]).toHaveAttribute(
+      "src",
+      "orion-image://localhost/image_def987654321",
+    );
+  });
+
+  it("plays a deck by speaking hidden notes and advancing slides", async () => {
+    let finishFirst = () => {};
+    const first = new Promise<void>((resolve) => {
+      finishFirst = () => resolve();
+    });
+    let secondStarted = false;
+    const spoken: string[] = [];
+    const note: Note = {
+      id: "note-deck-play",
+      title: "Space briefing",
+      slug: "space-briefing",
+      summary: "A deck.",
+      body: `## Thesis
+
+- Host owns the graph
+
+> The host owns the graph.
+
+## Width
+
+- Six calls at a time
+
+> Physical width stays at six.
+`,
+      aliases: [],
+      tags: ["orion-slide-deck"],
+      kind: "article",
+      status: "ready",
+      conceptIds: [],
+      sourceIds: [],
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+
+    render(
+      <NoteView
+        note={note}
+        notes={[note]}
+        concepts={[]}
+        onOpenNote={vi.fn()}
+        onOpenConcept={vi.fn()}
+        onUpdateNote={vi.fn()}
+        onDeleteNote={vi.fn()}
+        onRegisterConcept={vi.fn()}
+        onDisableConceptAutoLink={vi.fn()}
+        onSpeakNote={async (text, _signal, onProgress) => {
+          spoken.push(text);
+          onProgress?.({
+            elapsedSeconds: 1,
+            durationSeconds: 2,
+            ratio: 0.5,
+            loading: false,
+          });
+          if (!secondStarted) {
+            secondStarted = true;
+            await first;
+            return;
+          }
+        }}
+      />,
+    );
+
+    expect(screen.getByText("1 / 2")).toBeVisible();
+    fireEvent.click(screen.getAllByRole("button", { name: "Play slideshow" })[0]);
+    const playhead = await screen.findByTestId("note-listen-playhead");
+    expect(playhead).toBeVisible();
+    expect(playhead).toHaveAttribute("aria-label", "Playback playhead");
+    await waitFor(() => {
+      expect(spoken[0]).toBe("The host owns the graph.");
+    });
+    expect(spoken[0]).not.toContain("Thesis");
+    expect(screen.queryByText("The host owns the graph.")).not.toBeInTheDocument();
+    finishFirst();
+    await waitFor(() => {
+      expect(screen.getByText("2 / 2")).toBeVisible();
+    });
+    await waitFor(() => {
+      expect(spoken[1]).toContain("Physical width stays at six.");
+    });
+  });
+
+  it("prefetches upcoming slide speech while the current slide is still playing", async () => {
+    let finishFirst = () => {};
+    const first = new Promise<void>((resolve) => {
+      finishFirst = () => resolve();
+    });
+    const prepared: string[] = [];
+    const spoken: string[] = [];
+    const note: Note = {
+      id: "note-deck-prefetch",
+      title: "Space briefing",
+      slug: "space-briefing",
+      summary: "A deck.",
+      body: `## Thesis
+
+> The host owns the graph.
+
+## Width
+
+> Physical width stays at six.
+`,
+      aliases: [],
+      tags: ["orion-slide-deck"],
+      kind: "article",
+      status: "ready",
+      conceptIds: [],
+      sourceIds: [],
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+
+    render(
+      <NoteView
+        note={note}
+        notes={[note]}
+        concepts={[]}
+        onOpenNote={vi.fn()}
+        onOpenConcept={vi.fn()}
+        onUpdateNote={vi.fn()}
+        onDeleteNote={vi.fn()}
+        onRegisterConcept={vi.fn()}
+        onDisableConceptAutoLink={vi.fn()}
+        onPrepareSpeech={async (text) => {
+          prepared.push(text);
+        }}
+        onSpeakNote={async (text) => {
+          spoken.push(text);
+          await first;
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Play slideshow" })[0]);
+    await waitFor(() => {
+      expect(prepared.some((text) => text.includes("The host owns the graph."))).toBe(
+        true,
+      );
+      expect(
+        prepared.some((text) => text.includes("Physical width stays at six.")),
+      ).toBe(true);
+    });
+    expect(spoken).toHaveLength(1);
+    finishFirst();
+    await waitFor(() => {
+      expect(spoken).toHaveLength(2);
+    });
+  });
+
+  it("keeps a playhead fixed at the bottom while speaking", async () => {
+    let finish = () => {};
+    const speaking = new Promise<void>((resolve) => {
+      finish = () => resolve();
+    });
+    const note: Note = {
+      id: "note-listen",
+      title: "Spoken note",
+      slug: "spoken-note",
+      summary: "A note to hear.",
+      body: "Read this paragraph aloud.",
+      aliases: [],
+      tags: [],
+      kind: "article",
+      status: "ready",
+      conceptIds: [],
+      sourceIds: [],
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+
+    render(
+      <NoteView
+        note={note}
+        notes={[note]}
+        concepts={[]}
+        onOpenNote={vi.fn()}
+        onOpenConcept={vi.fn()}
+        onUpdateNote={vi.fn()}
+        onDeleteNote={vi.fn()}
+        onRegisterConcept={vi.fn()}
+        onDisableConceptAutoLink={vi.fn()}
+        onSpeakNote={async (_text, _signal, onProgress) => {
+          onProgress?.({
+            elapsedSeconds: 12,
+            durationSeconds: 40,
+            ratio: 0.3,
+            loading: false,
+          });
+          await speaking;
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Play note" }));
+    const playhead = await screen.findByTestId("note-listen-playhead");
+    expect(playhead).toBeVisible();
+    expect(playhead).toHaveAttribute("aria-label", "Playback playhead");
+    expect(screen.getByText("0:12")).toBeVisible();
+    expect(screen.getByText("0:40")).toBeVisible();
+    expect(screen.getByRole("progressbar", { name: "Playback progress" })).toHaveAttribute(
+      "aria-valuenow",
+      "30",
+    );
+    finish();
+    await waitFor(() => {
+      expect(screen.queryByTestId("note-listen-playhead")).not.toBeInTheDocument();
+    });
+  });
 });

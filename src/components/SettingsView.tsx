@@ -13,11 +13,13 @@ import {
   LockKeyhole,
   Mic2,
   Palette,
+  Volume2,
   RefreshCw,
   ShieldCheck,
   Trash2,
 } from "../lib/icons";
 import { useEffect, useState, type CSSProperties } from "react";
+import { SavedVoicesSetting } from "./SavedVoicesSetting";
 import {
   atmosphereMotionOptions,
   atmosphereToneOptions,
@@ -129,6 +131,9 @@ interface SettingsViewProps {
   onSaveAnthropicApiKey: (apiKey: string) => Promise<void>;
   onDeleteAnthropicApiKey: () => Promise<void>;
   onTestAnthropicApiKey: () => Promise<{ valid: boolean; message: string }>;
+  onSaveElevenLabsApiKey: (apiKey: string) => Promise<void>;
+  onDeleteElevenLabsApiKey: () => Promise<void>;
+  onTestElevenLabsApiKey: () => Promise<{ valid: boolean; message: string }>;
   onOpenDataLocation: () => void;
   onEraseVault: () => void;
 }
@@ -210,6 +215,9 @@ export function SettingsView({
   onSaveAnthropicApiKey,
   onDeleteAnthropicApiKey,
   onTestAnthropicApiKey,
+  onSaveElevenLabsApiKey,
+  onDeleteElevenLabsApiKey,
+  onTestElevenLabsApiKey,
   onOpenDataLocation,
   onEraseVault,
 }: SettingsViewProps) {
@@ -223,6 +231,12 @@ export function SettingsView({
   const [anthropicKeyMessage, setAnthropicKeyMessage] = useState<string | null>(
     null,
   );
+  const [elevenLabsApiKey, setElevenLabsApiKey] = useState("");
+  const [revealElevenLabsKey, setRevealElevenLabsKey] = useState(false);
+  const [elevenLabsKeyBusy, setElevenLabsKeyBusy] = useState(false);
+  const [elevenLabsKeyMessage, setElevenLabsKeyMessage] = useState<
+    string | null
+  >(null);
   const [setupBusy, setSetupBusy] = useState(false);
   const [setupMessage, setSetupMessage] = useState<string | null>(null);
   const [claudeConnectorBusy, setClaudeConnectorBusy] = useState(false);
@@ -235,6 +249,7 @@ export function SettingsView({
   );
   const [activeSection, setActiveSection] = useState<
     | "intelligence"
+    | "voice"
     | "claude"
     | "transcription"
     | "linking"
@@ -259,6 +274,10 @@ export function SettingsView({
   useEffect(() => {
     setAnthropicKeyMessage(null);
   }, [settings.anthropicApiKeyConfigured]);
+
+  useEffect(() => {
+    setElevenLabsKeyMessage(null);
+  }, [settings.elevenLabsApiKeyConfigured]);
 
   function patch(patchValue: Partial<Settings>) {
     onChange({ ...settings, ...patchValue });
@@ -332,6 +351,42 @@ export function SettingsView({
     }
   }
 
+  async function saveElevenLabsKey() {
+    if (!elevenLabsApiKey.trim()) return;
+    setElevenLabsKeyBusy(true);
+    setElevenLabsKeyMessage(null);
+    try {
+      await onSaveElevenLabsApiKey(elevenLabsApiKey.trim());
+      setElevenLabsApiKey("");
+      setElevenLabsKeyMessage(
+        desktopRuntime
+          ? "Saved securely in your system keychain."
+          : "Available for this browser tab only; reload clears it.",
+      );
+    } catch (error) {
+      setElevenLabsKeyMessage(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setElevenLabsKeyBusy(false);
+    }
+  }
+
+  async function testElevenLabsKey() {
+    setElevenLabsKeyBusy(true);
+    setElevenLabsKeyMessage(null);
+    try {
+      const result = await onTestElevenLabsApiKey();
+      setElevenLabsKeyMessage(result.message);
+    } catch (error) {
+      setElevenLabsKeyMessage(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setElevenLabsKeyBusy(false);
+    }
+  }
+
   async function checkLocalTools() {
     setSetupBusy(true);
     setSetupMessage(null);
@@ -397,6 +452,13 @@ export function SettingsView({
             onClick={() => setActiveSection("intelligence")}
           >
             <Bot size={15} /> Intelligence
+          </a>
+          <a
+            href="#voice"
+            className={activeSection === "voice" ? "active" : ""}
+            onClick={() => setActiveSection("voice")}
+          >
+            <Volume2 size={15} /> Voice
           </a>
           <a
             href="#claude"
@@ -659,6 +721,184 @@ export function SettingsView({
                 rows={4}
               />
             </label>
+          </section>
+
+          <section className="settings-section" id="voice">
+            <div className="settings-section-title">
+              <span className="settings-icon violet">
+                <Volume2 size={18} />
+              </span>
+              <span>
+                <h2>Voice</h2>
+                <p>
+                  Used only to speak notes and narrated slide decks. Writing,
+                  import, and Chat never use this key.
+                </p>
+              </span>
+            </div>
+
+            <div className="setting-card">
+              <div className="setting-row">
+                <span>
+                  <strong>Who speaks</strong>
+                  <small>
+                    Play uses ElevenLabs whenever that key is saved. OpenAI
+                    remains an explicit choice.
+                  </small>
+                </span>
+              </div>
+              <div
+                className="segmented-control labelled"
+                role="radiogroup"
+                aria-label="Voice"
+              >
+                {(
+                  [
+                    ["system", "System"],
+                    ["openai", "OpenAI"],
+                    ["elevenlabs", "ElevenLabs"],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    role="radio"
+                    aria-checked={settings.speechVoice === id}
+                    className={settings.speechVoice === id ? "active" : ""}
+                    onClick={() => patch({ speechVoice: id })}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <SavedVoicesSetting settings={settings} onChange={patch} />
+
+            <div className="setting-card api-key-card">
+              <div className="setting-row">
+                <span>
+                  <strong>ElevenLabs API key</strong>
+                  <small>
+                    {settings.elevenLabsApiKeyConfigured
+                      ? "A key is configured in your OS keychain."
+                      : "Optional. Improves narration when you generate a spoken deck."}
+                  </small>
+                </span>
+                <span
+                  className={
+                    settings.elevenLabsApiKeyConfigured
+                      ? "status-pill success"
+                      : "status-pill"
+                  }
+                >
+                  {settings.elevenLabsApiKeyConfigured ? (
+                    <>
+                      <Check size={12} /> Connected
+                    </>
+                  ) : (
+                    "Not configured"
+                  )}
+                </span>
+              </div>
+              <div className="api-key-input-row">
+                <label>
+                  <KeyRound size={15} />
+                  <input
+                    type={revealElevenLabsKey ? "text" : "password"}
+                    aria-label="ElevenLabs API key"
+                    value={elevenLabsApiKey}
+                    onChange={(event) =>
+                      setElevenLabsApiKey(event.target.value)
+                    }
+                    placeholder={
+                      settings.elevenLabsApiKeyConfigured
+                        ? "Enter a new key to replace it"
+                        : "sk_…"
+                    }
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setRevealElevenLabsKey((value) => !value)
+                    }
+                    aria-label={
+                      revealElevenLabsKey
+                        ? "Hide ElevenLabs API key"
+                        : "Show ElevenLabs API key"
+                    }
+                  >
+                    {revealElevenLabsKey ? (
+                      <EyeOff size={15} />
+                    ) : (
+                      <Eye size={15} />
+                    )}
+                  </button>
+                </label>
+                <button
+                  className="button primary compact"
+                  type="button"
+                  onClick={() => void saveElevenLabsKey()}
+                  disabled={!elevenLabsApiKey.trim() || elevenLabsKeyBusy}
+                >
+                  {elevenLabsKeyBusy ? (
+                    <LoaderCircle size={14} className="spin" />
+                  ) : (
+                    <LockKeyhole size={14} />
+                  )}
+                  Save key
+                </button>
+              </div>
+              <div className="api-key-actions">
+                <span>
+                  <ShieldCheck size={13} />
+                  {desktopRuntime
+                    ? "Stored separately from your writing keys in macOS Keychain."
+                    : "Browser preview keeps the key in memory only, until reload."}
+                </span>
+                {settings.elevenLabsApiKeyConfigured && (
+                  <span>
+                    <button
+                      type="button"
+                      onClick={() => void testElevenLabsKey()}
+                      disabled={elevenLabsKeyBusy}
+                    >
+                      Test connection
+                    </button>
+                    <button
+                      type="button"
+                      className="danger-text"
+                      onClick={async () => {
+                        setElevenLabsKeyBusy(true);
+                        setElevenLabsKeyMessage(null);
+                        try {
+                          await onDeleteElevenLabsApiKey();
+                          setElevenLabsKeyMessage(
+                            "The saved ElevenLabs key was removed.",
+                          );
+                        } catch (error) {
+                          setElevenLabsKeyMessage(
+                            error instanceof Error
+                              ? error.message
+                              : String(error),
+                          );
+                        } finally {
+                          setElevenLabsKeyBusy(false);
+                        }
+                      }}
+                      disabled={elevenLabsKeyBusy}
+                    >
+                      Remove
+                    </button>
+                  </span>
+                )}
+              </div>
+              {elevenLabsKeyMessage ? (
+                <p className="setting-message">{elevenLabsKeyMessage}</p>
+              ) : null}
+            </div>
           </section>
 
           <section className="settings-section" id="claude">
