@@ -466,7 +466,8 @@ from its current member digests instead of repeatedly summarizing prior
 summaries, which prevents incremental semantic drift without rereading
 unaffected note bodies.
 
-When `includeExistingNotesInAIContext` is disabled, the local digest/index may
+Except for explicit one-generation consent in the Generate composer described
+below, when `includeExistingNotesInAIContext` is disabled, the local digest/index may
 still be maintained as private derived data for deterministic search,
 fingerprints, and collision safety, but no overview, digest, cluster/root
 blueprint, note-derived routing signal, or note body may be sent to a provider.
@@ -504,7 +505,10 @@ exact source range and explicitly scoped Space comparison signals. It returns
 source-supported claims separately from Space-lens interpretations. It also
 returns distinct, importance-ranked synthesis seeds: semantic titles, theses,
 exact claim IDs, and a typed `new | extends | contradicts | connects |
-qualifies` Space contribution. A seed proposes a durable knowledge object, not
+qualifies` Space contribution. Readers also identify deliberate durable
+`linkPhrases` grounded in the seed's thesis or selected claims; older readings
+may omit this optional field. These are semantic vocabulary, not mined tags or
+keyword frequency. A seed proposes a durable knowledge object, not
 a range summary or final note draft. Source claims are atomic; every claim is
 partitioned into exactly one seed, a seed may combine at most four mutually
 supporting claims, and seed titles and theses are unique within the reading.
@@ -539,6 +543,24 @@ Space thesis, its exact output plan, its selected claims, its scoped existing
 note versions, and no sibling output. Writers never inherit a growing parent
 transcript or the whole Space.
 
+There is no twelve-project-note cap or target fraction of seeds to merge.
+Each output develops one clear thesis with distinct supporting details and no
+repeated paragraphs. Qualifications remain beside their claims; source
+assertions, conjectures, and editorial interpretations must not be conflated.
+Keep the shared thirty-output atomic boundary, planned token budgets, and six
+physical calls as explicit resource safeguards, never reasons to merge unrelated
+ideas. The local repair planner coalesces only identical title-and-thesis seeds.
+
+The writing blueprint plans durable phrase destinations and meaningful directed
+connections before writers run. A concept may resolve to a returned argument
+note as well as a canonical article; sentence titles are not the only vocabulary.
+Connections use `supports`, `qualifies`, `conflicts`, or `related` with a specific
+reason. Legacy untyped suggestions default to `related`; existing `contrasts`
+relationships still validate. Assemble every note first, then resolve exact
+same-Space destinations, canonical aliases, and typed relationships locally.
+Shared source membership alone must never create a relationship. Display the
+direction and reason in the existing connections inspector, not a graph canvas.
+
 There is no final model that rewrites all accepted prose. The host validates
 the two blueprints, complete source coverage, routes, note versions, ownership,
 provenance, citations, links, tasks, output IDs, and aggregate limits, then
@@ -546,7 +568,21 @@ applies the result atomically. This preserves the useful `blueprint -> fan-out
 -> blueprint -> fan-out` shape while keeping factual evidence, control flow,
 privacy, and final assembly deterministic.
 
-Short imports may still use the direct one-call path. The persistent Space
+Single short sources still use the direct one-call path. Multiple short sources
+use a deterministic local reading blueprint, parallel full-source readers, one
+shared writing blueprint, and up to six disjoint writer slots. This skips the
+long path's provider reading-plan call without losing exact coverage, typed
+evidence, ownership, checkpoint recovery, or atomic assembly. The host may
+repartition validated output ownership into disjoint slots; it must never
+invent outputs to fill those slots. For a fresh Space, a batch of at most six
+short sources totalling at most 24 KiB may also skip the provider writing plan
+when its validated readings contain at most six distinct, non-overlapping,
+all-new seeds. Preserve one output per seed and validate the host plan against
+the same evidence/ownership contract before any writer starts. Explicit import
+guidance, custom organization preferences, task lists, additional reader
+preservation requirements, low-importance seeds, ambiguous overlap, and existing
+notes retain the shared provider planner. Do not force the fast path or merge
+unrelated seeds just to reduce latency. The persistent Space
 hierarchy must reduce repeated context work, not add a planning tax to small
 inputs. Import parallelism is for latency across independent source readings
 and writer slots; background Space maintenance remains sequential by default.
@@ -563,6 +599,25 @@ provider call after local assembly begins.
 ## Import pipeline
 
 Import has four phases: Add, Review, Organize, Results.
+
+`src/lib/providerScheduler.ts` owns one six-call physical provider budget for
+Orion's single renderer, shared by imports, maintenance, Chat, generation,
+images, and speech. Run/workload queues rotate fairly; source reading also
+rotates locally among sources. Slots wrap actual native/fetch transport
+lifetimes, including response-body reads. A cancelled caller may stop waiting,
+but an uncancellable transport keeps its slot until completion; cancelled
+queued calls must never dispatch. Local extraction, fingerprints, cache IO,
+and key-status metadata do not enter this pool. A future second renderer must
+move this authority into the native host before claiming an app-wide cap.
+Fixed-import transport deadlines begin at physical dispatch through the
+driver's `onProviderStart` hook; queue wait is not a provider timeout. The hook
+is host-only and must never enter IPC or provider JSON.
+
+Provider readiness uses a two-minute in-memory success cache, seeded by actual
+successful calls or a valid key probe, and coalesces concurrent cold probes.
+Changing/deleting a key or a provider failure invalidates readiness. No key or
+credential-derived fingerprint is persisted. A probe is only a credentials
+check, not evidence that the selected model or a future generation will work.
 
 1. One calm Add surface queues textual documents, images, media, pasted text,
    ordinary webpages, and YouTube links. Choosing files progressively discloses
@@ -584,11 +639,20 @@ Import has four phases: Add, Review, Organize, Results.
    the same local helper. Public HTTPS webpages are fetched through the bounded native command
    and then parsed by the same renderer text/HTML path.
 3. Media is decoded by AVFoundation and transcribed by bundled Whisper.
+   Selectable PDF pages use four shared local extraction slots with stable
+   physical page order and exact selective OCR coverage. This pool is independent
+   of provider scheduling, OCR, downloads, and Whisper. Do not launch six Whisper
+   processes: each already uses GPU, CPU threads, and decoded-audio memory.
 4. Each input enters the queue immediately with its own preprocessing state.
    More inputs may be added concurrently. Closing and reopening Import preserves
    work in the active Space; changing Spaces clears it, and deleting an item
    means a late async completion must be ignored rather than resurrecting it.
 5. Only successfully parsed text can enter Review or either organization mode.
+   Ready sources may enter Review while other inputs are still preparing. Freeze
+   the reviewed selection: a late extraction remains unselected until explicitly
+   included, and may not invalidate another selection's retry checkpoint. After
+   apply, remove only the exact organized intake IDs, retaining all other queued
+   work. Space changes still clear the queue and ignore old asynchronous UI updates.
 6. Manual mode creates one editable note per source.
 7. Installed-app AI mode enters one bounded knowledge-orchestration run using
    the selected OpenAI Responses (`store: false`) or Anthropic Messages model.
@@ -649,7 +713,7 @@ Import has four phases: Add, Review, Organize, Results.
     corrective retry that names its exact contract violation. If it remains
     invalid after every source reading is complete, Orion recovers without
     user interaction: the host builds a create-only plan from the validated
-    semantic seeds, groups only compatible ideas, preserves exact selected
+    semantic seeds, coalesces only identical titles and theses, preserves exact selected
     claims, and schedules at most six bounded writer slots. It never creates
     `Source — Part N` titles or uses physical ranges as note boundaries. This
     repair cannot revise existing notes, invent claims, or widen Space access.
@@ -685,6 +749,12 @@ Import has four phases: Add, Review, Organize, Results.
     child tasks may widen the queue. Logical width is independent of physical
     width; the runtime permits at most six provider calls at once and schedules
     a wider logical plan across successive physical waves.
+    Readers start at four, rotate fairly among sources, and grow to six only
+    after a complete clean cohort. Original pending work fills idle slots while
+    sibling requests run. Failed or repaired work cannot widen the current
+    cohort; deferred repairs wait until the live original frontier settles.
+    Validate, cache, checkpoint, and fingerprint settled ranges while siblings
+    are in flight. The complete reading barrier still precedes every writer.
 13. Existing-note context starts from the current root Space blueprint or the
     bounded **Across this Space** fallback, never an all-note provider fan-out.
     Before source reading, the fixed long path receives no automatic routing
@@ -798,6 +868,9 @@ runtime; once it owns only one output, the host may finish that output from its
 already validated summaries and selected claims. An indivisible reading repair
 or a terminal provider-wide writing failure preserves the source without
 partial application.
+Provider timeouts at reading-plan, routing, or writing-plan stages stop and
+checkpoint that stage; they must not fall through to local planning and fan out
+more calls. Contract-invalid plans may still recover locally.
 There is no installed-app network retry through a legacy organizer after an
 orchestration failure. The only cross-provider retry is the user's explicit
 Wave 2 failover setting described below; it retries one eligible assignment,
@@ -827,8 +900,9 @@ The landing ladder guarantees that an import with `landOnFailure` enabled never
 terminally fails: a run that would throw instead lands deterministically with
 zero provider calls, marked on the result as `landing { tier, code }` and led
 by a warning beginning “Orion landed this import plainly”. Tier 1 assembles up
-to twelve idea-first notes from the strongest validated semantic seeds, their
-theses, and their exact grounded claims; it groups repeated seed titles but
+to thirty idea-first notes within the shared atomic boundary from the strongest
+validated semantic seeds, their theses, and their exact grounded claims; it
+groups only identical seed titles and theses, removes exact repeated paragraphs, but
 never emits range headings, private reading summaries, claim inventories, or
 Space-lens interpretations as evidence. Any additional candidates remain on
 the preserved Source/readings for regeneration. Tier 2 preserves the parsed
@@ -840,7 +914,10 @@ can regenerate later, never a disguise for a failed synthesis.
 
 Results must show the exact failed stage, a redacted provider or validation
 detail, retained reading/writing counts, a run ID, model, and recorded time only
-when automatic recovery is genuinely exhausted.
+when automatic recovery is genuinely exhausted. Landing retains the classified
+safe diagnostic and session checkpoint; it must not clear recovery state or
+render the normal success heading. Explicit retries reuse successful unchanged
+batches, and queue, guidance, mode, or Space changes discard that retained work.
 Redact API keys, bearer tokens, and user-home path components. A safe checkpoint
 offers **Resume import**; a direct or invalidated run offers **Retry import**;
 the preserved preview remains independently selectable. Show the source
@@ -969,6 +1046,13 @@ all. Do not reintroduce a fixed note-count/body-slice fallback.
   provider. A checkpoint-safe transient failure may auto-resume at most twice
   with bounded backoff; cancellation, a changed Space, and unsafe checkpoints
   remain visible stops.
+- The direct scheduler also retries typed transient transport failures at most
+  twice inside its existing time budget. Native connection failures must be
+  classified as retryable, without wrapping cancellation, credential, request
+  schema, or explicit billing failures as transient. Do not add a second
+  whole-import retry loop after this scheduler exhausts its attempts. The
+  readiness check may retry transient connectivity/availability failures twice
+  with 2- and 8-second abortable backoff before presenting Results.
 
 ## Adaptive source-reading orchestration
 
@@ -1167,8 +1251,8 @@ replayable. Tests must prove:
   and never accepted as source evidence;
 - the writing blueprint dispositions cover every synthesis seed exactly once;
   high/medium seeds cannot disappear, low-value repetition may be explicitly
-  omitted, every output owns one primary seed, and the host rejects severe
-  underproduction relative to distinct retained semantic objects;
+  omitted, every output owns one primary seed, and distinct ideas are never
+  forcibly merged to meet a numeric output ratio;
 - final titles and bodies are idea-first and contain no Part-N/range/import
   scaffolding; deterministic writer repair uses only the planned thesis,
   selected claims, and selected Space interpretations, never whole reader
@@ -1338,7 +1422,7 @@ claiming end-to-end OCR coverage.
 
 ## Offline transcription contract
 
-Orion 0.4.2 is self-contained on Apple Silicon macOS 13.3 or later. It bundles:
+The installed Orion app is self-contained on Apple Silicon macOS 13.3 or later. It bundles:
 
 - `whisper.cpp` 1.9.1 as `Contents/Frameworks/whisper.framework`;
 - the custom `Contents/MacOS/orion-whisper` sidecar;
@@ -1537,17 +1621,41 @@ Never search another Space for an upsert target.
 
 **+ New note** and `⌘N` still create a blank page. When a writing key is
 configured, the chevron opens one Generate composer: kind (Note, Podcast, Slide
-deck, Slide deck with narration), optional instructions, one Generate action.
+deck, Slide deck with narration), optional instructions, a **Use notes from this
+Space** checkbox, and one Generate action. The checkbox defaults to the global
+context preference each time the composer opens. Explicitly enabling it grants
+note context for this generation only, never changes the global preference,
+and travels with that job on restart. With it off, no note bodies, digests,
+concepts, or overview may enter generation requests; require user instructions.
 Each kind is an ordinary note. Do not add presentation or podcast schema, a
 Playground route, or Share-as-create.
 
 Generation is a transient job (linked-article pattern: attempt ownership, late
-results ignored, Restart/Delete). Import topology is unchanged. Slide copy may
-be one writing pass; each slide is then a complete `gpt-image-2` 16:9 image
+results ignored, Restart/Delete). Ordinary generated notes use one writing
+pass. Decks and podcasts use one bounded JSON outline, then up to six disjoint
+copy writers with a shared thesis and ordered section titles. Outline planning
+caps high/xhigh effort at medium; writers retain the selected effort. Validate
+exact Space-local note IDs and unique headings, and reject partial copy on
+failure. Assemble accepted copy locally with no final model rewrite. Each
+slide is then a complete `gpt-image-2` 16:9 image
 that letters the title and bullets in distinctive fonts, in same-kind waves
 of at most six, never mixed with copy. The slideshow shows that image only:
 no HTML type overlay even as a fallback, and speaker notes stay off-screen
-for Play. Play on the note
+for Play. Cancellation stops later stages and ignores late responses; the
+native Chat transport itself is not cancellable.
+
+When authorized, generation uses a validated hierarchy or clearly marked
+saved/local overview for orientation, a relevance-ranked directory of at most
+48 deterministic whole-body note digests, and bounded exact note excerpts.
+The planner sees the directory and at most four initial note excerpts; each
+writer sees only notes referenced by its assigned sections. Authored notes
+are primary material even when the Space has zero Sources. Never infer that
+zero Sources means an empty Space or describe digest/overview text as a full
+read of the underlying notes. Preserve excerpt omission markers and native
+request bounds. Generation does not trigger a whole-Space provider crawl or
+alter the sequential background maintenance pipeline.
+
+Play on the note
 header speaks existing prose, or times a deck to its speaker notes, with
 System speech by default, `gpt-4o-mini-tts` if an OpenAI key is selected, or
 ElevenLabs if that optional keychain account is selected. ElevenLabs is voice

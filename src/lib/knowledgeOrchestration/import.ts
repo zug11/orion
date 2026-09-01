@@ -146,7 +146,12 @@ export interface KnowledgeImportBatchResult {
   warnings: string[];
   orchestration: KnowledgeOrchestrationResult;
   /** Present only when the result was landed rather than orchestrated. */
-  landing?: { tier: 1 | 2; code: KnowledgeImportDiagnosticCode };
+  landing?: {
+    tier: 1 | 2;
+    code: KnowledgeImportDiagnosticCode;
+    diagnostic: KnowledgeImportDiagnostic;
+    checkpoint?: FixedBlueprintImportCheckpoint;
+  };
 }
 
 export async function runKnowledgeImportBatch(
@@ -156,9 +161,13 @@ export async function runKnowledgeImportBatch(
     throw new Error("There is no source material in this knowledge run.");
   }
   const runId = options.resume?.runId ?? `knowledge-run:${nanoid(12)}`;
+  const sourceReadingPlan = createSourceReadingPlan(options.sources);
+  const compactParallel = options.sources.length > 1 &&
+    [...sourceReadingPlan.values()].every((sections) => sections.length === 0);
   const needsFixedBlueprintPipeline =
     options.resume !== undefined ||
-    [...createSourceReadingPlan(options.sources).values()].some(
+    compactParallel ||
+    [...sourceReadingPlan.values()].some(
       (sections) => sections.length > 0,
     );
   const context = createKnowledgeRunContext(
@@ -239,6 +248,7 @@ export async function runKnowledgeImportBatch(
   try {
     orchestration = needsFixedBlueprintPipeline
       ? await runFixedBlueprintImport({
+        compactParallel,
         runContext: context,
         rootAssignment: root,
         snapshot: options.snapshot,
@@ -453,7 +463,14 @@ function landKnowledgeImportBatch(
       artifacts: readings.map(({ artifact }) => structuredClone(artifact)),
       usage: { inputTokens: 0, outputTokens: 0 },
     },
-    landing: { tier, code: runError.diagnostic.code },
+    landing: {
+      tier,
+      code: runError.diagnostic.code,
+      diagnostic: structuredClone(runError.diagnostic),
+      ...(runError.checkpoint
+        ? { checkpoint: structuredClone(runError.checkpoint) }
+        : {}),
+    },
   };
 }
 

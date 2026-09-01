@@ -21,6 +21,10 @@ import type {
   WhisperConfig,
 } from "../types";
 import { truncateUnicode } from "./text";
+import {
+  providerCallScheduler,
+  type ProviderCallOptions,
+} from "./providerScheduler";
 import { isSavedElevenLabsVoice, wrapLegacySnapshot } from "../data/defaults";
 import {
   aiProviderForModel,
@@ -32,6 +36,7 @@ import {
   formatProviderHealthConcern,
   providerDisplayName,
   providerHealthSummary,
+  isTransientProviderFailure,
   recordProviderHealth,
 } from "./providerHealth";
 import {
@@ -58,6 +63,7 @@ const ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models";
 let browserSessionApiKey: string | null = null;
 let browserSessionAnthropicApiKey: string | null = null;
 let browserSessionElevenLabsApiKey: string | null = null;
+let tauriCoreModule: Promise<typeof import("@tauri-apps/api/core")> | undefined;
 const MAX_NOTE_IMAGE_BYTES = 12 * 1024 * 1024;
 const NOTE_IMAGE_MIME_TYPES = new Set([
   "image/png",
@@ -327,64 +333,50 @@ export async function generateNoteImage(
         () => undefined,
       );
     };
-    let rejectForAbort: ((reason?: unknown) => void) | undefined;
-    const abortPromise = new Promise<never>((_resolve, reject) => {
-      rejectForAbort = () =>
-        reject(signal?.reason ?? new Error("Image generation was cancelled."));
-      signal?.addEventListener("abort", rejectForAbort, { once: true });
-    });
-    signal?.addEventListener("abort", cancelNative, { once: true });
-    try {
-      const value = await Promise.race([
-        invokeTauri<unknown>("generate_note_image", {
-          request: { requestId, prompt: normalized },
-        }),
-        abortPromise,
-      ]);
-      if (signal?.aborted) {
-        throw signal.reason ?? new Error("Image generation was cancelled.");
-      }
-      return parseGeneratedNoteImage(value);
-    } finally {
-      signal?.removeEventListener("abort", cancelNative);
-      if (rejectForAbort) signal?.removeEventListener("abort", rejectForAbort);
-    }
+    const value = await invokeTauri<unknown>(
+      "generate_note_image",
+      { request: { requestId, prompt: normalized } },
+      { queueKey: "images", signal, cancelActive: cancelNative },
+    );
+    return parseGeneratedNoteImage(value);
   }
 
-  const response = await fetch(OPENAI_IMAGE_GENERATIONS_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${requireBrowserApiKey()}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "gpt-image-2",
-      prompt: normalized,
-      n: 1,
-      size: "1536x1024",
-      quality: "medium",
-      output_format: "jpeg",
-      output_compression: 88,
-    }),
-    signal,
-  });
-  if (!response.ok) {
-    throw new Error(await readProviderApiError(response, "OpenAI"));
-  }
-  const value = (await response.json()) as unknown;
-  if (!isRecord(value) || !Array.isArray(value.data)) {
-    throw new Error("OpenAI returned an image Orion could not read.");
-  }
-  const first = value.data[0];
-  if (!isRecord(first) || typeof first.b64_json !== "string") {
-    throw new Error("OpenAI returned an image Orion could not read.");
-  }
-  return parseGeneratedNoteImage({
-    fileName: "orion-generated-image.jpg",
-    mimeType: "image/jpeg",
-    byteSize: decodedBase64Length(first.b64_json),
-    base64Data: first.b64_json,
-  });
+  return runBrowserProviderCall("openai", async () => {
+    const response = await fetch(OPENAI_IMAGE_GENERATIONS_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${requireBrowserApiKey()}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-image-2",
+        prompt: normalized,
+        n: 1,
+        size: "1536x1024",
+        quality: "medium",
+        output_format: "jpeg",
+        output_compression: 88,
+      }),
+      signal,
+    });
+    if (!response.ok) {
+      throw new Error(await readProviderApiError(response, "OpenAI"));
+    }
+    const value = (await response.json()) as unknown;
+    if (!isRecord(value) || !Array.isArray(value.data)) {
+      throw new Error("OpenAI returned an image Orion could not read.");
+    }
+    const first = value.data[0];
+    if (!isRecord(first) || typeof first.b64_json !== "string") {
+      throw new Error("OpenAI returned an image Orion could not read.");
+    }
+    return parseGeneratedNoteImage({
+      fileName: "orion-generated-image.jpg",
+      mimeType: "image/jpeg",
+      byteSize: decodedBase64Length(first.b64_json),
+      base64Data: first.b64_json,
+    });
+  }, { queueKey: "images", signal });
 }
 
 export async function persistGeneratedNoteImage(
@@ -520,8 +512,10 @@ export async function saveApiKey(apiKey: string): Promise<void> {
   if (!normalized) {
     throw new Error("Enter an OpenAI API key first.");
   }
+  invalidateProviderKey("openai");
   if (isTauriRuntime()) {
     await invokeTauri<void>("save_api_key", { apiKey: normalized });
+    invalidateProviderKey("openai");
     return;
   }
   browserSessionApiKey = normalized;
@@ -532,8 +526,10 @@ export async function saveAnthropicApiKey(apiKey: string): Promise<void> {
   if (!normalized) {
     throw new Error("Enter an Anthropic API key first.");
   }
+  invalidateProviderKey("anthropic");
   if (isTauriRuntime()) {
     await invokeTauri<void>("save_anthropic_api_key", { apiKey: normalized });
+    invalidateProviderKey("anthropic");
     return;
   }
   browserSessionAnthropicApiKey = normalized;
@@ -554,16 +550,20 @@ export async function anthropicApiKeyStatus(): Promise<ApiKeyStatus> {
 }
 
 export async function deleteApiKey(): Promise<void> {
+  invalidateProviderKey("openai");
   if (isTauriRuntime()) {
     await invokeTauri<void>("delete_api_key");
+    invalidateProviderKey("openai");
     return;
   }
   browserSessionApiKey = null;
 }
 
 export async function deleteAnthropicApiKey(): Promise<void> {
+  invalidateProviderKey("anthropic");
   if (isTauriRuntime()) {
     await invokeTauri<void>("delete_anthropic_api_key");
+    invalidateProviderKey("anthropic");
     return;
   }
   browserSessionAnthropicApiKey = null;
@@ -601,24 +601,27 @@ export async function testElevenLabsKey(): Promise<ApiKeyTestResult> {
     return invokeTauri<ApiKeyTestResult>("test_elevenlabs_key");
   }
   const apiKey = requireBrowserElevenLabsApiKey();
-  try {
-    const response = await fetch("https://api.elevenlabs.io/v1/user", {
-      headers: { "xi-api-key": apiKey },
-    });
-    if (response.ok) {
-      return { valid: true, message: "ElevenLabs accepted the key." };
+  return providerCallScheduler.run(async () => {
+    try {
+      const response = await fetch("https://api.elevenlabs.io/v1/user", {
+        headers: { "xi-api-key": apiKey },
+      });
+      if (response.ok) {
+        await response.body?.cancel();
+        return { valid: true, message: "ElevenLabs accepted the key." };
+      }
+      return {
+        valid: false,
+        message: await readProviderApiError(response, "ElevenLabs"),
+      };
+    } catch (error) {
+      return {
+        valid: false,
+        message:
+          error instanceof Error ? error.message : "Could not reach ElevenLabs.",
+      };
     }
-    return {
-      valid: false,
-      message: await readProviderApiError(response, "ElevenLabs"),
-    };
-  } catch (error) {
-    return {
-      valid: false,
-      message:
-        error instanceof Error ? error.message : "Could not reach ElevenLabs.",
-    };
-  }
+  }, { queueKey: "preflight" });
 }
 
 export async function generateSpeech(
@@ -643,9 +646,16 @@ export async function generateSpeech(
     });
   }
   if (engine === "openai") {
-    return generateSpeechInBrowserWithOpenAI(normalized);
+    return runBrowserProviderCall(
+      "openai",
+      () => generateSpeechInBrowserWithOpenAI(normalized),
+      { queueKey: "speech" },
+    );
   }
-  return generateSpeechInBrowserWithElevenLabs(normalized, voiceId);
+  return providerCallScheduler.run(
+    () => generateSpeechInBrowserWithElevenLabs(normalized, voiceId),
+    { queueKey: "speech" },
+  );
 }
 
 export async function testOpenAIKey(): Promise<ApiKeyTestResult> {
@@ -653,22 +663,25 @@ export async function testOpenAIKey(): Promise<ApiKeyTestResult> {
     return invokeTauri<ApiKeyTestResult>("test_openai_key");
   }
   const apiKey = requireBrowserApiKey();
-  try {
-    const response = await fetch(OPENAI_MODELS_URL, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-    if (response.ok) {
-      return { valid: true, message: "Connection successful." };
+  return providerCallScheduler.run(async () => {
+    try {
+      const response = await fetch(OPENAI_MODELS_URL, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      if (response.ok) {
+        await response.body?.cancel();
+        return { valid: true, message: "Connection successful." };
+      }
+      const message = await readApiError(response);
+      return { valid: false, message };
+    } catch (error) {
+      return {
+        valid: false,
+        message:
+          error instanceof Error ? error.message : "Could not reach OpenAI.",
+      };
     }
-    const message = await readApiError(response);
-    return { valid: false, message };
-  } catch (error) {
-    return {
-      valid: false,
-      message:
-        error instanceof Error ? error.message : "Could not reach OpenAI.",
-    };
-  }
+  }, { queueKey: "preflight" });
 }
 
 export async function testAnthropicKey(): Promise<ApiKeyTestResult> {
@@ -676,27 +689,30 @@ export async function testAnthropicKey(): Promise<ApiKeyTestResult> {
     return invokeTauri<ApiKeyTestResult>("test_anthropic_key");
   }
   const apiKey = requireBrowserAnthropicApiKey();
-  try {
-    const response = await fetch(ANTHROPIC_MODELS_URL, {
-      headers: {
-        "anthropic-version": "2023-06-01",
-        "x-api-key": apiKey,
-      },
-    });
-    if (response.ok) {
-      return { valid: true, message: "Anthropic accepted the key." };
+  return providerCallScheduler.run(async () => {
+    try {
+      const response = await fetch(ANTHROPIC_MODELS_URL, {
+        headers: {
+          "anthropic-version": "2023-06-01",
+          "x-api-key": apiKey,
+        },
+      });
+      if (response.ok) {
+        await response.body?.cancel();
+        return { valid: true, message: "Anthropic accepted the key." };
+      }
+      return {
+        valid: false,
+        message: await readProviderApiError(response, "Anthropic"),
+      };
+    } catch (error) {
+      return {
+        valid: false,
+        message:
+          error instanceof Error ? error.message : "Could not reach Anthropic.",
+      };
     }
-    return {
-      valid: false,
-      message: await readProviderApiError(response, "Anthropic"),
-    };
-  } catch (error) {
-    return {
-      valid: false,
-      message:
-        error instanceof Error ? error.message : "Could not reach Anthropic.",
-    };
-  }
+  }, { queueKey: "preflight" });
 }
 
 export type KnowledgeProviderPreflight =
@@ -705,11 +721,38 @@ export type KnowledgeProviderPreflight =
 
 const PREFLIGHT_TIMEOUT_MS = 8_000;
 const PREFLIGHT_TIMED_OUT = Symbol("preflight-timed-out");
+const PROVIDER_READY_TTL_MS = 120_000;
+const providerKeyGenerations = new Map<AIProvider, number>();
+const providerReadyAt = new Map<AIProvider, number>();
+const providerProbes = new Map<AIProvider, {
+  generation: number;
+  promise: Promise<KnowledgeProviderPreflight>;
+}>();
+
+function providerKeyGeneration(provider: AIProvider): number {
+  return providerKeyGenerations.get(provider) ?? 0;
+}
+
+function rememberProviderReady(provider: AIProvider, generation: number): void {
+  if (providerKeyGeneration(provider) === generation) {
+    providerReadyAt.set(provider, Date.now());
+  }
+}
+
+function forgetProviderReady(provider: AIProvider, generation: number): void {
+  if (providerKeyGeneration(provider) === generation) providerReadyAt.delete(provider);
+}
+
+function invalidateProviderKey(provider: AIProvider): void {
+  providerKeyGenerations.set(provider, providerKeyGeneration(provider) + 1);
+  providerReadyAt.delete(provider);
+  providerProbes.delete(provider);
+}
 
 /**
- * A fast local readiness check before an AI import run starts. Uses the same
- * native key-test commands as Settings, bounded by a local timeout so a hung
- * provider cannot stall the flow. Never throws: every failure becomes a
+ * Reuse recent successful provider traffic, otherwise coalesce a short native
+ * key probe. The transport timeout starts after dispatch, not while waiting
+ * for an app-wide provider slot. Never throws: every failure becomes a
  * user-facing message, and each outcome feeds the rolling provider health
  * memory. Browser preview has no key-test boundary and must not block.
  */
@@ -720,25 +763,47 @@ export async function preflightKnowledgeProvider(
     return { ok: true, latencyMs: 0 };
   }
   const provider = aiProviderForModel(model);
+  const readyAt = providerReadyAt.get(provider);
+  if (
+    readyAt !== undefined &&
+    Date.now() >= readyAt &&
+    Date.now() - readyAt < PROVIDER_READY_TTL_MS
+  ) {
+    return { ok: true, latencyMs: 0 };
+  }
+  const generation = providerKeyGeneration(provider);
+  const existing = providerProbes.get(provider);
+  if (existing?.generation === generation) return existing.promise;
+  const promise = probeKnowledgeProvider(provider).finally(() => {
+    if (providerProbes.get(provider)?.promise === promise) {
+      providerProbes.delete(provider);
+    }
+  });
+  providerProbes.set(provider, { generation, promise });
+  return promise;
+}
+
+async function probeKnowledgeProvider(
+  provider: AIProvider,
+): Promise<KnowledgeProviderPreflight> {
   const command =
     provider === "anthropic" ? "test_anthropic_key" : "test_openai_key";
-  const startedAt = Date.now();
+  let startedAt = Date.now();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const controller = new AbortController();
   try {
-    const outcome = await Promise.race([
-      invokeTauri<ApiKeyTestResult>(command),
-      new Promise<typeof PREFLIGHT_TIMED_OUT>((resolve) => {
-        timer = setTimeout(() => resolve(PREFLIGHT_TIMED_OUT), PREFLIGHT_TIMEOUT_MS);
-      }),
-    ]);
+    const outcome = await invokeTauri<ApiKeyTestResult>(command, undefined, {
+      queueKey: "preflight",
+      signal: controller.signal,
+      onStart: () => {
+        startedAt = Date.now();
+        timer = setTimeout(
+          () => controller.abort(PREFLIGHT_TIMED_OUT),
+          PREFLIGHT_TIMEOUT_MS,
+        );
+      },
+    });
     const latencyMs = Date.now() - startedAt;
-    if (outcome === PREFLIGHT_TIMED_OUT) {
-      recordProviderHealth({ provider, at: Date.now(), ok: false });
-      return preflightFailure(
-        provider,
-        `Orion could not reach ${providerDisplayName(provider)} within a few seconds, so the import did not start. Check your connection and try again.`,
-      );
-    }
     if (outcome.valid) {
       recordProviderHealth({ provider, at: Date.now(), ok: true, latencyMs });
       return { ok: true, latencyMs };
@@ -749,6 +814,13 @@ export async function preflightKnowledgeProvider(
       preflightFailureMessage(provider, outcome.message),
     );
   } catch (error) {
+    if (error === PREFLIGHT_TIMED_OUT) {
+      recordProviderHealth({ provider, at: Date.now(), ok: false });
+      return preflightFailure(
+        provider,
+        `Orion could not reach ${providerDisplayName(provider)} within a few seconds, so the import did not start. Check your connection and try again.`,
+      );
+    }
     // Native command failures arrive as Rust-provided strings; a TypeError
     // means the IPC bridge itself is absent (preview shells and tests fake
     // the Tauri marker). That carries no provider signal, so the check must
@@ -819,12 +891,17 @@ export async function organizeContent(
     return parseOrganizeResult(result);
   }
   if (aiProviderForModel(request.model) === "anthropic") {
-    return organizeContentInBrowserWithAnthropic(
-      request,
-      requireBrowserAnthropicApiKey(),
+    return runBrowserProviderCall(
+      "anthropic",
+      () => organizeContentInBrowserWithAnthropic(request, requireBrowserAnthropicApiKey()),
+      { queueKey: "organizer" },
     );
   }
-  return organizeContentInBrowser(request, requireBrowserApiKey());
+  return runBrowserProviderCall(
+    "openai",
+    () => organizeContentInBrowser(request, requireBrowserApiKey()),
+    { queueKey: "organizer" },
+  );
 }
 
 /**
@@ -867,20 +944,17 @@ export const runKnowledgeAssignment: KnowledgeAssignmentDriver = async (
       requestId: request.requestId,
     }).catch(() => undefined);
   };
-  let rejectForAbort: ((reason?: unknown) => void) | undefined;
-  const abortPromise = new Promise<never>((_resolve, reject) => {
-    rejectForAbort = () =>
-      reject(signal.reason ?? new Error("The knowledge run was cancelled."));
-    signal.addEventListener("abort", rejectForAbort, { once: true });
-  });
-  signal.addEventListener("abort", cancelNative, { once: true });
   try {
-    const result = await Promise.race([
-      invokeTauri<unknown>("knowledge_assignment", {
-        request: knowledgeAssignmentIpcRequest(request),
-      }),
-      abortPromise,
-    ]);
+    const result = await invokeTauri<unknown>(
+      "knowledge_assignment",
+      { request: knowledgeAssignmentIpcRequest(request) },
+      {
+        queueKey: `knowledge:${request.context.runId}`,
+        signal,
+        cancelActive: cancelNative,
+        onStart: request.onProviderStart,
+      },
+    );
     if (signal.aborted) {
       throw signal.reason ?? new Error("The knowledge run was cancelled.");
     }
@@ -895,20 +969,17 @@ export const runKnowledgeAssignment: KnowledgeAssignmentDriver = async (
     if (/did not respond within \d+ seconds?/i.test(message)) {
       throw new KnowledgeProviderTimeoutError(message);
     }
-    if (/rate or usage limits|too many requests|temporarily unavailable/i.test(message)) {
+    if (!signal.aborted && isTransientProviderFailure(message)) {
       throw new KnowledgeProviderExecutionError(message, {
         retryable: true,
         retryAfterMs: 1_000,
       });
     }
     throw error;
-  } finally {
-    signal.removeEventListener("abort", cancelNative);
-    if (rejectForAbort) {
-      signal.removeEventListener("abort", rejectForAbort);
-    }
   }
 };
+
+runKnowledgeAssignment.schedulesProviderCalls = true;
 
 /**
  * Transport shapes that justify trying the user's other provider: the request
@@ -958,7 +1029,7 @@ export function createFailoverKnowledgeDriver(
     alternateKeyChecks.set(provider, check);
     return check;
   };
-  return async (request, signal) => {
+  const driver: KnowledgeAssignmentDriver = async (request, signal) => {
     try {
       return await runKnowledgeAssignment(request, signal);
     } catch (error) {
@@ -985,6 +1056,8 @@ export function createFailoverKnowledgeDriver(
       );
     }
   };
+  driver.schedulesProviderCalls = true;
+  return driver;
 }
 
 function knowledgeAssignmentIpcRequest(
@@ -1038,21 +1111,31 @@ function optionalNonNegativeNumber(value: unknown): number | undefined {
 
 export async function chatWithOrion(
   request: ChatRequest,
+  signal?: AbortSignal,
 ): Promise<ChatResult> {
   if (!request.prompt.trim()) {
     throw new Error("Ask Orion a question first.");
   }
   let result: ChatResult;
   if (isTauriRuntime()) {
-    const value = await invokeTauri<unknown>("chat", { request });
+    const value = await invokeTauri<unknown>(
+      "chat",
+      { request },
+      { queueKey: "chat", signal },
+    );
     result = parseChatResult(value);
   } else if (aiProviderForModel(request.model) === "anthropic") {
-    result = await chatInBrowserWithAnthropic(
-      request,
-      requireBrowserAnthropicApiKey(),
+    result = await runBrowserProviderCall(
+      "anthropic",
+      () => chatInBrowserWithAnthropic(request, requireBrowserAnthropicApiKey()),
+      { queueKey: "chat", signal },
     );
   } else {
-    result = await chatInBrowser(request, requireBrowserApiKey());
+    result = await runBrowserProviderCall(
+      "openai",
+      () => chatInBrowser(request, requireBrowserApiKey()),
+      { queueKey: "chat", signal },
+    );
   }
   return chatRequestAllowsNoteActions(request)
     ? result
@@ -1202,9 +1285,78 @@ export function buildBrowserOrganizerInstructions(
 async function invokeTauri<T>(
   command: string,
   args?: Record<string, unknown>,
+  options?: ProviderCallOptions,
 ): Promise<T> {
-  const { invoke } = await import("@tauri-apps/api/core");
+  const { invoke } = await (tauriCoreModule ??= import("@tauri-apps/api/core"));
+  if (PROVIDER_COMMANDS.has(command)) {
+    const provider = providerForCommand(command, args);
+    const generation = provider ? providerKeyGeneration(provider) : undefined;
+    try {
+      const result = await providerCallScheduler.run(
+        () => invoke<T>(command, args),
+        { queueKey: command, ...options },
+      );
+      if (provider && generation !== undefined) {
+        if (
+          !command.startsWith("test_") ||
+          (isRecord(result) && result.valid === true)
+        ) {
+          rememberProviderReady(provider, generation);
+        } else {
+          forgetProviderReady(provider, generation);
+        }
+      }
+      return result;
+    } catch (error) {
+      if (provider && generation !== undefined && !options?.signal?.aborted) {
+        forgetProviderReady(provider, generation);
+      }
+      throw error;
+    }
+  }
   return invoke<T>(command, args);
+}
+
+const PROVIDER_COMMANDS = new Set([
+  "knowledge_assignment",
+  "organize_content",
+  "chat",
+  "generate_note_image",
+  "generate_speech",
+  "test_openai_key",
+  "test_anthropic_key",
+  "test_elevenlabs_key",
+]);
+
+function providerForCommand(
+  command: string,
+  args?: Record<string, unknown>,
+): AIProvider | undefined {
+  if (command === "test_elevenlabs_key") return undefined;
+  if (command === "test_anthropic_key") return "anthropic";
+  const request = isRecord(args?.request) ? args.request : {};
+  if (command === "generate_speech" && request.engine === "elevenlabs") {
+    return undefined;
+  }
+  return aiProviderForModel(
+    typeof request.model === "string" ? request.model : undefined,
+  );
+}
+
+async function runBrowserProviderCall<T>(
+  provider: AIProvider,
+  task: () => Promise<T>,
+  options?: ProviderCallOptions,
+): Promise<T> {
+  const generation = providerKeyGeneration(provider);
+  try {
+    const result = await providerCallScheduler.run(task, options);
+    rememberProviderReady(provider, generation);
+    return result;
+  } catch (error) {
+    if (!options?.signal?.aborted) forgetProviderReady(provider, generation);
+    throw error;
+  }
 }
 
 async function organizeContentInBrowser(
@@ -1973,6 +2125,8 @@ function isRelationship(value: unknown): boolean {
       "mentions",
       "related",
       "supports",
+      "qualifies",
+      "conflicts",
       "contrasts",
       "part-of",
       "inspired-by",
@@ -2227,6 +2381,7 @@ function parseOrganizeResult(value: unknown): OrganizeContentResult {
       !isRecord(item) ||
       typeof item.fromTitle !== "string" ||
       typeof item.toTitle !== "string" ||
+      (item.kind !== undefined && !isOneOf(item.kind, ["supports", "qualifies", "conflicts", "related"])) ||
       typeof item.reason !== "string"
     ) {
       throw new Error("The organizer returned an invalid connection.");
@@ -2234,6 +2389,7 @@ function parseOrganizeResult(value: unknown): OrganizeContentResult {
     return {
       fromTitle: item.fromTitle,
       toTitle: item.toTitle,
+      kind: (item.kind ?? "related") as "supports" | "qualifies" | "conflicts" | "related",
       reason: item.reason,
     };
   });
@@ -2782,10 +2938,15 @@ const ORGANIZE_RESULT_SCHEMA: Record<string, unknown> = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["fromTitle", "toTitle", "reason"],
+        required: ["fromTitle", "toTitle", "kind", "reason"],
         properties: {
           fromTitle: { type: "string" },
           toTitle: { type: "string" },
+          kind: {
+            type: "string",
+            enum: ["supports", "qualifies", "conflicts", "related"],
+            description: "The directed argumentative relationship, never inferred from a shared source alone.",
+          },
           reason: { type: "string" },
         },
       },

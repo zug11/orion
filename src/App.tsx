@@ -1,3 +1,4 @@
+import { generateFromSpace } from "./lib/generatePipeline";
 import { CheckCircle2, X } from "./lib/icons";
 import { nanoid } from "nanoid";
 import {
@@ -96,9 +97,7 @@ import {
   type LinkedArticleJob,
 } from "./lib/linkedArticle";
 import {
-  buildGenerateWritingRequest,
   createGeneratePlaceholderNote,
-  GENERATE_TIMEOUT_MS,
   GenerateRequestRegistry,
   insertImageForSlide,
   titleFromGenerateInstruction,
@@ -1436,7 +1435,7 @@ function App() {
   }, [openNote]);
 
   const startGenerate = useCallback(
-    (input: { kind: GenerateKind; instruction: string }) => {
+    (input: { kind: GenerateKind; instruction: string; useSpaceNotes?: boolean }) => {
       if (!isSelectedAIConfigured(snapshotRef.current.settings)) return;
       const instruction = truncateGenerateInstruction(input.instruction);
       const now = new Date().toISOString();
@@ -1456,6 +1455,7 @@ function App() {
         kind: input.kind,
         title,
         instruction,
+        useSpaceNotes: input.useSpaceNotes ?? snapshotRef.current.settings.includeExistingNotesInAIContext,
         progress: 12,
         stage: "preparing",
       };
@@ -1481,30 +1481,18 @@ function App() {
       };
 
       void (async () => {
-        let timeout: number | undefined;
         try {
-          patchJob({ stage: "writing", progress: 28 });
-          const request = buildGenerateWritingRequest(snapshotWithNote, {
-            originNoteId: noteId,
-            kind: input.kind,
-            instruction,
-          });
-          const result = await Promise.race([
-            chatWithOrion(request),
-            new Promise<never>((_, reject) => {
-              timeout = window.setTimeout(() => {
-                reject(
-                  new Error(
-                    "Orion paused this page after 180 seconds without a response.",
-                  ),
-                );
-              }, GENERATE_TIMEOUT_MS);
+          let body = await generateFromSpace(snapshotWithNote, {
+            originNoteId: noteId, kind: input.kind, instruction,
+            useSpaceNotes: job.useSpaceNotes,
+          }, chatWithOrion, {
+            signal: generateRequests.current.signal(requestKey),
+            onProgress: (stage, completed, total) => patchJob({
+              stage, progress: stage === "preparing" ? 16 : 28 + Math.round(30 * completed / Math.max(1, total)),
             }),
-          ]);
-          if (timeout !== undefined) window.clearTimeout(timeout);
+          });
           if (!generateRequests.current.owns(requestKey, jobId)) return;
           if (snapshotRef.current.workspace.id !== job.workspaceId) return;
-          let body = normalizeAIWritingReply(result.reply);
           const wantsPlates =
             (input.kind === "slide-deck" ||
               input.kind === "slide-deck-narrated") &&
@@ -1516,6 +1504,7 @@ function App() {
               .filter(({ slide }) => !slide.imageSrc)
               .slice(0, MAX_DECK_SLIDE_IMAGES);
             const illustrated = await runPresentationWaves({
+              signal: generateRequests.current.signal(requestKey),
               jobs: pendingSlides.map(({ slide, index }) => ({
                 id: `slide-${index}`,
                 kind: "image" as const,
@@ -1559,6 +1548,7 @@ function App() {
             }
           }
           if (!generateRequests.current.owns(requestKey, jobId)) return;
+          if (snapshotRef.current.workspace.id !== job.workspaceId) return;
           const finishedAt = new Date().toISOString();
           setSnapshot((current) => ({
             ...current,
@@ -1592,7 +1582,6 @@ function App() {
             );
           }, 2_400);
         } catch (error) {
-          if (timeout !== undefined) window.clearTimeout(timeout);
           if (!generateRequests.current.owns(requestKey, jobId)) return;
           patchJob({
             stage: "error",
@@ -1619,7 +1608,7 @@ function App() {
         if (current.workspace.id !== job.workspaceId) return current;
         return deleteNoteFromSnapshot(current, job.noteId, now).snapshot;
       });
-      startGenerate({ kind: job.kind, instruction: job.instruction });
+      startGenerate({ kind: job.kind, instruction: job.instruction, useSpaceNotes: job.useSpaceNotes });
     },
     [startGenerate],
   );

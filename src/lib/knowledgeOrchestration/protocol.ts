@@ -200,6 +200,8 @@ export interface KnowledgeSourceReading {
     claimIds: string[];
     importance: KnowledgeAssessmentLevel;
     contribution: "new" | "extends" | "contradicts" | "connects" | "qualifies";
+    /** Deliberately selected durable phrases, not a frequency-derived tag list. */
+    linkPhrases?: string[];
     relatedNoteIds: string[];
     rationale: string;
   }>;
@@ -1174,6 +1176,7 @@ export function parseKnowledgeSourceReading(
       "claimIds",
       "importance",
       "contribution",
+      "linkPhrases",
       "relatedNoteIds",
       "rationale",
     ]);
@@ -1184,6 +1187,7 @@ export function parseKnowledgeSourceReading(
       "claimIds",
       "importance",
       "contribution",
+      ...(seed.linkPhrases !== undefined ? ["linkPhrases"] : []),
       "relatedNoteIds",
       "rationale",
     ]);
@@ -1222,6 +1226,9 @@ export function parseKnowledgeSourceReading(
         ["new", "extends", "contradicts", "connects", "qualifies"] as const,
         `synthesis seeds[${index}].contribution`,
       ),
+      ...(seed.linkPhrases !== undefined
+        ? { linkPhrases: parseLinkPhrases(seed.linkPhrases) }
+        : {}),
       relatedNoteIds: identifierArray(
         seed.relatedNoteIds,
         `synthesis seeds[${index}].relatedNoteIds`,
@@ -2326,13 +2333,29 @@ function parseOrganizedConcept(value: unknown): OrganizedConcept {
 }
 
 function parseSuggestedConnection(value: unknown): SuggestedConnection {
-  const object = strictObject(value, ["fromTitle", "toTitle", "reason"]);
-  exactKeys(object, ["fromTitle", "toTitle", "reason"]);
+  const object = strictObject(value, ["fromTitle", "toTitle", "kind", "reason"]);
+  exactKeys(object, ["fromTitle", "toTitle", "reason", ...(object.kind !== undefined ? ["kind"] : [])]);
   return {
     fromTitle: boundedText(object.fromTitle, "connection fromTitle", 300),
     toTitle: boundedText(object.toTitle, "connection toTitle", 300),
+    kind: object.kind === undefined ? "related" : enumValue(
+      object.kind,
+      ["supports", "qualifies", "conflicts", "related"] as const,
+      "connection kind",
+    ),
     reason: boundedText(object.reason, "connection reason", 2_000),
   };
+}
+
+function parseLinkPhrases(value: unknown): string[] {
+  const phrases = arrayValue(value, "synthesis seed link phrases").map((phrase) =>
+    boundedText(phrase, "synthesis seed link phrase", 120),
+  );
+  if (phrases.length > 8) {
+    throw new Error("A synthesis seed may identify at most eight durable link phrases.");
+  }
+  assertUnique(phrases.map(normalizeTitle), "synthesis seed link phrases");
+  return phrases;
 }
 
 function parseLinks(value: unknown): OrganizedNote["links"] {

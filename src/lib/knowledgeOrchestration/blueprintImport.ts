@@ -1,4 +1,5 @@
 import type { AppSnapshot, ReasoningEffort } from "../../types";
+import { defaultSettings } from "../../data/defaults";
 import { splitDocumentIntoReadingSections } from "../longDocumentImport";
 import { truncateUnicode } from "../text";
 import {
@@ -43,10 +44,13 @@ import {
   type KnowledgeOrchestrationResult,
 } from "./service";
 import type { KnowledgeRuntimeEvent } from "./runtime";
+import { planLocalImportConnections } from "./importConnections";
+import { scopedImportConnectionPlan, validateImportConnectionPlan } from "./importConnectionPlan";
 
 const TRANSPORT_SAFETY_TIMEOUT_MS = 300_000;
 const MIN_CALL_MS = 250;
 const MAX_PHYSICAL_WIDTH = 6;
+const INITIAL_READING_WIDTH = 4;
 const MAX_SOURCE_READINGS = 12;
 const MIN_ADAPTIVE_READING_CHARS = 8_000;
 const MIN_ADAPTIVE_READING_UTF8_BYTES = 8_000;
@@ -63,6 +67,7 @@ const MAX_COMPLETED_SOURCE_READINGS_UTF8_BYTES = 1_500_000;
 const MAX_ROUTED_FULL_NOTES_FOR_WRITING_PLAN = 6;
 const MAX_ROUTED_FULL_NOTE_CHARACTERS = 240_000;
 const MAX_WRITER_CONTRACT_FAILURES = 6;
+const MAX_BLUEPRINT_OUTPUTS = 30;
 
 type PipelineStage = NonNullable<KnowledgeTelemetry["pipelineStage"]>;
 
@@ -254,6 +259,7 @@ class FixedAssignmentContractError extends Error {
 }
 
 interface FixedBlueprintImportOptions {
+  compactParallel?: boolean;
   runContext: KnowledgeRunContext;
   rootAssignment: KnowledgeAssignmentContract;
   snapshot: AppSnapshot;
@@ -590,6 +596,10 @@ export async function runFixedBlueprintImport(
     resume?.readingBlueprintFallbackWarning;
   if (resume) {
     readingBlueprint = structuredClone(resume.readingBlueprint);
+  } else if (options.compactParallel) {
+    // Complete short sources already have exact host-owned ranges. Reuse
+    // Space orientation without paying for a separate provider planning pass.
+    readingBlueprint = deterministicReadingBlueprint(options.runContext, sourceRanges);
   } else try {
     readingBlueprint = await executeTypedAssignment<KnowledgeReadingBlueprint>(
       options,
@@ -793,6 +803,22 @@ export async function runFixedBlueprintImport(
   let writingBlueprint = resume?.writingBlueprint
     ? structuredClone(resume.writingBlueprint)
     : undefined;
+  // Small imports into a fresh Space have no revision owners to route. When
+  // readers already proposed a small set of distinct knowledge objects, the
+  // host can preserve those boundaries instead of adding another model round.
+  if (!writingBlueprint && options.compactParallel &&
+      canPlanCompactImportLocally(options, completedSourceReadings)) {
+    const localPlan = createDeterministicWritingBlueprint(
+      options.snapshot, completedSourceReadings, [],
+    );
+    try {
+      validateWritingBlueprint(localPlan, synthesisContext, options.snapshot,
+        completedSourceReadings, [], "create-only");
+      writingBlueprint = localPlan;
+    } catch {
+      // Ambiguous/invalid local plans take the ordinary shared planning path.
+    }
+  }
   if (writingBlueprint) {
     validateWritingBlueprint(
       writingBlueprint,
@@ -868,7 +894,6 @@ export async function runFixedBlueprintImport(
         );
       }
       writingBlueprint = createDeterministicWritingBlueprint(
-        synthesisContext,
         options.snapshot,
         completedSourceReadings,
         [
@@ -896,6 +921,21 @@ export async function runFixedBlueprintImport(
     };
   }
 
+  if (options.compactParallel && !resume?.writingBlueprint && writingBlueprint.outputs.length > 1) {
+    const width = Math.min(6, writingBlueprint.outputs.length);
+    const outputs = writingBlueprint.outputs.map((output, index) => ({
+      ...output, writerSlotId: `compact-writer-${index % width + 1}`,
+    }));
+    writingBlueprint = {
+      ...writingBlueprint,
+      outputs,
+      writerSlots: Array.from({ length: width }, (_, index) => ({
+        writerSlotId: `compact-writer-${index + 1}`,
+        objective: "Write only these disjoint planned knowledge objects from their assigned evidence.",
+        outputIds: outputs.filter((output) => output.writerSlotId === `compact-writer-${index + 1}`).map(({ outputId }) => outputId),
+      })),
+    };
+  }
   counters.stage = "writing";
   counters.writeWidth = writingBlueprint.writerSlots.length;
   counters.writingTotal = writingBlueprint.outputs.length;
@@ -1022,6 +1062,9 @@ async function readSourcesAdaptively({
     resumedCompleted.map(({ reading }) => sourceRangeKey(reading)),
   );
   const queue: AdaptiveSourceReadingTask[] = [];
+  // New logical work caused by a failure belongs to the next settled frontier,
+  // never the live one. Original readers may continue filling idle slots.
+  const deferredTasks: AdaptiveSourceReadingTask[] = [];
   const pendingCheckpoints = new Map(
     progress.map((entry) => [sourceRangeKey(entry), entry] as const),
   );
@@ -1080,25 +1123,57 @@ async function readSourcesAdaptively({
     ...resumedCompleted,
   ]);
   const readingStage = linkedStageController(options.signal);
+  const sourceOrder = [...new Set(
+    readingBlueprint.readers.map(({ sourceId }) => sourceId),
+  )];
+  let nextSource = 0;
+  const takeNextSourceTask = () => {
+    // Source manifests are grouped by document. Round robin prevents a book's
+    // first six ranges from delaying every short companion source in a batch.
+    for (let offset = 0; offset < sourceOrder.length; offset += 1) {
+      const sourceIndex = (nextSource + offset) % sourceOrder.length;
+      const taskIndex = queue.findIndex(
+        ({ reader }) => reader.sourceId === sourceOrder[sourceIndex],
+      );
+      if (taskIndex === -1) continue;
+      nextSource = (sourceIndex + 1) % sourceOrder.length;
+      return queue.splice(taskIndex, 1)[0];
+    }
+    return queue.shift()!;
+  };
+  let physicalWidth = INITIAL_READING_WIDTH;
+  let healthEpoch = 0;
+  const markReaderUnhealthy = () => {
+    physicalWidth = INITIAL_READING_WIDTH;
+    healthEpoch += 1;
+  };
   const activeTasks = new Map<string, AdaptiveSourceReadingTask>();
   const interruptedTasks = new Map<string, AdaptiveSourceReadingTask>();
+  const taskFingerprints = new WeakMap<AdaptiveSourceReadingTask, string>();
   const adaptiveTaskIdentity = (task: AdaptiveSourceReadingTask) =>
     `${sourceRangeKey(task.canonicalReader)}:${task.path.join(".") || "root"}`;
   const syncProgress = () => {
     const pending = new Map<string, AdaptiveSourceReadingTask>();
     for (const task of [
       ...queue,
+      ...deferredTasks,
       ...activeTasks.values(),
       ...interruptedTasks.values(),
     ]) {
       pending.set(adaptiveTaskIdentity(task), task);
     }
-    const next = adaptiveSourceReadingProgress(states, [...pending.values()]);
+    const next = adaptiveSourceReadingProgress(
+      states,
+      [...pending.values()],
+      taskFingerprints,
+    );
     progress.splice(0, progress.length, ...next);
   };
   syncProgress();
 
-  const settleTask = async (task: AdaptiveSourceReadingTask) => {
+  const settleTask = async (task: AdaptiveSourceReadingTask): Promise<boolean> => {
+    let clean = true;
+    let providerCalled = false;
     const state = states.get(sourceRangeKey(task.canonicalReader));
     if (!state) throw new Error("A source section lost its adaptive reading state.");
     if (
@@ -1126,6 +1201,7 @@ async function readSourcesAdaptively({
           ? await readCachedSourceReading(options.readingCache, cacheKey, task)
           : undefined;
       if (!reading) {
+        providerCalled = true;
         const assignment =
           task.depth === 0
             ? task.canonicalAssignment
@@ -1199,6 +1275,8 @@ async function readSourcesAdaptively({
       counters.readingCompleted += 1;
       syncProgress();
     } catch (error) {
+      clean = false;
+      markReaderUnhealthy();
       if (readingStage.controller.signal.aborted) {
         throw readingStage.controller.signal.reason ?? error;
       }
@@ -1212,12 +1290,12 @@ async function readSourcesAdaptively({
           error.retryAfterMs,
           readingStage.controller.signal,
         );
-        queue.push({
+        deferredTasks.push({
           ...task,
           providerRetryAttempt: 1,
         });
         syncProgress();
-        return;
+        return false;
       }
       if (isProviderWideReadingFailure(error)) throw error;
       const children = splitAdaptiveSourceReadingTask(task);
@@ -1237,10 +1315,10 @@ async function readSourcesAdaptively({
         runProgress.logicalTaskCount += children.length;
         state.outstanding += children.length - 1;
         counters.readingTotal += children.length - 1;
-        queue.push(...children);
+        deferredTasks.push(...children);
         syncProgress();
       } else if (task.repairAttempt === 0) {
-        queue.push({
+        deferredTasks.push({
           ...task,
           repairAttempt: 1,
         });
@@ -1253,7 +1331,7 @@ async function readSourcesAdaptively({
       }
     }
 
-    if (state.outstanding !== 0 || state.terminalError) return;
+    if (state.outstanding !== 0 || state.terminalError) return clean && providerCalled;
     const reading = mergeAdaptiveSourceReading(
       state.canonicalReader,
       state.leaves,
@@ -1272,6 +1350,7 @@ async function readSourcesAdaptively({
     });
     states.delete(sourceRangeKey(state.canonicalReader));
     syncProgress();
+    return clean && providerCalled;
   };
 
   try {
@@ -1279,17 +1358,51 @@ async function readSourcesAdaptively({
       let active = 0;
       let settled = false;
       let fatalError: unknown;
+      interface HealthCohort {
+        epoch: number;
+        width: number;
+        launched: number;
+        pending: number;
+        clean: boolean;
+        sealed: boolean;
+      }
+      let cohort: HealthCohort | undefined;
       const pump = () => {
         if (settled) return;
-        while (!fatalError && active < MAX_PHYSICAL_WIDTH && queue.length > 0) {
-          const task = queue.shift()!;
+        if (!fatalError && active === 0 && queue.length === 0) {
+          queue.push(...deferredTasks.splice(0));
+          // A repair frontier starts its own health cohort. It cannot inherit
+          // a partial cohort containing a failed parent.
+          cohort = undefined;
+        }
+        while (!fatalError && active < physicalWidth && queue.length > 0) {
+          if (!cohort || cohort.sealed || cohort.epoch !== healthEpoch) {
+            cohort = {
+              epoch: healthEpoch,
+              width: physicalWidth,
+              launched: 0,
+              pending: 0,
+              clean: true,
+              sealed: false,
+            };
+          }
+          const taskCohort = cohort;
+          taskCohort.launched += 1;
+          taskCohort.pending += 1;
+          taskCohort.sealed = taskCohort.launched === taskCohort.width;
+          const task = takeNextSourceTask();
           activeTasks.set(adaptiveTaskIdentity(task), task);
           syncProgress();
           active += 1;
           counters.active += 1;
           emit();
           void settleTask(task)
+            .then((clean) => {
+              taskCohort.clean &&= clean;
+            })
             .catch((error) => {
+              taskCohort.clean = false;
+              markReaderUnhealthy();
               // A rejected provider task is still part of the exact logical
               // frontier. Keep it alongside never-started work so Resume can
               // retry only this path while preserving accepted sibling leaves.
@@ -1302,6 +1415,16 @@ async function readSourcesAdaptively({
               }
             })
             .finally(() => {
+              taskCohort.pending -= 1;
+              // Widen only after a complete cohort validated cleanly. This is
+              // a health barrier, not a work barrier: already pending original
+              // ranges keep using idle slots while slower siblings finish.
+              if (
+                taskCohort.sealed && taskCohort.pending === 0 &&
+                taskCohort.clean && taskCohort.epoch === healthEpoch
+              ) {
+                physicalWidth = MAX_PHYSICAL_WIDTH;
+              }
               activeTasks.delete(adaptiveTaskIdentity(task));
               active -= 1;
               counters.active -= 1;
@@ -1424,12 +1547,20 @@ function adaptiveSourceTaskFromPath(
 
 function adaptiveSourceTaskCheckpoint(
   task: AdaptiveSourceReadingTask,
+  fingerprints: WeakMap<AdaptiveSourceReadingTask, string>,
 ): AdaptiveSourceReadingTaskCheckpoint {
+  // Tasks hold immutable source slices. Frequent progress snapshots must not
+  // hash every pending book range again while provider calls are in flight.
+  let contentFingerprint = fingerprints.get(task);
+  if (contentFingerprint === undefined) {
+    contentFingerprint = stableTextFingerprint(task.content);
+    fingerprints.set(task, contentFingerprint);
+  }
   return {
     path: [...task.path],
     repairAttempt: task.repairAttempt,
     providerRetryAttempt: task.providerRetryAttempt,
-    contentFingerprint: stableTextFingerprint(task.content),
+    contentFingerprint,
   };
 }
 
@@ -1464,12 +1595,13 @@ function restoreAdaptiveSourceReadingTask(
 function adaptiveSourceReadingProgress(
   states: ReadonlyMap<string, AdaptiveSourceReadingState>,
   pending: readonly AdaptiveSourceReadingTask[],
+  fingerprints: WeakMap<AdaptiveSourceReadingTask, string>,
 ): AdaptiveSourceReadingCheckpoint[] {
   const pendingByRange = new Map<string, AdaptiveSourceReadingTaskCheckpoint[]>();
   for (const task of pending) {
     const key = sourceRangeKey(task.canonicalReader);
     const values = pendingByRange.get(key) ?? [];
-    values.push(adaptiveSourceTaskCheckpoint(task));
+    values.push(adaptiveSourceTaskCheckpoint(task, fingerprints));
     pendingByRange.set(key, values);
   }
   return [...states.values()].flatMap((state) => {
@@ -1713,6 +1845,9 @@ function mergeAdaptiveSourceReading(
     mustPreserve: uniqueStrings([
       `Source range ${canonicalReader.sourceId}/${canonicalReader.rangeId}`,
       ...canonicalReader.mustPreserve,
+      ...ordered.flatMap(({ reading }) => reading.mustPreserve.filter(
+        (required) => !required.startsWith(`Source range ${canonicalReader.sourceId}/`),
+      )),
     ]),
   };
 }
@@ -1971,6 +2106,7 @@ function createSourceReaderAssignments(
         ...context.constraints,
         "Source claims may cite only the assigned source range.",
         "Space interpretations are eisegetic lenses, not statements that the source itself made.",
+        "Preserve the source's epistemic status in every claim and seed: a question, hypothesis, possibility, recollection, or first-person experience must not become an established general fact. Keep attribution and qualifications when they change what the source actually supports.",
         "Each synthesis seed must name an idea rather than this source, chapter, page, or range; cite only exact claim IDs from this reading; and state whether the idea is new, extends, contradicts, connects, or qualifies Space knowledge.",
         "Write sourceClaims at atomic conceptual grain, then partition every sourceClaim into exactly one synthesis seed. A seed may combine at most four mutually supporting claims. Never leave a substantive claim unseeded or reuse one across seeds.",
         "Keep seed titles and theses distinct. A dense range may yield several seeds; a repetitive range may yield one. Never collapse unrelated ideas or split one idea merely to reach a target count.",
@@ -2107,7 +2243,7 @@ function createWritingBlueprintAssignment(
         "Every output must select at least one exact source claim; Space interpretations never establish provenance.",
         "Every imported source must contribute to at least one useful output, but a generic source-summary note is not required. The preserved Source record already carries document order and complete text.",
         "Infer knowledge objects across all readings: combine supporting claims from distant ranges or sources when they establish one thesis, and split adjacent claims when they establish different ideas.",
-        "Do not compress distinct supported ideas merely to minimize output count. Evidence-rich books often support ten or more notes or exact revisions; sparse or repetitive material may support fewer. Never manufacture filler to reach a number.",
+        "Give each clear, distinct thesis its own output. Merge seeds only when they support the same thesis, and explain that exact shared thesis in each merge rationale; shared vocabulary, source, or topic is not enough. Do not compress ideas to a target note count or manufacture filler. The thirty-output and aggregate-token limits are safety bounds: if the complete idea set does not fit, return the boundary honestly instead of disguising unrelated ideas as one note.",
         "Each output must make a distinct contribution that is new to, extends, contradicts, connects, or qualifies the Space. Its title must name that contribution directly, never a source title plus Part N, a range/page/chapter label, Notes on, Introduction to, or a generic summary unless the document itself is the genuine subject.",
         "A source index note may provide navigation only when useful; it cannot replace the durable knowledge objects it links.",
         "Discard low-value repetition and tangents from outputs without claiming they were absent from the preserved source.",
@@ -2116,6 +2252,8 @@ function createWritingBlueprintAssignment(
           : "Post-reading routing did not establish revision authority. Plan create operations only: revisionCandidates is empty, and Across this Space context or collisionTitles never authorize a revision.",
         "Writers own disjoint outputs and receive no sibling prose.",
         "Plan readable ordinary prose and structured links; final note bodies must never contain literal [[wiki]] syntax.",
+        "Plan the link vocabulary before writing. Full-sentence argument titles are valid, but durable synthesis-seed linkPhrases need one appropriate canonical destination. Return concepts with exact canonicalTitle references to planned or available existing notes; retain only meaningful phrases, never tags or a keyword inventory. Do not manufacture a duplicate article when an argument note already explains the phrase.",
+        "Plan suggestedConnections between exact titles with kind supports, qualifies, conflicts, or related and a specific reason. Direction runs from the supporting or qualifying argument to the argument it bears on. Preserve disagreement as conflicts; never connect notes merely because they share a source or word. Connections are a semantic plan resolved locally after all output IDs exist, not instructions to copy sibling prose.",
         "Keep explicit action items in source-grounded project notes as Markdown tasks (- [ ]). Never invent tasks or copy them into canonical wiki articles.",
         "Canonical articles should be definitional, integrate new evidence into coherent existing prose, explain Space relevance, and preserve genuine uncertainty.",
         "Use the frozen destination directory for exact existing-note IDs and versions; it is Space context, never source evidence.",
@@ -2418,21 +2556,15 @@ function canRecoverLocallyFromFixedStageError(
   signal?: AbortSignal,
 ): boolean {
   if (signal?.aborted) return false;
-  // A planner may be the sole slow/malformed call even while smaller writer
-  // calls remain viable. Provider-wide execution failures are different: a
-  // local plan would merely fan out several requests that are already known
-  // to be unable to run.
-  if (error instanceof KnowledgeProviderTimeoutError) return true;
+  // A contract-invalid planner may be repaired locally. An unhealthy provider
+  // must not gain another fan-out merely because the host can build a plan.
+  if (error instanceof KnowledgeProviderTimeoutError) return false;
   if (error instanceof KnowledgeProviderExecutionError) return false;
   if (error instanceof FixedAssignmentContractError) return true;
   const message = errorMessage(error);
-  // Planning and routing are advisory transformations over already validated
-  // readings. A timeout, malformed provider envelope, or schema rejection can
-  // therefore be bypassed safely by host-owned create-only planning. Only a
-  // credential/account/model-access failure is known to make every subsequent
-  // writer request futile, so surface that immediately instead of fanning out
-  // doomed calls.
-  return !/api key|unauthori[sz]ed|forbidden|billing|quota|rate limit|too many requests|could not reach|network|connection|socket|dns|fetch failed|gateway|service unavailable|provider unavailable|overloaded|server error|http (?:401|403|408|409|429|5\d\d)|does not have access|model (?:is )?(?:unavailable|not found)/i.test(
+  // Only contract failures may fall back to local planning. Transport failures
+  // stop the stage; they must not fan out more work against an unhealthy provider.
+  return !/timed? ?out|timeout|api key|unauthori[sz]ed|forbidden|billing|quota|rate limit|too many requests|could not reach|network|connection|socket|dns|fetch failed|gateway|service unavailable|provider unavailable|overloaded|server error|http (?:401|403|408|409|429|5\d\d)|does not have access|model (?:is )?(?:unavailable|not found)/i.test(
     message,
   );
 }
@@ -2445,8 +2577,30 @@ function canRecoverLocallyFromFixedStageError(
  * same knowledge-object grain as the generated plan and never becomes Part-N
  * source commentary.
  */
+function canPlanCompactImportLocally(
+  options: FixedBlueprintImportOptions,
+  readings: readonly CompletedSourceReading[],
+): boolean {
+  if (options.snapshot.notes.length || options.runContext.importGuidance.trim() || options.sources.length > 6 ||
+      options.sources.reduce((total, { parsed }) => total + new TextEncoder().encode(parsed.text).byteLength, 0) > 24_000) return false;
+  const preference = options.snapshot.settings.organizationInstructions.trim();
+  if (preference && preference !== defaultSettings.organizationInstructions.trim()) return false;
+  // Task allocation and deliberate cross-source merges still need the shared
+  // planner. Keep this optimization conservative and purely creation-only.
+  if (options.sources.some(({ parsed }) => /^\s*[-*+]\s+\[[ xX]\]/m.test(parsed.text))) return false;
+  if (readings.some(({ assignment, reading }) => reading.mustPreserve.some(
+    (required) => !assignment.constraints.mustPreserve.includes(required),
+  ))) return false;
+  const seeds = readings.flatMap(({ reading }) => reading.synthesisSeeds);
+  if (!seeds.length || seeds.length > 6 || seeds.some((seed) =>
+    seed.importance === "low" || seed.contribution !== "new" || seed.relatedNoteIds.length > 0)) return false;
+  const titles = seeds.map(({ proposedTitle }) => normalizedTitle(proposedTitle));
+  if (new Set(titles).size !== titles.length) return false;
+  const terms = seeds.map(({ proposedTitle, thesis }) => semanticTerms(`${proposedTitle} ${thesis}`));
+  return terms.every((entry, index) => terms.slice(index + 1).every((other) => semanticOverlap(entry, other) < 0.5));
+}
+
 function createDeterministicWritingBlueprint(
-  context: KnowledgeRunContext,
   snapshot: AppSnapshot,
   readings: readonly CompletedSourceReading[],
   warnings: readonly string[],
@@ -2458,24 +2612,23 @@ function createDeterministicWritingBlueprint(
     throw new Error("No semantic synthesis seeds were available for note planning.");
   }
   const seedGroups = groupSemanticSeeds(seeds);
-  const targetCount = Math.min(
-    12,
-    seedGroups.length,
-    Math.max(
-      context.sources.length,
-      Math.ceil(seedGroups.length * 0.65),
-    ),
-  );
-  const buckets = distributeSemanticSeedGroups(seedGroups, targetCount);
+  // Recovery is not authorized to invent a common thesis. Retain every
+  // distinct seed; exact title-and-thesis duplicates can share provenance.
+  // Resource overflow must fail intact instead of forcing unrelated merges.
+  if (seedGroups.length > MAX_BLUEPRINT_OUTPUTS) {
+    throw new Error(
+      `The completed readings contain ${seedGroups.length} distinct knowledge objects, exceeding the ${MAX_BLUEPRINT_OUTPUTS}-output safety limit. No ideas were merged or discarded to fit.`,
+    );
+  }
   const reservedTitles = new Set(
     snapshot.notes.map(({ title }) => normalizedTitle(title)),
   );
   const seedDispositions: KnowledgeWritingBlueprint["seedDispositions"] = [];
-  const outputs: KnowledgeWritingBlueprintOutput[] = buckets.map((bucket, index) => {
+  const outputs: KnowledgeWritingBlueprintOutput[] = seedGroups.map((group, index) => {
     const ordinal = index + 1;
     const outputId = `output-local-${ordinal}`;
     const writerSlotId = `writer-local-${((ordinal - 1) % 6) + 1}`;
-    const entries = bucket.flatMap((group) => group.entries);
+    const entries = group.entries;
     const primary = entries[0].seed;
     const selectedClaimsByArtifact = new Map<string, Set<string>>();
     for (const { completed, seed } of entries) {
@@ -2509,7 +2662,7 @@ function createDeterministicWritingBlueprint(
         rationale:
           seedIndex === 0
             ? "This seed defines the output's durable knowledge object."
-            : "This seed supplies a compatible facet of the same knowledge object.",
+            : "This seed has the same exact title and thesis as the primary seed and contributes its source evidence.",
       });
     });
     const title = uniqueDeterministicTitle(primary.proposedTitle, reservedTitles);
@@ -2519,7 +2672,8 @@ function createDeterministicWritingBlueprint(
       kind: "note" as const,
       title,
       editorialBrief: truncateUnicode(
-        uniqueStrings(entries.map(({ seed }) => seed.thesis)).join(" "),
+        "Preserve the reading requirements when interpreting only this output's selected claims. Those requirements never authorize copying unselected prose or tasks. Thesis: " +
+          uniqueStrings(entries.map(({ seed }) => seed.thesis)).join(" "),
         4_000,
       ),
       sourceIds: uniqueStrings(
@@ -2527,7 +2681,12 @@ function createDeterministicWritingBlueprint(
       ),
       claimSelections,
       lensSelections: mergeLensSelections(lensSelections),
-      mustPreserve: [],
+      // Readers currently scope requirements to a reading, not a claim. Carry
+      // that immutable context for every output using the reading, but retain
+      // the exact selected-claim boundary as its only authority to copy prose.
+      mustPreserve: uniqueStrings(
+        entries.flatMap(({ completed }) => completed.reading.mustPreserve),
+      ),
       estimatedTokens: 700,
       writerSlotId,
       existingDestination: null,
@@ -2547,14 +2706,19 @@ function createDeterministicWritingBlueprint(
 
   return {
     spaceThesis: truncateUnicode(
-      outputs.map(({ editorialBrief }) => editorialBrief).join(" "),
+      seedGroups.map(({ entries }) => entries[0].seed.thesis).join(" "),
       1_200,
     ),
     outputs,
     writerSlots,
     seedDispositions,
-    concepts: [],
-    suggestedConnections: [],
+    ...planLocalImportConnections({
+      outputs,
+      seedDispositions,
+      readings,
+      notes: snapshot.notes,
+      existingVocabulary: snapshot,
+    }),
     warnings: uniqueStrings(warnings),
   };
 }
@@ -2566,7 +2730,6 @@ type SemanticSeedEntry = {
 
 type SemanticSeedGroup = {
   entries: SemanticSeedEntry[];
-  terms: Set<string>;
   importance: number;
   order: number;
 };
@@ -2574,20 +2737,16 @@ type SemanticSeedGroup = {
 function groupSemanticSeeds(entries: readonly SemanticSeedEntry[]): SemanticSeedGroup[] {
   const groups = new Map<string, SemanticSeedGroup>();
   entries.forEach((entry, order) => {
-    const key = normalizedTitle(entry.seed.proposedTitle);
+    const key = `${normalizedTitle(entry.seed.proposedTitle)}\u0000${normalizedProse(entry.seed.thesis)}`;
     const existing = groups.get(key);
     const importance = semanticImportance(entry.seed.importance);
     if (existing) {
       existing.entries.push(entry);
       existing.importance = Math.max(existing.importance, importance);
-      semanticTerms(`${entry.seed.proposedTitle} ${entry.seed.thesis}`).forEach(
-        (term) => existing.terms.add(term),
-      );
       return;
     }
     groups.set(key, {
       entries: [entry],
-      terms: semanticTerms(`${entry.seed.proposedTitle} ${entry.seed.thesis}`),
       importance,
       order,
     });
@@ -2595,32 +2754,6 @@ function groupSemanticSeeds(entries: readonly SemanticSeedEntry[]): SemanticSeed
   return [...groups.values()].sort(
     (left, right) => right.importance - left.importance || left.order - right.order,
   );
-}
-
-function distributeSemanticSeedGroups(
-  groups: readonly SemanticSeedGroup[],
-  count: number,
-): SemanticSeedGroup[][] {
-  if (count < 1 || groups.length < 1) return [];
-  const buckets = groups.slice(0, count).map((group) => [group]);
-  for (const group of groups.slice(count)) {
-    let selectedIndex = 0;
-    let selectedScore = -1;
-    for (let index = 0; index < buckets.length; index += 1) {
-      const terms = new Set(buckets[index].flatMap((item) => [...item.terms]));
-      const score = semanticOverlap(group.terms, terms);
-      if (
-        score > selectedScore ||
-        (score === selectedScore &&
-          buckets[index].length < buckets[selectedIndex].length)
-      ) {
-        selectedIndex = index;
-        selectedScore = score;
-      }
-    }
-    buckets[selectedIndex].push(group);
-  }
-  return buckets;
 }
 
 function semanticImportance(value: "low" | "medium" | "high"): number {
@@ -2712,13 +2845,9 @@ function validateWritingBlueprint(
       : [],
   );
   const outputSourceCoverage = new Set<string>();
-  const noteOutputs = blueprint.outputs.filter(({ kind }) => kind === "note");
-  const wikiOutputs = blueprint.outputs.filter(
-    ({ kind }) => kind === "wikiArticle",
-  );
-  if (noteOutputs.length > 12 || wikiOutputs.length > 18) {
+  if (blueprint.outputs.length > MAX_BLUEPRINT_OUTPUTS) {
     throw new Error(
-      "One import may create at most twelve project notes and eighteen wiki articles.",
+      `One import may contain at most ${MAX_BLUEPRINT_OUTPUTS} planned outputs in total. This safety limit must not be met by merging unrelated ideas.`,
     );
   }
   if (
@@ -2841,6 +2970,7 @@ function validateWritingBlueprint(
     }
   }
   const titles = resolvableTitles(blueprint, snapshot);
+  validateImportConnectionPlan(blueprint, snapshot);
   for (const concept of blueprint.concepts) {
     requireUniqueTitle(concept.canonicalTitle, titles, "concept canonical title");
     concept.relatedTitles.forEach((title) =>
@@ -2892,7 +3022,6 @@ function validateSeedDispositions(
     blueprint.outputs.map((output) => [output.outputId, output] as const),
   );
   const primarySeedsByOutput = new Map<string, number>();
-  const retainedHighValueTitles = new Set<string>();
   for (const [key, { artifactId, seed }] of expected) {
     const disposition = dispositions.get(key)!;
     if (disposition.disposition === "omitted") {
@@ -2926,9 +3055,6 @@ function validateSeedDispositions(
         (primarySeedsByOutput.get(output.outputId) ?? 0) + 1,
       );
     }
-    if (seed.importance !== "low") {
-      retainedHighValueTitles.add(normalizedTitle(seed.proposedTitle));
-    }
   }
   for (const output of blueprint.outputs) {
     if (primarySeedsByOutput.get(output.outputId) !== 1) {
@@ -2936,18 +3062,6 @@ function validateSeedDispositions(
         `Blueprint output ${output.outputId} must own exactly one primary synthesis seed.`,
       );
     }
-  }
-  const minimumOutputs = Math.min(
-    12,
-    Math.max(
-      1,
-      Math.ceil(retainedHighValueTitles.size * 0.6),
-    ),
-  );
-  if (blueprint.outputs.length < minimumOutputs) {
-    throw new Error(
-      `The note plan collapsed ${retainedHighValueTitles.size} distinct supported knowledge objects into ${blueprint.outputs.length} outputs; at least ${minimumOutputs} nonredundant outputs are required.`,
-    );
   }
   for (const output of blueprint.outputs) {
     if (
@@ -3025,6 +3139,8 @@ function createWriterAssignments(
           rules: [
             ...context.constraints,
             "Use only selected source claims as evidence; an interpretation may shape explanation but never establish a factual source claim.",
+            "Preserve the exact epistemic status of the evidence: hypotheses, questions, possibilities, and personal or diary experiences remain qualified and attributed. Distinguish your interpretation from what the source asserts; do not turn a tentative explanation into an established fact.",
+            "State the thesis once, then add distinct supporting details. Do not repeat the summary or opening paragraph, and do not add a heading that merely repeats the note title. Editorial briefs are instructions, never prose to copy into the note.",
             "Return every assigned output exactly once and no sibling output.",
             "Write the idea, not a report about the import. Do not organize prose by source, chapter, page, range, or reading order; do not copy an intermediate reading summary or enumerate selected claims.",
             "Do not mention an assigned range, supplied lens, pipeline stage, import ID, or that material is merely relevant to the Space. State the substantive extension, contradiction, clarification, qualification, or connection instead.",
@@ -3415,20 +3531,34 @@ function createGroundedWriterResult(
       selectedSeedKeys.has(`${artifact.artifactId}\u0000${seedId}`),
     ),
   );
-  const thesis = output.editorialBrief.trim();
-  const seedTheses = uniqueStrings(selectedSeeds.map(({ thesis }) => thesis.trim()))
-    .filter(Boolean);
-  const groundedDetails = uniqueStrings(
+  const primarySeed = blueprint.seedDispositions.find(
+    (disposition) => disposition.outputId === output.outputId &&
+      disposition.disposition === "output",
+  );
+  const thesis = primarySeed
+    ? readingsByArtifact.get(primarySeed.artifactId)?.reading.synthesisSeeds
+      .find(({ seedId }) => seedId === primarySeed.seedId)?.thesis.trim()
+    : undefined;
+  const groundedDetails = distinctProse(
     selected.flatMap(({ claims }) => claims.map(({ text }) => text.trim())),
-  ).filter(Boolean);
-  const spaceInsights = uniqueStrings(
+  );
+  // Editorial briefs are instructions, not source evidence or note prose.
+  // Keep one supported thesis and verbatim claim statements so qualifications,
+  // first-person attribution, questions, and counterexamples remain intact.
+  const opening = thesis || groundedDetails[0] || output.title;
+  const sourceDetails = distinctProse(groundedDetails, [opening]);
+  const spaceInsights = distinctProse(
     selectedInterpretations.map(({ text }) => text.trim()),
-  ).filter(Boolean);
+    [opening, ...sourceDetails],
+  );
   const knowledgeBody = [
-    thesis,
-    seedTheses.join(" "),
-    groundedDetails.join(" "),
-    spaceInsights.join(" "),
+    opening,
+    sourceDetails.length > 0
+      ? `## Source statements\n\n${sourceDetails.join("\n\n")}`
+      : "",
+    spaceInsights.length > 0
+      ? `## Interpretation\n\n${spaceInsights.join("\n\n")}`
+      : "",
   ]
     .filter(Boolean)
     .join("\n\n")
@@ -3441,12 +3571,12 @@ function createGroundedWriterResult(
   }
   const body = output.operation === "revise"
     ? `${prior!.body.trim()}\n\n${knowledgeBody}`.trim()
-    : `# ${markdownHeading(output.title)}\n\n${knowledgeBody}`.trim();
+    : knowledgeBody;
   if (!body || body.length > 100_000) {
     throw new Error("A local note repair could not fit every selected source claim safely.");
   }
   const summary = truncateUnicode(
-    (prior?.summary.trim() || thesis || groundedDetails[0] || output.title).trim(),
+    (prior?.summary.trim() || opening).trim(),
     2_000,
   );
   const links = uniqueStrings(
@@ -3500,8 +3630,37 @@ function createGroundedWriterResult(
   };
 }
 
-function markdownHeading(value: string): string {
-  return value.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+function normalizedProse(value: string): string {
+  return value.normalize("NFKC").replace(/\s+/gu, " ").trim();
+}
+
+function distinctProse(values: readonly string[], excluded: readonly string[] = []): string[] {
+  const seen = new Set(excluded.map(normalizedProse));
+  return values.flatMap((value) => {
+    const text = value.trim();
+    const key = normalizedProse(text);
+    if (!key || seen.has(key)) return [];
+    seen.add(key);
+    return [text];
+  });
+}
+
+function hasRepeatedProseParagraph(body: string): boolean {
+  const seen = new Set<string>();
+  let fenced = false;
+  for (const block of body.split(/\n\s*\n/u)) {
+    const text = block.trim();
+    // Repeated code, quotations, tables, and list items may be intentional.
+    const fences = text.match(/^\s*(?:```|~~~)/gmu)?.length ?? 0;
+    const containsFence = fenced || fences > 0;
+    if (fences % 2 !== 0) fenced = !fenced;
+    if (containsFence || /^(?:#{1,6}\s|>|[-*+]\s|\d+[.)]\s|\|)/u.test(text)) continue;
+    const key = normalizedProse(text);
+    if (key.length < 40) continue;
+    if (seen.has(key)) return true;
+    seen.add(key);
+  }
+  return false;
 }
 
 function destinationSpaceDirectory(
@@ -3598,6 +3757,9 @@ function validateWriterResult(
     }
     if (!draft.body.trim()) {
       throw new Error("A note-writing pass returned an empty draft.");
+    }
+    if (draft.operation === "create" && hasRepeatedProseParagraph(draft.body)) {
+      throw new Error("A note-writing pass repeated a prose paragraph instead of adding distinct supporting detail.");
     }
     if (/\[\[[^\]]+\]\]/u.test(draft.body)) {
       throw new Error("A finished draft returned literal wiki-link syntax.");
@@ -3921,13 +4083,19 @@ async function callDriverWithTimeout(
     `Orion did not receive ${assignmentStageLabel(request.assignment)} within ${Math.ceil(request.timeoutMs / 1_000)} seconds.`,
   );
   let timeout: number | undefined;
+  let rejectTimeout: (error: unknown) => void = () => undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
+    rejectTimeout = reject;
+  });
+  const startProviderDeadline = () => {
+    if (timeout !== undefined || controller.signal.aborted) return;
     timeout = globalThis.setTimeout(() => {
       controller.abort(timeoutError);
-      reject(timeoutError);
+      rejectTimeout(timeoutError);
     }, request.timeoutMs) as unknown as number;
-  });
-  const driverPromise = driver(request, controller.signal);
+  };
+  if (!driver.schedulesProviderCalls) startProviderDeadline();
+  const driverPromise = driver({ ...request, onProviderStart: startProviderDeadline }, controller.signal);
   // A provider that ignores abort must never hold the product deadline open.
   void driverPromise.catch(() => undefined);
   try {
@@ -4138,11 +4306,7 @@ function writerPipelineMaterials(
       payload: {
         spaceThesis: writingBlueprint.spaceThesis,
         assignedOutputs,
-        outputDirectory: writingBlueprint.outputs.map(
-          ({ outputId, title, kind }) => ({ outputId, title, kind }),
-        ),
-        concepts: writingBlueprint.concepts,
-        suggestedConnections: writingBlueprint.suggestedConnections,
+        ...scopedImportConnectionPlan(writingBlueprint, slot.outputIds),
       },
     },
     ...readings.map(({ artifact, reading }) => ({

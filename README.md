@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.4.2-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.4.4-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
   ·
   <a href="#the-orchestration-topology">How it works</a>
   ·
@@ -22,7 +22,7 @@
   <a href="#local-first-by-construction">Privacy</a>
 </p>
 
-> Orion 0.4.2 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
+> Orion 0.4.4 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
 
 ## Knowledge work should produce knowledge, not another inbox
 
@@ -78,6 +78,12 @@ Inline AI writing is deliberately non-destructive. Continue at the caret or sele
 
 **New note** still opens a blank page. When a writing key is configured, the chevron next to it opens **Generate**: a note, a podcast script, a slide deck, or a slide deck written to be heard. Each lands as an ordinary note. **Play** in the note header reads the open page with System speech, OpenAI `gpt-4o-mini-tts`, or an optional ElevenLabs key. Slide decks generate complete `gpt-image-2` slides that letter the title and bullets in distinctive fonts, hide speaker notes on screen, and Play times those slides to the narration.
 
+Generate shows **Use notes from this Space**, initially matching your context setting. Turn it on for a single generation without changing that setting. Authored notes provide context even without imported Sources: Orion uses the Space overview, a compact note directory, and relevant note excerpts. Decks and podcasts share one outline before up to six writers work on separate sections; slide images follow in their own parallel waves. Planning caps high reasoning at medium while writers keep your selected effort. With context off, Orion uses only your instructions and cannot describe the saved project.
+
+Short sources read concurrently. In a fresh Space, a small batch with clear, separate ideas can go straight from validated readings to parallel writers, removing another provider planning round. Overlapping ideas, tasks, custom instructions, and existing-note integration retain shared planning. Writers keep your selected reasoning effort; reading and planning cap at medium. A single short source keeps its direct one-call path.
+
+Ready sources can proceed while other files download or transcribe; unfinished inputs stay queued after you apply the completed import. PDF pages extract in a separate four-slot local pool. Source readers share slots fairly, start at four, and grow to six after clean responses. All AI work shares a six-call cap, while recent successful provider calls avoid repeated credential probes. Actual latency still depends on the provider and the amount of writing needed.
+
 In **Settings → Voice**, save ElevenLabs voice IDs with names and choose the
 voice used by Play throughout Orion. You can rename or remove saved voices
 there without changing your ElevenLabs library. Your previously selected voice
@@ -127,6 +133,8 @@ flowchart TD
 
 A genuinely short source can still finish in one direct call. The topology exists where it adds coherence; it is not a tax on small imports.
 
+Temporary connection failures retry automatically within bounded attempts and time limits; the readiness check also retries before asking you to intervene. If AI organization fails after recovery is exhausted, Results shows the failed stage and a redacted error detail. Choose **Retry import** (or **Resume import** when a safe checkpoint exists), or **Keep preview** to save the available notes and complete sources. Preserved source previews are never presented as successful AI synthesis.
+
 ### The reading plan comes before interpretation
 
 The first blueprint receives a complete, immutable source-range manifest and a bounded orientation to the Space. It decides what each section needs to answer before any reader interprets the prose. It cannot invent ranges, drop material, or establish claims about text it has not read.
@@ -149,6 +157,10 @@ That distinction matters: difficult material gets a closer reading without turni
 Each reader returns atomic claims and importance-ranked synthesis seeds. A seed proposes a durable object with a semantic title, thesis, exact supporting claims, and a typed contribution to the Space: `new`, `extends`, `contradicts`, `connects`, or `qualifies`.
 
 The writing blueprint must account for every seed as a primary output, a justified merge, or an explicit low-value omission. Adjacent passages can split when they express different ideas; distant passages can combine when they establish one thesis. Note boundaries follow meaning, not files, pages, chapters, or worker assignments.
+
+There is no twelve-note cap or forced seed-merging ratio. Each note develops one clear thesis with distinct supporting details; qualifications stay beside their claims, and source assertions remain distinguishable from interpretations. The existing thirty-output atomic safety boundary and token budgets still apply, with at most six provider calls at once. Local recovery combines only identical title-and-thesis seeds, retains exact source wording, and avoids repeated paragraphs.
+
+Readers identify durable link phrases independently of sentence-length argument titles. Before writing, the shared plan maps those phrases to appropriate canonical notes and records meaningful supporting, qualifying, or conflicting arguments. After all outputs exist, Orion resolves their destinations and relationships locally. The existing connections inspector shows direction and reasons; sharing a source alone does not connect two notes, and no graph canvas is needed.
 
 ### Typed routing is a capability boundary
 
@@ -235,7 +247,7 @@ The connector rereads the real vault for every call, shares Orion's advisory loc
 
 ## Download
 
-[**Download Orion 0.4.2 for Apple Silicon**](https://github.com/zug11/orion/releases/latest/download/Orion-0.4.2-Apple-Silicon.dmg)
+[**Download Orion 0.4.4 for Apple Silicon**](https://github.com/zug11/orion/releases/latest/download/Orion-0.4.4-Apple-Silicon.dmg)
 
 Requirements:
 

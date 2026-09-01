@@ -47,7 +47,7 @@ interface SidebarProps {
   onNewNote: () => void;
   generateEnabled?: boolean;
   generateJobs?: readonly GenerateJob[];
-  onGenerate?: (input: { kind: GenerateKind; instruction: string }) => void;
+  onGenerate?: (input: { kind: GenerateKind; instruction: string; useSpaceNotes?: boolean }) => void;
   onRestartGenerate?: (job: GenerateJob) => void;
   onDeleteGenerate?: (job: GenerateJob) => void;
   onCreateSpace: (name: string) => void;
@@ -135,6 +135,7 @@ export function Sidebar({
 }: SidebarProps) {
   const [generateOpen, setGenerateOpen] = useState(false);
   const [generateKind, setGenerateKind] = useState<GenerateKind>("note");
+  const [generateUseSpaceNotes, setGenerateUseSpaceNotes] = useState(true);
   const [generateInstruction, setGenerateInstruction] = useState("");
   const generatePanelRef = useRef<HTMLDivElement>(null);
   const favorites = notes.filter((note) => note.pinned);
@@ -200,7 +201,12 @@ export function Sidebar({
             aria-label="Generate options"
             aria-expanded={generateOpen}
             aria-haspopup="dialog"
-            onClick={() => setGenerateOpen((open) => !open)}
+            onClick={() => {
+              if (!generateOpen) setGenerateUseSpaceNotes(
+                spaces.find((space) => space.workspace.id === activeSpaceId)?.settings.includeExistingNotesInAIContext ?? false,
+              );
+              setGenerateOpen((open) => !open);
+            }}
           >
             <ChevronDown size={14} />
           </button>
@@ -215,6 +221,7 @@ export function Sidebar({
               onGenerate({
                 kind: generateKind,
                 instruction: truncateGenerateInstruction(generateInstruction),
+                useSpaceNotes: generateUseSpaceNotes,
               });
               setGenerateInstruction("");
               setGenerateOpen(false);
@@ -236,17 +243,28 @@ export function Sidebar({
             </span>
             <label htmlFor="orion-generate-instruction">
               <span>Instructions</span>
-              <small>Optional</small>
+              <small>{generateUseSpaceNotes ? "Optional" : "Required"}</small>
             </label>
             <textarea
               id="orion-generate-instruction"
               value={generateInstruction}
               maxLength={1_250}
               rows={3}
-              placeholder="Leave blank for Orion’s best page from this Space…"
+              placeholder={generateUseSpaceNotes ? "Leave blank for Orion’s best page from this Space…" : "Describe what you want to create…"}
               onChange={(event) => setGenerateInstruction(event.target.value)}
             />
-            <button type="submit" className="button primary compact">
+            <label className="generate-space-context">
+              <input type="checkbox" checked={generateUseSpaceNotes}
+                onChange={(event) => setGenerateUseSpaceNotes(event.target.checked)} />
+              <span>Use notes from this Space</span>
+            </label>
+            <p className="generate-context-hint">
+              {generateUseSpaceNotes
+                ? `Uses relevant text from ${notes.length} notes for this generation. Imported sources are not required.`
+                : "Space context is off. Only your instructions will be used; Orion cannot describe your saved project."}
+            </p>
+            <button type="submit" className="button primary compact"
+              disabled={!generateUseSpaceNotes && !generateInstruction.trim()}>
               Generate
             </button>
           </form>

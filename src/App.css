@@ -6206,6 +6206,14 @@ button.source-citation-marker:focus-visible {
   -webkit-line-clamp: 2;
 }
 
+.backlink-list small.context-argument-reason,
+.nearby-list small.context-argument-reason {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+}
+
 .source-chip-list {
   display: flex;
   flex-wrap: wrap;
@@ -13066,6 +13074,13 @@ button.source-citation-marker:focus-visible {
     transform-origin: 0 24px;
   }
 
+  .new-note-generate-composer {
+    top: 0;
+    left: calc(100% + 9px);
+    right: auto;
+    width: 260px;
+  }
+
   .new-note-button {
     width: 38px;
     height: 38px;
@@ -13686,4 +13701,19 @@ button.source-citation-marker:focus-visible {
     opacity: 1;
     transform: none;
   }
+}
+
+.new-note-generate-composer .generate-space-context {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+}
+.generate-space-context input { width: auto; accent-color: var(--periwinkle); }
+.new-note-generate-composer .generate-context-hint {
+  margin: 6px 0 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
 }

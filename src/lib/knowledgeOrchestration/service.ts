@@ -39,6 +39,8 @@ export interface KnowledgeAssignmentExecutionRequest {
   requestId: string;
   timeoutMs: number;
   finalizing: boolean;
+  /** Renderer-only dispatch notification; never serialized into provider/IPC data. */
+  onProviderStart?: () => void;
 }
 
 export interface KnowledgeAssignmentDriverResult {
@@ -46,10 +48,13 @@ export interface KnowledgeAssignmentDriverResult {
   usage?: KnowledgeProviderUsage;
 }
 
-export type KnowledgeAssignmentDriver = (
+export type KnowledgeAssignmentDriver = ((
   request: KnowledgeAssignmentExecutionRequest,
   signal: AbortSignal,
-) => Promise<KnowledgeAssignmentDriverResult>;
+) => Promise<KnowledgeAssignmentDriverResult>) & {
+  /** This driver queues physical transports and invokes request.onProviderStart. */
+  schedulesProviderCalls?: true;
+};
 
 export interface KnowledgeOrchestrationOptions {
   runContext: KnowledgeRunContext;

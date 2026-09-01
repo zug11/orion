@@ -30,6 +30,8 @@ import { nanoid } from "nanoid";
 import clsx from "clsx";
 import {
   reconcileConceptVocabulary,
+  existingCanonicalPhraseDestinations,
+  normalizeConceptPhrase,
   type ConceptSeed,
 } from "../lib/concepts";
 import {
@@ -53,7 +55,11 @@ import {
   buildCompactOrganizerContext,
   mergeGeneratedOrganizerArticles,
 } from "../lib/organizerContext";
-import { autoResumeBackoffMs, shouldAutoResume } from "../lib/providerHealth";
+import {
+  autoResumeBackoffMs,
+  isTransientProviderFailure,
+  shouldAutoResume,
+} from "../lib/providerHealth";
 import {
   isSelectedAIConfigured,
   selectedAIProviderName,
@@ -79,6 +85,7 @@ import type {
   OrganizedWikiArticle,
   ParsedImport,
   Relationship,
+  RelationshipKind,
   Source,
   TranscribedMedia,
   WhisperConfig,
@@ -105,8 +112,6 @@ const MAX_FILES = 12;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_AI_CHARS_PER_SOURCE = 60_000;
 const MAX_MANUAL_CHARS_PER_SOURCE = 200_000;
-const MAX_NOTES_PER_SOURCE = 8;
-const MAX_WIKI_ARTICLES_PER_SOURCE = 20;
 const MAX_TOTAL_GENERATED_NOTES = 30;
 const MAX_IMPORT_GUIDANCE_CHARS = 1_000;
 const MEDIA_ACCEPT =
@@ -892,11 +897,7 @@ export function buildImportPayload(
     if (!parsed) continue;
     const fallbackSourceId = sourceIdByItemId.get(item.id);
     if (!fallbackSourceId) continue;
-    const organizedNotes = result
-      ? organizedSource.provenance !== undefined
-        ? result.notes
-        : result.notes.slice(0, MAX_NOTES_PER_SOURCE)
-      : [manualOrganizedNote(parsed)];
+    const organizedNotes = result ? result.notes : [manualOrganizedNote(parsed)];
 
     organizedNotes.forEach((organized) => {
       reserveNewNote();
@@ -926,11 +927,7 @@ export function buildImportPayload(
       });
     });
 
-    const organizedArticles = result
-      ? organizedSource.provenance !== undefined
-        ? result.wikiArticles
-        : result.wikiArticles.slice(0, MAX_WIKI_ARTICLES_PER_SOURCE)
-      : [];
+    const organizedArticles = result ? result.wikiArticles : [];
     for (const article of organizedArticles) {
       const title = article.title.trim();
       const key = normalize(title);
@@ -1012,6 +1009,8 @@ export function buildImportPayload(
     });
   const targetForTitle = (title: string) => {
     const targets = targetsByPhrase.get(normalize(title)) ?? [];
+    const exact = targets.filter((note) => normalize(note.title) === normalize(title));
+    if (exact.length === 1) return exact[0];
     if (targets.length === 1) {
       return targets[0];
     }
@@ -1028,6 +1027,15 @@ export function buildImportPayload(
       const canonical = targetForTitle(concept.canonicalTitle);
       if (!canonical) {
         return [];
+      }
+      for (const phrase of [concept.label, ...concept.aliases]) {
+        if (allNotes.some((note) => note.id !== canonical.id &&
+          normalizeConceptPhrase(note.title) === normalizeConceptPhrase(phrase))) {
+          throw new Error(`Orion cannot redirect the note title “${phrase}” to “${canonical.title}”.`);
+        }
+        if (existingCanonicalPhraseDestinations(snapshot, phrase).some((ownerId) => ownerId !== canonical.id)) {
+          throw new Error(`Orion cannot redirect the established link phrase “${phrase}” to “${canonical.title}”.`);
+        }
       }
       return [
         {
@@ -1058,11 +1066,21 @@ export function buildImportPayload(
     sourceId: EntityId,
     context: string,
     strength: number,
+    kind: RelationshipKind = "related",
   ) => {
-    if (fromNoteId === toNoteId) {
+    if (fromNoteId === toNoteId || !context.trim()) {
       return;
     }
-    const key = `${fromNoteId}>${toNoteId}:related`;
+    const pair = `${fromNoteId}>${toNoteId}`;
+    const key = `${pair}:${kind}`;
+    if (kind === "related" && relationships.some((relationship) =>
+      relationship.fromNoteId === fromNoteId && relationship.toNoteId === toNoteId && relationship.kind !== "related")) return;
+    if (kind !== "related") {
+      const genericIndex = relationships.findIndex((relationship) =>
+        relationship.fromNoteId === fromNoteId && relationship.toNoteId === toNoteId && relationship.kind === "related");
+      if (genericIndex >= 0) relationships.splice(genericIndex, 1);
+      relationshipKeys.delete(`${pair}:related`);
+    }
     if (relationshipKeys.has(key)) {
       return;
     }
@@ -1071,17 +1089,17 @@ export function buildImportPayload(
       id: `relationship_${nanoid(12)}`,
       fromNoteId,
       toNoteId,
-      kind: "related",
-      label: "related to",
+      kind,
+      label: kind === "related" ? "related to" : kind === "conflicts" ? "conflicts with" : kind,
       strength,
       sourceId,
-      context: context.trim() || "Suggested during import.",
+      context: context.trim(),
     });
   };
 
   generatedContexts.forEach(({ note, contributions }) => {
     contributions.forEach(({ sourceId, organized }) => {
-      organized.links.slice(0, 16).forEach((link) => {
+      organized.links.forEach((link) => {
         const target = targetForTitle(link.targetTitle);
         if (target) {
           addRelationship(
@@ -1109,7 +1127,7 @@ export function buildImportPayload(
       if (!canonical) {
         return;
       }
-      concept.relatedTitles.slice(0, 16).forEach((title) => {
+      concept.relatedTitles.forEach((title) => {
         const related = targetForTitle(title);
         if (related) {
           addRelationship(
@@ -1122,7 +1140,7 @@ export function buildImportPayload(
         }
       });
     });
-    result.suggestedConnections.slice(0, 18).forEach((connection) => {
+    result.suggestedConnections.forEach((connection) => {
       const from = targetForTitle(connection.fromTitle);
       const to = targetForTitle(connection.toTitle);
       if (from && to) {
@@ -1132,6 +1150,7 @@ export function buildImportPayload(
           sourceId,
           connection.reason,
           0.64,
+          connection.kind ?? "related",
         );
       }
     });
@@ -1165,11 +1184,19 @@ export function ImportStudio({
   const pasteBodyRef = useRef<HTMLTextAreaElement>(null);
   const fileChoiceDialogRef = useRef<HTMLDivElement>(null);
   const itemsRef = useRef<ImportItem[]>([]);
+  const reviewedImportIdsRef = useRef<Set<string> | null>(null);
+  const organizedImportIdsRef = useRef<Set<string>>(new Set());
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
   const organizeAbortRef = useRef<AbortController | null>(null);
   const autoResumeAttemptRef = useRef(0);
   const importCheckpointBatchIndexRef = useRef(0);
+  const retainedKnowledgeSegmentsRef = useRef<
+    Array<{
+      items: readonly ImportItem[];
+      knowledge: KnowledgeImportBatchResult;
+    }>
+  >([]);
   const organizeProgressFrameRef = useRef<number | null>(null);
   const pendingOrganizeProgressRef = useRef<OrganizeProgress | null>(null);
   const latestOrchestrationStageRef = useRef<UserFacingImportStage>("direct");
@@ -1205,13 +1232,23 @@ export function ImportStudio({
   const clearImportRecovery = () => {
     setImportDiagnostic(null);
     setImportCheckpoint(null);
+    retainedKnowledgeSegmentsRef.current = [];
   };
 
   const updateItems = (
     updater: (current: ImportItem[]) => ImportItem[],
   ) => {
-    clearImportRecovery();
-    const next = updater(itemsRef.current);
+    const previous = itemsRef.current;
+    const reviewed = reviewedImportIdsRef.current;
+    const next = updater(previous).map((item) =>
+      reviewed && !reviewed.has(item.id) && item.included
+        ? { ...item, included: false }
+        : item,
+    );
+    // A background extraction completing outside this selection must not
+    // invalidate the active run's accepted segments or retry checkpoint.
+    if (!reviewed || previous.some((item) => reviewed.has(item.id) &&
+        next.find(({ id }) => id === item.id) !== item)) clearImportRecovery();
     itemsRef.current = next;
     setItems(next);
   };
@@ -1227,7 +1264,7 @@ export function ImportStudio({
     });
   };
 
-  const reset = () => {
+  const reset = (remainingItems: ImportItem[] = []) => {
     organizeAbortRef.current?.abort(
       new Error("The knowledge import was cancelled."),
     );
@@ -1240,9 +1277,12 @@ export function ImportStudio({
     latestOrchestrationStageRef.current = "direct";
     autoResumeAttemptRef.current = 0;
     importCheckpointBatchIndexRef.current = 0;
+    retainedKnowledgeSegmentsRef.current = [];
     setStage("add");
-    itemsRef.current = [];
-    setItems([]);
+    reviewedImportIdsRef.current = null;
+    organizedImportIdsRef.current = new Set();
+    itemsRef.current = remainingItems;
+    setItems(remainingItems);
     setPastedTitle("");
     setPastedText("");
     setPasteOpen(false);
@@ -1690,6 +1730,7 @@ export function ImportStudio({
   };
 
   const toggleItem = (itemId: EntityId) => {
+    reviewedImportIdsRef.current?.add(itemId);
     updateItems((current) =>
       current.map((item) =>
         item.id === itemId && item.status === "ready"
@@ -1706,6 +1747,7 @@ export function ImportStudio({
     if (selected.length === 0) {
       return;
     }
+    organizedImportIdsRef.current = new Set(selected.map(({ id }) => id));
 
     const importSnapshot = snapshotRef.current;
     const effectiveMode: ImportMode =
@@ -1832,7 +1874,18 @@ export function ImportStudio({
           baseSnapshotVersion,
         });
         setResultBaseSnapshotVersion(baseSnapshotVersion);
-        clearImportRecovery();
+        const failedIndex = segments.findIndex(
+          ({ knowledge }) => knowledge.landing,
+        );
+        const failure = segments[failedIndex]?.knowledge.landing;
+        if (failure) {
+          retainedKnowledgeSegmentsRef.current = [...segments];
+          importCheckpointBatchIndexRef.current = failedIndex;
+          setImportDiagnostic(failure.diagnostic);
+          setImportCheckpoint(failure.checkpoint ?? null);
+        } else {
+          clearImportRecovery();
+        }
         setStage("results");
       };
       const completedSegments: Array<{
@@ -1841,9 +1894,35 @@ export function ImportStudio({
       }> = [];
       let activeBatchIndex = 0;
       try {
-        const preflight = await preflightKnowledgeProvider(
+        let preflight = await preflightKnowledgeProvider(
           importSnapshot.settings.model,
         );
+        for (
+          let attempt = 0;
+          !preflight.ok &&
+          isTransientProviderFailure(preflight.message) &&
+          attempt < 2 &&
+          !controller.signal.aborted;
+          attempt += 1
+        ) {
+          scheduleOrganizeProgress({
+            ...EMPTY_ORGANIZE_PROGRESS,
+            sourceTotal: selected.length,
+            phase: "orchestration",
+            operationLabel: "Orion is reconnecting to your AI provider",
+            detailLabel: `Retrying the connection · attempt ${attempt + 2} of 3`,
+            orchestrationStage: "direct",
+          });
+          const waited = await waitForAutoResumeBackoff(
+            autoResumeBackoffMs(attempt),
+            controller.signal,
+          );
+          if (!waited || controller.signal.aborted) break;
+          preflight = await preflightKnowledgeProvider(
+            importSnapshot.settings.model,
+          );
+        }
+        if (controller.signal.aborted) throw controller.signal.reason;
         if (!preflight.ok) {
           throw new Error(preflight.message);
         }
@@ -1854,6 +1933,20 @@ export function ImportStudio({
         for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
           activeBatchIndex = batchIndex;
           const batchItems = batches[batchIndex];
+          const retained = retainedKnowledgeSegmentsRef.current.find(
+            (segment) =>
+              !segment.knowledge.landing &&
+              snapshotStillMatchesImportBase(
+                importSnapshot,
+                segment.knowledge.baseSnapshotVersion,
+              ) &&
+              segment.items.length === batchItems.length &&
+              segment.items.every((item, index) => item === batchItems[index]),
+          );
+          if (retained) {
+            completedSegments.push(retained);
+            continue;
+          }
           const batchSources = knowledgeSourcesFor(batchItems);
           const batchTitle = batchProgressTitle(batchItems, batchIndex);
           let checkpoint =
@@ -1951,10 +2044,9 @@ export function ImportStudio({
                 checkpoint = runError.checkpoint;
                 continue;
               }
-              // Auto-resume is exhausted or ineligible: land this batch
-              // instead of pausing. Cancellation and a changed Space never
-              // land, and a Space that changed mid-run falls through to the
-              // ordinary paused card.
+              // Auto-resume is exhausted or ineligible: preserve this batch
+              // with its diagnostic and recovery action. Cancellation and a
+              // changed Space never land; they use the paused path below.
               const landed = landFailedKnowledgeImport(
                 runError,
                 batchSources,
@@ -1985,6 +2077,8 @@ export function ImportStudio({
         presentKnowledgeResults(completedSegments);
         return;
       } catch (error) {
+        if (organizeAbortRef.current !== controller ||
+            snapshotRef.current.workspace.id !== importSnapshot.workspace.id) return;
         if (controller.signal.aborted) {
           setStage("review");
           setOrganizeIssues([]);
@@ -2293,7 +2387,9 @@ export function ImportStudio({
           ...relationship,
         })),
       });
-      reset();
+      const appliedIds = organizedImportIdsRef.current;
+      reset(itemsRef.current.filter(({ id }) => !appliedIds.has(id))
+        .map((item) => item.status === "ready" ? { ...item, included: true } : item));
       onClose();
     } catch (error) {
       setApplyError(errorMessage(error));
@@ -2661,6 +2757,7 @@ export function ImportStudio({
                           {item.parsed && (
                             <span>{contentPreview(item.parsed.text)}</span>
                           )}
+                          {item.status === "parsing" && <span>{item.preprocessLabel ?? "Preparing locally…"} You can import the ready sources now.</span>}
                           {item.error && <em>{item.error}</em>}
                           {item.parsed?.warnings.map((warning) => (
                             <em key={warning}>{warning}</em>
@@ -2986,9 +3083,8 @@ export function ImportStudio({
                     </dl>
                   </details>
                   <p className="import-studio__diagnostic-preservation">
-                    {manualFallbackCount === 1
-                      ? "The complete source remains in Sources. Orion also created an editable preview note."
-                      : "The complete sources remain in Sources. Orion also created editable preview notes."}
+                    Your complete source text is preserved in this import. You can
+                    retry, or keep the available notes and sources as they are.
                   </p>
                 </section>
               )}
@@ -3227,11 +3323,15 @@ export function ImportStudio({
           <span className="import-studio__footer-note">
             {stage === "add" && items.length === 0
               ? "Nothing is imported until you review it."
+              : stage === "add" && parsing
+                ? `${readyItems.length} ready · other sources are still preparing`
               : stage === "review"
                 ? `${readyItems.length} selected ${readyItems.length === 1 ? "source" : "sources"}`
                 : stage === "results" && result
                   ? "Concepts with existing IDs will be safely updated."
-                  : "Working source by source to keep the result bounded."}
+                  : stage === "add"
+                    ? `${readyItems.length} ${readyItems.length === 1 ? "source is" : "sources are"} ready to review.`
+                    : "Original sources are preserved while Orion prepares your notes."}
           </span>
 
           <div className="import-studio__footer-actions">
@@ -3239,7 +3339,7 @@ export function ImportStudio({
               <button
                 className="button ghost"
                 type="button"
-                onClick={() => setStage("add")}
+                onClick={() => { reviewedImportIdsRef.current = null; setStage("add"); }}
               >
                 <ArrowLeft aria-hidden="true" size={15} />
                 Back
@@ -3250,8 +3350,12 @@ export function ImportStudio({
               <button
                 className="button primary"
                 type="button"
-                disabled={readyItems.length === 0 || parsing}
-                onClick={() => setStage("review")}
+                disabled={readyItems.length === 0}
+                onClick={() => {
+                  reviewedImportIdsRef.current = new Set(readyItems.map(({ id }) => id));
+                  updateItems((current) => current);
+                  setStage("review");
+                }}
               >
                 Review sources
                 <ArrowRight aria-hidden="true" size={15} />

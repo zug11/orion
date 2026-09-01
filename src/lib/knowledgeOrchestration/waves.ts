@@ -182,6 +182,7 @@ export async function runPresentationWaves<
   );
   const kind = sameKind(options.jobs);
   const queue: J[] = [...options.jobs];
+  const repairQueue: J[] = [];
   const results: PresentationWaveJobSuccess<J, R>[] = [];
   const failures: Array<{ job: J; error: unknown }> = [];
   const waves: string[][] = [];
@@ -251,7 +252,10 @@ export async function runPresentationWaves<
       jobIds,
     });
     // Repairs trail remaining original work so they cannot preempt the plan.
-    queue.push(...pendingRepairs);
+    repairQueue.push(...pendingRepairs);
+    // Finish the original cohorts before issuing repairs, even when the last
+    // original cohort has spare capacity. Repairs get their own barrier.
+    if (queue.length === 0) queue.push(...repairQueue.splice(0));
     waveIndex += 1;
   }
 

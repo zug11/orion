@@ -94,6 +94,29 @@ export function findConceptByPhrase(
   );
 }
 
+/** Read-only collision check shared by planning and the final import boundary. */
+export function existingCanonicalPhraseDestinations(
+  snapshot: Pick<AppSnapshot, "notes" | "concepts">,
+  phrase: string,
+): EntityId[] {
+  const key = normalizeConceptPhrase(phrase);
+  const owners = new Set<EntityId>();
+  for (const concept of snapshot.concepts) {
+    if (concept.canonicalNoteId && snapshot.notes.some((note) =>
+      note.id === concept.canonicalNoteId && normalizeConceptPhrase(note.title) === normalizeConceptPhrase(concept.label)) &&
+      [concept.label, ...concept.aliases].some((candidate) => normalizeConceptPhrase(candidate) === key)) {
+      owners.add(concept.canonicalNoteId);
+    }
+  }
+  if (owners.size > 0) return [...owners];
+  const fallbackOwners = snapshot.notes
+    .filter((note) => [note.title, ...note.aliases].some((candidate) => normalizeConceptPhrase(candidate) === key))
+    .map((note) => note.id);
+  // Legacy shared aliases are unresolved vocabulary, not several established
+  // canonical destinations. A deliberate plan may resolve that ambiguity.
+  return fallbackOwners.length === 1 ? fallbackOwners : [];
+}
+
 export function reconcileConceptVocabulary(
   inputNotes: readonly Note[],
   inputConcepts: readonly Concept[],
@@ -517,6 +540,42 @@ function upsertSeed(
     (candidate) =>
       normalizeConceptPhrase(candidate.label) === normalized,
   );
+  if (!concept) {
+    const canonicalAliasOwners = concepts.filter((candidate) => candidate.canonicalNoteId &&
+      candidate.aliases.some((alias) => normalizeConceptPhrase(alias) === normalized));
+    const destinationIds = unique(canonicalAliasOwners.map((candidate) => candidate.canonicalNoteId!));
+    if (destinationIds.length === 1) {
+      // Once explicitly resolved, a phrase remains canonical on later loads;
+      // repeating that phrase in another note's aliases cannot reopen a canvas.
+      if (seed.canonicalNoteId === destinationIds[0]) {
+        canonicalAliasOwners[0].aliases = unique([
+          ...canonicalAliasOwners[0].aliases,
+          ...(seed.aliases ?? []),
+        ]);
+      }
+      return;
+    }
+  }
+  const plannedCanonical = seed.canonicalNoteId && noteIds.includes(seed.canonicalNoteId)
+    ? concepts.find((candidate) => candidate.canonicalNoteId === seed.canonicalNoteId)
+    : undefined;
+  if (plannedCanonical && concept && concept.id !== plannedCanonical.id &&
+      (!concept.canonicalNoteId || concept.canonicalNoteId === seed.canonicalNoteId)) {
+    // A deliberate import plan may resolve an otherwise ambiguous shared alias.
+    // Keep its stable ID for explicit links, but make its label canonical so a
+    // later reconciliation does not discard the destination again.
+    concept.aliases = unique([
+      ...concept.aliases,
+      concept.label,
+      ...(seed.aliases ?? []),
+    ]);
+    concept.label = plannedCanonical.label;
+    concept.noteIds = [seed.canonicalNoteId!];
+    concept.canonicalNoteId = seed.canonicalNoteId;
+    concept.description = seed.description?.trim() || concept.description;
+    concept.autoLink = true;
+    return;
+  }
   if (!concept && noteIds.length === 1) {
     const canonicalForTarget = concepts.find(
       (candidate) => candidate.canonicalNoteId === noteIds[0],

@@ -12,6 +12,7 @@ import {
   anthropicApiKeyStatus,
   buildBrowserOrganizerInstructions,
   buildOrganizerInstructionSuffix,
+  chatWithOrion,
   clearBrowserSnapshot,
   createFailoverKnowledgeDriver,
   deleteAnthropicApiKey,
@@ -408,6 +409,36 @@ describe("native knowledge assignment boundary", () => {
     });
   });
 
+  it.each([
+    "Orion could not reach OpenAI: connection reset by peer",
+    "Orion could not reach Anthropic: error sending request",
+    "OpenAI is temporarily unavailable.",
+    "Anthropic rate or usage limits were reached.",
+  ])("makes a transient native error eligible for bounded retries: %s", async (message) => {
+    invokeTauriMock.mockRejectedValueOnce(message);
+    await expect(
+      runKnowledgeAssignment(
+        knowledgeExecutionRequest({ requestId: "run-1:root:1:1", timeoutMs: 90_000, finalizing: false }),
+        new AbortController().signal,
+      ),
+    ).rejects.toMatchObject({ retryable: true, retryAfterMs: 1_000 });
+  });
+
+  it.each([
+    "OpenAI rejected the saved API key.",
+    "OpenAI billing quota exceeded; rate limit reached.",
+    "Invalid response schema in request.",
+    "The model does not exist or you do not have access to it.",
+  ])("does not retry a terminal native error: %s", async (message) => {
+    invokeTauriMock.mockRejectedValueOnce(message);
+    await expect(
+      runKnowledgeAssignment(
+        knowledgeExecutionRequest({ requestId: "run-1:root:1:1", timeoutMs: 90_000, finalizing: false }),
+        new AbortController().signal,
+      ),
+    ).rejects.toBe(message);
+  });
+
   it("rejects promptly and asks native to cancel the exact active request", async () => {
     let finishNative!: (value: unknown) => void;
     invokeTauriMock.mockImplementation((command: string) => {
@@ -456,6 +487,71 @@ describe("native knowledge assignment boundary", () => {
     await expect(
       runKnowledgeAssignment(request, new AbortController().signal),
     ).rejects.toBeInstanceOf(KnowledgeProviderTimeoutError);
+  });
+
+  it("shares slots with Chat, keeps OCR independent, and holds cancelled native calls until they finish", async () => {
+    const finish = new Map<string, (value: unknown) => void>();
+    invokeTauriMock.mockImplementation((command: string, args?: { request?: { requestId?: string } }) => {
+      if (command === "knowledge_assignment") {
+        return new Promise((resolve) => { finish.set(args!.request!.requestId!, resolve); });
+      }
+      if (command === "chat") return Promise.resolve({ reply: "Ready." });
+      if (command === "recognize_document_text") return Promise.resolve({ text: "Local text", pageCount: 1, pages: [{ pageNumber: 1, text: "Local text" }], warnings: [] });
+      return Promise.resolve(true);
+    });
+    const controllers = Array.from({ length: 6 }, () => new AbortController());
+    const jobs = controllers.map((controller, index) => runKnowledgeAssignment({
+      ...knowledgeExecutionRequest({ requestId: `active-${index}`, timeoutMs: 30_000, finalizing: false }),
+      model: index % 2 ? "claude-sonnet-5" : "gpt-5.6-sol",
+    }, controller.signal));
+    const settledJobs = Promise.allSettled(jobs);
+    const failures: unknown[] = [];
+    jobs.forEach((job) => { void job.catch((error) => failures.push(error)); });
+    await vi.waitFor(() => expect({ started: [...finish.keys()], failures }).toEqual({ started: controllers.map((_, index) => `active-${index}`), failures: [] }));
+
+    const queuedController = new AbortController();
+    const queuedStart = vi.fn();
+    const queued = runKnowledgeAssignment({
+      ...knowledgeExecutionRequest({ requestId: "cancel-before-dispatch", timeoutMs: 30_000, finalizing: false }),
+      onProviderStart: queuedStart,
+    }, queuedController.signal);
+    const chatController = new AbortController();
+    const cancelledChat = chatWithOrion({ prompt: "Cancelled", workspaceName: "Space", notes: [], sources: [], concepts: [], history: [] }, chatController.signal);
+    chatController.abort(new Error("Cancelled before Chat dispatch"));
+    await expect(cancelledChat).rejects.toThrow("Cancelled before Chat dispatch");
+    const chat = chatWithOrion({ prompt: "Hello", workspaceName: "Space", notes: [], sources: [], concepts: [], history: [] });
+    await expect(recognizeDocumentText(new File([new Uint8Array([1])], "scan.png", { type: "image/png" }))).resolves.toMatchObject({ text: "Local text" });
+    expect(invokeTauriMock.mock.calls.filter(([command]) => command === "chat")).toHaveLength(0);
+
+    queuedController.abort(new Error("Queued import cancelled"));
+    await expect(queued).rejects.toThrow("Queued import cancelled");
+    expect(queuedStart).not.toHaveBeenCalled();
+    controllers[0].abort(new Error("Active import cancelled"));
+    await expect(jobs[0]).rejects.toThrow("Active import cancelled");
+    expect(invokeTauriMock.mock.calls.filter(([command]) => command === "chat")).toHaveLength(0);
+    expect(finish.has("cancel-before-dispatch")).toBe(false);
+    expect(invokeTauriMock).not.toHaveBeenCalledWith("cancel_knowledge_assignment", { requestId: "cancel-before-dispatch" });
+
+    finish.get("active-0")!({ response: { kind: "complete", payload: {} } });
+    await expect(chat).resolves.toEqual({ reply: "Ready." });
+    for (let index = 1; index < 6; index += 1) finish.get(`active-${index}`)!({ response: { kind: "complete", payload: {} } });
+    await settledJobs;
+  });
+
+  it("notifies the host only when the actual transport starts and never serializes its callback", async () => {
+    const onProviderStart = vi.fn();
+    invokeTauriMock.mockImplementation((command: string) => {
+      expect(command).toBe("knowledge_assignment");
+      expect(onProviderStart).toHaveBeenCalledTimes(1);
+      return Promise.resolve({ response: { kind: "complete", payload: {} } });
+    });
+    await runKnowledgeAssignment({
+      ...knowledgeExecutionRequest({ requestId: "dispatch-aware", timeoutMs: 30_000, finalizing: false }),
+      onProviderStart,
+    }, new AbortController().signal);
+    expect(invokeTauriMock.mock.calls[0]?.[1]?.request).not.toHaveProperty("onProviderStart");
+    expect(runKnowledgeAssignment.schedulesProviderCalls).toBe(true);
+    expect(createFailoverKnowledgeDriver(createEmptySnapshot().settings).schedulesProviderCalls).toBe(true);
   });
 });
 
@@ -604,7 +700,12 @@ describe("opt-in provider failover", () => {
 });
 
 describe("knowledge provider preflight", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    // Key changes invalidate the process-local readiness cache without a
+    // test-only reset API or any native credential operation.
+    Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    await deleteApiKey();
+    await deleteAnthropicApiKey();
     invokeTauriMock.mockReset();
     Object.defineProperty(window, "localStorage", {
       configurable: true,
@@ -683,8 +784,9 @@ describe("knowledge provider preflight", () => {
 
   it("gives up after the local timeout instead of hanging the flow", async () => {
     vi.useFakeTimers();
+    let finishNative!: (value: unknown) => void;
     invokeTauriMock.mockImplementationOnce(
-      () => new Promise(() => undefined),
+      () => new Promise((resolve) => { finishNative = resolve; }),
     );
 
     const pending = preflightKnowledgeProvider("gpt-5.6-sol");
@@ -695,6 +797,68 @@ describe("knowledge provider preflight", () => {
     if (!result.ok) {
       expect(result.message).toMatch(/could not reach OpenAI/);
     }
+    // A local timeout cannot release a still-running native request's slot.
+    finishNative({ valid: true });
+    await vi.advanceTimersByTimeAsync(0);
+    invokeTauriMock.mockResolvedValueOnce({ valid: false, message: "OpenAI rejected this key." });
+    await expect(preflightKnowledgeProvider("gpt-5.6-sol")).resolves.toMatchObject({ ok: false });
+    expect(invokeTauriMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses a successful probe for two minutes, then checks again", async () => {
+    vi.useFakeTimers();
+    invokeTauriMock.mockResolvedValue({ valid: true, message: "Ready." });
+    await preflightKnowledgeProvider("gpt-5.6-sol");
+    await expect(preflightKnowledgeProvider("gpt-5.6-sol")).resolves.toEqual({ ok: true, latencyMs: 0 });
+    expect(invokeTauriMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await preflightKnowledgeProvider("gpt-5.6-sol");
+    expect(invokeTauriMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces concurrent probes for the same provider", async () => {
+    let finish!: (value: unknown) => void;
+    invokeTauriMock.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const first = preflightKnowledgeProvider("gpt-5.6-sol");
+    const second = preflightKnowledgeProvider("gpt-5.6-luna");
+    await vi.waitFor(() => expect(invokeTauriMock).toHaveBeenCalledTimes(1));
+    finish({ valid: true, message: "Ready." });
+    await expect(Promise.all([first, second])).resolves.toMatchObject([{ ok: true }, { ok: true }]);
+  });
+
+  it("uses successful content traffic as readiness only for its own provider", async () => {
+    invokeTauriMock.mockResolvedValueOnce({ response: { kind: "complete", payload: {} } });
+    await runKnowledgeAssignment(knowledgeExecutionRequest({ requestId: "ready-content", timeoutMs: 30_000, finalizing: false }), new AbortController().signal);
+    await expect(preflightKnowledgeProvider("gpt-5.6-sol")).resolves.toEqual({ ok: true, latencyMs: 0 });
+    expect(invokeTauriMock).toHaveBeenCalledTimes(1);
+    invokeTauriMock.mockResolvedValueOnce({ valid: true });
+    await preflightKnowledgeProvider("claude-sonnet-5");
+    expect(invokeTauriMock).toHaveBeenLastCalledWith("test_anthropic_key", undefined);
+  });
+
+  it("does not let a late success for a replaced key authorize later imports", async () => {
+    let finishOldProbe!: (value: unknown) => void;
+    invokeTauriMock.mockImplementation((command: string) => command === "test_openai_key"
+      ? new Promise((resolve) => { finishOldProbe = resolve; })
+      : Promise.resolve(undefined));
+    const oldProbe = preflightKnowledgeProvider("gpt-5.6-sol");
+    await vi.waitFor(() => expect(invokeTauriMock).toHaveBeenCalledTimes(1));
+    await saveApiKey("replacement-fixture-key");
+    finishOldProbe({ valid: true });
+    await oldProbe;
+    invokeTauriMock.mockResolvedValueOnce({ valid: false, message: "OpenAI rejected this key." });
+    await expect(preflightKnowledgeProvider("gpt-5.6-sol")).resolves.toMatchObject({ ok: false });
+    expect(invokeTauriMock.mock.calls.filter(([command]) => command === "test_openai_key")).toHaveLength(2);
+  });
+
+  it("invalidates a recent success when a content call fails", async () => {
+    invokeTauriMock.mockResolvedValueOnce({ valid: true });
+    await preflightKnowledgeProvider("gpt-5.6-sol");
+    invokeTauriMock.mockRejectedValueOnce("OpenAI billing quota exceeded.");
+    await expect(runKnowledgeAssignment(knowledgeExecutionRequest({ requestId: "failed-content", timeoutMs: 30_000, finalizing: false }), new AbortController().signal)).rejects.toBeDefined();
+    invokeTauriMock.mockResolvedValueOnce({ valid: false, message: "OpenAI billing quota exceeded." });
+    await expect(preflightKnowledgeProvider("gpt-5.6-sol")).resolves.toMatchObject({ ok: false });
+    expect(invokeTauriMock).toHaveBeenCalledTimes(3);
   });
 
   it("never throws when the native command rejects", async () => {

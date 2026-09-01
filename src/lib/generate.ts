@@ -1,10 +1,7 @@
 import { nanoid } from "nanoid";
 import type { AppSnapshot, ChatRequest, Note } from "../types";
 import { SLIDE_DECK_TAG } from "./slideDeck";
-import {
-  buildLocalSpaceOverview,
-  resolveSpaceOverviewNoteIds,
-} from "./spaceOverview";
+import { buildGenerationContext, generationNoteEvidence } from "./generationContext";
 import { truncateUnicode } from "./text";
 
 export const GENERATE_KINDS = [
@@ -35,6 +32,7 @@ export interface GenerateJob {
   kind: GenerateKind;
   title: string;
   instruction: string;
+  useSpaceNotes?: boolean;
   progress: number;
   stage: GenerateJobStage;
   error?: string;
@@ -178,47 +176,19 @@ export function writingPromptForGenerateKind(
 
 export function buildGenerateWritingRequest(
   snapshot: AppSnapshot,
-  input: { originNoteId: string; kind: GenerateKind; instruction: string },
+  input: { originNoteId: string; kind: GenerateKind; instruction: string; useSpaceNotes?: boolean },
 ): ChatRequest {
   const origin = snapshot.notes.find((note) => note.id === input.originNoteId);
   if (!origin) {
     throw new Error("The generated note is no longer in this Space.");
   }
-  const includeSpace = snapshot.settings.includeExistingNotesInAIContext;
-  const overview = includeSpace
-    ? (snapshot.spaceOverview ?? buildLocalSpaceOverview(snapshot))
-    : null;
-  const linkedIds = overview
-    ? resolveSpaceOverviewNoteIds(snapshot, overview).filter(
-        (noteId) => noteId !== origin.id,
-      )
-    : [];
+  const includeSpace = input.useSpaceNotes ?? snapshot.settings.includeExistingNotesInAIContext;
+  const context = buildGenerationContext(snapshot, input.instruction, includeSpace);
   const notes = [
-    {
-      title: origin.title,
-      summary: origin.summary,
-      body: "",
-    },
-    ...(overview
-      ? [
-          {
-            title: overview.title,
-            summary: "Across this Space orientation (untrusted lens).",
-            body: truncateUnicode(overview.body, 4_000),
-          },
-        ]
-      : []),
-    ...linkedIds.slice(0, 8).flatMap((noteId) => {
-      const note = snapshot.notes.find((candidate) => candidate.id === noteId);
-      if (!note) return [];
-      return [
-        {
-          title: note.title,
-          summary: note.summary,
-          body: truncateUnicode(note.body, 1_200),
-        },
-      ];
-    }),
+    { title: origin.title, summary: origin.summary, body: "" },
+    ...context.orientation,
+    ...context.directory,
+    ...context.candidates.slice(0, 4).map((note) => generationNoteEvidence(note, input.instruction)),
   ];
   return {
     mode: "inline-writing",
@@ -228,7 +198,7 @@ export function buildGenerateWritingRequest(
       snapshot.workspace.name,
     ),
     workspaceName: snapshot.workspace.name,
-    notes: includeSpace ? notes : [notes[0]],
+    notes,
     sources: [],
     concepts: includeSpace
       ? snapshot.concepts.slice(0, 32).map((concept) => ({
@@ -278,11 +248,17 @@ export function insertImageForSlide(
 
 export class GenerateRequestRegistry {
   private readonly attempts = new Map<string, string>();
+  private readonly controllers = new Map<string, AbortController>();
 
   begin(requestKey: string, attemptId: string): boolean {
     if (this.attempts.has(requestKey)) return false;
     this.attempts.set(requestKey, attemptId);
+    this.controllers.set(requestKey, new AbortController());
     return true;
+  }
+
+  signal(requestKey: string): AbortSignal | undefined {
+    return this.controllers.get(requestKey)?.signal;
   }
 
   owns(requestKey: string, attemptId: string): boolean {
@@ -290,10 +266,15 @@ export class GenerateRequestRegistry {
   }
 
   finish(requestKey: string, attemptId: string): void {
-    if (this.owns(requestKey, attemptId)) this.attempts.delete(requestKey);
+    if (this.owns(requestKey, attemptId)) {
+      this.attempts.delete(requestKey);
+      this.controllers.delete(requestKey);
+    }
   }
 
   cancel(requestKey: string): void {
+    this.controllers.get(requestKey)?.abort(new Error("Generation cancelled."));
+    this.controllers.delete(requestKey);
     this.attempts.delete(requestKey);
   }
 }

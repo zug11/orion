@@ -2,11 +2,15 @@
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as importBatching from "../lib/importBatching";
+import * as providerHealth from "../lib/providerHealth";
+import { fixedPipelineResponse } from "../lib/knowledgeOrchestration/testFixtures";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptySnapshot } from "../data/defaults";
 import {
   fetchWebPage,
   organizeWithAI,
+  preflightKnowledgeProvider,
   recognizeDocumentText,
   runKnowledgeAssignment,
 } from "../lib/storage";
@@ -36,6 +40,7 @@ vi.mock("../lib/storage", async (importOriginal) => {
     ...actual,
     fetchWebPage: vi.fn(),
     organizeWithAI: vi.fn(),
+    preflightKnowledgeProvider: vi.fn().mockResolvedValue({ ok: true, latencyMs: 0 }),
     recognizeDocumentText: vi.fn(),
     runKnowledgeAssignment,
     // Import Studio wraps the assignment driver in the opt-in provider
@@ -146,12 +151,18 @@ function longPageText(pageCount = 206, charactersPerPage = 1_900): string {
 }
 
 describe("Import unified intake", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     pdfUiState.pages = [];
     vi.mocked(fetchWebPage).mockReset();
     vi.mocked(organizeWithAI).mockReset();
     vi.mocked(recognizeDocumentText).mockReset();
     vi.mocked(runKnowledgeAssignment).mockReset();
+    vi.mocked(preflightKnowledgeProvider).mockResolvedValue({ ok: true, latencyMs: 0 });
     delete (window as Window & { __TAURI_INTERNALS__?: unknown })
       .__TAURI_INTERNALS__;
   });
@@ -327,6 +338,54 @@ describe("Import unified intake", () => {
     ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open import" }));
     expect(screen.getByText("Field memo")).toBeVisible();
+  });
+
+  it("imports ready material while another source prepares, retaining the pending source after apply", async () => {
+    const slow = deferred<ParsedImport>();
+    vi.mocked(fetchWebPage).mockReturnValueOnce(slow.promise);
+    const onApply = vi.fn();
+    render(<Harness onApply={onApply} />);
+    fireEvent.change(screen.getByLabelText("Webpage or YouTube URL"), { target: { value: "https://example.org/slow" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add URL" }));
+    fireEvent.click(screen.getByRole("button", { name: "Paste text" }));
+    fireEvent.change(screen.getByLabelText(/Title/), { target: { value: "Ready memo" } });
+    fireEvent.change(screen.getByLabelText("Text"), { target: { value: "This short note is ready without waiting for media." } });
+    fireEvent.click(screen.getByRole("button", { name: "Add to queue" }));
+    expect(screen.getByRole("button", { name: "Review sources" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Review sources" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create notes" }));
+    await screen.findByRole("button", { name: "Add to Orion" });
+    // A late extraction stays outside the frozen selection and is kept queued.
+    await act(async () => { slow.resolve(parsedPage("Later source", "https://example.org/slow")); await slow.promise; });
+    fireEvent.click(screen.getByRole("button", { name: "Add to Orion" }));
+    await waitFor(() => expect(onApply).toHaveBeenCalledOnce());
+    expect(onApply.mock.calls[0][0].sources).toHaveLength(1);
+    expect(onApply.mock.calls[0][0].sources[0].title).toBe("Ready memo");
+    fireEvent.click(screen.getByRole("button", { name: "Open import" }));
+    expect(screen.getByText("Later source")).toBeVisible();
+    expect(screen.queryByText("Ready memo")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Review sources" }));
+    expect(screen.getByRole("checkbox", { name: "Exclude later-source.html" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("does not let a cancelled old import change a new Space's intake stage", async () => {
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const first = createEmptySnapshot("First", "2026-08-31T00:00:00Z");
+    first.settings.apiKeyConfigured = true;
+    const probe = deferred<Awaited<ReturnType<typeof preflightKnowledgeProvider>>>();
+    vi.mocked(preflightKnowledgeProvider).mockReturnValueOnce(probe.promise);
+    const view = render(<Harness testSnapshot={first} />);
+    fireEvent.click(screen.getByRole("button", { name: "Paste text" }));
+    fireEvent.change(screen.getByLabelText("Text"), { target: { value: "A source in the first Space." } });
+    fireEvent.click(screen.getByRole("button", { name: "Add to queue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review sources" }));
+    fireEvent.click(screen.getByRole("button", { name: "Organize with AI" }));
+    await waitFor(() => expect(preflightKnowledgeProvider).toHaveBeenCalledOnce());
+    view.rerender(<Harness testSnapshot={createEmptySnapshot("Second")} />);
+    await act(async () => { probe.resolve({ ok: true, latencyMs: 10 }); await probe.promise; });
+    expect(screen.getByRole("button", { name: "Review sources" })).toBeDisabled();
+    expect(screen.queryByRole("heading", { name: "Review what Orion will import" })).not.toBeInTheDocument();
+    expect(runKnowledgeAssignment).not.toHaveBeenCalled();
   });
 
   it("queues multiple webpage fetches, preserves progress while closed, and ignores a late deleted result", async () => {
@@ -913,7 +972,7 @@ describe("Import unified intake", () => {
     expect(screen.queryByText("Import notes")).not.toBeInTheDocument();
   });
 
-  it("lands a deadline-limited import plainly instead of failing", async () => {
+  it("preserves source previews and exposes an exhausted deadline", async () => {
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
       {};
     const warningSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -935,12 +994,12 @@ describe("Import unified intake", () => {
     fireEvent.click(screen.getByRole("button", { name: "Organize with AI" }));
 
     // The time limit is a deliberate stop, so there is no silent retry — but
-    // the import still lands as real notes instead of a failure card.
+    // the source still lands, with the actual stop reason and an explicit retry.
     expect(
-      await screen.findByRole("heading", { name: "1 note prepared" }),
+      await screen.findByRole("heading", { name: "Orion reached the import time limit." }),
     ).toBeVisible();
     expect(
-      screen.getByText(/Orion landed this import plainly/),
+      screen.getByRole("button", { name: "Retry import" }),
     ).toBeVisible();
     expect(warningSpy).toHaveBeenCalledWith(
       expect.stringContaining("[Orion import]"),
@@ -980,14 +1039,14 @@ describe("Import unified intake", () => {
     fireEvent.click(screen.getByRole("button", { name: "Organize with AI" }));
 
     // A persistent provider failure lands the source as a real note built
-    // locally from the preserved text — no failure card, no second workflow.
+    // locally from preserved text, without concealing the provider failure.
     expect(
-      await screen.findByRole("heading", { name: "1 note prepared" }, {
+      await screen.findByRole("heading", { name: "Orion could not finish this import." }, {
         timeout: 6_000,
       }),
     ).toBeVisible();
     expect(
-      screen.getByText(/Orion landed this import plainly/),
+      screen.getByText(diagnostic.message),
     ).toBeVisible();
     expect(warningSpy).toHaveBeenCalledWith(
       expect.stringContaining("[Orion import]"),
@@ -995,11 +1054,128 @@ describe("Import unified intake", () => {
     );
     expect(organizeWithAI).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add to Orion" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep preview" }));
     await waitFor(() => expect(onApply).toHaveBeenCalledOnce());
     expect(onApply.mock.calls[0]?.[0].notes[0]?.body).toContain(
       "Every paragraph must survive the provider failure.",
     );
     warningSpy.mockRestore();
   });
+
+  it.each(["assignment", "preflight", "later batch"])("shows a %s failure for two short sources and retries without losing either", async (failureStage) => {
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    if (failureStage === "later batch") {
+      vi.spyOn(importBatching, "partitionImportSourcesForSynthesis")
+        .mockImplementation((sources) => sources.map((source) => [source]));
+    }
+    vi.spyOn(providerHealth, "autoResumeBackoffMs").mockReturnValue(0);
+    const cause = "Invalid schema in provider response at /Users/zelda/import; token='sk-secret-token-123456789'.";
+    const succeed: typeof runKnowledgeAssignment = async (request) => {
+      if (request.assignment.output.kind !== "root-result") return fixedPipelineResponse(request);
+      const sources = request.context.runManifest!.sources;
+      return { response: { kind: "complete", payload: {
+        result: { ...organizedResult("unused"), notes: sources.flatMap((source) => organizedResult(`Synthesized ${source.title}`).notes) },
+        provenance: sources.map((source) => ({ kind: "note", title: `Synthesized ${source.title}`, sourceIds: [source.sourceId], evidenceReferences: [{ kind: "source", sourceId: source.sourceId }] })),
+        ownerProposals: [], warnings: [],
+      } } };
+    };
+    if (failureStage === "preflight") {
+      vi.mocked(preflightKnowledgeProvider).mockResolvedValue({ ok: false, message: cause });
+    } else {
+      vi.mocked(runKnowledgeAssignment).mockRejectedValue(new Error(cause));
+    }
+    if (failureStage === "later batch") {
+      vi.mocked(runKnowledgeAssignment).mockImplementation((request, signal) =>
+        request.context.runManifest?.sources[0].title === "First idea"
+          ? succeed(request, signal)
+          : Promise.reject(new Error(cause)),
+      );
+    }
+    const onApply = vi.fn();
+    render(<Harness testSnapshot={{ ...snapshot, settings: { ...snapshot.settings, apiKeyConfigured: true } }} onApply={onApply} />);
+    for (const title of ["First idea", "Second idea"]) {
+      fireEvent.click(screen.getByRole("button", { name: "Paste text" }));
+      fireEvent.change(screen.getByLabelText(/Title/), { target: { value: title } });
+      fireEvent.change(screen.getByLabelText("Text"), { target: { value: `The complete text of ${title}.` } });
+      fireEvent.click(screen.getByRole("button", { name: "Add to queue" }));
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Review sources" }));
+    fireEvent.click(screen.getByRole("button", { name: "Organize with AI" }));
+    expect(await screen.findByRole("heading", { name: /Orion (could not finish this import|paused while reading the source)\./ }, { timeout: 6_000 })).toBeVisible();
+    expect(screen.getByText(/Invalid schema in provider response/)).toHaveTextContent("[redacted]");
+    expect(screen.queryByText(/zelda|sk-secret-token/)).not.toBeInTheDocument();
+    expect(screen.queryByText("2 notes prepared")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Orion shaped your source/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Keep preview" })).toBeEnabled();
+    expect(onApply).not.toHaveBeenCalled();
+    if (failureStage === "preflight") expect(runKnowledgeAssignment).not.toHaveBeenCalled();
+
+    vi.mocked(preflightKnowledgeProvider).mockResolvedValue({ ok: true, latencyMs: 0 });
+    vi.mocked(runKnowledgeAssignment).mockClear();
+    vi.mocked(runKnowledgeAssignment).mockImplementation(succeed);
+    fireEvent.click(screen.getByRole("button", { name: /(?:Retry|Resume) import/ }));
+    expect(await screen.findByRole("heading", { name: failureStage === "later batch" ? "2 notes prepared" : "1 note prepared" })).toBeVisible();
+    expect(screen.queryByRole("alert", { name: "Import diagnostic" })).not.toBeInTheDocument();
+    expect(runKnowledgeAssignment).toHaveBeenCalledTimes(failureStage === "later batch" ? 1 : 4);
+    if (failureStage === "later batch") {
+      expect(vi.mocked(runKnowledgeAssignment).mock.calls[0][0].context.runManifest?.sources.map(({ title }) => title)).toEqual(["Second idea"]);
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Add to Orion" }));
+    await waitFor(() => expect(onApply).toHaveBeenCalledOnce());
+    expect(onApply.mock.calls[0][0].sources.map((source: { text: string }) => source.text)).toEqual([
+      "The complete text of First idea.", "The complete text of Second idea.",
+    ]);
+    expect(organizeWithAI).not.toHaveBeenCalled();
+  });
+
+  it.each(["recovers", "exhausts", "cancelled"])(
+    "automatically retries a transient readiness check: %s",
+    async (outcome) => {
+      (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.mocked(preflightKnowledgeProvider).mockReset().mockResolvedValue({
+        ok: false, message: "Orion could not reach OpenAI: connection reset.",
+      });
+      if (outcome === "recovers") {
+        vi.mocked(preflightKnowledgeProvider)
+          .mockResolvedValueOnce({ ok: false, message: "Orion could not reach OpenAI: connection reset." })
+          .mockResolvedValueOnce({ ok: true, latencyMs: 12 });
+      }
+      vi.mocked(runKnowledgeAssignment).mockImplementation(async (request) => {
+        const sourceId = request.context.runManifest!.sources[0].sourceId;
+        return { response: { kind: "complete", payload: {
+          result: organizedResult("Recovered idea"),
+          provenance: [{ kind: "note", title: "Recovered idea", sourceIds: [sourceId], evidenceReferences: [{ kind: "source", sourceId }] }],
+          ownerProposals: [], warnings: [],
+        } } };
+      });
+      render(<Harness testSnapshot={{ ...snapshot, settings: { ...snapshot.settings, apiKeyConfigured: true } }} />);
+      fireEvent.click(screen.getByRole("button", { name: "Paste text" }));
+      fireEvent.change(screen.getByLabelText("Text"), { target: { value: "A short source that should survive reconnection." } });
+      fireEvent.click(screen.getByRole("button", { name: "Add to queue" }));
+      fireEvent.click(screen.getByRole("button", { name: "Review sources" }));
+      vi.useFakeTimers();
+      fireEvent.click(screen.getByRole("button", { name: "Organize with AI" }));
+      await act(() => vi.advanceTimersByTimeAsync(50));
+      expect(screen.getByRole("heading", { name: "Orion is reconnecting to your AI provider" })).toBeVisible();
+      expect(preflightKnowledgeProvider).toHaveBeenCalledTimes(1);
+      if (outcome === "cancelled") fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await act(() => vi.advanceTimersByTimeAsync(11_000));
+      if (outcome === "recovers") {
+        expect(screen.getByRole("heading", { name: "1 note prepared" })).toBeVisible();
+        expect(preflightKnowledgeProvider).toHaveBeenCalledTimes(2);
+        expect(runKnowledgeAssignment).toHaveBeenCalledOnce();
+      } else if (outcome === "exhausts") {
+        expect(screen.getByRole("button", { name: "Retry import" })).toBeVisible();
+        expect(preflightKnowledgeProvider).toHaveBeenCalledTimes(3);
+        expect(runKnowledgeAssignment).not.toHaveBeenCalled();
+      } else {
+        expect(screen.getByRole("heading", { name: "Review what Orion will import" })).toBeVisible();
+        expect(preflightKnowledgeProvider).toHaveBeenCalledTimes(1);
+        expect(runKnowledgeAssignment).not.toHaveBeenCalled();
+      }
+    },
+  );
+
 });

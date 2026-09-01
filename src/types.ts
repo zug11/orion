@@ -85,6 +85,8 @@ export type RelationshipKind =
   | "mentions"
   | "related"
   | "supports"
+  | "qualifies"
+  | "conflicts"
   | "contrasts"
   | "part-of"
   | "inspired-by"
@@ -537,6 +539,8 @@ export interface OrganizedConcept {
 export interface SuggestedConnection {
   fromTitle: string;
   toTitle: string;
+  /** Older organizer results omitted the relation and remain ordinary links. */
+  kind?: "supports" | "qualifies" | "conflicts" | "related";
   reason: string;
 }
 

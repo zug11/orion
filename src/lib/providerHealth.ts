@@ -76,6 +76,16 @@ export function providerDisplayName(provider: AIProvider): string {
   return provider === "anthropic" ? "Anthropic" : "OpenAI";
 }
 
+/** Retry transport/pacing failures, never credentials or a rejected request. */
+export function isTransientProviderFailure(message: string): boolean {
+  if (
+    /unauthori[sz]ed|forbidden|rejected.*key|no.*api key|permission|billing|quota|insufficient|payment|invalid.*schema|model.*(?:not found|does not exist|access)/i.test(message)
+  ) {
+    return false;
+  }
+  return /could not reach|network|connection (?:reset|refused|lost)|offline|dns|temporarily unavailable|rate (?:or usage )?limits?|too many requests/i.test(message);
+}
+
 const AUTO_RESUMABLE_IMPORT_CODES = new Set([
   "provider-timeout",
   "provider-rate-limit",

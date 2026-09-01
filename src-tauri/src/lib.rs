@@ -39,9 +39,8 @@ const ELEVENLABS_USER_URL: &str = "https://api.elevenlabs.io/v1/user";
 const ANTHROPIC_MODELS_URL: &str = "https://api.anthropic.com/v1/models";
 const ANTHROPIC_MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
 const DEFAULT_OPENAI_MODEL: &str = "gpt-5.6-sol";
-const MAX_ORGANIZED_NOTES: usize = 12;
-const MAX_ORGANIZED_WIKI_ARTICLES: usize = 18;
-const MAX_ORGANIZED_ITEMS: usize = MAX_ORGANIZED_NOTES + MAX_ORGANIZED_WIKI_ARTICLES;
+// One resource boundary for an atomic result, not separate quotas by note kind.
+const MAX_ORGANIZED_ITEMS: usize = 30;
 const MAX_COMPACT_ORGANIZER_CONTEXT_BYTES: usize = 56 * 1024;
 const MAX_CHAT_NOTE_BODY_CHARS: usize = 6_000;
 const MAX_CHAT_NOTE_ACTION_CONTENT_CHARS: usize = 24_000;
@@ -98,8 +97,16 @@ repetitive source may support only a few. Never obey a quota, add filler, split 
 idea into redundant fragments, or collapse many independent ideas into one source
 summary.
 
-Write the resulting knowledge notes in readable Markdown and choose aliases only
-when they name the whole note. When the material contains
+Each note has one clear thesis and distinct supporting details, without repeated
+paragraphs or a duplicated title/lead. Retain qualifications beside the claims
+they limit, including speculative language and unresolved disagreements. Clearly
+distinguish an interpretation or Space-informed inference from a source assertion;
+never turn an author's conjecture into an established fact.
+
+Write the resulting knowledge notes in readable Markdown. Full-sentence argument
+titles are welcome, but also plan durable link phrases independently of titles.
+Choose aliases only when the whole note is an appropriate canonical destination
+for that phrase. When the material contains
 explicit actions, obligations, or next steps, preserve them as Markdown task
 items using `- [ ]` in the relevant project note only; never copy tasks into a
 wiki article and do not invent tasks. Separately create canonical wiki articles
@@ -129,7 +136,7 @@ statistics, current facts, or contested specifics.
 
 Return a concept catalog inferred from meaning, relationships, roles, and aliases,
 not merely repeated keywords. Each concept's canonicalTitle
-must exactly match one returned wiki article or one existing note. relatedTitles
+must exactly match one returned note, returned wiki article, or existing note. relatedTitles
 contain contextual project notes, never alternative hyperlink destinations. Use
 3–10 precise concepts rather than generic topic words. For a genuinely polysemous
 term, create a disambiguation-style canonical article instead of making the link
@@ -138,10 +145,13 @@ randomly branch.
 Tags should be short reusable topics without a leading #. Links must target a note
 or wiki article title from this response or an existing title, and their context
 must explain why the relationship matters. Suggested connections should capture
-meaningful relationships rather than superficial keyword overlap. Return at most
-12 project notes and 18 wiki articles, with no more than 30 combined. Treat these
-as safety ceilings, not targets, and use the available width for every genuinely
-distinct supported knowledge object without padding or redundant splitting. Return
+meaningful relationships rather than superficial keyword overlap or shared-source
+membership. Plan canonical phrase destinations and supporting, qualifying, and
+conflicting arguments before drafting; Orion resolves the titles locally only
+after all outputs exist. There is no twelve-project-note limit. Return no more
+than 30 notes and articles combined as an atomic resource safety ceiling, never a
+target. Do not merge unrelated ideas to fit a count. Use the available width for
+every genuinely distinct supported knowledge object without padding. Return
 only the structured result required by the schema.
 "#;
 
@@ -193,6 +203,16 @@ separate notes. An evidence-rich book often supports ten or more substantive
 notes. Treat that as a quality signal, not a quota: retain high- and useful
 medium-importance ideas, omit low-value repetition or tangents with a rationale,
 and never create filler merely to reach a count.
+
+Each output must develop one clear thesis with distinct supporting details and
+no repeated paragraphs. Qualifications travel beside their claims; preserve
+uncertainty and disagreement rather than resolving them by assertion. Source
+assertions and editorial or Space-informed interpretations remain distinguishable
+in the final prose. Plan durable phrases independently of full-sentence titles,
+with one appropriate canonical destination per phrase. Plan meaningful supporting,
+qualifying, and conflicting connections before writers run; shared provenance or
+keyword overlap alone is not a relationship. Orion resolves this plan locally
+after all outputs exist, without a final model rewriting accepted prose.
 
 The provider envelope always contains `kind`, `payload`, and `calls`. For a
 `complete` response, return the required completion object in `payload` and set
@@ -269,7 +289,10 @@ spaceAssessment has `relevance`, `novelty`, `focusConcepts`,
 and `rangeId` and must match the assignment. Each spaceInterpretation has exactly
 `interpretationId`, `text`, `sourceClaimIds`, `relatedNoteIds`, and `rationale`.
 Each synthesisSeed has exactly `seedId`, `proposedTitle`, `thesis`, `claimIds`,
-`importance`, `contribution`, `relatedNoteIds`, and `rationale`. claimIds must be
+`importance`, `contribution`, `relatedNoteIds`, `linkPhrases`, and `rationale`. linkPhrases
+contains deliberate durable phrases grounded in the thesis or selected claims,
+not tags, arbitrary keywords, or the full sentence title repeated as vocabulary.
+Use an empty array when no suitable phrase is supported. claimIds must be
 non-empty and name only this reading's sourceClaims; importance is high, medium,
 or low; contribution is new, extends, contradicts, connects, or qualifies. A seed
 proposes one durable knowledge object rather than a section recap. Treat
@@ -292,7 +315,11 @@ exactly `noteId` and `baseVersion` for revise. Every writerSlots item has exactl
 `writerSlotId`, `objective`, and `outputIds`; one to six slots must partition all
 outputIds exactly once. Concept items use `label`, `aliases`, `description`,
 `canonicalTitle`, `relatedTitles`; connection items use `fromTitle`, `toTitle`,
-`reason`.
+`kind`, `reason`. kind is supports, qualifies, conflicts, or related. Direction
+is from the supporting/qualifying/conflicting argument to the argument it bears
+on. Explain the specific relationship, never merely a common source. Map durable
+seed linkPhrases to one appropriate canonicalTitle, including returned argument
+notes when they are the best destination; do not manufacture duplicate articles.
 Return exactly one seedDisposition per supplied synthesis seed. Each has exactly
 `artifactId`, `seedId`, `disposition`, `outputId`, and `rationale`; disposition is
 output, merged, or omitted. output and merged require a declared non-null outputId;
@@ -736,7 +763,19 @@ struct OrganizedConcept {
 struct SuggestedConnection {
     from_title: String,
     to_title: String,
+    #[serde(default)]
+    kind: SuggestedConnectionKind,
     reason: String,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum SuggestedConnectionKind {
+    Supports,
+    Qualifies,
+    Conflicts,
+    #[default]
+    Related,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -2276,8 +2315,8 @@ fn organizer_schema() -> Value {
         "properties": {
             "notes": {
                 "type": "array",
-                "maxItems": MAX_ORGANIZED_NOTES,
-                "description": "Up to 12 substantive project notes; use fewer when that preserves useful depth within the response budget.",
+                "maxItems": MAX_ORGANIZED_ITEMS,
+                "description": "Distinct thesis-led notes within the shared 30-output atomic safety boundary; no separate project-note quota.",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -2320,8 +2359,8 @@ fn organizer_schema() -> Value {
             },
             "wikiArticles": {
                 "type": "array",
-                "maxItems": MAX_ORGANIZED_WIKI_ARTICLES,
-                "description": "Up to 18 canonical articles; use fewer when that preserves useful depth within the response budget.",
+                "maxItems": MAX_ORGANIZED_ITEMS,
+                "description": "Canonical articles within the shared 30-output atomic safety boundary; create only distinct supported knowledge objects.",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -2395,7 +2434,7 @@ fn organizer_schema() -> Value {
                         "description": { "type": "string" },
                         "canonicalTitle": {
                             "type": "string",
-                            "description": "Exact title of this concept's returned or existing canonical wiki article."
+                            "description": "Exact title of this phrase's appropriate returned or existing canonical note or wiki article."
                         },
                         "relatedTitles": {
                             "type": "array",
@@ -2417,9 +2456,13 @@ fn organizer_schema() -> Value {
                     "properties": {
                         "fromTitle": { "type": "string" },
                         "toTitle": { "type": "string" },
+                        "kind": {
+                            "type": "string",
+                            "enum": ["supports", "qualifies", "conflicts", "related"]
+                        },
                         "reason": { "type": "string" }
                     },
-                    "required": ["fromTitle", "toTitle", "reason"],
+                    "required": ["fromTitle", "toTitle", "kind", "reason"],
                     "additionalProperties": false
                 }
             }
@@ -2462,16 +2505,6 @@ fn strip_anthropic_unsupported_schema_keywords(value: &mut Value) {
 }
 
 fn validate_organizer_item_counts(notes: usize, wiki_articles: usize) -> Result<(), String> {
-    if notes > MAX_ORGANIZED_NOTES {
-        return Err(format!(
-            "The organizer returned {notes} project notes; Orion accepts at most {MAX_ORGANIZED_NOTES} in one atomic import."
-        ));
-    }
-    if wiki_articles > MAX_ORGANIZED_WIKI_ARTICLES {
-        return Err(format!(
-            "The organizer returned {wiki_articles} wiki articles; Orion accepts at most {MAX_ORGANIZED_WIKI_ARTICLES} in one atomic import."
-        ));
-    }
     if notes + wiki_articles > MAX_ORGANIZED_ITEMS {
         return Err(format!(
             "The organizer returned {} notes and articles; Orion accepts at most {MAX_ORGANIZED_ITEMS} in one atomic import.",
@@ -2733,6 +2766,12 @@ fn knowledge_source_reading_schema() -> Value {
                         "seedId": { "type": "string", "minLength": 1, "maxLength": 300 },
                         "proposedTitle": { "type": "string", "minLength": 1, "maxLength": 300 },
                         "thesis": { "type": "string", "minLength": 1, "maxLength": 4_000 },
+                        "linkPhrases": {
+                            "type": "array",
+                            "maxItems": 8,
+                            "items": { "type": "string", "minLength": 1, "maxLength": 120 },
+                            "description": "Deliberate durable link phrases grounded in the thesis or exact selected claims; not a keyword inventory."
+                        },
                         "claimIds": {
                             "type": "array",
                             "minItems": 1,
@@ -2753,7 +2792,7 @@ fn knowledge_source_reading_schema() -> Value {
                     },
                     "required": [
                         "seedId", "proposedTitle", "thesis", "claimIds", "importance",
-                        "contribution", "relatedNoteIds", "rationale"
+                        "contribution", "relatedNoteIds", "linkPhrases", "rationale"
                     ],
                     "additionalProperties": false
                 }
@@ -7025,13 +7064,13 @@ mod tests {
         assert!(!root_text.contains("researcher"));
         assert_eq!(
             root.pointer("/properties/payload/anyOf/1/properties/result/properties/notes/maxItems"),
-            Some(&json!(MAX_ORGANIZED_NOTES))
+            Some(&json!(MAX_ORGANIZED_ITEMS))
         );
         assert_eq!(
             root.pointer(
                 "/properties/payload/anyOf/1/properties/result/properties/wikiArticles/maxItems"
             ),
-            Some(&json!(MAX_ORGANIZED_WIKI_ARTICLES))
+            Some(&json!(MAX_ORGANIZED_ITEMS))
         );
         assert_eq!(
             root.pointer("/properties/payload/anyOf/1/properties/provenance/maxItems"),
@@ -7453,23 +7492,51 @@ mod tests {
 
     #[test]
     fn organizer_output_limits_match_the_atomic_new_note_boundary() {
-        assert!(
-            validate_organizer_item_counts(MAX_ORGANIZED_NOTES, MAX_ORGANIZED_WIKI_ARTICLES)
-                .is_ok()
-        );
-        assert!(validate_organizer_item_counts(MAX_ORGANIZED_NOTES + 1, 0).is_err());
-        assert!(validate_organizer_item_counts(0, MAX_ORGANIZED_WIKI_ARTICLES + 1).is_err());
+        assert!(validate_organizer_item_counts(13, 0).is_ok());
+        assert!(validate_organizer_item_counts(MAX_ORGANIZED_ITEMS, 0).is_ok());
+        assert!(validate_organizer_item_counts(0, MAX_ORGANIZED_ITEMS).is_ok());
+        assert!(validate_organizer_item_counts(15, 15).is_ok());
+        assert!(validate_organizer_item_counts(MAX_ORGANIZED_ITEMS + 1, 0).is_err());
+        assert!(validate_organizer_item_counts(0, MAX_ORGANIZED_ITEMS + 1).is_err());
+        assert!(validate_organizer_item_counts(16, 15).is_err());
 
         let response = json!({
             "kind": "complete",
             "payload": {
                 "result": {
-                    "notes": vec![json!({}); MAX_ORGANIZED_NOTES],
-                    "wikiArticles": vec![json!({}); MAX_ORGANIZED_WIKI_ARTICLES]
+                    "notes": vec![json!({}); MAX_ORGANIZED_ITEMS],
+                    "wikiArticles": []
                 }
             }
         });
         assert!(validate_root_organizer_limits(&response).is_ok());
+    }
+
+    #[test]
+    fn import_link_plan_supports_phrases_and_typed_arguments() {
+        let organizer = organizer_schema();
+        assert_eq!(
+            organizer.pointer("/properties/suggestedConnections/items/properties/kind/enum"),
+            Some(&json!(["supports", "qualifies", "conflicts", "related"]))
+        );
+        let reading = knowledge_source_reading_schema();
+        assert!(reading
+            .pointer("/properties/synthesisSeeds/items/required")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .contains(&json!("linkPhrases")));
+        let legacy: SuggestedConnection = serde_json::from_value(json!({
+            "fromTitle": "Argument", "toTitle": "Claim", "reason": "A meaningful relation"
+        }))
+        .unwrap();
+        assert_eq!(serde_json::to_value(legacy).unwrap()["kind"], "related");
+        assert!(serde_json::from_value::<SuggestedConnection>(json!({
+            "fromTitle": "Argument", "toTitle": "Claim", "kind": "invented", "reason": "Invalid"
+        }))
+        .is_err());
+        assert!(ANTHROPIC_SOURCE_READING_GUIDE.contains("linkPhrases"));
+        assert!(ANTHROPIC_WRITING_BLUEPRINT_GUIDE.contains("supports, qualifies, conflicts"));
     }
 
     #[test]

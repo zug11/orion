@@ -47,7 +47,30 @@ describe("Sidebar generate composer", () => {
     expect(onGenerate).toHaveBeenCalledWith({
       kind: "podcast",
       instruction: "",
+      useSpaceNotes: true,
     });
+  });
+
+  it("makes disabled Space context visible and requires an explicit generation opt-in", () => {
+    const snapshot = createEmptySnapshot("Stories", NOW);
+    snapshot.settings.includeExistingNotesInAIContext = false;
+    const onGenerate = vi.fn();
+    render(<Sidebar view="home" notes={[]} spaces={[snapshot]}
+      activeSpaceId={snapshot.workspace.id} activeNoteId={null} linkedArticleJobs={[]}
+      generateEnabled onGenerate={onGenerate} onViewChange={vi.fn()} onOpenNote={vi.fn()}
+      onDeleteNote={vi.fn()} onNewNote={vi.fn()} onCreateSpace={vi.fn()} onDeleteSpace={vi.fn()}
+      onSwitchSpace={vi.fn()} onRestartLinkedArticle={vi.fn()} onDeleteLinkedArticle={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Generate options" }));
+    const checkbox = screen.getByRole("checkbox", { name: "Use notes from this Space" });
+    expect(checkbox).not.toBeChecked();
+    expect(screen.getByText(/Space context is off/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Generate" })).toBeDisabled();
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+    expect(onGenerate).toHaveBeenCalledWith({ kind: "note", instruction: "", useSpaceNotes: true });
+    expect(snapshot.settings.includeExistingNotesInAIContext).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Generate options" }));
+    expect(screen.getByRole("checkbox", { name: "Use notes from this Space" })).not.toBeChecked();
   });
 
   it("collapses to an icon rail without text labels", () => {

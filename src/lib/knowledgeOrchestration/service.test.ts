@@ -15,6 +15,7 @@ import type { KnowledgeAssignmentContract } from "./protocol";
 import { runKnowledgeOrchestration, validateArtifactCompletion } from "./service";
 import {
   KnowledgeDeadlineExceededError,
+  type KnowledgeAssignmentExecutionRequest,
   KnowledgeProviderExecutionError,
   KnowledgeProviderTimeoutError,
 } from "./service";
@@ -759,6 +760,29 @@ describe("knowledge orchestration service", () => {
       }),
     ).rejects.toThrow("rate limited");
     expect(driver).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])("automatically retries the direct root with one identity, exhausted=%s", async (exhausted) => {
+    const { context, root } = setup();
+    const assignmentIds: string[] = [];
+    const driver = vi.fn(async ({ assignment: current }: KnowledgeAssignmentExecutionRequest) => {
+      assignmentIds.push(current.assignmentId);
+      if (exhausted || assignmentIds.length < 3) {
+        throw new KnowledgeProviderExecutionError("Connection reset", { retryable: true });
+      }
+      return { response: { kind: "complete" as const, payload: runResult() } };
+    });
+    const outcome = runKnowledgeOrchestration({
+      runContext: context,
+      rootAssignment: root,
+      model: "gpt-5.6-sol",
+      effort: "high",
+      driver,
+    });
+    if (exhausted) await expect(outcome).rejects.toThrow("Connection reset");
+    else await expect(outcome).resolves.toHaveProperty("result");
+    expect(driver).toHaveBeenCalledTimes(3);
+    expect(new Set(assignmentIds).size).toBe(1);
   });
 
   it("rejects hidden primitive operands and gives the root a corrective observation", async () => {

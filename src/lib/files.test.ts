@@ -10,36 +10,49 @@ import {
   shouldUsePdfVisionText,
 } from "./files";
 
-const pdfState = vi.hoisted(() => ({ pages: [] as string[] }));
+const pdfState = vi.hoisted(() => ({
+  pages: [] as string[],
+  beforeRead: undefined as ((pageNumber: number) => Promise<void>) | undefined,
+}));
 const destroyPdf = vi.hoisted(() => vi.fn());
 
 vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
   GlobalWorkerOptions: { workerSrc: "test-pdf-worker" },
-  getDocument: () => ({
-    promise: Promise.resolve({
-      get numPages() {
-        return pdfState.pages.length;
-      },
-      getPage: async (pageNumber: number) => ({
-        getTextContent: async () => ({
-          items: pdfState.pages[pageNumber - 1]
-            ? [
-                {
-                  str: pdfState.pages[pageNumber - 1],
-                  hasEOL: true,
-                },
-              ]
-            : [],
+  getDocument: () => {
+    const { pages, beforeRead } = pdfState;
+    return {
+      promise: Promise.resolve({
+        numPages: pages.length,
+        getPage: async (pageNumber: number) => ({
+          getTextContent: async () => {
+            await beforeRead?.(pageNumber);
+            return {
+              items: pages[pageNumber - 1]
+                ? [{ str: pages[pageNumber - 1], hasEOL: true }]
+                : [],
+            };
+          },
         }),
       }),
-    }),
-    destroy: destroyPdf,
-  }),
+      destroy: destroyPdf,
+    };
+  },
 }));
+
+function deferred() {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 describe("import file helpers", () => {
   beforeEach(() => {
     pdfState.pages = [];
+    pdfState.beforeRead = undefined;
     destroyPdf.mockClear();
   });
 
@@ -104,6 +117,130 @@ describe("import file helpers", () => {
 
     expect(parsed.text).toContain("This ordinary PDF contains");
     expect(recognize).not.toHaveBeenCalled();
+  });
+
+  it("reads four PDF pages concurrently while retaining physical order and exact OCR selection", async () => {
+    pdfState.pages = Array.from({ length: 7 }, (_, index) =>
+      index === 1 || index === 5
+        ? ""
+        : `Physical page ${index + 1} supplies enough readable embedded source text.`,
+    );
+    const pending = new Map<number, ReturnType<typeof deferred>>();
+    pdfState.beforeRead = (pageNumber) => {
+      const gate = deferred();
+      pending.set(pageNumber, gate);
+      return gate.promise;
+    };
+    const recognize = vi.fn().mockResolvedValue({
+      text: "Recognized text",
+      pageCount: 7,
+      pages: [
+        {
+          pageNumber: 2,
+          text: "The second physical page was recovered by local recognition.",
+        },
+        {
+          pageNumber: 6,
+          text: "The sixth physical page was recovered by local recognition.",
+        },
+      ],
+      warnings: [],
+    });
+    const file = new File(["pdf"], "parallel.pdf", { type: "application/pdf" });
+    const parsing = parseImportFile(file, recognize);
+
+    await vi.waitFor(() => expect([...pending.keys()]).toEqual([1, 2, 3, 4]));
+    pending.get(4)!.resolve();
+    await vi.waitFor(() => expect(pending.has(5)).toBe(true));
+    pending.get(3)!.resolve();
+    await vi.waitFor(() => expect(pending.has(6)).toBe(true));
+    pending.get(2)!.resolve();
+    await vi.waitFor(() => expect(pending.has(7)).toBe(true));
+    expect(recognize).not.toHaveBeenCalled();
+    for (const gate of pending.values()) gate.resolve();
+
+    const parsed = await parsing;
+    expect(parsed.text.match(/^## Page \d+/gm)).toEqual(
+      Array.from({ length: 7 }, (_, index) => `## Page ${index + 1}`),
+    );
+    expect(parsed.text).toContain("## Page 2\n\nThe second physical page");
+    expect(parsed.text).toContain("## Page 6\n\nThe sixth physical page");
+    expect(recognize).toHaveBeenCalledWith(file, { pageNumbers: [2, 6] });
+    expect(destroyPdf).toHaveBeenCalledOnce();
+  });
+
+  it("shares four PDF extraction slots across documents without blocking plain text", async () => {
+    pdfState.pages = Array.from({ length: 8 }, (_, index) =>
+      `Page ${index + 1} has a complete sentence of useful selectable document text.`,
+    );
+    const release = deferred();
+    let active = 0;
+    let maximum = 0;
+    let started = 0;
+    pdfState.beforeRead = async () => {
+      started += 1;
+      active += 1;
+      maximum = Math.max(maximum, active);
+      await release.promise;
+      active -= 1;
+    };
+    const first = parseImportFile(
+      new File(["pdf"], "first.pdf", { type: "application/pdf" }),
+    );
+    await vi.waitFor(() => expect(started).toBe(4));
+    const second = parseImportFile(
+      new File(["pdf"], "second.pdf", { type: "application/pdf" }),
+    );
+    const text = await parseImportFile(
+      new File(["Plain text is ready independently."], "notes.txt", {
+        type: "text/plain",
+      }),
+    );
+    expect(text.text).toBe("Plain text is ready independently.");
+    expect(started).toBe(4);
+    release.resolve();
+
+    const documents = await Promise.all([first, second]);
+    expect(maximum).toBe(4);
+    expect(started).toBe(16);
+    expect(
+      documents.every((document) => document.text.includes("## Page 8")),
+    ).toBe(true);
+    expect(destroyPdf).toHaveBeenCalledTimes(2);
+  });
+
+  it("drains live PDF reads after a page failure before destroying the document", async () => {
+    pdfState.pages = Array.from(
+      { length: 8 },
+      () => "A complete page of selectable source text.",
+    );
+    const pending = new Map<number, ReturnType<typeof deferred>>();
+    pdfState.beforeRead = (pageNumber) => {
+      const gate = deferred();
+      pending.set(pageNumber, gate);
+      return gate.promise;
+    };
+    const parsing = parseImportFile(
+      new File(["pdf"], "broken.pdf", { type: "application/pdf" }),
+    );
+    await vi.waitFor(() => expect(pending.size).toBe(4));
+    pending.get(2)!.reject(new Error("Page stream is damaged"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(destroyPdf).not.toHaveBeenCalled();
+    expect([...pending.keys()]).toEqual([1, 2, 3, 4]);
+    for (const [pageNumber, gate] of pending) {
+      if (pageNumber !== 2) gate.resolve();
+    }
+    await expect(parsing).rejects.toThrow("Page stream is damaged");
+    expect(destroyPdf).toHaveBeenCalledOnce();
+
+    pdfState.beforeRead = undefined;
+    await expect(
+      parseImportFile(
+        new File(["pdf"], "next.pdf", { type: "application/pdf" }),
+      ),
+    ).resolves.toMatchObject({ format: "pdf" });
+    expect(destroyPdf).toHaveBeenCalledTimes(2);
   });
 
   it("surfaces a damaged selectable OCR layer when page OCR is unavailable without inventing text", async () => {

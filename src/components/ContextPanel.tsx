@@ -7,7 +7,7 @@ import {
   Quote,
 } from "../lib/icons";
 import { markdownToPlainText } from "../lib/wiki";
-import type { AppSnapshot, Note } from "../types";
+import type { AppSnapshot, Note, Relationship } from "../types";
 import { useEffect, useRef } from "react";
 
 interface ContextPanelProps {
@@ -31,6 +31,18 @@ function excerptAround(body: string, term: string) {
   return `${start > 0 ? "…" : ""}${plain.slice(start, end)}${
     end < plain.length ? "…" : ""
   }`;
+}
+
+function argumentConnectionText(relationship: Relationship, noteId: string): string | undefined {
+  const outward = relationship.fromNoteId === noteId;
+  let label: string;
+  switch (relationship.kind) {
+    case "supports": label = outward ? "This note supports it" : "Supports this note"; break;
+    case "qualifies": label = outward ? "This note qualifies it" : "Qualifies this note"; break;
+    case "conflicts": label = "Conflicts with this note"; break;
+    default: return undefined;
+  }
+  return `${label}${relationship.context?.trim() ? ` — ${relationship.context.trim()}` : ""}`;
 }
 
 export function ContextPanel({
@@ -84,7 +96,18 @@ export function ContextPanel({
   const concepts = snapshot.concepts.filter((concept) =>
     note.conceptIds.includes(concept.id),
   );
-  const terms = [note.title, ...note.aliases, ...concepts.map((item) => item.label)];
+  const terms = [note.title, ...note.aliases, ...concepts.flatMap((item) => [item.label, ...item.aliases])];
+  const argumentConnections = new Map<string, Set<string>>();
+  for (const relationship of snapshot.relationships) {
+    const otherId = relationship.fromNoteId === note.id ? relationship.toNoteId
+      : relationship.toNoteId === note.id ? relationship.fromNoteId : undefined;
+    if (!otherId) continue;
+    const text = argumentConnectionText(relationship, note.id);
+    if (!text) continue;
+    const descriptions = argumentConnections.get(otherId) ?? new Set<string>();
+    descriptions.add(text);
+    argumentConnections.set(otherId, descriptions);
+  }
   const backlinks = snapshot.notes
     .filter(
       (candidate) =>
@@ -163,6 +186,9 @@ export function ContextPanel({
                     <Quote size={10} />
                     {excerptAround(backlink.body, term)}
                   </small>
+                  {[...(argumentConnections.get(backlink.id) ?? [])].map((connection) => (
+                    <small className="context-argument-reason" key={connection}>{connection}</small>
+                  ))}
                 </button>
               );
             })
@@ -191,6 +217,9 @@ export function ContextPanel({
                 <span>
                   <strong>{item.title}</strong>
                   <small>{item.summary}</small>
+                  {[...(argumentConnections.get(item.id) ?? [])].map((connection) => (
+                    <small className="context-argument-reason" key={connection}>{connection}</small>
+                  ))}
                 </span>
               </button>
             ))}

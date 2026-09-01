@@ -1,0 +1,14 @@
+{
+  "release": "v0.4.4",
+  "submissionId": "a95c28bc-f4e1-456b-a112-33090ae93c75",
+  "teamId": "NX592DPNHM",
+  "submittedAt": "2026-09-01T16:47:15.642Z",
+  "status": "Accepted",
+  "submittedArchiveSha256": "6b26cd1f1164ec89c7415bb1bb13b5f00219f38c89789934ff00415c2c240a76",
+  "stapledDmgSha256": "8647ff25000b349f2f3aecb6700c321679c66671b9ada2e35538690b1683af05",
+  "ticketStapled": true,
+  "gatekeeper": {
+    "diskImage": "accepted",
+    "copiedApplication": "accepted"
+  }
+}

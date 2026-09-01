@@ -13,6 +13,7 @@ import type { KnowledgeResultProvenance } from "./protocol";
 
 const LANDED_SUMMARY_LIMIT = 300;
 const LANDED_STRUCTURAL_BODY_LIMIT = 60_000;
+const LANDED_NOTE_LIMIT = 30;
 
 export interface KnowledgeLandingAssembly {
   result: OrganizeContentResult;
@@ -65,7 +66,12 @@ export function assembleDeterministicLanding(
         reading.sourceClaims.map((claim) => [claim.claimId, claim.text] as const),
       );
       for (const seed of reading.synthesisSeeds) {
-        const key = normalizedTitle(seed.proposedTitle);
+        // A repeated title does not prove that two ideas are interchangeable.
+        // Only an identical thesis permits local coalescing without a writer.
+        const key = JSON.stringify([
+          normalizedTitle(seed.proposedTitle),
+          normalizedParagraph(seed.thesis),
+        ]);
         const selectedClaims = seed.claimIds.flatMap((claimId) => {
           const claim = claims.get(claimId);
           return claim ? [claim] : [];
@@ -100,7 +106,11 @@ export function assembleDeterministicLanding(
     else semanticCandidates.push(...groups.values());
   });
 
-  const semanticCapacity = Math.max(0, 12 - structuralSources.length);
+  const selectedStructuralSources = structuralSources.slice(0, LANDED_NOTE_LIMIT);
+  const semanticCapacity = Math.max(
+    0,
+    LANDED_NOTE_LIMIT - selectedStructuralSources.length,
+  );
   const selectedCandidates = [...semanticCandidates]
     .sort(
       (left, right) =>
@@ -118,18 +128,17 @@ export function assembleDeterministicLanding(
       `Orion landed the ${selectedCandidates.length} strongest validated knowledge objects; ${semanticCandidates.length - selectedCandidates.length} additional candidates remain available in the source readings for regeneration.`,
     );
   }
+  if (structuralSources.length > selectedStructuralSources.length) {
+    warnings.push(structuralOverflowWarning(structuralSources.length));
+  }
 
   for (const candidate of selectedCandidates) {
     const title = allocateTitle(candidate.title);
-    const body = [
-      `# ${title}`,
+    const body = composeSemanticLandingBody(
+      title,
       candidate.thesis,
-      ...candidate.claims.filter(
-        (claim) => normalizedTitle(claim) !== normalizedTitle(candidate.thesis),
-      ),
-    ]
-      .filter(Boolean)
-      .join("\n\n");
+      candidate.claims,
+    );
     notes.push({
       title,
       summary: boundedLandingSummary(candidate.thesis),
@@ -149,7 +158,7 @@ export function assembleDeterministicLanding(
     });
   }
 
-  for (const { source } of structuralSources) {
+  for (const { source } of selectedStructuralSources) {
     const title = allocateTitle(source.parsed.title);
     warnings.push(
       `Orion completed no semantic readings for “${source.parsed.title}”, so its landed note preserves the source text directly.`,
@@ -173,7 +182,7 @@ export function assembleStructuralLanding(
   const notes: OrganizedNote[] = [];
   const provenance: KnowledgeResultProvenance[] = [];
   const warnings: string[] = [];
-  for (const source of sources) {
+  for (const source of sources.slice(0, LANDED_NOTE_LIMIT)) {
     const structural = structuralLandingNote(
       source,
       allocateTitle(source.parsed.title),
@@ -181,6 +190,9 @@ export function assembleStructuralLanding(
     notes.push(structural.note);
     provenance.push(structural.provenance);
     warnings.push(...structural.warnings);
+  }
+  if (sources.length > LANDED_NOTE_LIMIT) {
+    warnings.push(structuralOverflowWarning(sources.length));
   }
   return {
     result: { notes, wikiArticles: [], concepts: [], suggestedConnections: [] },
@@ -240,6 +252,49 @@ function createLandingTitleAllocator(): (rawTitle: string) => string {
 
 function normalizedTitle(value: string): string {
   return value.normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function normalizedParagraph(value: string): string {
+  // Keep case, punctuation, and qualifiers meaningful. A fuzzy match could
+  // discard a source's uncertainty or conflate two different assertions.
+  return value.normalize("NFC").trim().replace(/\s+/g, " ");
+}
+
+function uniqueParagraphs(values: readonly string[]): string[] {
+  const seen = new Set<string>();
+  return values
+    .flatMap((value) => value.split(/\n\s*\n/u))
+    .flatMap((value) => {
+      const paragraph = value.trim();
+      const key = normalizedParagraph(paragraph);
+      if (!key || seen.has(key)) return [];
+      seen.add(key);
+      return [paragraph];
+    });
+}
+
+function composeSemanticLandingBody(
+  title: string,
+  thesis: string,
+  claims: readonly string[],
+): string {
+  const claimParagraphs = uniqueParagraphs(claims);
+  const sourceWording = new Map(
+    claimParagraphs.map((paragraph) => [normalizedParagraph(paragraph), paragraph]),
+  );
+  const thesisParagraphs = uniqueParagraphs([thesis]).map(
+    (paragraph) => sourceWording.get(normalizedParagraph(paragraph)) ?? paragraph,
+  );
+  // The seed supplies one lead, while exact selected source claims supply the
+  // rest. Never append private reading summaries or Space interpretations.
+  return [
+    `# ${title}`,
+    ...uniqueParagraphs([...thesisParagraphs, ...claimParagraphs]),
+  ].join("\n\n");
+}
+
+function structuralOverflowWarning(sourceCount: number): string {
+  return `Orion landed ${LANDED_NOTE_LIMIT} source notes within the import output limit; ${sourceCount - LANDED_NOTE_LIMIT} additional sources remain preserved for regeneration.`;
 }
 
 function parsedRangeOrdinal(rangeId: string): number | undefined {

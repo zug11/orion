@@ -105,12 +105,15 @@ describe("deterministic landing assembly", () => {
     const sources = [
       { sourceId: "s1", parsed: parsed("Hegel Notebook", "Short source text.") },
     ];
+    const laterReading = reading("s1", "range-2", "Second range summary.", [
+      "Second claim, quoted verbatim.",
+    ]);
+    // Repeated seeds may coalesce only when both title and thesis agree.
+    laterReading.reading.synthesisSeeds[0].thesis = "First claim — exact wording (§12).";
     const { result, provenance, warnings } = assembleDeterministicLanding(
       sources,
       [
-        reading("s1", "range-2", "Second range summary.", [
-          "Second claim, quoted verbatim.",
-        ]),
+        laterReading,
         reading(
           "s1",
           "range-1",

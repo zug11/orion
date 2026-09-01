@@ -37,6 +37,27 @@ export type DocumentTextRecognizer = (
 
 export type PdfVisionOcrReason = "textless" | "damaged";
 
+// PDF text extraction shares a small local pool across documents. It never
+// consumes an AI-provider slot or waits for OCR/media transcription.
+const PDF_TEXT_EXTRACTION_WIDTH = 4;
+let activePdfTextExtractions = 0;
+const waitingPdfTextExtractions: Array<() => void> = [];
+
+async function withPdfTextExtractionSlot<T>(work: () => Promise<T>): Promise<T> {
+  if (activePdfTextExtractions >= PDF_TEXT_EXTRACTION_WIDTH) {
+    await new Promise<void>((resolve) => waitingPdfTextExtractions.push(resolve));
+  } else {
+    activePdfTextExtractions += 1;
+  }
+  try {
+    return await work();
+  } finally {
+    const next = waitingPdfTextExtractions.shift();
+    if (next) next();
+    else activePdfTextExtractions -= 1;
+  }
+}
+
 export class UnsupportedImportError extends Error {
   constructor(
     public readonly fileName: string,
@@ -299,27 +320,51 @@ async function parsePdf(
     useWorkerFetch: false,
   });
   const document = await loadingTask.promise;
-  const rawPages: Array<{ pageNumber: number; text: string }> = [];
+  const rawPages: Array<{ pageNumber: number; text: string }> = new Array(
+    document.numPages,
+  );
   const warnings: string[] = [];
 
   try {
-    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
-      const page = await document.getPage(pageNumber);
-      const content = await page.getTextContent();
-      let pageText = "";
-      for (const item of content.items) {
-        if (!("str" in item)) {
-          continue;
-        }
-        pageText += item.str;
-        pageText += item.hasEOL ? "\n" : " ";
-      }
-      const normalized = pageText
-        .replace(/[ \t]+\n/g, "\n")
-        .replace(/[ \t]{2,}/g, " ")
-        .trim();
-      rawPages.push({ pageNumber, text: normalized });
-    }
+    let nextPageNumber = 1;
+    let extractionFailed = false;
+    let extractionError: unknown;
+    // Keep only one pending page per worker. Completion order cannot change
+    // physical page provenance, and every live read drains before destroy().
+    await Promise.all(
+      Array.from(
+        { length: Math.min(PDF_TEXT_EXTRACTION_WIDTH, document.numPages) },
+        async () => {
+          while (!extractionFailed && nextPageNumber <= document.numPages) {
+            const pageNumber = nextPageNumber++;
+            try {
+              await withPdfTextExtractionSlot(async () => {
+                if (extractionFailed) return;
+                const page = await document.getPage(pageNumber);
+                const content = await page.getTextContent();
+                let pageText = "";
+                for (const item of content.items) {
+                  if (!("str" in item)) continue;
+                  pageText += item.str;
+                  pageText += item.hasEOL ? "\n" : " ";
+                }
+                rawPages[pageNumber - 1] = {
+                  pageNumber,
+                  text: pageText
+                    .replace(/[ \t]+\n/g, "\n")
+                    .replace(/[ \t]{2,}/g, " ")
+                    .trim(),
+                };
+              });
+            } catch (error) {
+              if (!extractionFailed) extractionError = error;
+              extractionFailed = true;
+            }
+          }
+        },
+      ),
+    );
+    if (extractionFailed) throw extractionError;
 
     const selectedPages = rawPages.flatMap((page) => {
       const reason = pdfVisionOcrReason(page.text);

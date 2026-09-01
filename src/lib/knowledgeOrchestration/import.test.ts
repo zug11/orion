@@ -3,6 +3,7 @@ import { createEmptySnapshot } from "../../data/defaults";
 import type { Note, ParsedImport } from "../../types";
 import {
   KnowledgeImportRunError,
+  landFailedKnowledgeImport,
   runKnowledgeImportBatch,
   snapshotStillMatchesImportBase,
   validateAndFinalizeImportResult,
@@ -36,6 +37,178 @@ afterEach(() => {
 });
 
 describe("variable-width import integration", () => {
+  it.each(["overlap", "tasks", "guidance", "populated", "preferences", "preservation"])(
+    "keeps shared planning for compact imports needing %s decisions", async (reason) => {
+      const snapshot = createEmptySnapshot("Space", NOW);
+      if (reason === "populated") {
+        snapshot.notes = [wikiNote()];
+        snapshot.settings.includeExistingNotesInAIContext = false;
+      }
+      if (reason === "preferences") snapshot.settings.organizationInstructions = "Combine every idea into one note.";
+      let planCalls = 0;
+      await runKnowledgeImportBatch({
+        snapshot,
+        sources: [
+          { sourceId: "s1", parsed: parsed("Memo", reason === "tasks" ? "- [ ] Review the research" : "Inherited trauma generates political myths.") },
+          { sourceId: "s2", parsed: parsed("Research", "Sincerity alternates with irony.") },
+        ],
+        importGuidance: reason === "guidance" ? "Combine both sources into one argument." : "",
+        model: snapshot.settings.model, effort: "high",
+        driver: async (request) => {
+          const response = fixedPipelineResponse(request);
+          if (request.assignment.output.kind === "writing-blueprint") {
+            planCalls += 1;
+            const readings = readingsFromPipelineMaterials(request);
+            if (reason === "preservation") expect(readings[0].reading.mustPreserve).toContain("Retain the author's qualification exactly.");
+            if (reason !== "overlap") {
+              const payload = response.response.payload as { outputs: Array<Record<string, unknown>>; seedDispositions: Array<Record<string, unknown>>; writerSlots: Array<Record<string, unknown>> };
+              const template = payload.outputs[0];
+              payload.outputs = readings.map(({ artifactId, reading }, index) => ({
+                ...template, outputId: `output-${index + 1}`, title: index === 0 ? "Primordial wound" : "Metamodern oscillation",
+                sourceIds: [reading.sourceId], mustPreserve: reading.mustPreserve,
+                claimSelections: [{ artifactId, claimIds: reading.sourceClaims.map(({ claimId }) => claimId) }],
+              }));
+              payload.seedDispositions = readings.flatMap(({ artifactId, reading }, index) => reading.synthesisSeeds.map(({ seedId }) => ({
+                artifactId, seedId, disposition: "output", outputId: `output-${index + 1}`, rationale: "This is a distinct idea.",
+              })));
+              payload.writerSlots = [{ writerSlotId: "writer-1", objective: "Write the assigned ideas.", outputIds: ["output-1", "output-2"] }];
+            }
+          }
+          if (request.assignment.output.kind === "source-reading") {
+            const reading = response.response.payload as { synthesisSeeds: Array<{ proposedTitle: string; thesis: string }>; mustPreserve: string[] };
+            const first = request.assignment.output.sourceId === "s1";
+            reading.synthesisSeeds[0].proposedTitle = first || reason === "overlap" ? "Primordial wound" : "Metamodern oscillation";
+            reading.synthesisSeeds[0].thesis = first ? "Inherited trauma generates political myths." : "Sincerity alternates with irony.";
+            if (reason === "preservation") reading.mustPreserve.push("Retain the author's qualification exactly.");
+          }
+          return response;
+        },
+      });
+      expect(planCalls).toBe(1);
+    },
+  );
+
+  it("starts the fixed transport deadline only after a globally queued call dispatches", async () => {
+    vi.useFakeTimers();
+    const snapshot = createEmptySnapshot("Space", NOW);
+    const driver: import("./service").KnowledgeAssignmentDriver = async (request) => {
+      // Waiting longer than the five-minute provider timeout is not a provider failure.
+      await new Promise((resolve) => setTimeout(resolve, 310_000));
+      request.onProviderStart?.();
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      return fixedPipelineResponse(request);
+    };
+    driver.schedulesProviderCalls = true;
+    const pending = runKnowledgeImportBatch({ snapshot,
+      sources: [{ sourceId: "s1", parsed: parsed("First", "First text") }, { sourceId: "s2", parsed: parsed("Second", "Second text") }],
+      importGuidance: "", model: snapshot.settings.model, effort: "high", driver,
+    });
+    await vi.runAllTimersAsync();
+    const output = await pending;
+    expect(output.organized.notes).toHaveLength(1);
+    expect(output.landing).toBeUndefined();
+  });
+
+  it("finishes two distinct short notes in two provider rounds while preserving high-effort writers", async () => {
+    vi.useFakeTimers();
+    const snapshot = createEmptySnapshot("Space", NOW);
+    const stages: Array<{ kind: string; at: number; effort: string }> = [];
+    const start = Date.now();
+    const pending = runKnowledgeImportBatch({
+      snapshot,
+      sources: [
+        { sourceId: "s1", parsed: parsed("Memo", "Inherited trauma creates political myths.") },
+        { sourceId: "s2", parsed: parsed("Research", "Metamodern oscillation alternates sincerity and irony.") },
+      ],
+      importGuidance: "", model: "gpt-5.6-sol", effort: "high",
+      driver: async (request) => {
+        const kind = request.assignment.output.kind;
+        stages.push({ kind, at: Date.now() - start, effort: request.effort });
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        const response = fixedPipelineResponse(request);
+        if (request.assignment.output.kind === "source-reading") {
+          const seed = (response.response.payload as { synthesisSeeds: Array<{ proposedTitle: string; thesis: string }> }).synthesisSeeds[0];
+          seed.proposedTitle = request.assignment.output.sourceId === "s1" ? "Primordial wound" : "Metamodern oscillation";
+          seed.thesis = request.assignment.output.sourceId === "s1" ? "Inherited trauma creates political myths." : "Sincerity and irony alternate as cultural moods.";
+        }
+        return response;
+      },
+    });
+    await vi.runAllTimersAsync();
+    const output = await pending;
+    expect(stages.map(({ kind }) => kind)).toEqual(["source-reading", "source-reading", "writer-result", "writer-result"]);
+    expect(stages.slice(0, 2).map(({ at, effort }) => ({ at, effort }))).toEqual([{ at: 0, effort: "medium" }, { at: 0, effort: "medium" }]);
+    expect(stages.slice(2).map(({ at, effort }) => ({ at, effort }))).toEqual([{ at: 1_000, effort: "high" }, { at: 1_000, effort: "high" }]);
+    expect(Date.now() - start).toBe(2_000);
+    expect(output.organized.notes.map(({ title }) => title)).toEqual(["Primordial wound", "Metamodern oscillation"]);
+    expect(output.provenance.map(({ sourceIds }) => sourceIds)).toEqual([["s1"], ["s2"]]);
+    expect(output.warnings).not.toContain("Orion repaired the note plan locally from the completed readings before writing the notes.");
+  });
+
+  it("reads two short sources together and writes disjoint ideas together without a provider reading plan", async () => {
+    const snapshot = createEmptySnapshot("Space", NOW);
+    let readers = 0, writers = 0;
+    let releaseReaders!: () => void, releaseWriters!: () => void;
+    const readingGate = new Promise<void>((resolve) => { releaseReaders = resolve; });
+    const writingGate = new Promise<void>((resolve) => { releaseWriters = resolve; });
+    const kinds: string[] = [];
+    const slots: string[] = [];
+    const pending = runKnowledgeImportBatch({
+      snapshot,
+      sources: [
+        { sourceId: "s1", parsed: parsed("Source one", "Memory shapes the city.") },
+        { sourceId: "s2", parsed: parsed("Source two", "Responsibility shapes the council.") },
+      ],
+      importGuidance: "Preserve the two distinct ideas.",
+      model: snapshot.settings.model, effort: "high",
+      driver: async (request) => {
+        const kind = request.assignment.output.kind;
+        kinds.push(kind);
+        if (kind === "source-reading") { readers += 1; await readingGate; }
+        if (kind === "writer-result") {
+          writers += 1;
+          slots.push(request.assignment.output.writerSlotId);
+          await writingGate;
+        }
+        const response = fixedPipelineResponse(request);
+        if (kind === "writing-blueprint") {
+          const readings = readingsFromPipelineMaterials(request);
+          const payload = response.response.payload as {
+            outputs: Array<Record<string, unknown>>;
+            seedDispositions: Array<Record<string, unknown>>;
+            writerSlots: Array<Record<string, unknown>>;
+          };
+          const template = payload.outputs[0];
+          payload.outputs = readings.map(({ artifactId, reading }, index) => ({
+            ...template, outputId: `output-${index + 1}`,
+            title: index === 0 ? "Memory and the city" : "Responsibility and the council",
+            editorialBrief: "Write this distinct idea from its selected evidence.",
+            sourceIds: [reading.sourceId],
+            claimSelections: [{ artifactId, claimIds: reading.sourceClaims.map(({ claimId }) => claimId) }],
+            mustPreserve: reading.mustPreserve,
+          }));
+          payload.seedDispositions = readings.flatMap(({ artifactId, reading }, index) =>
+            reading.synthesisSeeds.map(({ seedId }) => ({ artifactId, seedId,
+              disposition: "output", outputId: `output-${index + 1}`, rationale: "This seed defines a distinct idea." })));
+          payload.writerSlots = [{ writerSlotId: "writer-1", objective: "Write both ideas.", outputIds: ["output-1", "output-2"] }];
+        }
+        return response;
+      },
+    });
+    await vi.waitFor(() => expect(readers).toBe(2));
+    expect(writers).toBe(0);
+    releaseReaders();
+    await vi.waitFor(() => expect(writers).toBe(2));
+    expect(new Set(slots).size).toBe(2);
+    releaseWriters();
+    const output = await pending;
+    expect(kinds).toEqual(["source-reading", "source-reading", "writing-blueprint", "writer-result", "writer-result"]);
+    expect(output.organized.notes).toHaveLength(2);
+    expect(output.provenance.map(({ sourceIds }) => sourceIds)).toEqual([["s1"], ["s2"]]);
+    expect(output.landing).toBeUndefined();
+    expect(snapshot.notes).toEqual([]);
+  });
+
   it("uses one immutable batch and permits direct one-call completion", async () => {
     const snapshot = createEmptySnapshot("Space", NOW);
     const driver = vi.fn().mockResolvedValue({
@@ -681,9 +854,9 @@ describe("variable-width import integration", () => {
     ).not.toThrow();
   });
 
-  it("reads every long-source range six at a time without forcing tangents into notes", async () => {
+  it("grows clean long-source reading to six without forcing tangents into notes", async () => {
     const snapshot = createEmptySnapshot("Space", NOW);
-    const source = parsed("Hegel", longPdfText());
+    const source = parsed("Hegel", longPdfText(240));
     let active = 0;
     let maximumActive = 0;
     let coverageCount = 0;
@@ -705,7 +878,7 @@ describe("variable-width import integration", () => {
       },
     });
 
-    expect(coverageCount).toBeGreaterThan(6);
+    expect(coverageCount).toBeGreaterThan(9);
     expect(maximumActive).toBe(6);
     expect(output.organized.notes[0].title).toBe("Finding");
     expect(
@@ -815,7 +988,8 @@ describe("variable-width import integration", () => {
       },
     });
 
-    await vi.advanceTimersByTimeAsync(70_000);
+    // Four initial reads establish provider health before width grows to six.
+    await vi.advanceTimersByTimeAsync(80_000);
     await expect(output).resolves.toMatchObject({
       organized: { notes: [{ title: "Finding" }] },
     });
@@ -929,7 +1103,7 @@ describe("variable-width import integration", () => {
     ).not.toThrow();
   });
 
-  it("fails open to a local reading blueprint without starting a legacy root writer", async () => {
+  it("repairs a malformed reading blueprint locally without starting a legacy root writer", async () => {
     const snapshot = createEmptySnapshot("Space", NOW);
     const purposes: string[] = [];
     const output = await runKnowledgeImportBatch({
@@ -947,9 +1121,7 @@ describe("variable-width import integration", () => {
         purposes.push(request.assignment.purpose);
         if (request.assignment.purpose === "reading-blueprint") {
           expect(request.effort).toBe("medium");
-          throw new KnowledgeProviderTimeoutError(
-            "The reading plan timed out before source reading began.",
-          );
+          return { response: { kind: "complete", payload: {} } };
         }
         return fixedPipelineResponse(request);
       },
@@ -1157,7 +1329,7 @@ describe("variable-width import integration", () => {
         },
       });
     expect(planCalls).toBe(2);
-    expect(output.organized.notes).toHaveLength(1);
+    expect(output.organized.notes).toHaveLength(2);
     expect(output.warnings).toContain(
       "Orion repaired the note plan locally from the completed readings before writing the notes.",
     );
@@ -1279,7 +1451,7 @@ describe("variable-width import integration", () => {
           return fixedPipelineResponse(request);
         },
     });
-    expect(writerCalls).toBe(1);
+    expect(writerCalls).toBe(2);
     expect(output.organized.notes[0].title).toBe("Finding (2)");
     expect(output.warnings).toContain(
       "Orion repaired the note plan locally from the completed readings before writing the notes.",
@@ -1360,9 +1532,9 @@ describe("variable-width import integration", () => {
             return response;
           },
         });
-      expect(writerCalls).toBe(1);
+      expect(writerCalls).toBe(2);
       expect(output.organized.wikiArticles).toEqual([]);
-      expect(output.organized.notes).toHaveLength(1);
+      expect(output.organized.notes).toHaveLength(2);
       expect(output.warnings).toContain(
         "Orion repaired the note plan locally from the completed readings before writing the notes.",
       );
@@ -1937,18 +2109,18 @@ describe("variable-width import integration", () => {
               text: `Small grounded finding ${index + 1}.`,
               support: [{ sourceId, rangeId }],
             }));
-            payload.synthesisSeeds = payload.sourceClaims.map(
-              ({ claimId }, index) => ({
+            payload.synthesisSeeds = Array.from(
+              { length: Math.ceil(payload.sourceClaims.length / 4) },
+              (_, index) => ({
                 seedId: `seed-${index + 1}`,
-                proposedTitle: `Small durable finding ${[...rangeId]
-                  .map((character) => character.codePointAt(0))
-                  .join("-")} ${index + 1}`,
-                thesis: `Atomic thesis ${index + 1} from ${rangeId}.`,
-                claimIds: [claimId],
+                proposedTitle: `Small durable mechanism ${index + 1}`,
+                thesis: `The related observations jointly support mechanism ${index + 1}.`,
+                claimIds: payload.sourceClaims.slice(index * 4, index * 4 + 4)
+                  .map(({ claimId }) => claimId),
                 importance: "high",
                 contribution: "new",
                 relatedNoteIds: [],
-                rationale: "The claim remains an independently useful knowledge object.",
+                rationale: "At most four related observations support one mechanism, repeated across readings.",
               }),
             );
             payload.spaceInterpretations = payload.sourceClaims.map(
@@ -1982,8 +2154,10 @@ describe("variable-width import integration", () => {
       },
     });
 
-    expect(outcome.organized.notes).toHaveLength(12);
-    expect(new Set(outcome.organized.notes.map(({ title }) => title)).size).toBe(12);
+    // Twenty-six exact repeated mechanisms plus the untouched sibling finding.
+    // The 202-claim reading is retained without forcing it into twelve notes.
+    expect(outcome.organized.notes).toHaveLength(27);
+    expect(new Set(outcome.organized.notes.map(({ title }) => title)).size).toBe(27);
     expect(inspectedCanonicalReading).toBe(true);
   });
 
@@ -2101,7 +2275,8 @@ describe("variable-width import integration", () => {
     expect(callsByRange.get("range-1")).toBe(1);
     expect(callsByRange.get("range-1.part-1")).toBe(1);
     expect(callsByRange.get("range-1.part-2")).toBe(1);
-    expect(maximumActiveReaders).toBe(6);
+    // A contract failure in the first cohort keeps this short queue at four.
+    expect(maximumActiveReaders).toBe(4);
   });
 
   it("repairs a genuinely small ordinary range once instead of splitting it", async () => {
@@ -2669,6 +2844,12 @@ describe("variable-width import integration", () => {
       firstReaderRequests.length - 1,
     );
 
+    const landed = landFailedKnowledgeImport(interrupted!, sources, snapshot);
+    expect(landed?.landing?.tier).toBe(1);
+    expect(landed?.landing?.diagnostic).toEqual(interrupted!.diagnostic);
+    expect(landed?.landing?.checkpoint).toEqual(interrupted!.checkpoint);
+    expect(landed?.landing?.checkpoint).not.toBe(interrupted!.checkpoint);
+
     const resumedReaderRequests: KnowledgeAssignmentExecutionRequest[] = [];
     const resumed = await runKnowledgeImportBatch({
       snapshot,
@@ -2682,7 +2863,7 @@ describe("variable-width import integration", () => {
         }
         return fixedPipelineResponse(request);
       },
-      resume: interrupted?.checkpoint,
+      resume: landed?.landing?.checkpoint,
     });
 
     expect(resumed.organized.notes[0].title).toBe("Finding");
@@ -2707,7 +2888,7 @@ describe("variable-width import integration", () => {
   });
 
   it.each(["malformed", "timeout"] as const)(
-    "keeps a %s post-reading route create-only even with Across this Space notes",
+    "handles a %s post-reading route without widening revision authority",
     async (routingFailure) => {
       const snapshot = createEmptySnapshot("Space", NOW);
       const existing = wikiNote();
@@ -2722,7 +2903,7 @@ describe("variable-width import integration", () => {
       snapshot.spaceKnowledge = prepareSpaceKnowledgeIndex(snapshot, NOW);
       let routerCalls = 0;
       const planRequests: KnowledgeAssignmentExecutionRequest[] = [];
-      const output = await runKnowledgeImportBatch({
+      const pending = runKnowledgeImportBatch({
         snapshot,
         sources: [
           {
@@ -2789,7 +2970,14 @@ describe("variable-width import integration", () => {
         },
       });
 
-      expect(routerCalls).toBe(routingFailure === "malformed" ? 2 : 1);
+      if (routingFailure === "timeout") {
+        await expect(pending).rejects.toMatchObject({ diagnostic: { code: "provider-timeout", resumable: true } });
+        expect(routerCalls).toBe(1);
+        expect(planRequests).toHaveLength(0);
+        return;
+      }
+      const output = await pending;
+      expect(routerCalls).toBe(2);
       expect(planRequests).toHaveLength(2);
       expect(planRequests[1].observations[0]?.message).toContain(
         "cannot revise existing articles without validated post-reading routing",
@@ -3406,11 +3594,11 @@ describe("variable-width import integration", () => {
     expect(output.landing).toBeUndefined();
   });
 
-  it("bypasses a timed-out writing planner and continues automatically with bounded writers", async () => {
+  it("checkpoints a timed-out writing planner without launching any writers", async () => {
     const snapshot = createEmptySnapshot("Space", NOW);
     let planCalls = 0;
     let writerCalls = 0;
-    const output = await runKnowledgeImportBatch({
+    const pending = runKnowledgeImportBatch({
       snapshot,
       sources: [{ sourceId: "s1", parsed: parsed("Long", longPdfText(36)) }],
       importGuidance: "",
@@ -3430,13 +3618,11 @@ describe("variable-width import integration", () => {
       },
     });
 
+    await expect(pending).rejects.toMatchObject({
+      diagnostic: { stage: "writing-plan", code: "provider-timeout", resumable: true },
+    });
     expect(planCalls).toBe(1);
-    expect(writerCalls).toBeGreaterThan(0);
-    expect(output.organized.notes.length).toBeGreaterThan(0);
-    expect(output.landing).toBeUndefined();
-    expect(output.warnings).toContain(
-      "Orion repaired the note plan locally from the completed readings before writing the notes.",
-    );
+    expect(writerCalls).toBe(0);
   });
 
   it("does not fan out doomed writers after a provider-wide planning failure", async () => {
@@ -3473,7 +3659,7 @@ describe("variable-width import integration", () => {
     expect(error?.diagnostic.code).not.toBe("unknown");
   });
 
-  it("automatically replaces a collapsed Hegel plan with ten or more semantic notes", async () => {
+  it("repairs a seed-omitting Hegel plan while preserving every distinct thesis", async () => {
     const snapshot = createEmptySnapshot("Space", NOW);
     let planCalls = 0;
     const writerSlots: string[] = [];
@@ -3557,6 +3743,9 @@ describe("variable-width import integration", () => {
               };
             }),
           );
+          // A structural omission, rather than an arbitrary numeric output
+          // floor, triggers recovery. Every retained clear thesis stays whole.
+          payload.seedDispositions = payload.seedDispositions.slice(1);
         }
         if (request.assignment.output.kind === "writer-result") {
           writerSlots.push(request.assignment.output.writerSlotId);
@@ -3569,7 +3758,7 @@ describe("variable-width import integration", () => {
     expect(emittedHighSeedTitles.size).toBeGreaterThanOrEqual(18);
     expect(new Set(writerSlots).size).toBeGreaterThan(1);
     expect(new Set(writerSlots).size).toBeLessThanOrEqual(6);
-    expect(output.organized.notes.length).toBeGreaterThanOrEqual(10);
+    expect(output.organized.notes.length).toBe(emittedHighSeedTitles.size);
     expect(new Set(output.organized.notes.map(({ title }) => title)).size).toBe(
       output.organized.notes.length,
     );
@@ -3708,7 +3897,7 @@ describe("landing ladder", () => {
       "Finding",
     ]);
     for (const note of output.organized.notes) {
-      expect(note.body).toContain("Synthesize every selected range claim.");
+      expect(note.body).not.toContain("Synthesize every selected range claim.");
       expect(note.body).toContain("Grounded claim from range-1.");
       expect(note.body).not.toContain("Complete summary of range-1.");
       expect(note.body).not.toContain("- Grounded claim from range-1.");
@@ -3744,7 +3933,16 @@ describe("landing ladder", () => {
       },
     });
 
-    expect(output.landing).toEqual({ tier: 2, code: "provider-network" });
+    expect(output.landing).toMatchObject({
+      tier: 2,
+      code: "provider-network",
+      diagnostic: {
+        stage: "direct",
+        code: "provider-network",
+        technicalDetail: "The provider connection was reset unexpectedly.",
+        resumable: false,
+      },
+    });
     expect(output.warnings[0]).toMatch(/^Orion landed this import plainly/);
     expect(output.organized.notes).toHaveLength(1);
     expect(output.organized.notes[0].title).toBe("Short");
