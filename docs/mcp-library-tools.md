@@ -94,5 +94,6 @@ Both the Claude extension and Codex ZIP passed the 20-tool harness after
 extraction. The desktop integration build passed. Both connectors also passed
 the harness after extraction from the final development DMG; its checksum and
 the copied application's strict nested signatures verified successfully.
-Development artifacts remain locally signed; this work does not publish,
-notarize, or install a release.
+That initial verification used locally signed development artifacts. Current
+distribution and signing status are recorded in the
+[Orion 0.4.5 release notes](../releases/0.4.5.md).

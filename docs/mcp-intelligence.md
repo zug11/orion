@@ -88,8 +88,9 @@ Verified on 5 September 2026:
 
 No real library was changed, and no paid provider request was made during
 verification. Live provider quality, billing, and an end-to-end run in an
-installed Codex or Claude Desktop client remain unverified. These are local
-development bundles, not a published or notarized release.
+installed Codex or Claude Desktop client remain unverified. That initial pass
+used local development bundles. Current distribution and signing status are
+recorded in the [Orion 0.4.5 release notes](../releases/0.4.5.md).
 
 The numerical phrase “100x” expresses the requested breadth; no performance or
 quality multiplier is claimed without measurement.
