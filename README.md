@@ -15,6 +15,8 @@
 <p align="center">
   <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.4.5-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
   ·
+  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.4.5.m-Apple-Silicon.dmg">Whisper Medium edition</a>
+  ·
   <a href="#the-orchestration-topology">How it works</a>
   ·
   <a href="#build-from-source">Build from source</a>
@@ -79,7 +81,7 @@ There is no Markdown mode and no read/write split. Click **Edit**, write with a 
 
 While editing a note, the microphone in the sticky writing toolbar records dictation and inserts the transcript at the preserved text cursor. The control remains available as the note scrolls. Recording and transcription stay on-device; the temporary M4A is deleted when bundled Whisper finishes.
 
-The ordinary `0.4.5` download bundles Whisper Small and processes two-minute segments. The optional Medium build bundles Whisper Medium, loads it once per dictation, and transcribes overlapping 30-second windows in the background. Both keep all generated text hidden until you press Stop, and neither imposes a fixed recording-duration cap.
+The ordinary `0.4.5` download bundles Whisper Small and processes two-minute segments. The `0.4.5.m` download bundles Whisper Medium, loads it once per dictation, and transcribes overlapping 30-second windows in the background. Both keep all generated text hidden until you press Stop, and neither imposes a fixed recording-duration cap.
 
 Inline AI writing is deliberately non-destructive. Continue at the caret or select a passage to Rewrite, Clarify, Tighten, Simplify, Expand, or Enrich from the active Space. A proposal is never saved until you accept it, and acceptance is one ordinary Undo step. An OpenAI key also enables selected-passage image generation; image bytes remain transient until accepted.
 
@@ -310,7 +312,9 @@ See [all 20 tools and their contracts](docs/mcp-library-tools.md).
 
 [**Download Orion 0.4.5 for Apple Silicon**](https://github.com/zug11/orion/releases/latest/download/Orion-0.4.5-Apple-Silicon.dmg)
 
-The published installer includes Whisper Small. The Medium edition is available through the source-build command below.
+[**Download Orion 0.4.5 with Whisper Medium**](https://github.com/zug11/orion/releases/latest/download/Orion-0.4.5.m-Apple-Silicon.dmg)
+
+The standard installer includes Whisper Small. The larger Medium edition includes Whisper Medium and its persistent dictation worker. Both contain the same app features, two-tone shader picker, Claude connector, and Codex plugin.
 
 Requirements:
 
