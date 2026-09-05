@@ -17,6 +17,19 @@ These product decisions are intentional:
   seeded Chat messages to a real vault.
 - Notes have one direct reading/writing surface. Editing reveals a lightweight
   word-processing toolbar; users never need to understand Markdown.
+- The sticky rich-text toolbar can record dictation at the current body cursor.
+  The renderer preserves and tracks that insertion point while rotating the
+  live microphone into bounded M4A segments. The Small edition uses independent
+  two-minute requests. The Medium edition loads one persistent Whisper worker
+  when recording starts and processes 30-second windows with two seconds of
+  acoustic overlap; local assembly removes repeated boundary words. Completed
+  segments are transcribed sequentially while recording continues, so the
+  session has no fixed duration cap, but their generated text stays buffered
+  and is not shown in the note until the user stops the whole session. The
+  native host bounds and temporarily stages each part, bundled Whisper
+  transcribes it entirely on-device, and only the combined ordered transcript
+  is inserted into the note; each recording is discarded after its command
+  finishes.
 - To-do items use portable Markdown task lists inside ordinary notes. Home
   derives a scrollable open-task list for the active Space, including source
   note and best matching canonical concept; do not add a parallel task schema.
@@ -90,6 +103,7 @@ src/App.css                         complete visual system and responsive UI
 src/types.ts                        persisted and IPC data contracts
 src/data/defaults.ts                clean-vault defaults and new settings
 src/components/NoteView.tsx         direct rich-text note surface
+src/components/VoiceMemoButton.tsx  bounded note-local microphone capture
 src/components/ConnectionCanvas.tsx legacy concept disambiguation
 src/components/ImportStudio.tsx     unified document, paste, media, and URL queue
 src/components/ExportDialog.tsx     bounded web/Markdown scope and format picker
@@ -98,6 +112,17 @@ src/components/SettingsView.tsx     AI, transcription, linking, theme, data
 src/components/HomeAtmosphere.tsx   lazy home-atmosphere selection
 src/components/SignalDecay.tsx      low-power responsive harmonic shader
 src/components/LineWaves.tsx        low-power OGL contour shader
+src/components/QuietLoom.tsx        original local WebGL woven-light shader
+src/components/Nova.tsx             original animated plasma volume and sparks
+src/components/Flux.tsx             full-width flowing plasma currents
+src/components/TidalGlass.tsx       full-width procedural liquid caustics
+src/components/PrismDrift.tsx       animated crystalline height-field facets
+src/components/Nebula.tsx           layered full-width cloud and star field
+src/components/Emberwake.tsx        advected full-width spark streams and wakes
+src/components/GravitySilk.tsx      billowing satin field with analytic normals
+src/components/Mirage.tsx           drifting procedural glass-lens field
+src/components/ProceduralAtmosphere.tsx shared bounded WebGL lifecycle
+src/components/atmosphereShader.ts  local GLSL palette and room composition
 src/components/DotField.tsx         settling Canvas 2D interaction field
 src/lib/icons.ts                    direct Lucide exports; never use its barrel
 src/lib/files.ts                    local document parsing
@@ -155,6 +180,12 @@ npm run tauri build
 `npm run tauri build` is the canonical native integration and release check.
 Native artifacts are produced under `src-tauri/target/release/bundle/`.
 
+The native crate sets release `strip = "none"` to avoid Rust 1.96 producing
+misaligned proc-macro dylibs with the macOS 27 toolchain
+([upstream issue](https://github.com/rust-lang/rust/issues/157750)). Retain this
+until the supported compiler includes the fix. The independent MCP package
+keeps its existing remapping, stripping, signing, and verification pipeline.
+
 ## Persistence and schema rules
 
 The canonical desktop vault is `vault.json` in Tauri's application data folder
@@ -174,6 +205,16 @@ flushed temporary file plus atomic replacement.
   vaults remain valid, but are always normalized into complete runtime settings.
   System mode must react to macOS appearance changes without rewriting the
   user's selected mode or preset.
+- `homeAtmosphereCustomColor` and `homeAtmosphereCustomSecondaryColor` are
+  optional six-digit hex colours (or empty) at the storage boundary, hydrated
+  to empty for older vaults. Together they override the first two colour
+  channels across every shader and preview; derive any third channel from
+  their blend and preserve readable signal contrast and the themed room.
+  Older single-colour overrides keep their existing tonal companions until
+  edited. Editing either picker captures the other visible colour once, then
+  preserves that independent choice. Each colour has a native picker and hex
+  field; choosing a preset or Reset colours clears both overrides. With neither
+  set, the original multi-colour preset remains unchanged.
 - Update every validator and exhaustive `SourceKind` mapping when adding a
   source type.
 - Preserve the original extracted/transcribed source even when AI input must be
@@ -183,6 +224,10 @@ flushed temporary file plus atomic replacement.
   `updatedAt`, but it must never reorder the sidebar. The active Space's stored
   note-array order is the stable visible order.
 - Settings currently apply across all Spaces; content remains Space-local.
+- The intelligence picker includes GPT-6 Astra (`gpt-6-astra`) through the
+  existing OpenAI request path. Selecting it changes None reasoning to Low and
+  disables None while selected; its visible supported depths run Low through
+  Extra high. Preserve the exact selected model in persistence and requests.
 
 Browser preview uses `localStorage` for development and keeps both provider keys
 in memory for the current tab. Desktop behavior is authoritative.
@@ -192,7 +237,8 @@ in memory for the current tab. Desktop behavior is authoritative.
 Orion bundles `Orion-Claude-Connector.mcpb`, a self-contained Apple Silicon
 Claude Desktop extension. Its `orion-mcp` binary uses newline-delimited JSON-RPC
 over stdio. stdout is protocol-only; diagnostics belong on stderr. It implements
-the MCP initialize lifecycle, ping, and these nine tools:
+the MCP initialize lifecycle, ping, these nine local vault tools, and the optional
+desktop workflows described below:
 
 - `orion_list_spaces`
 - `orion_browse_space`
@@ -264,6 +310,101 @@ Preserve these trust boundaries:
 - Make no network request and never read or expose either provider key.
 - Treat all vault text as user data, not executable instructions.
 - Keep MCP messages on stdout to one JSON value per line with no stdout logging.
+
+### Additional local library tools
+
+The independent MCP crate also exposes 20 tools from `src/library`:
+`orion_list_sources`, `orion_search_sources`, `orion_get_source_passage`,
+`orion_get_note_section`, `orion_get_notes`, `orion_list_concepts`,
+`orion_get_concept`, `orion_resolve_link`, `orion_get_related_notes`,
+`orion_get_provenance`, `orion_list_tags`, `orion_list_tasks`,
+`orion_set_task_completion`, `orion_edit_note_text`, `orion_append_to_note`,
+`orion_batch_update_metadata`, `orion_find_duplicate_notes`,
+`orion_check_space_integrity`, `orion_get_recent_changes`, and
+`orion_get_link_path`. They work with Orion closed, without credentials or
+provider calls, under the existing direct local-library access contract.
+
+- Reads default only to the active Space. Every write requires an explicit
+  exact Space and opaque current note versions, checked under `vault.lock`.
+  Batch metadata updates validate every member before any mutation. Preserve
+  unrelated raw fields and settings; content edits stale the overview, pin-only
+  edits do not. A stale retry must never duplicate an append or erase new text.
+- Tasks remain Markdown checkboxes. Return exact raw text and zero-based line
+  indices, ignore frontmatter/fenced examples, and change only the requested
+  marker. Collapse matching task copies only with shared provenance or a wiki
+  derivation, preserving unrelated recurring tasks and ordinary-note authority.
+- Source and section ranges use Unicode scalar offsets, with exclusive ends.
+  Carry versions and exact note citations. Paginated reads expose a vault
+  revision and optionally reject a changed revision between pages. Versions
+  are current-content equality tokens, never historical snapshots.
+- Bound results to 2 MiB, page sizes to 100, multi-note reads to 12 bodies of
+  at most 5,000 characters each, and exact passages/sections to 20,000 characters.
+  Whole-body scans report their 2,000-record/8-MiB coverage. Bound matches/tasks
+  and diagnostic examples to 5,000, and path searches to eight hops, 500 expanded
+  notes, and 10,000 edges. Report truncation; never infer exhaustive absence.
+- Provenance, paths, and title matches are navigation/diagnostic evidence, not
+  claim-level support. Recent changes are current metadata, not a deletion or
+  version history. Integrity tooling never silently repairs or deletes data.
+- Run `script/test_mcp_library.mjs` against each exact extracted package binary
+  and include this harness in release fingerprints. The harness uses only
+  isolated fixtures and exercises all 20 new tools, including real atomic edits.
+
+### Optional native desktop workflows
+
+The shared connector now exposes 41 tools: 29 local library tools and 12 desktop workflows. The optional workflows are
+`orion_get_capabilities`, `orion_get_context`, `orion_research`, `orion_import`,
+`orion_reprocess_sources`, `orion_generate`, `orion_develop_concept`,
+`orion_enrich_knowledge`, `orion_refresh_overview`, `orion_get_job`,
+`orion_list_jobs`, and `orion_cancel_job`.
+
+- `src-tauri/shared/assistant_protocol.rs` defines the strict, bounded request
+  contract. `src-tauri/src/assistant_bridge.rs` owns the per-user Unix socket,
+  private descriptor/token, opt-in grants, queue, renderer lease, and commit.
+  `src-tauri/mcp-server/src/workflows.rs` is a credential-free local transport.
+  No separate daemon or TCP endpoint starts. The running app alone accesses
+  Keychain and providers through existing native commands and scheduling.
+- Optional `Settings.assistantAccess` hydrates to disabled for older vaults.
+  Connections independently enables workflows, API use, workflow writes, and
+  exact allowed Space IDs. These grants do not replace the installed connector's
+  existing direct read/write access. Never let tool input override a grant,
+  selected model, or existing-note AI-context preference.
+- Every workflow requires explicit `space_id` and `request_id`. Jobs deduplicate
+  identical retries while retained: at most 32 jobs or one hour, lost at app exit.
+  Cap queued/active jobs at eight, retained input at 16 MiB, MCP messages at 8 MiB,
+  and each result at 2 MiB. The renderer executes one job at a time, with a
+  20-minute cancellation deadline and the existing provider scheduler bounds.
+  Cancellation prevents new stages and late note commits; an atomic commit that
+  already started finishes. Never release a physical provider slot early.
+- `src/lib/assistant` reuses the existing import, generation, linked-article,
+  enrichment, and hierarchical-overview engines. Context/research return exact
+  versioned excerpts, host-built citations, partial coverage, and explicit AI
+  interpretation. Research never writes notes or Chat. Follow-ups reject stale
+  prior Space versions. Unknown usage is not zero or a dollar estimate.
+- Import preserves all extracted source text up to its explicit 1.8 MB total
+  bound. File inputs are exact paths from the captured request: native code
+  validates regular files, extensions, and document/media bounds before using
+  existing parsers, Vision OCR, Whisper, or HTTPS/YouTube fetching. Reprocessing
+  passes original source IDs into `buildImportPayload`, preserving original
+  timestamps and citation targets. Local recovery must be reported as recovery,
+  never completed AI synthesis.
+- Flush and freeze context before dispatch; reject changed knowledge, permissions,
+  or settings. Commit through the existing advisory lock, expected revision,
+  and atomic writer. Native scope validation prevents deletions, settings changes,
+  or changes to another Space. Renderer saves coalesce against the latest live
+  vault so a queued autosave cannot undo a workflow commit. Edits made during the
+  commit window are merged as subsequent user edits, without resurrecting deleted
+  records. Return saved citations only after atomic persistence succeeds.
+- Workflow commits suppress automatic overview calls for that content version in
+  the running app; explicit overview refresh or the next independent knowledge
+  edit resumes normal maintenance. Local import must not trigger a hidden paid
+  refresh immediately after completion.
+- Private descriptor mode is 0600. The MCP transport verifies exact canonical
+  vault identity, socket directory, and protocol before connecting, including
+  advanced vault overrides. This is same-user OS authority, not verified identity
+  of a particular assistant client. Never expose the token through MCP results.
+- Include `src-tauri/shared` in release fingerprints. Test the exact packaged
+  executable, not only source-level tool definitions. See
+  `docs/mcp-intelligence.md` for the scope and verification contract.
 
 `npm run build:mcp` compiles and ad-hoc-signs the binary, packages the manifest,
 icon, documentation, and server into `.mcpb`, extracts the exact package, checks
@@ -586,6 +727,17 @@ unrelated seeds just to reduce latency. The persistent Space
 hierarchy must reduce repeated context work, not add a planning tax to small
 inputs. Import parallelism is for latency across independent source readings
 and writer slots; background Space maintenance remains sequential by default.
+The direct path has an eight-minute wall-clock safety boundary: five minutes
+for primary synthesis and a three-minute finalization reserve. A root provider
+transport may use four minutes within the primary window, retaining room for
+an immediate transport retry; routing and other
+non-root assignments remain capped at two minutes. Import opts into preserving
+an active root transport across the soft finalization cutoff; it still obeys
+its transport ceiling and the hard overall deadline. Keep the deadline error copy
+duration-neutral so tests with deliberately shortened clocks and future budget
+changes never report a false elapsed time. The fixed multi-stage pipeline keeps
+its separate per-transport deadlines and checkpoint recovery rather than
+inheriting this direct-path wall clock.
 
 Tests must prove full initial note
 coverage, exact incremental changed-note coverage, stable 24–32-note
@@ -785,10 +937,11 @@ check, not evidence that the selected model or a future generation will work.
     each writer receive an independent 300-second emergency transport-safety
     ceiling; user cancellation is the run-level stop. That ceiling is not a
     shared stage or product countdown. The genuinely short generic direct path
-    retains its legacy 180-second bounded runtime. If either path fails
-    terminally, do not
-    launch a second network organizer. Preserve the complete extracted text on
-    its Source record and create a bounded editable preview note for it.
+    uses the eight-minute bounded runtime described above. Its timeout or
+    invalid-result recovery may enter the existing compact fixed-stage pipeline
+    once, using the selected model and the same frozen input. Never fall back to
+    the legacy network organizer. Exhausted recovery preserves the complete
+    extracted text on its Source record and creates bounded editable notes.
 
 The OpenAI-facing response envelope remains a strict root JSON object with
 required `kind`, `payload`, and `calls` fields. Represent the inactive semantic
@@ -841,8 +994,8 @@ adaptive long path is not governed by one shrinking 180-second clock: the
 reading blueprint, each source-reading request, the writing blueprint, and each
 writer receive an independent 300-second emergency transport-safety ceiling.
 It is not a shared stage or product countdown. Cancellation must abort active
-work and ignore late completions. The short generic direct organizer continues
-to use the legacy 180-second orchestration boundary.
+work and ignore late completions. The short generic direct organizer uses the
+eight-minute orchestration boundary described above.
 
 Initial source ranges are derived from source density and aim for approximately
 72 KiB and 12,000 estimated tokens while enforcing hard ceilings of 100,000
@@ -874,8 +1027,14 @@ more calls. Contract-invalid plans may still recover locally.
 There is no installed-app network retry through a legacy organizer after an
 orchestration failure. The only cross-provider retry is the user's explicit
 Wave 2 failover setting described below; it retries one eligible assignment,
-not the import through a second organizer. For the short direct path, a provider
-timeout remains the product deadline unless that opt-in failover succeeds.
+not the import through a second organizer. `runAutomaticKnowledgeImport` owns
+batch recovery: a direct deadline, provider timeout, malformed result, or
+coverage/validation failure may enter the compact fixed-stage pipeline once.
+This uses a local reading plan and the same provider/model/effort and frozen
+source/Space contract; it is not a replay of the failed direct request. Explicit
+authentication, billing/quota, unsupported-model, and request-schema failures
+land immediately, without this extra work. Direct network retries remain owned
+by the direct scheduler rather than another whole-import retry loop.
 
 A failed fixed long-import stage must return a typed recovery checkpoint before
 control reaches Import Studio. This checkpoint is an exceptional safety net,
@@ -888,11 +1047,11 @@ artifacts, an accepted writing plan when one exists, completed per-output
 drafts and writer slots, recovery-circuit state, and monotonic physical-attempt
 counters. The checkpoint schema is versioned; incomplete older shapes are
 rejected rather than trusted.
-Any visible Resume reuses the same logical run and calls only unfinished canonical readings
+Automatic resume reuses the same logical run and calls only unfinished canonical readings
 or writer slots; it must never repeat already accepted provider work. Validate
 the checkpoint against the frozen Space version, exact source fingerprints,
 model, effort, guidance, and organization instructions before use. Any mismatch
-invalidates Resume and requires a fresh Retry. Checkpoints are session-local,
+invalidates the checkpoint; stale work must never be applied. Checkpoints are session-local,
 never mutate the vault, and are discarded when the source queue, mode,
 instructions, or active Space changes.
 
@@ -915,13 +1074,14 @@ can regenerate later, never a disguise for a failed synthesis.
 Results must show the exact failed stage, a redacted provider or validation
 detail, retained reading/writing counts, a run ID, model, and recorded time only
 when automatic recovery is genuinely exhausted. Landing retains the classified
-safe diagnostic and session checkpoint; it must not clear recovery state or
-render the normal success heading. Explicit retries reuse successful unchanged
-batches, and queue, guidance, mode, or Space changes discard that retained work.
-Redact API keys, bearer tokens, and user-home path components. A safe checkpoint
-offers **Resume import**; a direct or invalidated run offers **Retry import**;
-the preserved preview remains independently selectable. Show the source
-preservation explanation once, never concatenate duplicate fallback copy.
+safe diagnostic and session checkpoint; it must not render the normal success
+heading. Automatic recovery reuses successful unchanged batches; queue,
+guidance, mode, or Space changes discard that retained work. Redact API keys,
+bearer tokens, and user-home path components. Do not expose Retry/Resume buttons:
+the final incomplete result says **AI synthesis is incomplete**, explains that
+recovery finished, and offers **Keep available notes**. This is still an explicit
+atomic Add/Keep action, not an automatic vault write. Show the source preservation
+explanation once, never concatenate duplicate fallback copy.
 
 Progress must reflect the real staged pipeline without exposing orchestration
 jargon. The user-facing stages are **Preparing the reading**, **Reading in
@@ -931,8 +1091,8 @@ total may increase when one branch needs a closer pass. Keep the source title
 and batch ordinal visible, retain Cancel throughout the installed run, and use
 an indeterminate overall indicator rather than inventing a time percentage.
 Never say worker, blueprint, fan-out, topology, deterministic, or split in the
-normal Import progress UI. The recovery action may say Retry when no valid
-checkpoint exists. Prefer “closer read” when adaptive narrowing needs
+normal Import progress UI. Automatic recovery explains the closer reading or
+retained progress without requiring a recovery action. Prefer “closer read” when adaptive narrowing needs
 explanation. Results
 count prepared notes, never label a generated note as a source “page.”
 
@@ -1043,14 +1203,15 @@ all. Do not reintroduce a fixed note-count/body-slice fallback.
   and never reinterpret failover as permission to run a second organizer.
 - Rolling provider-health memory is local, bounded, and best-effort. It may add
   a concise concern to preflight diagnostics but cannot silently choose a
-  provider. A checkpoint-safe transient failure may auto-resume at most twice
+  provider. A checkpoint-safe transient failure may auto-resume at most twice per batch
   with bounded backoff; cancellation, a changed Space, and unsafe checkpoints
   remain visible stops.
 - The direct scheduler also retries typed transient transport failures at most
   twice inside its existing time budget. Native connection failures must be
   classified as retryable, without wrapping cancellation, credential, request
-  schema, or explicit billing failures as transient. Do not add a second
-  whole-import retry loop after this scheduler exhausts its attempts. The
+  schema, or explicit billing failures as transient. Do not replay the direct
+  organizer after this scheduler exhausts its attempts; its one-time staged
+  recovery is the narrowly authorized exception described above. The
   readiness check may retry transient connectivity/availability failures twice
   with 2- and 8-second abortable backoff before presenting Results.
 
@@ -1238,7 +1399,9 @@ replayable. Tests must prove:
   independent 300-second emergency transport-safety ceiling—not a shared stage
   or product countdown—while user cancellation aborts active work and late
   results are ignored;
-- the short direct organizer retains the legacy 180-second bounded runtime;
+- the short direct organizer retains its eight-minute bounded runtime, does
+  not preempt an active root at its soft cutoff, and may recover a timeout or
+  invalid result through the compact fixed-stage pipeline exactly once;
 - every completed source reading has full coverage, source importance, Space
   relevance, novelty, focus, deprioritization, reviewed-ID assessment, and
   claim-grounded semantic synthesis seeds that partition every atomic source
@@ -1257,11 +1420,11 @@ replayable. Tests must prove:
   scaffolding; deterministic writer repair uses only the planned thesis,
   selected claims, and selected Space interpretations, never whole reader
   summaries or range-heading bullet dumps;
-- a terminal transport, validation, or cancellation failure creates no second
-  network workflow and cannot partially apply completed siblings; the explicit
-  one-request provider failover is not a second organizer;
+- exhausted recovery or cancellation creates no legacy network workflow and
+  cannot partially apply completed siblings; the explicit one-request provider
+  failover is not a second organizer;
 - a terminal fixed-stage failure retains accepted siblings in a validated
-  session checkpoint, and Resume never calls those assignments again;
+  session checkpoint, and automatic resume never calls those assignments again;
 - assignment context never crosses Spaces, owners cannot overlap, and stale,
   cancelled, invalid, or late work cannot partially mutate the Space;
 - every canonical-note revision matches an exact frozen destination version,
@@ -1426,7 +1589,8 @@ The installed Orion app is self-contained on Apple Silicon macOS 13.3 or later. 
 
 - `whisper.cpp` 1.9.1 as `Contents/Frameworks/whisper.framework`;
 - the custom `Contents/MacOS/orion-whisper` sidecar;
-- the multilingual `ggml-base.bin` model in `Contents/Resources/models`;
+- exactly one multilingual model, Small in the ordinary edition or Medium in
+  the `.m` edition, as `Contents/Resources/models/ggml-model.bin`;
 - official standalone `yt-dlp_macos` as `Contents/MacOS/yt-dlp`;
 - Deno as `Contents/MacOS/deno`.
 
@@ -1437,13 +1601,29 @@ snapshot validator for migration but are ignored and are not shown in the UI.
 `orion-whisper` uses AVFoundation to decode a selected audio or video track
 directly to 16 kHz mono Float32 samples and calls the whisper C API. It writes
 only the finished transcript to stdout and diagnostic detail to stderr. Rust
-passes exact model and media paths as structured process arguments, captures the
-result, and never transfers media through renderer IPC or HTTP.
+passes exact model and media paths as structured process arguments and captures
+the result. Imported media remains path-based and never crosses renderer IPC or
+HTTP. Note voice memos are the narrow exception: the renderer records a
+continuous session as bounded M4A segments and sends each one through a
+sequential native command while the microphone continues recording. The Small
+edition uses independent two-minute invocations. The Medium edition starts one
+persistent sidecar per dictation, loads the model once, and processes 30-second
+windows with the prior two seconds of decoded audio prepended for boundary
+continuity. The host validates the name, MIME type, MP4 signature,
+encoded/decoded sizes, and temporary-file lifetime before invoking the sidecar.
+Segment transcripts stay buffered until recording stops; the renderer removes
+overlap duplicates and only then inserts and persists the combined ordered
+transcript. Silent intermediate windows are valid. The overall dictation
+session has no fixed duration limit.
 
 The upstream framework is built for macOS 13.3, which defines Orion's current
-minimum system version. The model must be at least 100 MiB or setup validation
+minimum system version. The model must be at least 400 MiB or setup validation
 treats it as incomplete. `THIRD_PARTY_NOTICES.md` records artifact versions,
-hashes, origins, and licenses. Do not replace a bundled artifact without
+hashes, origins, and licenses. `ORION_WHISPER_MODEL=small|medium` selects the
+edition for the transcription helper, renderer timings, Tauri resource map,
+release fingerprint, and final bundle verification. Each build verifies the
+selected model's exact byte count and SHA-256, and the release source
+fingerprint covers that model. Do not replace a bundled artifact without
 updating and verifying those records.
 
 Run `../script/build_transcription_sidecar.sh` after changing the Swift source.
@@ -1905,6 +2085,8 @@ Reuse the existing colors, surfaces, typography, radii, and compact scale in
 `App.css`. Prefer a single clear action and progressive disclosure. Preserve:
 
 - direct editing with the animated toolbar;
+- note dictation in that sticky toolbar, with the body insertion point preserved
+  and mapped through edits while on-device transcription is running;
 - one wider toolbar around a restrained reading measure, with portable Markdown
   controls for strikethrough, inline and fenced code, dividers, and editable GFM
   tables. Table row, column, header, and deletion controls appear contextually
@@ -1944,8 +2126,16 @@ Reuse the existing colors, surfaces, typography, radii, and compact scale in
   reveal a persistent solid outline; both edge and halo must inherit the exact
   card radius without square filter bleed at the corners;
 - a persisted, reduced-motion-safe home atmosphere chosen from Line Waves,
-  Signal Decay, and Field, with curated accent and motion controls; only the
-  active renderer should load or animate;
+  Signal Decay, Field, Quiet Loom, Nova, Flux, Tidal Glass, Prism Drift, Nebula,
+  Emberwake, Gravity Silk, and Mirage, with curated or custom accent and motion controls;
+  only the active renderer should load or animate. The nine original procedural
+  effects share a local WebGL lifecycle with no external artwork or shader
+  dependency, a 600,000-pixel
+  budget and 30 fps cap, hidden/offscreen suspension, static fallbacks, and
+  context-loss recovery. Still draws only on resize or pointer input; system
+  reduced motion also disables pointer response. The seven full-field effects
+  (Flux, Tidal Glass, Prism Drift, Nebula, Emberwake, Gravity Silk, Mirage)
+  occupy the whole hero rather than a central object;
 - direct canonical article navigation, with the right-hand connections canvas
   reserved for unresolved legacy ambiguity instead of a graph;
 - route-aware Back/Forward: a note opened from Notes returns to Notes, a note
@@ -2000,7 +2190,9 @@ Before handoff:
    changed.
 11. Refresh distributable artifacts and release notes when the task includes a
     release build. From the workspace root, use
-    `./script/package_release.sh <release-label>` so the DMG is staged to a new
+    `./script/package_release.sh <release-label>` for the ordinary Small
+    edition, or `ORION_WHISPER_MODEL=medium ./script/package_release.sh
+    <release-label>.m` for the Medium edition, so the DMG is staged to a new
     inode before publication. Never use an in-place copy to replace a DMG that
     may be mounted; doing so corrupts the live mounted backing store and can
     leave a partial application after Finder error `-36`.
@@ -2017,11 +2209,13 @@ Release builds sign `whisper.framework`, `orion-ocr`, `orion-whisper`, `yt-dlp`,
 Deno, the main Orion executable, and the outer app with one Developer ID
 Application identity, secure timestamps, and Hardened Runtime. The PyInstaller
 `yt-dlp` helper alone receives the narrow `disable-library-validation`
-entitlement it needs to map its extracted Python framework. Verify the entire
-bundle with `codesign --verify --deep --strict`, then regenerate and sign the
-DMG around that exact signed app. Mount the finished image read-only, copy the
-app out with `ditto`, and run the four helper `--version` commands from that
-copy. Set
+entitlement it needs to map its extracted Python framework. The main Orion
+executable receives only the audio-input entitlement required for note voice
+memos, and the app bundle includes the matching microphone usage description.
+Verify the entire bundle with `codesign --verify --deep --strict`, then
+regenerate and sign the DMG around that exact signed app. Mount the finished
+image read-only, copy the app out with `ditto`, and run the four helper
+`--version` commands from that copy. Set
 `ORION_CODESIGN_IDENTITY` when more than one Developer ID identity is installed.
 Set `ORION_NOTARY_PROFILE` to a `notarytool` Keychain profile to submit, staple,
 and Gatekeeper-check the DMG as part of the same release command. The script

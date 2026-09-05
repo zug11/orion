@@ -972,13 +972,15 @@ describe("Import unified intake", () => {
     expect(screen.queryByText("Import notes")).not.toBeInTheDocument();
   });
 
-  it("preserves source previews and exposes an exhausted deadline", async () => {
+  it("recovers a direct deadline automatically through planned reading", async () => {
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
       {};
     const warningSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.mocked(runKnowledgeAssignment).mockRejectedValue(
-      new KnowledgeDeadlineExceededError(),
-    );
+    vi.spyOn(providerHealth, "autoResumeBackoffMs").mockReturnValue(0);
+    vi.mocked(runKnowledgeAssignment).mockImplementation(async (request) => {
+      if (request.assignment.output.kind === "root-result") throw new KnowledgeDeadlineExceededError();
+      return fixedPipelineResponse(request);
+    });
     const aiSnapshot: AppSnapshot = {
       ...snapshot,
       settings: { ...snapshot.settings, apiKeyConfigured: true },
@@ -993,20 +995,14 @@ describe("Import unified intake", () => {
     fireEvent.click(screen.getByRole("button", { name: "Review sources" }));
     fireEvent.click(screen.getByRole("button", { name: "Organize with AI" }));
 
-    // The time limit is a deliberate stop, so there is no silent retry — but
-    // the source still lands, with the actual stop reason and an explicit retry.
     expect(
-      await screen.findByRole("heading", { name: "Orion reached the import time limit." }),
+      await screen.findByRole("heading", { name: "1 note prepared" }),
     ).toBeVisible();
-    expect(
-      screen.getByRole("button", { name: "Retry import" }),
-    ).toBeVisible();
-    expect(warningSpy).toHaveBeenCalledWith(
-      expect.stringContaining("[Orion import]"),
-      expect.objectContaining({
-        message: expect.stringMatching(/knowledge-import limit/i),
-      }),
-    );
+    expect(screen.queryByRole("button", { name: /(?:Retry|Resume) import/ })).not.toBeInTheDocument();
+    const kinds = vi.mocked(runKnowledgeAssignment).mock.calls.map(([request]) => request.assignment.output.kind);
+    expect(kinds.filter((kind) => kind === "root-result")).toHaveLength(1);
+    expect(kinds.filter((kind) => kind === "source-reading")).toHaveLength(1);
+    expect(kinds).not.toContain("reading-blueprint");
     warningSpy.mockRestore();
   });
 
@@ -1041,20 +1037,18 @@ describe("Import unified intake", () => {
     // A persistent provider failure lands the source as a real note built
     // locally from preserved text, without concealing the provider failure.
     expect(
-      await screen.findByRole("heading", { name: "Orion could not finish this import." }, {
+      await screen.findByRole("heading", { name: "AI synthesis is incomplete" }, {
         timeout: 6_000,
       }),
     ).toBeVisible();
     expect(
       screen.getByText(diagnostic.message),
     ).toBeVisible();
-    expect(warningSpy).toHaveBeenCalledWith(
-      expect.stringContaining("[Orion import]"),
-      diagnostic,
-    );
     expect(organizeWithAI).not.toHaveBeenCalled();
+    expect(runKnowledgeAssignment).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: /(?:Retry|Resume) import/ })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Keep preview" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep available notes" }));
     await waitFor(() => expect(onApply).toHaveBeenCalledOnce());
     expect(onApply.mock.calls[0]?.[0].notes[0]?.body).toContain(
       "Every paragraph must survive the provider failure.",
@@ -1062,7 +1056,7 @@ describe("Import unified intake", () => {
     warningSpy.mockRestore();
   });
 
-  it.each(["assignment", "preflight", "later batch"])("shows a %s failure for two short sources and retries without losing either", async (failureStage) => {
+  it.each(["assignment", "preflight", "later batch"])("preserves both sources after a terminal %s failure without requiring retry", async (failureStage) => {
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     vi.spyOn(console, "warn").mockImplementation(() => {});
     if (failureStage === "later batch") {
@@ -1102,26 +1096,22 @@ describe("Import unified intake", () => {
     }
     fireEvent.click(screen.getByRole("button", { name: "Review sources" }));
     fireEvent.click(screen.getByRole("button", { name: "Organize with AI" }));
-    expect(await screen.findByRole("heading", { name: /Orion (could not finish this import|paused while reading the source)\./ }, { timeout: 6_000 })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "AI synthesis is incomplete" }, { timeout: 6_000 })).toBeVisible();
     expect(screen.getByText(/Invalid schema in provider response/)).toHaveTextContent("[redacted]");
     expect(screen.queryByText(/zelda|sk-secret-token/)).not.toBeInTheDocument();
     expect(screen.queryByText("2 notes prepared")).not.toBeInTheDocument();
     expect(screen.queryByText(/Orion shaped your source/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Keep preview" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Keep available notes" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /(?:Retry|Resume) import/ })).not.toBeInTheDocument();
     expect(onApply).not.toHaveBeenCalled();
     if (failureStage === "preflight") expect(runKnowledgeAssignment).not.toHaveBeenCalled();
 
-    vi.mocked(preflightKnowledgeProvider).mockResolvedValue({ ok: true, latencyMs: 0 });
-    vi.mocked(runKnowledgeAssignment).mockClear();
-    vi.mocked(runKnowledgeAssignment).mockImplementation(succeed);
-    fireEvent.click(screen.getByRole("button", { name: /(?:Retry|Resume) import/ }));
-    expect(await screen.findByRole("heading", { name: failureStage === "later batch" ? "2 notes prepared" : "1 note prepared" })).toBeVisible();
-    expect(screen.queryByRole("alert", { name: "Import diagnostic" })).not.toBeInTheDocument();
-    expect(runKnowledgeAssignment).toHaveBeenCalledTimes(failureStage === "later batch" ? 1 : 4);
     if (failureStage === "later batch") {
-      expect(vi.mocked(runKnowledgeAssignment).mock.calls[0][0].context.runManifest?.sources.map(({ title }) => title)).toEqual(["Second idea"]);
+      const firstBatchCalls = vi.mocked(runKnowledgeAssignment).mock.calls.filter(([request]) =>
+        request.context.runManifest?.sources[0].title === "First idea");
+      expect(firstBatchCalls).toHaveLength(1);
     }
-    fireEvent.click(screen.getByRole("button", { name: "Add to Orion" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep available notes" }));
     await waitFor(() => expect(onApply).toHaveBeenCalledOnce());
     expect(onApply.mock.calls[0][0].sources.map((source: { text: string }) => source.text)).toEqual([
       "The complete text of First idea.", "The complete text of Second idea.",
@@ -1167,7 +1157,8 @@ describe("Import unified intake", () => {
         expect(preflightKnowledgeProvider).toHaveBeenCalledTimes(2);
         expect(runKnowledgeAssignment).toHaveBeenCalledOnce();
       } else if (outcome === "exhausts") {
-        expect(screen.getByRole("button", { name: "Retry import" })).toBeVisible();
+        expect(screen.getByRole("button", { name: "Keep available notes" })).toBeVisible();
+        expect(screen.queryByRole("button", { name: /(?:Retry|Resume) import/ })).not.toBeInTheDocument();
         expect(preflightKnowledgeProvider).toHaveBeenCalledTimes(3);
         expect(runKnowledgeAssignment).not.toHaveBeenCalled();
       } else {

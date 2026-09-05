@@ -32,12 +32,14 @@ import {
   saveAnthropicApiKey,
   saveApiKey,
   saveSnapshot,
+  transcribeVoiceMemo,
 } from "./storage";
 import {
   KnowledgeProviderTimeoutError,
   type KnowledgeAssignmentExecutionRequest,
 } from "./knowledgeOrchestration/service";
 import { prepareSpaceKnowledgeIndex } from "./spaceKnowledge";
+import { isTransientProviderFailure } from "./providerHealth";
 
 const invokeTauriMock = vi.hoisted(() => vi.fn());
 
@@ -110,15 +112,22 @@ describe("organizer instruction boundaries", () => {
     try {
       await organizeContent({ ...request, model: "gpt-5.6-sol" });
       await organizeContent({ ...request, model: "claude-sonnet-5" });
+      await organizeContent({ ...request, model: "gpt-6-astra", effort: "high" });
 
       const bodies = fetchMock.mock.calls.map(([, init]) =>
         JSON.parse(String((init as RequestInit | undefined)?.body)),
       ) as Array<Record<string, unknown>>;
-      expect(bodies).toHaveLength(2);
+      expect(bodies).toHaveLength(3);
       expect(bodies[0]?.instructions).toBe(bodies[1]?.system);
       expect(bodies[0]?.instructions).toBe(
         buildBrowserOrganizerInstructions(request),
       );
+      expect(bodies[2]).toMatchObject({
+        model: "gpt-6-astra",
+        reasoning: { effort: "high" },
+        store: false,
+        instructions: bodies[0]?.instructions,
+      });
     } finally {
       await deleteApiKey();
       await deleteAnthropicApiKey();
@@ -205,6 +214,49 @@ describe("browser OCR boundary", () => {
     } finally {
       Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
     }
+  });
+});
+
+describe("voice memo transcription boundary", () => {
+  it("sends bounded M4A bytes to the native on-device transcriber", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    invokeTauriMock.mockResolvedValueOnce({
+      title: "Voice memo",
+      fileName: "voice-memo.m4a",
+      mimeType: "audio/mp4",
+      byteSize: 12,
+      text: "A transcribed thought.",
+      warnings: [],
+    });
+    const audio = new Blob(
+      [new Uint8Array([0, 0, 0, 12, 102, 116, 121, 112, 77, 52, 65, 32])],
+      { type: "audio/mp4;codecs=mp4a.40.2" },
+    );
+
+    try {
+      await expect(
+        transcribeVoiceMemo(audio, { language: "en" }),
+      ).resolves.toMatchObject({ text: "A transcribed thought." });
+      expect(invokeTauriMock).toHaveBeenCalledWith("transcribe_voice_memo", {
+        request: {
+          fileName: "voice-memo.m4a",
+          mimeType: "audio/mp4",
+          base64Data: "AAAADGZ0eXBNNEEg",
+        },
+        config: { language: "en" },
+      });
+    } finally {
+      Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    }
+  });
+
+  it("does not offer local Whisper through the browser preview", async () => {
+    await expect(
+      transcribeVoiceMemo(new Blob(["memo"], { type: "audio/mp4" }), {}),
+    ).rejects.toThrow(/installed Orion desktop app/i);
   });
 });
 
@@ -874,6 +926,20 @@ describe("knowledge provider preflight", () => {
     }
   });
 
+  it.each([
+    ["OpenAI billing quota exceeded; HTTP 429", false],
+    ["OpenAI HTTP 429: too many requests", true],
+    ["OpenAI HTTP 503: service unavailable", true],
+  ])("preserves recovery eligibility through preflight copy: %s", async (message, transient) => {
+    invokeTauriMock.mockResolvedValueOnce({ valid: false, message });
+    const result = await preflightKnowledgeProvider("gpt-5.6-sol");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(isTransientProviderFailure(result.message)).toBe(transient);
+      expect(result.message).not.toContain("try again");
+    }
+  });
+
   it("notes repeated recent failures from the provider health memory", async () => {
     invokeTauriMock.mockResolvedValue({
       valid: false,
@@ -1189,12 +1255,84 @@ describe("browser persistence fallback", () => {
     delete legacy.settings.themeContrast;
     delete legacy.settings.homeAtmosphere;
     delete legacy.settings.homeAtmosphereTone;
+    delete legacy.settings.homeAtmosphereCustomColor;
+    delete legacy.settings.homeAtmosphereCustomSecondaryColor;
     delete legacy.settings.homeAtmosphereMotion;
     window.localStorage.setItem("orion:vault:v1", JSON.stringify(legacy));
 
     await expect(loadSnapshot()).resolves.toMatchObject({
       schemaVersion: 2,
       spaces: [{ workspace: { id: "workspace-test-vault" } }],
+    });
+  });
+
+  it.each([
+    "quiet-loom", "nova", "flux", "tidal-glass", "prism-drift", "nebula",
+    "emberwake", "gravity-silk", "mirage",
+  ] as const)("round-trips %s and its tuning without losing vault content", async (atmosphere) => {
+    const vault = createEmptyVault("Loom project", TEST_NOW);
+    vault.spaces[0] = createPopulatedSnapshot();
+    vault.activeSpaceId = vault.spaces[0].workspace.id;
+    vault.spaces[0].settings.homeAtmosphere = atmosphere;
+    vault.spaces[0].settings.homeAtmosphereTone = "mint";
+    vault.spaces[0].settings.homeAtmosphereMotion = "still";
+
+    await saveSnapshot(vault);
+    const loaded = await loadSnapshot();
+
+    expect(loaded?.spaces[0].settings).toMatchObject({
+      homeAtmosphere: atmosphere,
+      homeAtmosphereTone: "mint",
+      homeAtmosphereMotion: "still",
+    });
+    expect(loaded?.spaces[0].notes).toEqual(vault.spaces[0].notes);
+  });
+
+  it.each(["#e94f8a", "#000000", "#FFFFFF"])("round-trips custom shader color %s", async (color) => {
+    const vault = createEmptyVault("Custom atmosphere", TEST_NOW);
+    vault.spaces[0].settings.homeAtmosphereCustomColor = color;
+    vault.spaces[0].settings.homeAtmosphereTone = "gold";
+
+    await saveSnapshot(vault);
+    const loaded = await loadSnapshot();
+
+    expect(loaded?.spaces[0].settings).toMatchObject({
+      homeAtmosphereCustomColor: color,
+      homeAtmosphereTone: "gold",
+    });
+  });
+
+  it("round-trips both shader colours without changing notes or other appearance settings", async () => {
+    const vault = createEmptyVault("Two-tone", TEST_NOW);
+    vault.spaces[0] = createPopulatedSnapshot();
+    vault.activeSpaceId = vault.spaces[0].workspace.id;
+    vault.spaces[0].settings.homeAtmosphereCustomColor = "#FF6699";
+    vault.spaces[0].settings.homeAtmosphereCustomSecondaryColor = "#66CFFF";
+    await saveSnapshot(vault);
+    const loaded = await loadSnapshot();
+    expect(loaded?.spaces[0].settings).toEqual(vault.spaces[0].settings);
+    expect(loaded?.spaces[0].notes).toEqual(vault.spaces[0].notes);
+  });
+
+  it("accepts a single-colour vault saved before two-tone controls existed", async () => {
+    const legacy = mutablePopulatedSnapshot();
+    legacy.settings.homeAtmosphereCustomColor = "#E94F8A";
+    delete legacy.settings.homeAtmosphereCustomSecondaryColor;
+    window.localStorage.setItem("orion:vault:v1", JSON.stringify(legacy));
+    const loaded = await loadSnapshot();
+    expect(loaded?.spaces[0].settings.homeAtmosphereCustomColor).toBe("#E94F8A");
+    expect(loaded?.spaces[0].notes).toEqual(legacy.notes);
+  });
+
+  it("preserves GPT-6 Astra and its reasoning depth through vault persistence", async () => {
+    const vault = createEmptyVault("GPT-6 research", TEST_NOW);
+    vault.spaces[0].settings.model = "gpt-6-astra";
+    vault.spaces[0].settings.reasoningEffort = "high";
+    await saveSnapshot(vault);
+    const loaded = await loadSnapshot();
+    expect(loaded?.spaces[0].settings).toMatchObject({
+      model: "gpt-6-astra",
+      reasoningEffort: "high",
     });
   });
 
@@ -1376,6 +1514,20 @@ describe("browser persistence fallback", () => {
     );
   });
 
+  it("accepts old vaults without workflow grants and validates the new opt-in grant shape", async () => {
+    const vault = createEmptyVault("Workflow migration", TEST_NOW);
+    Reflect.deleteProperty(vault.spaces[0].settings, "assistantAccess");
+    window.localStorage.setItem("orion:vault:v2", JSON.stringify(vault));
+    expect((await loadSnapshot())?.spaces[0].settings.assistantAccess).toBeUndefined();
+    vault.spaces[0].settings.assistantAccess = { enabled: true, allowAI: false, allowWrites: false, spaceIds: [vault.activeSpaceId] };
+    window.localStorage.setItem("orion:vault:v2", JSON.stringify(vault));
+    expect((await loadSnapshot())?.spaces[0].settings.assistantAccess.allowAI).toBe(false);
+    vault.spaces[0].settings.assistantAccess.spaceIds.push(vault.activeSpaceId);
+    window.localStorage.setItem("orion:vault:v2", JSON.stringify(vault));
+    await expect(loadSnapshot()).rejects.toThrow("browser preview vault could not be loaded");
+    expect(window.localStorage.getItem("orion:vault:v2")).toContain("assistantAccess");
+  });
+
   it.each([
     [
       "non-string title",
@@ -1503,6 +1655,30 @@ describe("browser persistence fallback", () => {
       "unsupported atmosphere motion",
       (snapshot: MutableSnapshot) => {
         snapshot.settings.homeAtmosphereMotion = "chaotic";
+      },
+    ],
+    [
+      "invalid custom shader color",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.homeAtmosphereCustomColor = "#112233;}</style>";
+      },
+    ],
+    [
+      "non-string custom shader color",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.homeAtmosphereCustomColor = 123456;
+      },
+    ],
+    [
+      "invalid secondary shader color",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.homeAtmosphereCustomSecondaryColor = "#112233;}</style>";
+      },
+    ],
+    [
+      "non-string secondary shader color",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.homeAtmosphereCustomSecondaryColor = 123456;
       },
     ],
   ])("rejects settings with an %s", async (_name, corrupt) => {

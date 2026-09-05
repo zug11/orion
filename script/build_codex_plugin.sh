@@ -196,6 +196,10 @@ mkdir -p "$VERIFICATION_DIR"
 /usr/bin/unzip -q "$STAGED_ZIP" -d "$VERIFICATION_DIR"
 node "$ROOT_DIR/script/test_codex_plugin.mjs" \
   "$VERIFICATION_DIR/Orion-Codex-Plugin" "$FIXTURE_VAULT"
+node "$ROOT_DIR/script/test_mcp_workflows.mjs" \
+  "$VERIFICATION_DIR/Orion-Codex-Plugin/plugins/orion/server/orion-mcp" "$FIXTURE_VAULT"
+node "$ROOT_DIR/script/test_mcp_library.mjs" \
+  "$VERIFICATION_DIR/Orion-Codex-Plugin/plugins/orion/server/orion-mcp" "$FIXTURE_VAULT"
 
 rm -rf -- "$RESOURCE_ROOT"
 mv "$STAGED_ROOT" "$RESOURCE_ROOT"

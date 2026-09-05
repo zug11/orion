@@ -17,6 +17,7 @@ import type {
 import { createEmptyStudio } from "../lib/studio";
 
 export const defaultSettings: Settings = {
+  assistantAccess: { enabled: false, allowAI: false, allowWrites: false, spaceIds: [] },
   model: "gpt-5.6-sol",
   reasoningEffort: "low",
   apiKeyConfigured: false,
@@ -45,6 +46,8 @@ export const defaultSettings: Settings = {
   themeContrast: "balanced",
   homeAtmosphere: "field",
   homeAtmosphereTone: "signature",
+  homeAtmosphereCustomColor: "",
+  homeAtmosphereCustomSecondaryColor: "",
   homeAtmosphereMotion: "calm",
 };
 
@@ -165,6 +168,15 @@ export function normalizeHomeAtmosphere(value: unknown): HomeAtmosphere {
   if (
     value === "signal-decay" ||
     value === "line-waves" ||
+    value === "quiet-loom" ||
+    value === "nova" ||
+    value === "flux" ||
+    value === "tidal-glass" ||
+    value === "prism-drift" ||
+    value === "nebula" ||
+    value === "emberwake" ||
+    value === "gravity-silk" ||
+    value === "mirage" ||
     value === "field"
   ) {
     return value;

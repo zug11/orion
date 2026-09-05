@@ -17,7 +17,10 @@ describe("AI link titles", () => {
       note("note-origin", "Architecture notes", "The system uses SQL."),
       note("note-existing", "Role inheritance", "Permissions flow by role."),
     ];
-    snapshot.concepts = [concept("concept-sql", "SQL")];
+    snapshot.concepts = [
+      concept("concept-origin", "Architecture notes", "note-origin"),
+      concept("concept-sql", "SQL"),
+    ];
 
     const request = buildLinkTitleRequest(
       snapshot,
@@ -42,6 +45,9 @@ describe("AI link titles", () => {
       { label: "SQL", description: "SQL concept" },
     ]);
     expect(request.prompt).not.toContain("A join combines");
+    expect(request.prompt).toContain(
+      'Never return the origin title or one of its aliases ("Architecture notes")',
+    );
   });
 
   it("keeps both ends of a very large selection within request bounds", () => {
@@ -95,13 +101,18 @@ function note(id: string, title: string, body: string): Note {
   };
 }
 
-function concept(id: string, label: string): Concept {
+function concept(
+  id: string,
+  label: string,
+  canonicalNoteId?: string,
+): Concept {
   return {
     id,
     label,
     aliases: [],
     description: `${label} concept`,
-    noteIds: [],
+    noteIds: canonicalNoteId ? [canonicalNoteId] : [],
+    canonicalNoteId,
     autoLink: true,
     color: "#8798ff",
   };

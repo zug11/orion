@@ -1,3 +1,4 @@
+import type { Editor, EditorEvents } from "@tiptap/core";
 import { Markdown } from "@tiptap/markdown";
 import Image from "@tiptap/extension-image";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -58,6 +59,7 @@ import {
   type ConceptLinkSelection,
 } from "./editor/conceptLinkSelection";
 import { FindInNote, findInNotePluginKey } from "./editor/FindInNote";
+import { insertVoiceTranscriptAt } from "./editor/voiceDictation";
 import { AIWritingPreview } from "./editor/AIWritingPreview";
 import {
   acceptAIWritingPreview,
@@ -93,6 +95,9 @@ interface RichNoteEditorProps {
     signal: AbortSignal,
   ) => Promise<AIImageProposal>;
   onDisableConceptAutoLink: (conceptId: EntityId) => void;
+  onPrepareVoiceMemoSession?: (sessionId: string) => Promise<void>;
+  onTranscribeVoiceMemo?: (audio: Blob, sessionId: string) => Promise<string>;
+  onFinishVoiceMemoSession?: (sessionId: string) => Promise<void>;
   aiArticleWritingEnabled?: boolean;
   aiImageGenerationEnabled?: boolean;
   aiProviderName?: string;
@@ -174,6 +179,9 @@ export function RichNoteEditor({
   onGenerateAIWriting,
   onGenerateAIImage,
   onDisableConceptAutoLink,
+  onPrepareVoiceMemoSession,
+  onTranscribeVoiceMemo,
+  onFinishVoiceMemoSession,
   aiArticleWritingEnabled = false,
   aiImageGenerationEnabled = false,
   aiProviderName,
@@ -199,6 +207,12 @@ export function RichNoteEditor({
   const editorShellRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<ReturnType<typeof useEditor>>(null);
   const imageUploadActiveRef = useRef(false);
+  const voiceMemoInsertionRef = useRef<{
+    sessionId: string;
+    position: number;
+    editor: Editor;
+    track: (event: EditorEvents["transaction"]) => void;
+  } | null>(null);
   const aiRequestIdRef = useRef(0);
   const aiOperationRef = useRef<AIOperation | null>(null);
   const aiImageAbortRef = useRef<AbortController | null>(null);
@@ -330,6 +344,8 @@ export function RichNoteEditor({
     [noteId],
   );
   editorRef.current = editor;
+
+  useEffect(() => () => clearVoiceMemoInsertion(), [noteId]);
 
   useEffect(() => {
     if (!editor) {
@@ -604,6 +620,72 @@ export function RichNoteEditor({
     } finally {
       imageUploadActiveRef.current = false;
       setImageBusy(false);
+    }
+  }
+
+  function startVoiceMemoAtCaret(sessionId: string) {
+    const currentEditor = editorRef.current;
+    if (!currentEditor || currentEditor.isDestroyed) {
+      return Promise.reject(new Error("This note is no longer editable."));
+    }
+    clearVoiceMemoInsertion();
+    const insertion = {
+      sessionId,
+      position: currentEditor.state.selection.to,
+      editor: currentEditor,
+      track: (_event: EditorEvents["transaction"]) => {},
+    };
+    insertion.track = ({
+      transaction,
+    }: EditorEvents["transaction"]) => {
+      if (voiceMemoInsertionRef.current === insertion) {
+        insertion.position = transaction.mapping.map(insertion.position, 1);
+      }
+    };
+    voiceMemoInsertionRef.current = insertion;
+    currentEditor.on("transaction", insertion.track);
+    setAnnouncement("Recording dictation. Text will appear after you stop.");
+    return onPrepareVoiceMemoSession?.(sessionId);
+  }
+
+  function clearVoiceMemoInsertion(sessionId?: string) {
+    const insertion = voiceMemoInsertionRef.current;
+    if (!insertion || (sessionId !== undefined && insertion.sessionId !== sessionId)) {
+      return;
+    }
+    if (!insertion.editor.isDestroyed) {
+      insertion.editor.off("transaction", insertion.track);
+    }
+    voiceMemoInsertionRef.current = null;
+  }
+
+  async function finishVoiceMemoSession(sessionId: string) {
+    clearVoiceMemoInsertion(sessionId);
+    await onFinishVoiceMemoSession?.(sessionId);
+  }
+
+  async function insertCompletedVoiceMemo(
+    sessionId: string,
+    transcript: string,
+  ) {
+    const currentEditor = editorRef.current;
+    if (!currentEditor || currentEditor.isDestroyed) return;
+    const insertion = voiceMemoInsertionRef.current;
+    const insertionPosition =
+      insertion?.sessionId === sessionId
+        ? insertion.position
+        : currentEditor.state.selection.to;
+    try {
+      if (
+        !insertVoiceTranscriptAt(currentEditor, insertionPosition, transcript)
+      ) {
+        throw new Error(
+          "Orion could not insert the dictation at this cursor position.",
+        );
+      }
+      setAnnouncement("Dictation inserted at the cursor. Undo is available.");
+    } finally {
+      clearVoiceMemoInsertion(sessionId);
     }
   }
 
@@ -1175,6 +1257,22 @@ export function RichNoteEditor({
           onOpenCitation={openCitationPicker}
           onInsertImages={(files) => void insertNoteImages(files)}
           imageBusy={imageBusy}
+          noteId={noteId}
+          onVoiceMemoSessionStart={
+            onTranscribeVoiceMemo ? startVoiceMemoAtCaret : undefined
+          }
+          onVoiceMemoSessionEnd={finishVoiceMemoSession}
+          onTranscribeVoiceMemo={
+            onTranscribeVoiceMemo
+              ? (audio, sessionId) => onTranscribeVoiceMemo(audio, sessionId)
+              : undefined
+          }
+          onCompleteVoiceMemo={
+            onTranscribeVoiceMemo
+              ? (sessionId, transcript) =>
+                  insertCompletedVoiceMemo(sessionId, transcript)
+              : undefined
+          }
           aiWritingAvailable={
             (aiArticleWritingEnabled && Boolean(onGenerateAIWriting)) ||
             (aiImageGenerationEnabled && Boolean(onGenerateAIImage))
@@ -1240,6 +1338,7 @@ export function RichNoteEditor({
           initialDestinationIds={linkDraft.initialDestinationIds}
           currentNoteId={noteId}
           notes={notes}
+          concepts={concepts}
           aiArticleWritingEnabled={aiArticleWritingEnabled}
           aiProviderName={aiProviderName}
           onGenerateTitle={onGenerateLinkTitle}

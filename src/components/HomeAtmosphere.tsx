@@ -10,10 +10,21 @@ import type {
 const SignalDecay = lazy(() => import("./SignalDecay"));
 const LineWaves = lazy(() => import("./LineWaves"));
 const DotField = lazy(() => import("./DotField"));
+const QuietLoom = lazy(() => import("./QuietLoom"));
+const Nova = lazy(() => import("./Nova"));
+const Flux = lazy(() => import("./Flux"));
+const TidalGlass = lazy(() => import("./TidalGlass"));
+const PrismDrift = lazy(() => import("./PrismDrift"));
+const Nebula = lazy(() => import("./Nebula"));
+const Emberwake = lazy(() => import("./Emberwake"));
+const GravitySilk = lazy(() => import("./GravitySilk"));
+const Mirage = lazy(() => import("./Mirage"));
 
 interface HomeAtmosphereProps {
   atmosphere: HomeAtmosphereMode;
   tone: HomeAtmosphereTone;
+  customColor?: string;
+  customSecondaryColor?: string;
   motion: HomeAtmosphereMotion;
   themePalette: ThemePalette;
 }
@@ -21,12 +32,21 @@ interface HomeAtmosphereProps {
 export default function HomeAtmosphere({
   atmosphere,
   tone,
+  customColor,
+  customSecondaryColor,
   motion,
   themePalette,
 }: HomeAtmosphereProps) {
   const palette = useMemo(
-    () => resolveAtmospherePalette(atmosphere, tone, themePalette),
-    [atmosphere, themePalette, tone],
+    () =>
+      resolveAtmospherePalette(
+        atmosphere,
+        tone,
+        themePalette,
+        customColor,
+        customSecondaryColor,
+      ),
+    [atmosphere, themePalette, tone, customColor, customSecondaryColor],
   );
 
   return (
@@ -56,6 +76,24 @@ export default function HomeAtmosphere({
             color3={palette.tertiary}
             motion={motion}
           />
+        ) : atmosphere === "emberwake" ? (
+          <Emberwake palette={palette} motion={motion} />
+        ) : atmosphere === "gravity-silk" ? (
+          <GravitySilk palette={palette} motion={motion} />
+        ) : atmosphere === "mirage" ? (
+          <Mirage palette={palette} motion={motion} />
+        ) : atmosphere === "flux" ? (
+          <Flux palette={palette} motion={motion} />
+        ) : atmosphere === "tidal-glass" ? (
+          <TidalGlass palette={palette} motion={motion} />
+        ) : atmosphere === "prism-drift" ? (
+          <PrismDrift palette={palette} motion={motion} />
+        ) : atmosphere === "nebula" ? (
+          <Nebula palette={palette} motion={motion} />
+        ) : atmosphere === "nova" ? (
+          <Nova palette={palette} motion={motion} />
+        ) : atmosphere === "quiet-loom" ? (
+          <QuietLoom palette={palette} motion={motion} />
         ) : (
           <DotField palette={palette} motion={motion} />
         )}

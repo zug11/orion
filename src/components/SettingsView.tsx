@@ -20,6 +20,10 @@ import {
 } from "../lib/icons";
 import { useEffect, useState, type CSSProperties } from "react";
 import { SavedVoicesSetting } from "./SavedVoicesSetting";
+import { AssistantConnections } from "./AssistantConnections";
+import type { AssistantJob } from "../lib/assistant/types";
+import type { WorkspaceInfo } from "../types";
+import { AtmosphereColorPicker } from "./AtmosphereColorPicker";
 import {
   atmosphereMotionOptions,
   atmosphereToneOptions,
@@ -123,6 +127,9 @@ function ThemeColorOverride({
 
 interface SettingsViewProps {
   settings: Settings;
+  spaces?: WorkspaceInfo[];
+  assistantJobs?: AssistantJob[];
+  onCancelAssistantJob?: (job: AssistantJob) => Promise<void>;
   themePalette?: ThemePalette;
   onChange: (settings: Settings) => void;
   onSaveApiKey: (apiKey: string) => Promise<void>;
@@ -139,6 +146,13 @@ interface SettingsViewProps {
 }
 
 const models = [
+  {
+    id: "gpt-6-astra",
+    name: "GPT-6 Astra",
+    provider: "OpenAI",
+    description: "Advanced reasoning for complex research and synthesis.",
+    badge: "Most capable",
+  },
   {
     id: "gpt-5.6-sol",
     name: "GPT-5.6 Sol",
@@ -203,10 +217,58 @@ const atmosphereOptions: Array<{
     name: "Field",
     description: "A precise dot matrix that responds to movement.",
   },
+  {
+    id: "quiet-loom",
+    name: "Quiet Loom",
+    description: "Woven light folds into a softly moving veil.",
+  },
+  {
+    id: "nova",
+    name: "Nova",
+    description: "A living plasma core, spiralling light, and streaming sparks.",
+  },
+  {
+    id: "flux",
+    name: "Flux",
+    description: "Luminous currents sweep from edge to edge.",
+  },
+  {
+    id: "tidal-glass",
+    name: "Tidal Glass",
+    description: "Liquid light refracts into a shifting web of caustics.",
+  },
+  {
+    id: "prism-drift",
+    name: "Prism Drift",
+    description: "A rolling landscape of iridescent crystal facets.",
+  },
+  {
+    id: "nebula",
+    name: "Nebula",
+    description: "Layered clouds of light drift through a field of stars.",
+  },
+  {
+    id: "emberwake",
+    name: "Emberwake",
+    description: "Streams of glowing sparks ride a sweeping wind.",
+  },
+  {
+    id: "gravity-silk",
+    name: "Gravity Silk",
+    description: "Glossy fabric billows through luminous folds.",
+  },
+  {
+    id: "mirage",
+    name: "Mirage",
+    description: "Drifting glass lenses bend a travelling sheet of light.",
+  },
 ];
 
 export function SettingsView({
   settings,
+  spaces = [],
+  assistantJobs = [],
+  onCancelAssistantJob,
   themePalette,
   onChange,
   onSaveApiKey,
@@ -266,6 +328,13 @@ export function SettingsView({
   );
   const activeThemePalette =
     themePalette ?? resolveThemePalette(settings, previewMode);
+  const activeAtmospherePalette = resolveAtmospherePalette(
+    settings.homeAtmosphere,
+    settings.homeAtmosphereTone,
+    activeThemePalette,
+    settings.homeAtmosphereCustomColor,
+    settings.homeAtmosphereCustomSecondaryColor,
+  );
 
   useEffect(() => {
     setKeyMessage(null);
@@ -628,7 +697,17 @@ export function SettingsView({
                       key={model.id}
                       type="button"
                       className={settings.model === model.id ? "active" : ""}
-                      onClick={() => patch({ model: model.id })}
+                      aria-pressed={settings.model === model.id}
+                      onClick={() =>
+                        patch({
+                          model: model.id,
+                          reasoningEffort:
+                            model.id === "gpt-6-astra" &&
+                            settings.reasoningEffort === "none"
+                              ? "low"
+                              : settings.reasoningEffort,
+                        })
+                      }
                     >
                       <i>
                         {settings.model === model.id && <Check size={13} />}
@@ -650,6 +729,7 @@ export function SettingsView({
                   <small>Low is a good baseline for structured imports.</small>
                 </span>
                 <select
+                  aria-label="Reasoning depth"
                   value={settings.reasoningEffort}
                   onChange={(event) =>
                     patch({
@@ -657,7 +737,9 @@ export function SettingsView({
                     })
                   }
                 >
-                  <option value="none">None</option>
+                  <option value="none" disabled={settings.model === "gpt-6-astra"}>
+                    None
+                  </option>
                   <option value="low">Low</option>
                   <option value="medium">Medium</option>
                   <option value="high">High</option>
@@ -1045,11 +1127,11 @@ export function SettingsView({
                     Claude and Codex can find Spaces, search concepts, and read
                     the notes or source passages you ask about. They can also
                     create, edit, and delete notes directly in the Space you
-                    choose. Neither connection needs an Orion API key.
+                    choose. These local tools work without an Orion API key.
                   </small>
                 </span>
                 <span className="status-pill success">
-                  <ShieldCheck size={12} /> Full access
+                  <ShieldCheck size={12} /> Local library
                 </span>
               </div>
 
@@ -1126,6 +1208,8 @@ export function SettingsView({
                 </p>
               )}
             </div>
+            <AssistantConnections access={settings.assistantAccess} spaces={spaces} jobs={assistantJobs} desktop={desktopRuntime}
+              onChange={(assistantAccess) => onChange({ ...settings, assistantAccess })} onCancel={onCancelAssistantJob} />
           </section>
 
           <section className="settings-section" id="transcription">
@@ -1157,7 +1241,7 @@ export function SettingsView({
               <div className="transcription-fields">
                 <div className="transcription-field transcription-field--wide">
                   <span>On-device engine</span>
-                  <strong>Whisper base · multilingual</strong>
+                  <strong>Whisper small · multilingual</strong>
                   <small className="transcription-field-hint">
                     Metal-accelerated through whisper.cpp and packaged inside
                     Orion.
@@ -1505,6 +1589,8 @@ export function SettingsView({
                       option.id,
                       settings.homeAtmosphereTone,
                       activeThemePalette,
+                      settings.homeAtmosphereCustomColor,
+                      settings.homeAtmosphereCustomSecondaryColor,
                     );
                     return (
                       <button
@@ -1559,51 +1645,103 @@ export function SettingsView({
                   className="atmosphere-tuner"
                   aria-label="Atmosphere tuning"
                 >
-                  <div className="atmosphere-tuner-row">
+                  <div className="atmosphere-tuner-row atmosphere-tuner-row--accent">
                     <span>
-                      <strong>Accent</strong>
-                      <small>
-                        {
-                          resolveAtmospherePalette(
-                            settings.homeAtmosphere,
-                            settings.homeAtmosphereTone,
-                            activeThemePalette,
-                          ).primary
-                        }
-                      </small>
+                      <strong>Colours</strong>
+                      <small>Two-tone accents</small>
                     </span>
-                    <div
-                      className="atmosphere-tone-options"
-                      aria-label="Atmosphere accent"
-                    >
-                      {atmosphereToneOptions.map((option) => {
-                        const color = resolveAtmospherePalette(
-                          settings.homeAtmosphere,
-                          option.id,
-                          activeThemePalette,
-                        ).primary;
-                        return (
+                    <div className="atmosphere-accent-controls">
+                      <div
+                        className="atmosphere-tone-options"
+                        aria-label="Atmosphere accent"
+                      >
+                        {atmosphereToneOptions.map((option) => {
+                          const color = resolveAtmospherePalette(
+                            settings.homeAtmosphere,
+                            option.id,
+                            activeThemePalette,
+                          ).primary;
+                          return (
+                            <button
+                              key={option.id}
+                              type="button"
+                              aria-label={`${option.name} accent, ${color}`}
+                              aria-pressed={
+                                !settings.homeAtmosphereCustomColor &&
+                                !settings.homeAtmosphereCustomSecondaryColor &&
+                                settings.homeAtmosphereTone === option.id
+                              }
+                              title={`${option.name} · ${color}`}
+                              style={
+                                {
+                                  "--atmosphere-tone": color,
+                                } as CSSProperties
+                              }
+                              onClick={() =>
+                                patch({
+                                  homeAtmosphereTone: option.id,
+                                  homeAtmosphereCustomColor: "",
+                                  homeAtmosphereCustomSecondaryColor: "",
+                                })
+                              }
+                            >
+                              <i aria-hidden="true" />
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div
+                        className="atmosphere-duotone-controls"
+                        role="group"
+                        aria-label="Shader colours"
+                      >
+                        <AtmosphereColorPicker
+                          label="Colour 1"
+                          value={settings.homeAtmosphereCustomColor}
+                          fallback={activeAtmospherePalette.primary}
+                          showReset={false}
+                          onChange={(homeAtmosphereCustomColor) =>
+                            patch({
+                              homeAtmosphereCustomColor,
+                              // Capture the other visible colour the first time
+                              // a pair is edited, then leave that choice intact.
+                              homeAtmosphereCustomSecondaryColor:
+                                settings.homeAtmosphereCustomSecondaryColor ||
+                                activeAtmospherePalette.secondary,
+                            })
+                          }
+                        />
+                        <AtmosphereColorPicker
+                          label="Colour 2"
+                          colorName="Shader secondary color"
+                          value={settings.homeAtmosphereCustomSecondaryColor}
+                          fallback={activeAtmospherePalette.secondary}
+                          showReset={false}
+                          onChange={(homeAtmosphereCustomSecondaryColor) =>
+                            patch({
+                              homeAtmosphereCustomColor:
+                                settings.homeAtmosphereCustomColor ||
+                                activeAtmospherePalette.primary,
+                              homeAtmosphereCustomSecondaryColor,
+                            })
+                          }
+                        />
+                        {settings.homeAtmosphereCustomColor ||
+                        settings.homeAtmosphereCustomSecondaryColor ? (
                           <button
-                            key={option.id}
                             type="button"
-                            aria-label={`${option.name} accent, ${color}`}
-                            aria-pressed={
-                              settings.homeAtmosphereTone === option.id
-                            }
-                            title={`${option.name} · ${color}`}
-                            style={
-                              {
-                                "--atmosphere-tone": color,
-                              } as CSSProperties
-                            }
+                            aria-label="Reset shader colours"
                             onClick={() =>
-                              patch({ homeAtmosphereTone: option.id })
+                              patch({
+                                homeAtmosphereCustomColor: "",
+                                homeAtmosphereCustomSecondaryColor: "",
+                              })
                             }
                           >
-                            <i aria-hidden="true" />
+                            Reset colours
                           </button>
-                        );
-                      })}
+                        ) : null}
+                      </div>
                     </div>
                   </div>
                   <div className="atmosphere-tuner-row">

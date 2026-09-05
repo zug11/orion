@@ -27,6 +27,7 @@ import { findConceptByPhrase } from "../lib/concepts";
 import type { Concept, EntityId } from "../types";
 import { AIWritingMark } from "./icons/AIWritingMark";
 import { NOTE_IMAGE_ACCEPT } from "../lib/noteImages";
+import { VoiceMemoButton } from "./VoiceMemoButton";
 
 interface EditorToolbarProps {
   editor: Editor;
@@ -37,6 +38,14 @@ interface EditorToolbarProps {
   onOpenCitation: () => void;
   onInsertImages?: (files: readonly File[]) => void;
   imageBusy?: boolean;
+  noteId?: EntityId;
+  onVoiceMemoSessionStart?: (sessionId: string) => Promise<void> | void;
+  onVoiceMemoSessionEnd?: (sessionId: string) => Promise<void> | void;
+  onTranscribeVoiceMemo?: (audio: Blob, sessionId: string) => Promise<string>;
+  onCompleteVoiceMemo?: (
+    sessionId: string,
+    transcript: string,
+  ) => Promise<void>;
   aiWritingAvailable?: boolean;
   aiWritingActive?: boolean;
   aiWritingBusy?: boolean;
@@ -54,6 +63,11 @@ export function EditorToolbar({
   onOpenCitation,
   onInsertImages,
   imageBusy = false,
+  noteId,
+  onVoiceMemoSessionStart,
+  onVoiceMemoSessionEnd,
+  onTranscribeVoiceMemo,
+  onCompleteVoiceMemo,
   aiWritingAvailable = false,
   aiWritingActive = false,
   aiWritingBusy = false,
@@ -518,6 +532,22 @@ export function EditorToolbar({
           <span>Cite</span>
         </button>
       </div>
+
+      {noteId && onTranscribeVoiceMemo && onCompleteVoiceMemo ? (
+        <div
+          className="editor-toolbar-dictation"
+          role="group"
+          aria-label="Dictation"
+        >
+          <VoiceMemoButton
+            noteId={noteId}
+            onSessionStart={onVoiceMemoSessionStart}
+            onSessionEnd={onVoiceMemoSessionEnd}
+            onTranscribe={onTranscribeVoiceMemo}
+            onComplete={onCompleteVoiceMemo}
+          />
+        </div>
+      ) : null}
 
       <div className="editor-toolbar-ai" role="group" aria-label="AI writing">
         <button

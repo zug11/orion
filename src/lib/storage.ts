@@ -32,6 +32,7 @@ import {
   type AIProvider,
 } from "./ai";
 import { parseTextImport } from "./files";
+import { USE_PERSISTENT_VOICE_MEMO_WORKER } from "./transcription";
 import {
   formatProviderHealthConcern,
   providerDisplayName,
@@ -65,6 +66,7 @@ let browserSessionAnthropicApiKey: string | null = null;
 let browserSessionElevenLabsApiKey: string | null = null;
 let tauriCoreModule: Promise<typeof import("@tauri-apps/api/core")> | undefined;
 const MAX_NOTE_IMAGE_BYTES = 12 * 1024 * 1024;
+const MAX_VOICE_MEMO_BYTES = 64 * 1024 * 1024;
 const NOTE_IMAGE_MIME_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -201,6 +203,59 @@ export async function transcribeMediaFiles(
   throw new Error(
     "Offline transcription is available in the installed Orion desktop app.",
   );
+}
+
+export async function transcribeVoiceMemo(
+  audio: Blob,
+  config: WhisperConfig,
+  sessionId?: string,
+): Promise<TranscribedMedia> {
+  if (!isTauriRuntime()) {
+    throw new Error(
+      "Voice memo transcription is available in the installed Orion desktop app.",
+    );
+  }
+  if (audio.size === 0) {
+    throw new Error("The voice memo is empty.");
+  }
+  if (audio.size > MAX_VOICE_MEMO_BYTES) {
+    throw new Error("Voice memos must be 64 MB or smaller.");
+  }
+  const mimeType = audio.type.split(";", 1)[0]?.trim().toLocaleLowerCase();
+  if (mimeType !== "audio/mp4" && mimeType !== "audio/x-m4a") {
+    throw new Error("Orion records voice memos as M4A audio on macOS.");
+  }
+  if (USE_PERSISTENT_VOICE_MEMO_WORKER && !sessionId) {
+    throw new Error("The persistent dictation session is missing.");
+  }
+  const value = await invokeTauri<unknown>("transcribe_voice_memo", {
+    request: {
+      fileName: "voice-memo.m4a",
+      mimeType,
+      base64Data: arrayBufferToBase64(await audio.arrayBuffer()),
+    },
+    config,
+    ...(USE_PERSISTENT_VOICE_MEMO_WORKER ? { sessionId } : {}),
+  });
+  return parseTranscribedMedia(value);
+}
+
+export async function startVoiceMemoSession(
+  sessionId: string,
+  config: WhisperConfig,
+): Promise<void> {
+  if (!USE_PERSISTENT_VOICE_MEMO_WORKER) return;
+  if (!isTauriRuntime()) {
+    throw new Error(
+      "Voice memo transcription is available in the installed Orion desktop app.",
+    );
+  }
+  await invokeTauri("start_voice_memo_session", { sessionId, config });
+}
+
+export async function finishVoiceMemoSession(sessionId: string): Promise<void> {
+  if (!USE_PERSISTENT_VOICE_MEMO_WORKER || !isTauriRuntime()) return;
+  await invokeTauri("finish_voice_memo_session", { sessionId });
 }
 
 export async function transcribeYouTube(
@@ -500,7 +555,7 @@ export async function checkTranscriptionSetup(): Promise<TranscriptionSetupStatu
   }
   return {
     whisperAvailable: false,
-    whisperModel: "Whisper base · multilingual",
+    whisperModel: "Whisper small · multilingual",
     ytDlpAvailable: false,
     message:
       "The installed Orion desktop app includes and checks its offline transcription tools.",
@@ -818,7 +873,7 @@ async function probeKnowledgeProvider(
       recordProviderHealth({ provider, at: Date.now(), ok: false });
       return preflightFailure(
         provider,
-        `Orion could not reach ${providerDisplayName(provider)} within a few seconds, so the import did not start. Check your connection and try again.`,
+        `Orion could not reach ${providerDisplayName(provider)} within a few seconds. Your source text is unaffected.`,
       );
     }
     // Native command failures arrive as Rust-provided strings; a TypeError
@@ -865,42 +920,50 @@ function preflightFailureMessage(
       detail,
     )
   ) {
-    return `${name} rejected the saved API key, so Orion did not start this import. Replace the key in Settings and try again.`;
+    return `${name} rejected the saved API key. Replace the key in Settings to restore AI imports; your source text is unaffected.`;
   }
-  if (/rate or usage|too many requests|rate limit|quota|billing/i.test(detail)) {
-    return `${name} is pausing requests for this key because of rate or usage limits. Wait a little and try again.`;
+  if (/quota|billing|insufficient|payment|credits/i.test(detail)) {
+    return `${name} reported a billing or quota limit. Check your provider account to restore AI imports; your source text is unaffected.`;
+  }
+  if (/rate or usage|too many requests|rate limit|HTTP 429\b/i.test(detail)) {
+    return `${name} is temporarily rate limiting requests. Your source text is unaffected.`;
   }
   if (
-    /could not reach|temporarily unavailable|network|connection|offline|dns|timed? out|timeout/i.test(
+    isTransientProviderFailure(detail) || /could not reach|temporarily unavailable|network|connection|offline|dns|timed? out|timeout/i.test(
       detail,
     )
   ) {
-    return `Orion could not reach ${name}, so the import did not start. Check your connection and try again.`;
+    return `Orion could not reach ${name}. Your source text is unaffected.`;
   }
   return `${name} could not confirm the saved key, so Orion did not start this import. Test the connection in Settings.`;
 }
 
 export async function organizeContent(
   request: OrganizeContentRequest,
+  options: Pick<ProviderCallOptions, "onStart" | "signal"> = {},
 ): Promise<OrganizeContentResult> {
   if (!request.content.trim()) {
     throw new Error("There is no content to organize.");
   }
   if (isTauriRuntime()) {
-    const result = await invokeTauri<unknown>("organize_content", { request });
+    const result = await invokeTauri<unknown>(
+      "organize_content",
+      { request },
+      { queueKey: "organizer", ...options },
+    );
     return parseOrganizeResult(result);
   }
   if (aiProviderForModel(request.model) === "anthropic") {
     return runBrowserProviderCall(
       "anthropic",
       () => organizeContentInBrowserWithAnthropic(request, requireBrowserAnthropicApiKey()),
-      { queueKey: "organizer" },
+      { queueKey: "organizer", ...options },
     );
   }
   return runBrowserProviderCall(
     "openai",
     () => organizeContentInBrowser(request, requireBrowserApiKey()),
-    { queueKey: "organizer" },
+    { queueKey: "organizer", ...options },
   );
 }
 
@@ -2207,6 +2270,17 @@ function isSettings(value: unknown): boolean {
       typeof value.sidebarCollapsed === "boolean") &&
     (value.providerFailoverEnabled === undefined ||
       typeof value.providerFailoverEnabled === "boolean") &&
+    (value.assistantAccess === undefined || (
+      isRecord(value.assistantAccess) &&
+      Object.keys(value.assistantAccess).every((key) => ["enabled", "allowAI", "allowWrites", "spaceIds"].includes(key)) &&
+      typeof value.assistantAccess.enabled === "boolean" &&
+      typeof value.assistantAccess.allowAI === "boolean" &&
+      typeof value.assistantAccess.allowWrites === "boolean" &&
+      Array.isArray(value.assistantAccess.spaceIds) &&
+      value.assistantAccess.spaceIds.length <= 500 &&
+      value.assistantAccess.spaceIds.every((id: unknown) => typeof id === "string" && id.trim() === id && id.length > 0 && id.length <= 200) &&
+      new Set(value.assistantAccess.spaceIds).size === value.assistantAccess.spaceIds.length
+    )) &&
     typeof value.autoLink === "boolean" &&
     typeof value.showHoverPreviews === "boolean" &&
     typeof value.includeExistingNotesInAIContext === "boolean" &&
@@ -2244,6 +2318,15 @@ function isSettings(value: unknown): boolean {
         "antigravity",
         "signal-decay",
         "line-waves",
+        "quiet-loom",
+        "nova",
+        "flux",
+        "tidal-glass",
+        "prism-drift",
+        "nebula",
+        "emberwake",
+        "gravity-silk",
+        "mirage",
         "liquid-ether",
         "field",
         "constellation",
@@ -2256,6 +2339,8 @@ function isSettings(value: unknown): boolean {
         "mint",
         "gold",
       ])) &&
+    isOptionalThemeColor(value.homeAtmosphereCustomColor) &&
+    isOptionalThemeColor(value.homeAtmosphereCustomSecondaryColor) &&
     (value.homeAtmosphereMotion === undefined ||
       isOneOf(value.homeAtmosphereMotion, [
         "still",

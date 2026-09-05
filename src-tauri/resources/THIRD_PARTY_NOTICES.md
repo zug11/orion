@@ -23,13 +23,25 @@ without separately installed software or a local server.
   `8c3ecbe73f48b0cb9318fc3058264f951ab336fd530e82c4ccdd2298d1311a4c`
 - License: MIT (`licenses/whisper.cpp-LICENSE`)
 
-## Whisper base multilingual model
+## Whisper small multilingual model
 
 - Project: https://huggingface.co/ggerganov/whisper.cpp
-- Artifact: `ggml-base.bin`
-- Size: 147,951,465 bytes
+- Artifact: `ggml-small.bin`
+- Size: 487,601,967 bytes
 - SHA-256:
-  `60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe`
+  `1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b`
+- Model origin: OpenAI Whisper
+- License: MIT (`licenses/openai-whisper-LICENSE`)
+
+## Whisper medium multilingual model
+
+- Project: https://huggingface.co/ggerganov/whisper.cpp
+- Artifact: `ggml-medium.bin`
+- Size: 1,533,763,059 bytes
+- Upstream SHA-1:
+  `fd9727b6e1217c2f614f9b698455c4ffd82463b4`
+- SHA-256:
+  `6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208`
 - Model origin: OpenAI Whisper
 - License: MIT (`licenses/openai-whisper-LICENSE`)
 

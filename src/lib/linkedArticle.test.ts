@@ -83,7 +83,7 @@ describe("linked article generation", () => {
     expect(request.taskInstructions).toContain(
       "Focus on joins and relational algebra.",
     );
-    expect(request.timeoutMs).toBe(90_000);
+    expect(request.timeoutMs).toBe(240_000);
   });
 
   it("uses relevant compact Space records without leaking existing article bodies", () => {
@@ -287,6 +287,33 @@ describe("linked article generation", () => {
 
       await vi.advanceTimersByTimeAsync(1_000);
       await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts its watchdog only when the queued provider request starts", async () => {
+    vi.useFakeTimers();
+    try {
+      let markProviderStarted: () => void = () => undefined;
+      const providerStarted = new Promise<void>((resolve) => {
+        markProviderStarted = resolve;
+      });
+      const pending = new Promise<never>(() => undefined);
+      const result = waitForLinkedArticle(pending, 1_000, providerStarted);
+      let rejected = false;
+      void result.catch(() => {
+        rejected = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(rejected).toBe(false);
+
+      markProviderStarted();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(rejected).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).rejects.toThrow(/paused this article after 1 second/i);
     } finally {
       vi.useRealTimers();
     }

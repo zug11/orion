@@ -72,6 +72,8 @@ export interface KnowledgeOrchestrationOptions {
   usageBudgetTokens?: number;
   holdFanOutAbove?: number;
   retryLimit?: number;
+  /** Let an import's in-flight root finish across the soft phase boundary. */
+  preserveActiveRoot?: boolean;
   initialCoordinationCalls?: readonly CoordinationCall[];
   /**
    * Already-validated artifacts recorded into the registry before scheduling,
@@ -96,16 +98,16 @@ export interface KnowledgeOrchestrationResult {
   usage: Required<KnowledgeProviderUsage>;
 }
 
-export const KNOWLEDGE_TOTAL_BUDGET_MS = 180_000;
-export const KNOWLEDGE_EXPLORATION_BUDGET_MS = 120_000;
-export const KNOWLEDGE_FINALIZATION_RESERVE_MS = 60_000;
-const KNOWLEDGE_MAX_CALL_MS = 90_000;
-const KNOWLEDGE_INTERMEDIATE_CALL_MS = 45_000;
+export const KNOWLEDGE_TOTAL_BUDGET_MS = 8 * 60_000;
+export const KNOWLEDGE_EXPLORATION_BUDGET_MS = 5 * 60_000;
+export const KNOWLEDGE_FINALIZATION_RESERVE_MS = 3 * 60_000;
+const KNOWLEDGE_MAX_CALL_MS = 4 * 60_000;
+const KNOWLEDGE_INTERMEDIATE_CALL_MS = 2 * 60_000;
 const MIN_ATTEMPT_TIME_MS = 1_000;
 
 export class KnowledgeDeadlineExceededError extends Error {
   constructor() {
-    super("Orion reached the three-minute knowledge-import limit.");
+    super("Orion reached the knowledge-import limit.");
     this.name = "KnowledgeDeadlineExceededError";
   }
 }
@@ -372,15 +374,20 @@ export async function runKnowledgeOrchestration(
           runtime.cancelAssignment(assignmentId);
         }
       }
-      for (const attemptController of attemptControllers.values()) {
+      for (const [assignmentId, attemptController] of attemptControllers) {
+        if (options.preserveActiveRoot && assignmentId === options.rootAssignment.assignmentId) continue;
         attemptController.abort(cutoffError);
       }
       const root = runtime
         .projection()
         .assignments.get(options.rootAssignment.assignmentId);
       if (root?.state === "running") {
-        runtime.waitAssignment(options.rootAssignment.assignmentId);
-        finalizationRootDeferred = true;
+        // Let a live synthesis finish. A root whose transport already failed
+        // still needs the bounded finalizer.
+        if (!options.preserveActiveRoot || !attemptControllers.has(options.rootAssignment.assignmentId)) {
+          runtime.waitAssignment(options.rootAssignment.assignmentId);
+          finalizationRootDeferred = true;
+        }
       } else {
         enqueue(options.rootAssignment.assignmentId);
       }
@@ -449,7 +456,8 @@ export async function runKnowledgeOrchestration(
             throw new KnowledgeFinalizationCutoffError();
           }
           const phaseDeadline =
-            phase === "exploring" ? explorationDeadline : hardDeadline;
+            phase === "exploring" && !(options.preserveActiveRoot && running.contract.purpose === "root")
+              ? explorationDeadline : hardDeadline;
           const remainingMs = Math.max(0, phaseDeadline - Date.now());
           if (remainingMs < MIN_ATTEMPT_TIME_MS) {
             if (phase === "exploring") {
@@ -884,13 +892,9 @@ function assignmentDepth(
 function assignmentCallTimeCap(
   assignment: KnowledgeAssignmentContract,
 ): number {
-  if (
-    assignment.output.kind === "reconciliation" ||
-    assignment.output.kind === "compression"
-  ) {
-    return KNOWLEDGE_INTERMEDIATE_CALL_MS;
-  }
-  return KNOWLEDGE_MAX_CALL_MS;
+  return assignment.purpose === "root"
+    ? KNOWLEDGE_MAX_CALL_MS
+    : KNOWLEDGE_INTERMEDIATE_CALL_MS;
 }
 
 function assignmentReasoningEffort(

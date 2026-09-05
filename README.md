@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.4.4-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.4.5-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
   ·
   <a href="#the-orchestration-topology">How it works</a>
   ·
@@ -22,7 +22,7 @@
   <a href="#local-first-by-construction">Privacy</a>
 </p>
 
-> Orion 0.4.4 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
+> Orion 0.4.5 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
 
 ## Knowledge work should produce knowledge, not another inbox
 
@@ -61,18 +61,25 @@ Import supports:
 | --- | --- |
 | PDF, DOCX, Markdown, text, HTML, JSON, CSV/TSV | Parsed on-device; healthy PDF text stays on the fast path |
 | PNG, JPEG, HEIC, HEIF, scanned PDFs | Recognized on-device with macOS Vision |
-| MP3, MP4, M4A, WAV, WebM, OGG, FLAC, MPEG | Decoded with AVFoundation and transcribed with bundled Whisper |
+| MP3, MP4, M4A, WAV, WebM, OGG, FLAC, MPEG | Decoded with AVFoundation and transcribed with the edition's bundled multilingual Whisper model |
 | Public HTTPS webpages | One bounded page fetched through the native host and parsed locally |
 | YouTube | One video downloaded with bundled `yt-dlp` + Deno, transcribed locally, then deleted from the temporary folder |
 | Pasted text and direct writing | Immediately available without preprocessing |
 
 Choose **Manual** to create one editable note per source without an AI request. Choose **Organize with AI** to turn the material into idea-first notes, reusable concepts, source-backed links, and integrated canonical articles.
 
+**Settings → Intelligence** includes **GPT-6 Astra** for complex research and
+synthesis through your OpenAI connection, with Low through Extra high reasoning.
+
 ## What Orion feels like
 
 ### One calm reading and writing surface
 
 There is no Markdown mode and no read/write split. Click **Edit**, write with a lightweight word-processing toolbar, and return to the same page. Headings, tables, task lists, code, quotes, images, links, and numbered source citations remain portable Markdown underneath.
+
+While editing a note, the microphone in the sticky writing toolbar records dictation and inserts the transcript at the preserved text cursor. The control remains available as the note scrolls. Recording and transcription stay on-device; the temporary M4A is deleted when bundled Whisper finishes.
+
+The ordinary `0.4.5` download bundles Whisper Small and processes two-minute segments. The optional Medium build bundles Whisper Medium, loads it once per dictation, and transcribes overlapping 30-second windows in the background. Both keep all generated text hidden until you press Stop, and neither imposes a fixed recording-duration cap.
 
 Inline AI writing is deliberately non-destructive. Continue at the caret or select a passage to Rewrite, Clarify, Tighten, Simplify, Expand, or Enrich from the active Space. A proposal is never saved until you accept it, and acceptance is one ordinary Undo step. An OpenAI key also enables selected-passage image generation; image bytes remain transient until accepted.
 
@@ -102,6 +109,31 @@ Every citation opens the preserved source. Every open Markdown task appears on H
 ### A Space has memory
 
 Home carries a living **Across this Space** orientation beside the task list. It keeps the last useful overview visible while knowledge changes and falls back to a deterministic local summary when AI is unavailable.
+
+**Settings → Appearance → Home atmosphere** includes nine original procedural
+effects alongside Line Waves, Signal Decay, and Field:
+
+- **Quiet Loom** — a turning sculpture of iridescent woven ribbons.
+- **Nova** — a pulsing plasma core with spiralling filaments and streaming sparks.
+- **Flux** — luminous currents flowing across the entire backdrop.
+- **Tidal Glass** — shifting liquid caustics and refracted light.
+- **Prism Drift** — a rolling landscape of reflective crystal facets.
+- **Nebula** — layered clouds of light with drifting stars.
+- **Emberwake** — glowing sparks and curved trails carried by a sweeping wind.
+- **Gravity Silk** — billowing satin folds with moving highlights.
+- **Mirage** — drifting glass lenses that refract a travelling sheet of light.
+
+The last seven fill the Home backdrop. All nine are written directly in local
+WebGL, with no downloaded artwork, textures, or external shader dependencies.
+Their colours follow your room and accent; Still, Calm, and Alive control motion.
+Choose **Colour 1** and **Colour 2** with their colour pickers or hex fields
+beside the four presets. The pair colours every shader and preview, saves with
+appearance settings, and adapts its brightness for light and dark rooms. Any
+third shader colour is a blend of your pair. Changing one choice leaves the
+other intact. **Reset colours** or choose a preset to restore its original
+multi-colour palette. Existing single-colour settings keep their previous look
+until you edit them.
+They pause when hidden and respect reduced motion.
 
 ### Your atlas can leave the app
 
@@ -133,7 +165,9 @@ flowchart TD
 
 A genuinely short source can still finish in one direct call. The topology exists where it adds coherence; it is not a tax on small imports.
 
-Temporary connection failures retry automatically within bounded attempts and time limits; the readiness check also retries before asking you to intervene. If AI organization fails after recovery is exhausted, Results shows the failed stage and a redacted error detail. Choose **Retry import** (or **Resume import** when a safe checkpoint exists), or **Keep preview** to save the available notes and complete sources. Preserved source previews are never presented as successful AI synthesis.
+Import recovery is automatic; Results never asks you to click Retry or Resume. Temporary connection failures and the readiness check have bounded retries. If a short direct synthesis times out or cannot produce a valid result, Orion makes one recovery pass through smaller, checkpointed reading and writing stages with the selected model. Failed stages can resume twice, retaining accepted work. An active direct synthesis is not interrupted at the soft finalization cutoff; transport and overall safety limits still apply.
+
+If recovery is exhausted, Results clearly says **AI synthesis is incomplete**, shows the failed stage and a redacted error detail, and offers **Keep available notes** to save the available notes and complete sources. Authentication, billing, and rejected-request errors require attention in Settings or the provider account; Orion does not keep spending requests on them. Preserved source previews are never presented as successful AI synthesis. Recovery checkpoints belong to the current session, not a crash-resumable background queue.
 
 ### The reading plan comes before interpretation
 
@@ -245,9 +279,38 @@ Both integrations discover Spaces, search and browse bounded content, open exact
 
 The connector rereads the real vault for every call, shares Orion's advisory lock and atomic replacement protocol, makes no network request of its own, and cannot read either provider key. Text deliberately returned to Codex or Claude is then governed by that product's account settings.
 
+While Orion is open, the integrations can also use its AI and context engine.
+Enable **Settings → Connections → Orion workflows**, select allowed Spaces,
+and independently allow API use and workflow writes. Older libraries start with
+these workflows disabled. The existing direct read/write tools keep their access.
+
+The expanded MCP surface has **41 tools**: 29 local library tools and twelve
+workflow/capability/job tools. It can build local evidence packets; research,
+compare, review, find gaps, or prepare briefs using Orion's configured AI;
+process text, files, webpages, and YouTube through the full import flow;
+reprocess preserved sources without duplicate provenance; generate notes,
+podcast scripts, and decks; develop canonical articles; enrich knowledge; and
+refresh the Space hierarchy. AI work is billed to the provider account configured
+in Orion. Its existing-note context preference remains authoritative.
+
+Workflows return jobs with status, cancellation, exact note citations, bounded
+evidence, freshness, and available usage metadata. They commit through the same
+revision checks and atomic writer as the app. Research does not modify notes or
+Chat. The private app connection requires no hosted endpoint or separate daemon.
+See [the workflow contract](docs/mcp-intelligence.md) for bounds and behavior.
+
+Twenty additional local tools provide exact source passages and note sections,
+batched note reads, concept and link-path navigation, provenance tracing, tags,
+Markdown tasks, duplicate detection, integrity checks, and recent changes.
+Version-guarded text edits and atomic metadata batches reject stale targets
+before saving. These tools work with Orion closed and use no provider account.
+See [all 20 tools and their contracts](docs/mcp-library-tools.md).
+
 ## Download
 
-[**Download Orion 0.4.4 for Apple Silicon**](https://github.com/zug11/orion/releases/latest/download/Orion-0.4.4-Apple-Silicon.dmg)
+[**Download Orion 0.4.5 for Apple Silicon**](https://github.com/zug11/orion/releases/latest/download/Orion-0.4.5-Apple-Silicon.dmg)
+
+The published installer includes Whisper Small. The Medium edition is available through the source-build command below.
 
 Requirements:
 
@@ -255,7 +318,7 @@ Requirements:
 - macOS 13.3 or later
 - An OpenAI or Anthropic API key only for optional AI features
 
-The release bundle is self-contained. It includes the Vision OCR helper, Whisper model and runtime, `yt-dlp`, Deno, Claude connector, and Codex plugin. No Homebrew package, Python environment, ffmpeg installation, local model server, or transcription API key is required.
+Each release bundle is self-contained. It includes the Vision OCR helper, its selected Whisper model and runtime, `yt-dlp`, Deno, Claude connector, and Codex plugin. The two editions share the same app identity, so installing one replaces the other. No Homebrew package, Python environment, ffmpeg installation, local model server, or transcription API key is required.
 
 ## Build from source
 
@@ -300,7 +363,7 @@ Browser preview is a renderer-development convenience, not Orion's desktop secur
 | `cargo test --manifest-path src-tauri/Cargo.toml` | Run Rust host tests |
 | `cargo test --manifest-path src-tauri/mcp-server/Cargo.toml` | Run MCP server tests |
 
-Native bundles are written below `src-tauri/target/release/bundle/`. Public release packaging additionally requires Developer ID signing and notarization; use `./script/package_release.sh <release-label>` rather than treating a local ad-hoc build as a distributable release.
+Native bundles are written below `src-tauri/target/release/bundle/`. Public release packaging additionally requires Developer ID signing and notarization. Use `./script/package_release.sh 0.4.5` for Small and `ORION_WHISPER_MODEL=medium ./script/package_release.sh 0.4.5.m` for Medium rather than treating a local ad-hoc build as a distributable release.
 
 ## Architecture
 

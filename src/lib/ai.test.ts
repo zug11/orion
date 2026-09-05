@@ -14,8 +14,21 @@ describe("AI provider selection", () => {
   });
 
   it("keeps GPT and missing model IDs on OpenAI", () => {
+    expect(aiProviderForModel("gpt-6-astra")).toBe("openai");
     expect(aiProviderForModel("gpt-5.6-sol")).toBe("openai");
     expect(aiProviderForModel(undefined)).toBe("openai");
+  });
+
+  it("uses the OpenAI key for GPT-6 Astra", () => {
+    const settings = {
+      ...defaultSettings,
+      model: "gpt-6-astra",
+      apiKeyConfigured: false,
+      anthropicApiKeyConfigured: true,
+    };
+    expect(isSelectedAIConfigured(settings)).toBe(false);
+    expect(selectedAIProviderName(settings)).toBe("OpenAI");
+    expect(isSelectedAIConfigured({ ...settings, apiKeyConfigured: true })).toBe(true);
   });
 
   it("uses only the selected provider's configured status", () => {

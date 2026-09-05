@@ -1,4 +1,9 @@
 import { generateFromSpace } from "./lib/generatePipeline";
+import { flushSync } from "react-dom";
+import { invoke as invokeAssistantHost } from "@tauri-apps/api/core";
+import { startAssistantExecutor } from "./lib/assistant/executor";
+import { composeWorkflowVault, rebaseCommittedWorkflow } from "./lib/assistant/commit";
+import type { AssistantJob } from "./lib/assistant/types";
 import { CheckCircle2, X } from "./lib/icons";
 import { nanoid } from "nanoid";
 import {
@@ -78,6 +83,9 @@ import {
   testElevenLabsKey,
   testOpenAIKey,
   generateSpeech,
+  finishVoiceMemoSession,
+  startVoiceMemoSession,
+  transcribeVoiceMemo,
 } from "./lib/storage";
 import {
   applyChatResult,
@@ -306,6 +314,7 @@ function App() {
     LinkedArticleJob[]
   >([]);
   const [generateJobs, setGenerateJobs] = useState<GenerateJob[]>([]);
+  const [assistantJobs, setAssistantJobs] = useState<AssistantJob[]>([]);
   const generateRequests = useRef(new GenerateRequestRegistry());
   const preparedSpeech = useRef(new PreparedSpeechCache());
   const speechPlaybackContext = useRef<AudioContext | null>(null);
@@ -331,6 +340,7 @@ function App() {
   const wikiEnrichmentRequests = useRef(new Set<string>());
   const overviewRequests = useRef(new Map<string, string>());
   const overviewTimers = useRef(new Map<string, number>());
+  const assistantOverviewVersions = useRef(new Map<string, string>());
   const refreshSpaceOverviewRef = useRef<
     (spaceId: string, manual?: boolean) => Promise<void>
   >(async () => undefined);
@@ -458,6 +468,10 @@ function App() {
       if (!workspace || overviewRequests.current.has(spaceId)) {
         return;
       }
+      // A workflow must not trigger unreported provider work after it finishes.
+      // Explicit refresh or the next independent knowledge edit resumes maintenance.
+      if (!manual && assistantOverviewVersions.current.get(spaceId) === spaceKnowledgeFingerprint(workspace)) return;
+      assistantOverviewVersions.current.delete(spaceId);
       if (!workspace.notes.some(hasSubstantiveOverviewNote)) {
         if (!workspace.spaceOverview && !workspace.spaceKnowledge) return;
         const now = new Date().toISOString();
@@ -670,11 +684,13 @@ function App() {
     snapshot.workspace.id,
   ]);
 
-  const queueSnapshotSave = useCallback((nextVault: OrionVault) => {
+  const queueSnapshotSave = useCallback((_nextVault: OrionVault) => {
     pendingSaveCount.current += 1;
     const queued = saveQueue.current
       .catch(() => undefined)
       .then(async () => {
+        // Coalesce at execution time so a queued autosave cannot undo a workflow commit.
+        const nextVault = vaultRef.current;
         await saveSnapshot(nextVault, persistedVaultUpdatedAt.current);
         persistedVaultUpdatedAt.current = nextVault.updatedAt;
       })
@@ -684,6 +700,67 @@ function App() {
     saveQueue.current = queued;
     return queued;
   }, []);
+
+  useEffect(() => {
+    if (!hydrated || !persistenceEnabled || !isTauriRuntime()) return;
+    const serialize = <T,>(work: () => Promise<T>): Promise<T> => {
+      pendingSaveCount.current += 1;
+      const queued = saveQueue.current.catch(() => undefined).then(work).finally(() => {
+        pendingSaveCount.current = Math.max(0, pendingSaveCount.current - 1);
+      });
+      saveQueue.current = queued.then(() => undefined, () => undefined);
+      return queued;
+    };
+    return startAssistantExecutor({
+      getSpace: (spaceId) => vaultRef.current.spaces.find((space) => space.workspace.id === spaceId),
+      onActivity: setAssistantJobs,
+      onComplete: () => undefined,
+      prepareSpace: (spaceId) => serialize(async () => {
+        if (closingRef.current) throw new Error("Orion is closing.");
+        if (saveTimer.current !== null) { window.clearTimeout(saveTimer.current); saveTimer.current = null; }
+        // Refresh an unchanged renderer before work submitted by another assistant.
+        const before = vaultRef.current;
+        if (before.updatedAt === persistedVaultUpdatedAt.current) {
+          const latest = await loadSnapshot();
+          if (latest && latest.updatedAt !== persistedVaultUpdatedAt.current && vaultRef.current === before) {
+            const reconciled = { ...latest, spaces: latest.spaces.map((space) => reconcileSnapshotConceptVocabulary({ ...space, settings: { ...defaultSettings, ...space.settings } })) };
+            persistedVaultUpdatedAt.current = latest.updatedAt;
+            skipAutosaveVault.current = reconciled;
+            flushSync(() => { vaultRef.current = reconciled; setVault(reconciled); });
+          }
+        }
+        const current = vaultRef.current;
+        if (current.updatedAt !== persistedVaultUpdatedAt.current) {
+          await saveSnapshot(current, persistedVaultUpdatedAt.current);
+          persistedVaultUpdatedAt.current = current.updatedAt;
+        }
+        const snapshot = current.spaces.find((space) => space.workspace.id === spaceId);
+        if (!snapshot) throw new Error("This Space no longer exists.");
+        return { snapshot, revision: persistedVaultUpdatedAt.current! };
+      }),
+      commit: (claim, sessionId, base, generated, result) => serialize(async () => {
+        if (closingRef.current) throw new Error("Orion is closing.");
+        if (saveTimer.current !== null) { window.clearTimeout(saveTimer.current); saveTimer.current = null; }
+        const before = vaultRef.current;
+        const proposed = composeWorkflowVault(before, base, generated);
+        // Persist pending navigation/settings using the ordinary revision protocol.
+        if (before.updatedAt !== persistedVaultUpdatedAt.current) {
+          await saveSnapshot(before, persistedVaultUpdatedAt.current);
+          persistedVaultUpdatedAt.current = before.updatedAt;
+        }
+        await invokeAssistantHost("assistant_commit_vault", { jobId: claim.id, sessionId, vault: proposed, expectedUpdatedAt: persistedVaultUpdatedAt.current, result });
+        persistedVaultUpdatedAt.current = proposed.updatedAt;
+        cancelSpaceOverviewRefresh(base.workspace.id);
+        assistantOverviewVersions.current.set(base.workspace.id, spaceKnowledgeFingerprint(generated));
+        flushSync(() => setVault((current) => {
+          const merged = rebaseCommittedWorkflow(before, proposed, current, base.workspace.id);
+          vaultRef.current = merged;
+          if (merged === proposed) skipAutosaveVault.current = merged;
+          return merged;
+        }));
+      }),
+    });
+  }, [hydrated, persistenceEnabled, cancelSpaceOverviewRefresh]);
 
   useEffect(() => {
     let cancelled = false;
@@ -763,6 +840,12 @@ function App() {
               ),
               homeAtmosphereTone: normalizeHomeAtmosphereTone(
                 base.settings.homeAtmosphereTone,
+              ),
+              homeAtmosphereCustomColor: normalizeThemeColor(
+                base.settings.homeAtmosphereCustomColor,
+              ),
+              homeAtmosphereCustomSecondaryColor: normalizeThemeColor(
+                base.settings.homeAtmosphereCustomSecondaryColor,
               ),
               homeAtmosphereMotion: normalizeHomeAtmosphereMotion(
                 base.settings.homeAtmosphereMotion,
@@ -1628,6 +1711,50 @@ function App() {
     [],
   );
 
+  const prepareVoiceMemoForNote = useCallback(
+    async (noteId: EntityId, sessionId: string) => {
+      const workspaceId = vaultRef.current.activeSpaceId;
+      const workspace = vaultRef.current.spaces.find(
+        (space) => space.workspace.id === workspaceId,
+      );
+      if (!workspace?.notes.some((note) => note.id === noteId)) {
+        throw new Error("This note is no longer available.");
+      }
+      await startVoiceMemoSession(sessionId, {
+        language: workspace.settings.whisperLanguage || undefined,
+      });
+    },
+    [],
+  );
+
+  const transcribeVoiceMemoForNote = useCallback(
+    async (noteId: EntityId, audio: Blob, sessionId: string) => {
+      const workspaceId = vaultRef.current.activeSpaceId;
+      const workspace = vaultRef.current.spaces.find(
+        (space) => space.workspace.id === workspaceId,
+      );
+      if (!workspace?.notes.some((note) => note.id === noteId)) {
+        throw new Error("This note is no longer available.");
+      }
+      const transcript = await transcribeVoiceMemo(audio, {
+        language: workspace.settings.whisperLanguage || undefined,
+      }, sessionId);
+      const liveSpace = vaultRef.current.spaces.find(
+        (space) => space.workspace.id === workspaceId,
+      );
+      if (!liveSpace?.notes.some((note) => note.id === noteId)) {
+        throw new Error("This note was removed before the voice memo finished.");
+      }
+
+      return transcript.text;
+    },
+    [],
+  );
+
+  const finishVoiceMemoForNote = useCallback(async (sessionId: string) => {
+    await finishVoiceMemoSession(sessionId);
+  }, []);
+
   const updateNote = useCallback((nextNote: Note) => {
     const normalized: Note = {
       ...nextNote,
@@ -2024,6 +2151,10 @@ function App() {
       }, 700);
 
       try {
+        let markProviderStarted: () => void = () => undefined;
+        const providerStarted = new Promise<void>((resolve) => {
+          markProviderStarted = resolve;
+        });
         const result = await waitForLinkedArticle(
           organizeWithAI(
             buildLinkedArticleRequest(
@@ -2033,7 +2164,10 @@ function App() {
               instructions,
               selectedContext,
             ),
+            { onStart: markProviderStarted },
           ),
+          undefined,
+          providerStarted,
         );
         if (!linkedArticleRequests.current.owns(requestKey, jobId)) {
           return;
@@ -3273,6 +3407,13 @@ function App() {
           aiProviderName={selectedAIProviderName(snapshot.settings)}
           onSpeakNote={speakNoteText}
           onPrepareSpeech={prepareSpeech}
+          onPrepareVoiceMemoSession={(sessionId) =>
+            prepareVoiceMemoForNote(activeNote.id, sessionId)
+          }
+          onTranscribeVoiceMemo={(audio, sessionId) =>
+            transcribeVoiceMemoForNote(activeNote.id, audio, sessionId)
+          }
+          onFinishVoiceMemoSession={finishVoiceMemoForNote}
         />
       );
     }
@@ -3311,6 +3452,11 @@ function App() {
       return (
         <SettingsView
           settings={snapshot.settings}
+          spaces={vault.spaces.map((space) => space.workspace)}
+          assistantJobs={assistantJobs}
+          onCancelAssistantJob={async (job) => {
+            await invokeAssistantHost("assistant_cancel", { spaceId: job.spaceId, jobId: job.id });
+          }}
           themePalette={resolvedThemePalette}
           onChange={updateSettings}
           onSaveApiKey={handleSaveKey}

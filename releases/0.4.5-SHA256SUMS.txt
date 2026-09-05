@@ -1,0 +1,3 @@
+f615d5c53f82c1a739ac8d3b49ecd311593a66e60b8d36b55bf3dfa573bdc68a  Orion-0.4.5-Apple-Silicon.dmg
+7b7fce7df370efa478b6097bcbb2177ea320fbde9fd9574f37a9a0e7c98a7396  Orion-Claude-Connector-0.4.5-Apple-Silicon.mcpb
+0643404624240935c56be4f14e4799b66dcdfcfa72d2fc055b428a0e9ac11d4b  Orion-Codex-Plugin-0.4.5-Apple-Silicon.zip

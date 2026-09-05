@@ -1,7 +1,7 @@
 {
   "name": "orion",
-  "version": "0.4.4",
-  "description": "Browse, cite, and write to your local Orion knowledge Spaces from Codex.",
+  "version": "0.4.5",
+  "description": "Search, edit, research, import, and generate in your local Orion Spaces.",
   "author": {
     "name": "Orion",
     "url": "https://github.com/zug11/orion"
@@ -21,20 +21,22 @@
   "interface": {
     "displayName": "Orion",
     "shortDescription": "Your local knowledge atlas, available in Codex.",
-    "longDescription": "Bring Orion's structured, local knowledge atlas into Codex. Discover Spaces, orient with living overviews, search and open evidence-bearing notes and sources, follow native Orion citations, and create, update, or delete notes when you ask—without cloud sync or connector path setup.",
+    "longDescription": "Use Orion's local library and optional AI/context workflows from Codex. Search and cite exact notes, edit knowledge, import source material through Orion's synthesis flow, research evidence, generate notes and decks, and refresh canonical knowledge. Orion retains provider credentials and settings. Enable workflow Spaces, API use, and writes in Orion Connections. Inspect exact passages, sections, tasks, provenance, concepts and link paths. Make version-guarded edits and atomic metadata updates, and diagnose duplicates or broken references. Includes 41 tools across local knowledge and native AI workflows.",
     "developerName": "Orion",
     "category": "Productivity",
     "capabilities": [
       "Local knowledge",
       "Citations",
       "Read",
-      "Write"
+      "Write",
+      "Orion AI",
+      "Import workflows"
     ],
     "websiteURL": "https://github.com/zug11/orion",
     "defaultPrompt": [
-      "Summarize my active Orion Space with citations.",
-      "Find what Orion says about this topic and cite the notes.",
-      "Create a note in my Orion Space from this conversation."
+      "Research my Orion Space and cite the supporting evidence.",
+      "Import this material through Orion’s knowledge flow.",
+      "Generate a briefing from the notes in my Orion Space."
     ],
     "brandColor": "#8999FF",
     "composerIcon": "./assets/icon.png",

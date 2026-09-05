@@ -20,8 +20,29 @@ CODEX_PLUGIN_RESOURCE="$ROOT_DIR/src-tauri/resources/Orion-Codex-Plugin"
 SOURCE_STAMP_RELATIVE_PATH="Contents/Resources/orion-source.sha256"
 RENDERER_STAMP_RELATIVE_PATH="Contents/Resources/orion-renderer.sha256"
 HELPER_ENTITLEMENTS="$ROOT_DIR/src-tauri/entitlements/helper-runtime.plist"
+APP_ENTITLEMENTS="$ROOT_DIR/src-tauri/entitlements/app.plist"
 NOTARY_PROFILE="${ORION_NOTARY_PROFILE:-}"
 CODE_SIGN_IDENTITY="${ORION_CODESIGN_IDENTITY:-}"
+WHISPER_MODEL_EDITION="${ORION_WHISPER_MODEL:-small}"
+
+case "$WHISPER_MODEL_EDITION" in
+  small)
+    WHISPER_MODEL_RESOURCE_RELATIVE="src-tauri/resources/models/ggml-small.bin"
+    EXPECTED_WHISPER_MODEL_BYTES=487601967
+    EXPECTED_WHISPER_MODEL_SHA256="1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
+    TAURI_BUILD_CONFIG='{"build":{"beforeBuildCommand":""}}'
+    ;;
+  medium)
+    WHISPER_MODEL_RESOURCE_RELATIVE="src-tauri/resources/models/ggml-medium.bin"
+    EXPECTED_WHISPER_MODEL_BYTES=1533763059
+    EXPECTED_WHISPER_MODEL_SHA256="6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208"
+    TAURI_BUILD_CONFIG='{"build":{"beforeBuildCommand":""},"bundle":{"macOS":{"files":{"Resources/models/ggml-model.bin":"./resources/models/ggml-medium.bin"}}}}'
+    ;;
+  *)
+    echo "ORION_WHISPER_MODEL must be 'small' or 'medium'" >&2
+    exit 2
+    ;;
+esac
 
 if [[ -z "$APP_VERSION" ]]; then
   echo "could not read Orion version from package.json" >&2
@@ -70,8 +91,14 @@ if [[ ! -f "$HELPER_ENTITLEMENTS" ]]; then
   echo "missing helper entitlements: $HELPER_ENTITLEMENTS" >&2
   exit 1
 fi
+if [[ ! -f "$APP_ENTITLEMENTS" ]]; then
+  echo "missing app entitlements: $APP_ENTITLEMENTS" >&2
+  exit 1
+fi
 
 export ORION_CODESIGN_IDENTITY="$CODE_SIGN_IDENTITY"
+export ORION_WHISPER_MODEL="$WHISPER_MODEL_EDITION"
+export VITE_ORION_WHISPER_MODEL="$WHISPER_MODEL_EDITION"
 # Rust 1.96 on current macOS can emit release-stripped proc-macro dylibs that
 # rustc then cannot reload (E0463). Defer symbol trimming until after linking;
 # this keeps the release build deterministic without weakening app signing.
@@ -123,6 +150,8 @@ verify_connector_package() (
   "$connector_binary" --version
   node "$ROOT_DIR/script/test_mcp_connector.mjs" \
     "$connector_binary" "$FIXTURE_VAULT" "$verification_dir/manifest.json"
+  node "$ROOT_DIR/script/test_mcp_workflows.mjs" "$connector_binary" "$FIXTURE_VAULT"
+  node "$ROOT_DIR/script/test_mcp_library.mjs" "$connector_binary" "$FIXTURE_VAULT"
 )
 
 verify_codex_plugin() (
@@ -146,6 +175,7 @@ verify_codex_plugin() (
   "$plugin_binary" --version
   node "$ROOT_DIR/script/test_codex_plugin.mjs" \
     "$resource_root" "$FIXTURE_VAULT"
+  node "$ROOT_DIR/script/test_mcp_library.mjs" "$plugin_binary" "$FIXTURE_VAULT"
 )
 
 verify_no_build_user_paths() {
@@ -170,7 +200,8 @@ source_fingerprint() (
   cd "$ROOT_DIR"
 
   {
-    find src src-tauri/src src-tauri/native src-tauri/mcp-server/src \
+    find src src-tauri/src src-tauri/shared src-tauri/native src-tauri/mcp-server/src \
+      src-tauri/entitlements \
       mcp/orion-claude codex/orion -type f ! -name '.DS_Store'
     printf '%s\n' \
       AGENTS.md \
@@ -184,6 +215,9 @@ source_fingerprint() (
       src-tauri/Cargo.lock \
       src-tauri/mcp-server/Cargo.toml \
       src-tauri/mcp-server/Cargo.lock \
+      src-tauri/Info.plist \
+      src-tauri/resources/THIRD_PARTY_NOTICES.md \
+      "$WHISPER_MODEL_RESOURCE_RELATIVE" \
       src-tauri/tauri.conf.json \
       script/build_codex_plugin.sh \
       script/build_mcp_connector.sh \
@@ -191,7 +225,9 @@ source_fingerprint() (
       script/build_transcription_sidecar.sh \
       script/package_release.sh \
       script/test_codex_plugin.mjs \
-      script/test_mcp_connector.mjs
+      script/test_mcp_connector.mjs \
+      script/test_mcp_workflows.mjs \
+      script/test_mcp_library.mjs
   } |
     LC_ALL=C sort -u |
     while IFS= read -r source_path; do
@@ -200,6 +236,23 @@ source_fingerprint() (
     shasum -a 256 |
     awk '{ print $1 }'
 )
+
+verify_bundled_whisper_model() {
+  local app_bundle model_path actual_bytes actual_sha256
+  app_bundle="${1:?missing Orion app bundle}"
+  model_path="$app_bundle/Contents/Resources/models/ggml-model.bin"
+  if [[ ! -f "$model_path" ]]; then
+    echo "missing bundled Whisper $WHISPER_MODEL_EDITION model: $model_path" >&2
+    exit 1
+  fi
+  actual_bytes="$(wc -c <"$model_path" | tr -d '[:space:]')"
+  actual_sha256="$(shasum -a 256 "$model_path" | awk '{ print $1 }')"
+  if [[ "$actual_bytes" != "$EXPECTED_WHISPER_MODEL_BYTES" ]] ||
+    [[ "$actual_sha256" != "$EXPECTED_WHISPER_MODEL_SHA256" ]]; then
+    echo "bundled Whisper $WHISPER_MODEL_EDITION model failed release verification" >&2
+    exit 1
+  fi
+}
 
 renderer_fingerprint() (
   set -euo pipefail
@@ -335,6 +388,7 @@ sign_app_bundle() {
     echo "missing release app bundle: $APP_BUNDLE" >&2
     exit 1
   fi
+  verify_bundled_whisper_model "$APP_BUNDLE"
   verify_connector_package "$APP_BUNDLE/$CONNECTOR_RELATIVE_PATH"
 
   # Remove Finder/resource metadata before sealing the final Developer ID
@@ -361,8 +415,10 @@ sign_app_bundle() {
   codesign --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
     "$APP_BUNDLE/$CODEX_PLUGIN_BINARY_RELATIVE_PATH"
   codesign --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
+    --entitlements "$APP_ENTITLEMENTS" \
     "$APP_BUNDLE/Contents/MacOS/orion"
   codesign --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
+    --entitlements "$APP_ENTITLEMENTS" \
     "$APP_BUNDLE"
   codesign --verify --deep --strict --verbose=4 "$APP_BUNDLE"
   verify_codex_plugin "$APP_BUNDLE/$CODEX_PLUGIN_RELATIVE_PATH"
@@ -532,6 +588,7 @@ verify_final_dmg() (
   device=""
 
   codesign --verify --deep --strict --verbose=4 "$copied_app"
+  verify_bundled_whisper_model "$copied_app"
   if [[ "$(tr -d '[:space:]' <"$copied_app/$SOURCE_STAMP_RELATIVE_PATH")" != "$(source_fingerprint)" ]] ||
     [[ "$(tr -d '[:space:]' <"$copied_app/$RENDERER_STAMP_RELATIVE_PATH")" != "$(renderer_fingerprint)" ]]; then
     echo "final DMG provenance does not match its source and renderer" >&2
@@ -563,7 +620,7 @@ case "$BUILD_MODE" in
       npm run build:codex -- --use-existing
       configure_release_rustflags
       npm run tauri -- build \
-        --config '{"build":{"beforeBuildCommand":""}}'
+        --config "$TAURI_BUILD_CONFIG"
     )
     # Cargo must keep release symbols until linking so proc-macro dylibs remain
     # loadable on current macOS/Rust. Strip the finished executable here,

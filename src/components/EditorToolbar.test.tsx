@@ -137,6 +137,31 @@ describe("EditorToolbar", () => {
     expect(history).toContainElement(redo);
   });
 
+  it("keeps dictation in a fixed toolbar group", () => {
+    const editor = createEditor();
+    render(
+      <EditorToolbar
+        editor={editor}
+        concepts={[]}
+        onOpenLink={vi.fn()}
+        onUnlink={vi.fn()}
+        citationAvailable={false}
+        onOpenCitation={vi.fn()}
+        noteId="note-one"
+        onTranscribeVoiceMemo={vi.fn()}
+        onCompleteVoiceMemo={vi.fn()}
+      />,
+    );
+
+    const dictation = screen.getByRole("group", { name: "Dictation" });
+    expect(dictation).toContainElement(
+      screen.getByRole("button", { name: "Start dictation" }),
+    );
+    expect(dictation).not.toBe(
+      screen.getByRole("group", { name: "Editing history" }),
+    );
+  });
+
   it("toggles AI writing without changing the editor selection or document", () => {
     const editor = createEditor();
     editor.commands.setTextSelection({ from: 1, to: 6 });

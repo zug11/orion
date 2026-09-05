@@ -137,6 +137,15 @@ export type ReasoningEffort =
 export type HomeAtmosphere =
   | "signal-decay"
   | "line-waves"
+  | "quiet-loom"
+  | "nova"
+  | "flux"
+  | "tidal-glass"
+  | "prism-drift"
+  | "nebula"
+  | "emberwake"
+  | "gravity-silk"
+  | "mirage"
   | "field";
 
 export type HomeAtmosphereTone =
@@ -162,7 +171,16 @@ export interface SavedElevenLabsVoice {
   voiceId: string;
 }
 
+export interface AssistantAccess {
+  enabled: boolean;
+  allowAI: boolean;
+  allowWrites: boolean;
+  spaceIds: string[];
+}
+
 export interface Settings {
+  /** Opt-in desktop workflows. Legacy vaults hydrate the disabled default. */
+  assistantAccess: AssistantAccess;
   model: string;
   reasoningEffort: ReasoningEffort;
   apiKeyConfigured: boolean;
@@ -202,6 +220,9 @@ export interface Settings {
   themeContrast: ThemeContrast;
   homeAtmosphere: HomeAtmosphere;
   homeAtmosphereTone: HomeAtmosphereTone;
+  homeAtmosphereCustomColor: string;
+  /** Optional in older vaults; empty retains the existing single-colour look. */
+  homeAtmosphereCustomSecondaryColor: string;
   homeAtmosphereMotion: HomeAtmosphereMotion;
 }
 

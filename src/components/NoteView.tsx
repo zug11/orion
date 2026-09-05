@@ -105,6 +105,9 @@ interface NoteViewProps {
     onProgress?: (progress: SpeechPlaybackProgress) => void,
   ) => Promise<void>;
   onPrepareSpeech?: (text: string, signal?: AbortSignal) => Promise<void>;
+  onPrepareVoiceMemoSession?: (sessionId: string) => Promise<void>;
+  onTranscribeVoiceMemo?: (audio: Blob, sessionId: string) => Promise<string>;
+  onFinishVoiceMemoSession?: (sessionId: string) => Promise<void>;
   onDisableConceptAutoLink: (conceptId: string) => void;
   aiArticleWritingEnabled?: boolean;
   aiImageGenerationEnabled?: boolean;
@@ -143,6 +146,9 @@ export function NoteView({
   onGenerateAIImage,
   onSpeakNote,
   onPrepareSpeech,
+  onPrepareVoiceMemoSession,
+  onTranscribeVoiceMemo,
+  onFinishVoiceMemoSession,
   onDisableConceptAutoLink,
   aiArticleWritingEnabled = false,
   aiImageGenerationEnabled = false,
@@ -1171,6 +1177,9 @@ export function NoteView({
               onGenerateAIWriting={onGenerateAIWriting}
               onGenerateAIImage={onGenerateAIImage}
               onDisableConceptAutoLink={onDisableConceptAutoLink}
+              onPrepareVoiceMemoSession={onPrepareVoiceMemoSession}
+              onTranscribeVoiceMemo={onTranscribeVoiceMemo}
+              onFinishVoiceMemoSession={onFinishVoiceMemoSession}
               aiArticleWritingEnabled={aiArticleWritingEnabled}
               aiImageGenerationEnabled={aiImageGenerationEnabled}
               aiProviderName={aiProviderName}

@@ -133,6 +133,8 @@ export function HomeView({
         <HomeAtmosphere
           atmosphere={snapshot.settings.homeAtmosphere}
           tone={snapshot.settings.homeAtmosphereTone}
+          customColor={snapshot.settings.homeAtmosphereCustomColor}
+          customSecondaryColor={snapshot.settings.homeAtmosphereCustomSecondaryColor}
           motion={snapshot.settings.homeAtmosphereMotion}
           themePalette={activeThemePalette}
         />

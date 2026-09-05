@@ -7,6 +7,94 @@ import {
 import { contrastRatio, resolveThemePalette } from "./theme";
 
 describe("home atmosphere theme inheritance", () => {
+  const atmospheres = [
+    "line-waves", "signal-decay", "field", "quiet-loom", "nova", "flux",
+    "tidal-glass", "prism-drift", "nebula", "emberwake", "gravity-silk", "mirage",
+  ] as const;
+
+  it("uses both chosen hues and their blend across every shader", () => {
+    for (const atmosphere of atmospheres) {
+      const pair = resolveAtmospherePalette(atmosphere, "gold", undefined, "#ff0000", "#0000ff");
+      expect(pair).toMatchObject({ primary: "#FF0000", secondary: "#0000FF", tertiary: "#800080" });
+      const changedFirst = resolveAtmospherePalette(atmosphere, "gold", undefined, "#00ff00", "#0000ff");
+      expect(changedFirst.secondary).toBe(pair.secondary);
+      expect(changedFirst.primary).not.toBe(pair.primary);
+      expect(changedFirst.tertiary).not.toBe(pair.tertiary);
+    }
+  });
+
+  it.each(["dark", "light"] as const)("keeps custom pairs readable in every %s shader", (mode) => {
+    for (const themePreset of ["orion", "tide", "grove", "ember"] as const) {
+      const theme = resolveThemePalette({ ...defaultSettings, themePreset }, mode);
+      for (const atmosphere of atmospheres) {
+        for (const [first, second] of [["#FF6699", "#66CFFF"], ["#000000", "#FFFFFF"], ["#00FF00", "#FF00FF"]]) {
+          const pair = resolveAtmospherePalette(atmosphere, "signature", theme, first, second);
+          expect(pair.primary).not.toBe(pair.secondary);
+          expect(pair.background).toBe(theme.canvasDeep);
+          expect(pair.backgroundSecondary).toBe(theme.surface0);
+          for (const colour of [pair.primary, pair.secondary, pair.tertiary]) {
+            expect(contrastRatio(colour, theme.canvasDeep)).toBeGreaterThanOrEqual(3);
+            expect(contrastRatio(colour, theme.surface0)).toBeGreaterThanOrEqual(3);
+          }
+        }
+      }
+    }
+  });
+
+  it("preserves legacy single-colour overrides and the untouched default palette", () => {
+    const theme = resolveThemePalette(defaultSettings, "dark");
+    for (const atmosphere of atmospheres) {
+      for (const secondary of [undefined, "", "red", "#123", "#00ggff", "#112233;}"]) {
+        expect(resolveAtmospherePalette(atmosphere, "signature", theme, "#ff4c80", secondary))
+          .toEqual(resolveAtmospherePalette(atmosphere, "signature", theme, "#ff4c80"));
+        expect(resolveAtmospherePalette(atmosphere, "signature", theme, "", secondary))
+          .toEqual(resolveAtmospherePalette(atmosphere, "signature", theme));
+      }
+    }
+  });
+
+  it("can override only the second hue while retaining the preset primary", () => {
+    const preset = resolveAtmospherePalette("nova", "mint");
+    const pair = resolveAtmospherePalette("nova", "mint", undefined, "", "#ff6699");
+    expect(pair.primary).toBe(preset.primary);
+    expect(pair.secondary).toBe("#FF6699");
+  });
+
+  it("uses a custom hue across every shader and ignores the selected preset", () => {
+    const theme = resolveThemePalette(defaultSettings, "dark");
+    for (const mode of [
+      "line-waves", "signal-decay", "field", "quiet-loom", "nova", "flux",
+      "tidal-glass", "prism-drift", "nebula", "emberwake", "gravity-silk", "mirage",
+    ] as const) {
+      const custom = resolveAtmospherePalette(mode, "mint", theme, "#ff4c80");
+      expect(custom.primary).toBe("#FF4C80");
+      expect(custom.secondary).not.toBe(custom.primary);
+      expect(custom.tertiary).not.toBe(custom.primary);
+      expect(custom).toEqual(resolveAtmospherePalette(mode, "gold", theme, "#FF4C80"));
+      expect(custom.background).toBe(theme.canvasDeep);
+      expect(custom.backgroundSecondary).toBe(theme.surface0);
+    }
+  });
+
+  it.each(["dark", "light"] as const)("keeps extreme custom colors visible in %s mode", (mode) => {
+    const theme = resolveThemePalette(defaultSettings, mode);
+    for (const customColor of ["#000000", "#FFFFFF", "#0000FF", "#00FF00"]) {
+      const palette = resolveAtmospherePalette("flux", "signature", theme, customColor);
+      for (const color of [palette.primary, palette.secondary, palette.tertiary]) {
+        expect(contrastRatio(color, theme.canvasDeep)).toBeGreaterThanOrEqual(3);
+        expect(contrastRatio(color, theme.surface0)).toBeGreaterThanOrEqual(3);
+      }
+    }
+  });
+
+  it("falls back to the preset for absent or invalid custom colors", () => {
+    const theme = resolveThemePalette(defaultSettings, "dark");
+    const preset = resolveAtmospherePalette("mirage", "gold", theme);
+    for (const color of [undefined, "", "red", "#123", "#00ggff", "#112233;}"]) {
+      expect(resolveAtmospherePalette("mirage", "gold", theme, color)).toEqual(preset);
+    }
+  });
+
   it.each(["dark", "light"] as const)(
     "gives every shader one shared, gently offset %s room",
     (mode) => {
@@ -19,7 +107,11 @@ describe("home atmosphere theme inheritance", () => {
         },
         mode,
       );
-      const rooms = (["line-waves", "signal-decay", "field"] as const).map(
+      const rooms = ([
+        "line-waves", "signal-decay", "field", "quiet-loom", "nova",
+        "flux", "tidal-glass", "prism-drift", "nebula",
+        "emberwake", "gravity-silk", "mirage",
+      ] as const).map(
         (atmosphere) =>
           resolveAtmospherePalette(atmosphere, "signature", theme),
       );
@@ -132,15 +224,15 @@ describe("home atmosphere theme inheritance", () => {
         },
         "light",
       );
-      const atmosphere = resolveAtmospherePalette("line-waves", tone, theme);
-
-      for (const color of [
-        atmosphere.primary,
-        atmosphere.secondary,
-        atmosphere.tertiary,
-      ]) {
-        expect(contrastRatio(color, theme.canvasDeep)).toBeGreaterThanOrEqual(3);
-        expect(contrastRatio(color, theme.surface0)).toBeGreaterThanOrEqual(3);
+      for (const mode of [
+        "line-waves", "quiet-loom", "nova", "flux", "tidal-glass", "prism-drift", "nebula",
+        "emberwake", "gravity-silk", "mirage",
+      ] as const) {
+        const atmosphere = resolveAtmospherePalette(mode, tone, theme);
+        for (const color of [atmosphere.primary, atmosphere.secondary, atmosphere.tertiary]) {
+          expect(contrastRatio(color, theme.canvasDeep)).toBeGreaterThanOrEqual(3);
+          expect(contrastRatio(color, theme.surface0)).toBeGreaterThanOrEqual(3);
+        }
       }
     },
   );

@@ -359,7 +359,7 @@ kbd {
   border-color: transparent;
   background: var(--periwinkle);
   box-shadow:
-    0 9px 24px rgba(87, 102, 187, 0.19),
+    0 9px 24px color-mix(in srgb, var(--periwinkle) 19%, transparent),
     inset 0 1px 0 rgba(255, 255, 255, 0.48);
 }
 
@@ -368,14 +368,14 @@ kbd {
   border-color: transparent;
   background: var(--periwinkle-strong);
   box-shadow:
-    0 12px 28px rgba(87, 102, 187, 0.26),
+    0 12px 28px color-mix(in srgb, var(--periwinkle-strong) 26%, transparent),
     inset 0 1px 0 rgba(255, 255, 255, 0.55);
 }
 
 [data-theme="light"] .button.primary {
   color: var(--accent-ink);
   background: var(--periwinkle);
-  box-shadow: 0 8px 22px rgba(71, 84, 159, 0.2);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--periwinkle) 20%, transparent);
 }
 
 [data-theme="light"] .button.primary:hover:not(:disabled) {
@@ -3641,6 +3641,48 @@ kbd {
   padding-top: 6px;
 }
 
+.voice-memo-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.icon-button.voice-memo.active {
+  color: var(--coral);
+  border-color: color-mix(in srgb, var(--coral) 38%, var(--line));
+  background: color-mix(in srgb, var(--coral) 12%, var(--surface-1));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--coral) 8%, transparent);
+  animation: voice-memo-pulse 1.5s ease-in-out infinite;
+}
+
+.voice-memo-status {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% + 7px);
+  right: 0;
+  width: max-content;
+  max-width: min(280px, 72vw);
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  background: var(--surface-raised);
+  box-shadow: 0 8px 24px rgba(1, 4, 12, 0.2);
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.voice-memo-status.is-error {
+  color: var(--coral);
+  white-space: normal;
+}
+
+@keyframes voice-memo-pulse {
+  50% {
+    box-shadow: 0 0 0 7px color-mix(in srgb, var(--coral) 3%, transparent);
+  }
+}
+
 .save-state {
   display: inline-flex;
   align-items: center;
@@ -4234,13 +4276,18 @@ kbd {
   border-left: 1px solid var(--line);
 }
 
-.editor-toolbar-ai {
+.editor-toolbar-ai,
+.editor-toolbar-dictation {
   display: flex;
   min-width: max-content;
   flex: 0 0 auto;
   align-items: center;
   padding-left: 5px;
   border-left: 1px solid var(--line);
+}
+
+.editor-toolbar-dictation {
+  position: relative;
 }
 
 .editor-toolbar-main[inert],
@@ -8185,6 +8232,281 @@ button.source-citation-marker:focus-visible {
   display: none;
 }
 
+.atmosphere-preview.quiet-loom,
+.atmosphere-canvas.quiet-loom[data-atmosphere-state="fallback"] {
+  overflow: hidden;
+  background: linear-gradient(
+    180deg,
+    var(--atmosphere-background),
+    var(--atmosphere-background-secondary)
+  );
+}
+
+.atmosphere-preview.quiet-loom i,
+.atmosphere-canvas.quiet-loom[data-atmosphere-state="fallback"] i {
+  position: absolute;
+  top: 24%;
+  left: 16%;
+  width: 76%;
+  height: 48%;
+  border-radius: 50%;
+  border-block: 1px solid color-mix(in srgb, var(--atmosphere-primary) 34%, transparent);
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0 3px,
+    color-mix(in srgb, var(--atmosphere-primary) 46%, transparent) 3px 4px
+  );
+  box-shadow: 0 0 16px color-mix(in srgb, var(--atmosphere-secondary) 12%, transparent);
+  transform: rotate(-24deg) skewX(-24deg);
+  mask-image: linear-gradient(90deg, transparent, #000 24% 76%, transparent);
+}
+
+.atmosphere-preview.quiet-loom i:nth-child(2),
+.atmosphere-canvas.quiet-loom[data-atmosphere-state="fallback"] i:nth-child(2) {
+  top: 32%;
+  left: 26%;
+  width: 62%;
+  height: 48%;
+  opacity: 0.7;
+  transform: rotate(22deg) skewX(28deg);
+  border-color: color-mix(in srgb, var(--atmosphere-secondary) 42%, transparent);
+}
+
+.atmosphere-preview.quiet-loom i:nth-child(3),
+.atmosphere-canvas.quiet-loom[data-atmosphere-state="fallback"] i:nth-child(3) {
+  top: 17%;
+  left: 30%;
+  width: 64%;
+  opacity: 0.45;
+  transform: rotate(-8deg) skewX(38deg);
+}
+
+.atmosphere-preview.nova,
+.atmosphere-canvas.nova[data-atmosphere-state="fallback"] {
+  overflow: hidden;
+  background:
+    radial-gradient(
+      ellipse at 66% 48%,
+      color-mix(in srgb, var(--atmosphere-primary) 12%, transparent),
+      transparent 60%
+    ),
+    linear-gradient(180deg, var(--atmosphere-background), var(--atmosphere-background-secondary));
+}
+
+.atmosphere-preview.nova i,
+.atmosphere-canvas.nova[data-atmosphere-state="fallback"] i {
+  position: absolute;
+  left: 51%;
+  top: 12%;
+  width: 31%;
+  height: 76%;
+  border-radius: 48% 62% 42% 58%;
+  background: repeating-conic-gradient(
+    from 24deg,
+    var(--atmosphere-primary) 0deg,
+    transparent 24deg 42deg,
+    var(--atmosphere-secondary) 66deg,
+    transparent 90deg
+  );
+  box-shadow: 0 0 18px color-mix(in srgb, var(--atmosphere-primary) 35%, transparent);
+  mask-image: radial-gradient(ellipse, transparent 20%, #000 45%, transparent 72%);
+  opacity: 0.9;
+}
+
+.atmosphere-preview.nova i:nth-child(2),
+.atmosphere-canvas.nova[data-atmosphere-state="fallback"] i:nth-child(2) {
+  transform: rotate(48deg) scale(0.8);
+  opacity: 0.6;
+}
+
+.atmosphere-preview.nova i:nth-child(3),
+.atmosphere-canvas.nova[data-atmosphere-state="fallback"] i:nth-child(3) {
+  border-radius: 50%;
+  background: radial-gradient(ellipse, var(--atmosphere-bright), var(--atmosphere-tertiary) 12%, transparent 45%);
+  mask-image: none;
+  box-shadow: none;
+}
+
+.atmosphere-preview.flux,
+.atmosphere-canvas.flux[data-atmosphere-state="fallback"] {
+  background:
+    repeating-linear-gradient(
+      -16deg,
+      transparent 0 12px,
+      color-mix(in srgb, var(--atmosphere-secondary) 12%, transparent) 15px,
+      color-mix(in srgb, var(--atmosphere-primary) 62%, transparent) 17px,
+      color-mix(in srgb, var(--atmosphere-tertiary) 24%, transparent) 19px,
+      transparent 23px 33px
+    ),
+    linear-gradient(180deg, var(--atmosphere-background), var(--atmosphere-background-secondary));
+}
+
+.atmosphere-preview.flux i,
+.atmosphere-canvas.flux[data-atmosphere-state="fallback"] i {
+  position: absolute;
+  inset: 15% -10%;
+  border: 1px solid color-mix(in srgb, var(--atmosphere-primary) 54%, transparent);
+  border-radius: 50%;
+  transform: rotate(-14deg);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--atmosphere-primary) 24%, transparent);
+}
+
+.atmosphere-preview.flux i:nth-child(2),
+.atmosphere-canvas.flux[data-atmosphere-state="fallback"] i:nth-child(2) {
+  inset: 28% -15%;
+  transform: rotate(12deg);
+}
+
+.atmosphere-preview.flux i:nth-child(3),
+.atmosphere-canvas.flux[data-atmosphere-state="fallback"] i:nth-child(3) {
+  inset: 38% -10%;
+}
+
+.atmosphere-preview.tidal-glass,
+.atmosphere-canvas.tidal-glass[data-atmosphere-state="fallback"] {
+  background:
+    repeating-radial-gradient(
+      ellipse at 26% 14%,
+      transparent 0 13px,
+      color-mix(in srgb, var(--atmosphere-primary) 48%, transparent) 14px,
+      color-mix(in srgb, var(--atmosphere-secondary) 22%, transparent) 16px,
+      transparent 18px 32px
+    ),
+    repeating-radial-gradient(
+      ellipse at 83% 120%,
+      transparent 0 20px,
+      color-mix(in srgb, var(--atmosphere-tertiary) 44%, transparent) 22px,
+      transparent 24px 39px
+    ),
+    linear-gradient(140deg, var(--atmosphere-background), var(--atmosphere-background-secondary));
+}
+
+.atmosphere-preview.prism-drift,
+.atmosphere-canvas.prism-drift[data-atmosphere-state="fallback"] {
+  background:
+    conic-gradient(
+      from 30deg at 50% 50%,
+      color-mix(in srgb, var(--atmosphere-primary) 28%, transparent) 0deg 90deg,
+      color-mix(in srgb, var(--atmosphere-secondary) 16%, transparent) 90deg 180deg,
+      color-mix(in srgb, var(--atmosphere-tertiary) 36%, transparent) 180deg 270deg,
+      transparent 270deg
+    ) 0 0 / 44px 62px,
+    linear-gradient(140deg, var(--atmosphere-background), var(--atmosphere-background-secondary));
+}
+
+.atmosphere-preview.nebula,
+.atmosphere-canvas.nebula[data-atmosphere-state="fallback"] {
+  background:
+    radial-gradient(ellipse at 28% 28%, color-mix(in srgb, var(--atmosphere-primary) 48%, transparent), transparent 60%),
+    radial-gradient(ellipse at 75% 74%, color-mix(in srgb, var(--atmosphere-secondary) 38%, transparent), transparent 55%),
+    radial-gradient(ellipse at 60% 6%, color-mix(in srgb, var(--atmosphere-tertiary) 25%, transparent), transparent 48%),
+    linear-gradient(140deg, var(--atmosphere-background), var(--atmosphere-background-secondary));
+}
+
+.atmosphere-preview.nebula i,
+.atmosphere-canvas.nebula[data-atmosphere-state="fallback"] i {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle, var(--atmosphere-bright) 0 0.6px, transparent 1.2px) 0 0 / 31px 23px;
+  opacity: 0.4;
+}
+
+.atmosphere-preview.nebula i:nth-child(2),
+.atmosphere-canvas.nebula[data-atmosphere-state="fallback"] i:nth-child(2) {
+  transform: translate(13px, 7px);
+  opacity: 0.2;
+}
+
+.atmosphere-preview.nebula i:nth-child(3),
+.atmosphere-canvas.nebula[data-atmosphere-state="fallback"] i:nth-child(3) {
+  display: none;
+}
+
+.atmosphere-preview.emberwake,
+.atmosphere-canvas.emberwake[data-atmosphere-state="fallback"] {
+  background:
+    radial-gradient(ellipse, var(--atmosphere-bright) 0 0.8px, transparent 2px) 8px 3px / 37px 19px,
+    radial-gradient(ellipse, var(--atmosphere-primary) 0 1px, transparent 2px) 0 7px / 29px 27px,
+    linear-gradient(160deg, var(--atmosphere-background), var(--atmosphere-background-secondary));
+}
+
+.atmosphere-preview.emberwake i,
+.atmosphere-canvas.emberwake[data-atmosphere-state="fallback"] i {
+  position: absolute;
+  top: 32%;
+  left: 12%;
+  width: 78%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--atmosphere-primary), var(--atmosphere-bright));
+  transform: rotate(-12deg);
+  box-shadow: 0 0 10px var(--atmosphere-primary);
+  opacity: 0.7;
+}
+
+.atmosphere-preview.emberwake i:nth-child(2),
+.atmosphere-canvas.emberwake[data-atmosphere-state="fallback"] i:nth-child(2) {
+  top: 62%;
+  left: 27%;
+  width: 62%;
+  opacity: 0.45;
+}
+
+.atmosphere-preview.emberwake i:nth-child(3),
+.atmosphere-canvas.emberwake[data-atmosphere-state="fallback"] i:nth-child(3) {
+  top: 82%;
+  left: -8%;
+  width: 54%;
+  opacity: 0.3;
+}
+
+.atmosphere-preview.gravity-silk,
+.atmosphere-canvas.gravity-silk[data-atmosphere-state="fallback"] {
+  background:
+    repeating-linear-gradient(
+      120deg,
+      transparent 0 11px,
+      color-mix(in srgb, var(--atmosphere-secondary) 18%, transparent) 21px,
+      color-mix(in srgb, var(--atmosphere-primary) 56%, transparent) 28px,
+      color-mix(in srgb, var(--atmosphere-tertiary) 32%, transparent) 31px,
+      transparent 43px 64px
+    ),
+    linear-gradient(180deg, var(--atmosphere-background), var(--atmosphere-background-secondary));
+}
+
+.atmosphere-preview.gravity-silk i,
+.atmosphere-canvas.gravity-silk[data-atmosphere-state="fallback"] i {
+  position: absolute;
+  inset: -36% 34%;
+  border-radius: 50%;
+  border-right: 5px solid color-mix(in srgb, var(--atmosphere-primary) 36%, transparent);
+  box-shadow: 7px 0 12px color-mix(in srgb, var(--atmosphere-secondary) 16%, transparent);
+  transform: rotate(32deg);
+}
+
+.atmosphere-preview.gravity-silk i:nth-child(2),
+.atmosphere-canvas.gravity-silk[data-atmosphere-state="fallback"] i:nth-child(2) {
+  transform: translateX(40px) rotate(32deg);
+}
+
+.atmosphere-preview.gravity-silk i:nth-child(3),
+.atmosphere-canvas.gravity-silk[data-atmosphere-state="fallback"] i:nth-child(3) {
+  transform: translateX(-40px) rotate(32deg);
+}
+
+.atmosphere-preview.mirage,
+.atmosphere-canvas.mirage[data-atmosphere-state="fallback"] {
+  background:
+    radial-gradient(
+      ellipse at 44% 35%,
+      color-mix(in srgb, var(--atmosphere-primary) 8%, transparent) 20%,
+      color-mix(in srgb, var(--atmosphere-secondary) 24%, transparent) 45%,
+      color-mix(in srgb, var(--atmosphere-tertiary) 46%, transparent) 53%,
+      transparent 64%
+    ) 0 0 / 44px 41px,
+    repeating-linear-gradient(125deg, transparent, color-mix(in srgb, var(--atmosphere-primary) 18%, transparent) 24px, transparent 48px),
+    linear-gradient(180deg, var(--atmosphere-background), var(--atmosphere-background-secondary));
+}
+
 .atmosphere-selection {
   position: absolute;
   top: 11px;
@@ -8251,6 +8573,86 @@ button.source-citation-marker:focus-visible {
   flex: 0 0 auto;
   align-items: center;
   gap: 4px;
+}
+
+.atmosphere-tuner-row--accent {
+  flex-wrap: wrap;
+}
+
+.atmosphere-accent-controls,
+.atmosphere-duotone-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.atmosphere-custom-color {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.atmosphere-custom-color > label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.atmosphere-custom-color.active > label {
+  color: var(--text);
+}
+
+.atmosphere-custom-color input[type="color"] {
+  width: 27px;
+  height: 27px;
+  padding: 3px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--surface-0);
+  cursor: pointer;
+}
+
+.atmosphere-custom-color input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.atmosphere-custom-color input[type="color"]::-webkit-color-swatch {
+  border: 0;
+  border-radius: 3px;
+}
+
+.atmosphere-custom-color input[type="color"]::-moz-color-swatch {
+  border: 0;
+  border-radius: 3px;
+}
+
+.atmosphere-custom-color input.atmosphere-color-hex {
+  width: 79px;
+  min-width: 0;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text-soft);
+  background: var(--surface-0);
+  font: 10px/1.4 var(--mono-font);
+}
+
+.atmosphere-color-hex[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.atmosphere-custom-color > button,
+.atmosphere-duotone-controls > button {
+  padding: 4px 0;
+  border: 0;
+  color: var(--periwinkle);
+  background: transparent;
+  font-size: 9px;
 }
 
 .atmosphere-tone-options > button {

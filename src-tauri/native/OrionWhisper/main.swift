@@ -14,6 +14,19 @@ private enum RunnerFailure: Error, CustomStringConvertible {
     }
 }
 
+private struct ServerRequest: Decodable {
+    let id: UInt64?
+    let input: String?
+    let quit: Bool?
+}
+
+private struct ServerResponse: Encodable {
+    let id: UInt64?
+    let ready: Bool?
+    let text: String?
+    let error: String?
+}
+
 private func option(_ name: String, in arguments: [String]) -> String? {
     guard let index = arguments.firstIndex(of: name), arguments.indices.contains(index + 1) else {
         return nil
@@ -92,29 +105,29 @@ private func decodeAudio(at path: String) async throws -> [Float] {
     return samples
 }
 
-private func transcribe(
-    modelPath: String,
-    mediaPath: String,
-    language: String?
-) async throws -> String {
-    let samples = try await decodeAudio(at: mediaPath)
+private func loadContext(modelPath: String, useGPU: Bool) throws -> OpaquePointer {
     var contextParameters = whisper_context_default_params()
-    contextParameters.use_gpu = true
+    contextParameters.use_gpu = useGPU
 
-    let context = modelPath.withCString {
+    if let context = modelPath.withCString({
         whisper_init_from_file_with_params($0, contextParameters)
+    }) {
+        return context
     }
-    guard let context else {
-        throw RunnerFailure.message("The bundled Whisper model could not be loaded.")
-    }
-    defer { whisper_free(context) }
+    throw RunnerFailure.message("The bundled Whisper model could not be loaded.")
+}
 
+private func transcribe(
+    samples: [Float],
+    context: OpaquePointer,
+    language: String?
+) throws -> String {
     var parameters = whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
     parameters.n_threads = Int32(
         min(8, max(2, ProcessInfo.processInfo.activeProcessorCount - 2))
     )
     parameters.translate = false
-    parameters.no_context = false
+    parameters.no_context = true
     parameters.no_timestamps = true
     parameters.single_segment = false
     parameters.print_special = false
@@ -164,16 +177,110 @@ private func transcribe(
         .split(whereSeparator: \.isWhitespace)
         .joined(separator: " ")
         .trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !normalized.isEmpty else {
+    return normalized
+}
+
+private func transcribe(
+    modelPath: String,
+    mediaPath: String,
+    language: String?,
+    useGPU: Bool
+) async throws -> String {
+    let samples = try await decodeAudio(at: mediaPath)
+    let context = try loadContext(modelPath: modelPath, useGPU: useGPU)
+    defer { whisper_free(context) }
+    let transcript = try transcribe(samples: samples, context: context, language: language)
+    guard !transcript.isEmpty else {
         throw RunnerFailure.message("Whisper finished without detecting any speech.")
     }
-    return normalized
+    return transcript
+}
+
+private func writeServerResponse(_ response: ServerResponse) throws {
+    let data = try JSONEncoder().encode(response)
+    FileHandle.standardOutput.write(data)
+    FileHandle.standardOutput.write(Data([0x0a]))
+}
+
+private func runServer(modelPath: String, language: String?, useGPU: Bool) async throws {
+    let context = try loadContext(modelPath: modelPath, useGPU: useGPU)
+    defer { whisper_free(context) }
+    try writeServerResponse(
+        ServerResponse(id: nil, ready: true, text: nil, error: nil)
+    )
+
+    // Each renderer recording is an independent 30-second M4A. Retaining the
+    // final two seconds supplies acoustic continuity across recorder rotation;
+    // the renderer removes the repeated words when it assembles the hidden
+    // transcript after Stop.
+    let overlapSampleCount = 2 * 16_000
+    var trailingSamples: [Float] = []
+    while let line = readLine(strippingNewline: true) {
+        guard let data = line.data(using: .utf8) else { continue }
+        let request: ServerRequest
+        do {
+            request = try JSONDecoder().decode(ServerRequest.self, from: data)
+        } catch {
+            try writeServerResponse(
+                ServerResponse(
+                    id: nil,
+                    ready: nil,
+                    text: nil,
+                    error: "The transcription worker received an invalid request."
+                )
+            )
+            continue
+        }
+        if request.quit == true { break }
+        guard let id = request.id, let input = request.input, !input.isEmpty else {
+            try writeServerResponse(
+                ServerResponse(
+                    id: request.id,
+                    ready: nil,
+                    text: nil,
+                    error: "The transcription worker request is incomplete."
+                )
+            )
+            continue
+        }
+
+        do {
+            let currentSamples = try await decodeAudio(at: input)
+            let samples = trailingSamples + currentSamples
+            trailingSamples = Array(currentSamples.suffix(overlapSampleCount))
+            let transcript = try transcribe(
+                samples: samples,
+                context: context,
+                language: language
+            )
+            try writeServerResponse(
+                ServerResponse(id: id, ready: nil, text: transcript, error: nil)
+            )
+        } catch {
+            try writeServerResponse(
+                ServerResponse(id: id, ready: nil, text: nil, error: String(describing: error))
+            )
+        }
+    }
 }
 
 private func run() async throws {
     let arguments = Array(CommandLine.arguments.dropFirst())
     if arguments == ["--version"] {
-        print("whisper.cpp \(String(cString: whisper_version())) · Orion base multilingual")
+        print("whisper.cpp \(String(cString: whisper_version())) · Orion multilingual worker")
+        return
+    }
+    if arguments.contains("--server") {
+        guard let modelPath = option("--model", in: arguments) else {
+            throw RunnerFailure.message(
+                "usage: orion-whisper --server --model <model.bin> [--language <code>]"
+            )
+        }
+        try await runServer(
+            modelPath: modelPath,
+            language: option("--language", in: arguments),
+            useGPU: !arguments.contains("--cpu")
+        )
         return
     }
     guard
@@ -187,7 +294,8 @@ private func run() async throws {
     let transcript = try await transcribe(
         modelPath: modelPath,
         mediaPath: mediaPath,
-        language: option("--language", in: arguments)
+        language: option("--language", in: arguments),
+        useGPU: !arguments.contains("--cpu")
     )
     print(transcript)
 }

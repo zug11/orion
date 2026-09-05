@@ -58,7 +58,6 @@ import {
 import {
   autoResumeBackoffMs,
   isTransientProviderFailure,
-  shouldAutoResume,
 } from "../lib/providerHealth";
 import {
   isSelectedAIConfigured,
@@ -101,19 +100,20 @@ import {
   createKnowledgeImportRunError,
   KnowledgeImportRunError,
   landFailedKnowledgeImport,
-  runKnowledgeImportBatch,
   snapshotStillMatchesImportBase,
   type KnowledgeImportBatchResult,
   type KnowledgeImportDiagnostic,
 } from "../lib/knowledgeOrchestration/import";
-import type { FixedBlueprintImportCheckpoint } from "../lib/knowledgeOrchestration/blueprintImport";
+import { runAutomaticKnowledgeImport } from "../lib/knowledgeOrchestration/automaticImport";
 
 const MAX_FILES = 12;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_AI_CHARS_PER_SOURCE = 60_000;
 const MAX_MANUAL_CHARS_PER_SOURCE = 200_000;
 const MAX_TOTAL_GENERATED_NOTES = 30;
-const MAX_IMPORT_GUIDANCE_CHARS = 1_000;
+const MAX_IMPORT_GUIDANCE_CHARS = 2_000;
+// The legacy organizer's 2,000-character task also includes Orion's import rules.
+const MAX_ORGANIZER_GUIDANCE_CHARS = 1_000;
 const MEDIA_ACCEPT =
   ".flac,.m4a,.mp3,.mp4,.mpeg,.mpga,.ogg,.wav,.webm,audio/*,video/mp4,video/webm";
 type ImportStage = "add" | "review" | "organizing" | "results";
@@ -448,8 +448,8 @@ function diagnosticProgressText(
     return `${diagnostic.completedReadings} completed readings retained`;
   }
   return diagnostic.resumable
-    ? "Completed work is retained for Resume"
-    : "A fresh retry will start from the source";
+    ? "Completed work was retained during automatic recovery"
+    : "The complete source text is preserved";
 }
 
 export function knowledgeImportFailureMessage(
@@ -699,7 +699,7 @@ export function buildImportOrganizationInstructions(
 ): string {
   const guidance = truncateUnicode(
     importGuidance.trim(),
-    MAX_IMPORT_GUIDANCE_CHARS,
+    MAX_ORGANIZER_GUIDANCE_CHARS,
   );
   return [
     guidance
@@ -776,6 +776,7 @@ export function buildImportPayload(
   organizedSources: readonly OrganizedSource[],
   snapshot: AppSnapshot,
   importGuidance = "",
+  preservedSourceIds?: ReadonlyMap<string, string>,
 ): ImportStudioApplyPayload {
   const now = new Date().toISOString();
   const reservedSlugs = new Set(snapshot.notes.map((note) => note.slug));
@@ -824,12 +825,17 @@ export function buildImportPayload(
     if (!parsed) {
       continue;
     }
-    const sourceId = `source_${nanoid(12)}`;
+    const preservedId = preservedSourceIds?.get(item.id);
+    const preserved = preservedId ? snapshot.sources.find((source) => source.id === preservedId) : undefined;
+    if (preservedId && !preserved) throw new Error("The preserved source is no longer in this Space.");
+    const sourceId = preserved?.id ?? `source_${nanoid(12)}`;
+    if (sources.some((source) => source.id === sourceId)) throw new Error("A source may occur only once in an import batch.");
     const source: Source = {
+      ...preserved,
       id: sourceId,
       title: parsed.title,
       kind: parsed.format,
-      importedAt: now,
+      importedAt: preserved?.importedAt ?? now,
       fileName: parsed.fileName,
       mimeType: parsed.mimeType,
       byteSize: parsed.byteSize,
@@ -843,7 +849,7 @@ export function buildImportPayload(
           }
         : {}),
       text: parsed.text,
-      noteIds: [],
+      noteIds: preserved ? [...preserved.noteIds] : [],
     };
     sources.push(source);
     sourceIdByItemId.set(item.id, sourceId);
@@ -1189,14 +1195,6 @@ export function ImportStudio({
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
   const organizeAbortRef = useRef<AbortController | null>(null);
-  const autoResumeAttemptRef = useRef(0);
-  const importCheckpointBatchIndexRef = useRef(0);
-  const retainedKnowledgeSegmentsRef = useRef<
-    Array<{
-      items: readonly ImportItem[];
-      knowledge: KnowledgeImportBatchResult;
-    }>
-  >([]);
   const organizeProgressFrameRef = useRef<number | null>(null);
   const pendingOrganizeProgressRef = useRef<OrganizeProgress | null>(null);
   const latestOrchestrationStageRef = useRef<UserFacingImportStage>("direct");
@@ -1220,8 +1218,6 @@ export function ImportStudio({
   const [organizeIssues, setOrganizeIssues] = useState<OrganizeIssue[]>([]);
   const [importDiagnostic, setImportDiagnostic] =
     useState<KnowledgeImportDiagnostic | null>(null);
-  const [importCheckpoint, setImportCheckpoint] =
-    useState<FixedBlueprintImportCheckpoint | null>(null);
   const [result, setResult] = useState<ImportStudioApplyPayload | null>(null);
   const [resultBaseSnapshotVersion, setResultBaseSnapshotVersion] = useState<
     string | null
@@ -1231,8 +1227,6 @@ export function ImportStudio({
 
   const clearImportRecovery = () => {
     setImportDiagnostic(null);
-    setImportCheckpoint(null);
-    retainedKnowledgeSegmentsRef.current = [];
   };
 
   const updateItems = (
@@ -1275,9 +1269,6 @@ export function ImportStudio({
     }
     pendingOrganizeProgressRef.current = null;
     latestOrchestrationStageRef.current = "direct";
-    autoResumeAttemptRef.current = 0;
-    importCheckpointBatchIndexRef.current = 0;
-    retainedKnowledgeSegmentsRef.current = [];
     setStage("add");
     reviewedImportIdsRef.current = null;
     organizedImportIdsRef.current = new Set();
@@ -1295,7 +1286,6 @@ export function ImportStudio({
     setOrganizeProgress(EMPTY_ORGANIZE_PROGRESS);
     setOrganizeIssues([]);
     setImportDiagnostic(null);
-    setImportCheckpoint(null);
     setResult(null);
     setResultBaseSnapshotVersion(null);
     setApplyError("");
@@ -1740,9 +1730,7 @@ export function ImportStudio({
     );
   };
 
-  const organize = async (
-    resumeCheckpoint?: FixedBlueprintImportCheckpoint,
-  ) => {
+  const organize = async () => {
     const selected = readyItems;
     if (selected.length === 0) {
       return;
@@ -1750,6 +1738,7 @@ export function ImportStudio({
     organizedImportIdsRef.current = new Set(selected.map(({ id }) => id));
 
     const importSnapshot = snapshotRef.current;
+    const importBaseSnapshotVersion = stableSnapshotVersion(importSnapshot);
     const effectiveMode: ImportMode =
       mode === "ai" && aiConfigured ? "ai" : "manual";
     setStage("organizing");
@@ -1759,11 +1748,6 @@ export function ImportStudio({
     });
     setOrganizeIssues([]);
     setImportDiagnostic(null);
-    if (!resumeCheckpoint) {
-      setImportCheckpoint(null);
-      autoResumeAttemptRef.current = 0;
-      importCheckpointBatchIndexRef.current = 0;
-    }
     setApplyError("");
     await new Promise<void>((resolve) => {
       window.setTimeout(resolve, 0);
@@ -1879,10 +1863,7 @@ export function ImportStudio({
         );
         const failure = segments[failedIndex]?.knowledge.landing;
         if (failure) {
-          retainedKnowledgeSegmentsRef.current = [...segments];
-          importCheckpointBatchIndexRef.current = failedIndex;
           setImportDiagnostic(failure.diagnostic);
-          setImportCheckpoint(failure.checkpoint ?? null);
         } else {
           clearImportRecovery();
         }
@@ -1927,30 +1908,11 @@ export function ImportStudio({
           throw new Error(preflight.message);
         }
         const driver = createFailoverKnowledgeDriver(importSnapshot.settings);
-        const resumeBatchIndex = resumeCheckpoint
-          ? Math.min(importCheckpointBatchIndexRef.current, batches.length - 1)
-          : 0;
         for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
           activeBatchIndex = batchIndex;
           const batchItems = batches[batchIndex];
-          const retained = retainedKnowledgeSegmentsRef.current.find(
-            (segment) =>
-              !segment.knowledge.landing &&
-              snapshotStillMatchesImportBase(
-                importSnapshot,
-                segment.knowledge.baseSnapshotVersion,
-              ) &&
-              segment.items.length === batchItems.length &&
-              segment.items.every((item, index) => item === batchItems[index]),
-          );
-          if (retained) {
-            completedSegments.push(retained);
-            continue;
-          }
           const batchSources = knowledgeSourcesFor(batchItems);
           const batchTitle = batchProgressTitle(batchItems, batchIndex);
-          let checkpoint =
-            batchIndex === resumeBatchIndex ? resumeCheckpoint : undefined;
           latestOrchestrationStageRef.current = "direct";
           scheduleOrganizeProgress({
             ...EMPTY_ORGANIZE_PROGRESS,
@@ -1961,117 +1923,55 @@ export function ImportStudio({
             detailLabel: "Preparing the direct reading",
             orchestrationStage: "direct",
           });
-          for (;;) {
-            try {
-              const knowledge = await runKnowledgeImportBatch({
-                snapshot: importSnapshot,
-                sources: batchSources,
-                importGuidance,
-                model: importSnapshot.settings.model,
-                effort: importSnapshot.settings.reasoningEffort,
-                driver,
-                readingCache: createKnowledgeReadingCache(),
-                routingCache: createKnowledgeReadingCache(),
-                signal: controller.signal,
-                onTelemetry: (telemetry) => {
-                  if (organizeAbortRef.current !== controller) return;
-                  const progress = progressFromKnowledgeTelemetry(
-                    telemetry,
-                    batchItems.length,
-                    batchTitle,
-                  );
-                  latestOrchestrationStageRef.current =
-                    progress.orchestrationStage ?? "direct";
-                  scheduleOrganizeProgress(progress);
-                },
-                resume: checkpoint,
+          const knowledge = await runAutomaticKnowledgeImport({
+            snapshot: importSnapshot,
+            sources: batchSources,
+            importGuidance,
+            model: importSnapshot.settings.model,
+            effort: importSnapshot.settings.reasoningEffort,
+            driver,
+            readingCache: createKnowledgeReadingCache(),
+            routingCache: createKnowledgeReadingCache(),
+            signal: controller.signal,
+            onTelemetry: (telemetry) => {
+              if (organizeAbortRef.current !== controller) return;
+              const progress = progressFromKnowledgeTelemetry(
+                telemetry,
+                batchItems.length,
+                batchTitle,
+              );
+              latestOrchestrationStageRef.current =
+                progress.orchestrationStage ?? "direct";
+              scheduleOrganizeProgress(progress);
+            },
+            isCurrent: () => organizeAbortRef.current === controller &&
+              snapshotStillMatchesImportBase(snapshotRef.current, importBaseSnapshotVersion),
+            onRecovery: (recovery) => {
+              if (organizeAbortRef.current !== controller || controller.signal.aborted) return;
+              scheduleOrganizeProgress({
+                ...EMPTY_ORGANIZE_PROGRESS,
+                sourceTotal: batchItems.length,
+                sourceTitle: batchTitle,
+                phase: "orchestration",
+                operationLabel: "Orion is recovering this import",
+                detailLabel: recovery.kind === "planned-reading"
+                  ? "Taking a closer reading before writing the notes"
+                  : "Continuing the unfinished work; completed work is retained",
+                orchestrationStage: latestOrchestrationStageRef.current,
               });
-              if (
-                !snapshotStillMatchesImportBase(
-                  snapshotRef.current,
-                  knowledge.baseSnapshotVersion,
-                )
-              ) {
-                throw new Error(
-                  "This Space changed while Orion was reading, so the knowledge run was not applied.",
-                );
-              }
-              completedSegments.push({ items: batchItems, knowledge });
-              break;
-            } catch (error) {
-              if (controller.signal.aborted) {
-                throw error;
-              }
-              const runError = isKnowledgeImportRunError(error)
-                ? error
-                : createKnowledgeImportRunError(
-                    error,
-                    `import:${Date.now().toString(36)}`,
-                    importSnapshot.settings.model,
-                    undefined,
-                    latestOrchestrationStageRef.current,
-                  );
-              reportKnowledgeImportDiagnostic(
-                `Run ${runError.diagnostic.runId} paused during ${runError.diagnostic.stage}`,
-                runError.originalError,
-              );
-              if (
-                runError.diagnostic.resumable &&
-                runError.checkpoint &&
-                shouldAutoResume(
-                  runError.diagnostic.code,
-                  autoResumeAttemptRef.current,
-                )
-              ) {
-                const attempt = autoResumeAttemptRef.current;
-                autoResumeAttemptRef.current = attempt + 1;
-                scheduleOrganizeProgress({
-                  ...EMPTY_ORGANIZE_PROGRESS,
-                  sourceTotal: batchItems.length,
-                  sourceTitle: batchTitle,
-                  phase: "orchestration",
-                  operationLabel: "Orion is recovering this import",
-                  detailLabel: "Resuming from the saved progress in a moment",
-                  orchestrationStage: latestOrchestrationStageRef.current,
-                });
-                const waited = await waitForAutoResumeBackoff(
-                  autoResumeBackoffMs(attempt),
-                  controller.signal,
-                );
-                if (!waited || controller.signal.aborted) {
-                  throw error;
-                }
-                checkpoint = runError.checkpoint;
-                continue;
-              }
-              // Auto-resume is exhausted or ineligible: preserve this batch
-              // with its diagnostic and recovery action. Cancellation and a
-              // changed Space never land; they use the paused path below.
-              const landed = landFailedKnowledgeImport(
-                runError,
-                batchSources,
-                importSnapshot,
-              );
-              if (
-                landed &&
-                snapshotStillMatchesImportBase(
-                  snapshotRef.current,
-                  landed.baseSnapshotVersion,
-                )
-              ) {
-                reportKnowledgeImportDiagnostic(
-                  `Run ${landed.runId} landed at tier ${landed.landing?.tier ?? 2}`,
-                  runError.originalError,
-                );
-                completedSegments.push({
-                  items: batchItems,
-                  knowledge: landed,
-                });
-                break;
-              }
-              throw runError;
-            }
+            },
+          });
+          if (
+            !snapshotStillMatchesImportBase(
+              snapshotRef.current,
+              knowledge.baseSnapshotVersion,
+            )
+          ) {
+            throw new Error(
+              "This Space changed while Orion was reading, so the knowledge run was not applied.",
+            );
           }
+          completedSegments.push({ items: batchItems, knowledge });
         }
         activeBatchIndex = batches.length;
         presentKnowledgeResults(completedSegments);
@@ -2142,9 +2042,7 @@ export function ImportStudio({
           importSnapshot,
           importGuidance,
         );
-        importCheckpointBatchIndexRef.current = activeBatchIndex;
         setImportDiagnostic(runError.diagnostic);
-        setImportCheckpoint(runError.checkpoint ?? null);
         setOrganizeIssues(
           selected.map((item) => ({
             itemId: item.id,
@@ -3009,11 +2907,11 @@ export function ImportStudio({
                 </span>
                 <div>
                   <span className="import-studio__eyebrow">
-                    {importDiagnostic ? "Import paused" : "Ready for your atlas"}
+                    {importDiagnostic ? "Source preserved" : "Ready for your atlas"}
                   </span>
                   <h3 id={`${titleId}-results`}>
                     {importDiagnostic
-                      ? importDiagnostic.summary
+                      ? "AI synthesis is incomplete"
                       : `${result.notes.length} ${
                           result.notes.length === 1 ? "note" : "notes"
                         } prepared`}
@@ -3034,7 +2932,7 @@ export function ImportStudio({
                 >
                   <div className="import-studio__diagnostic-heading">
                     <span>
-                      <small>Stopped during</small>
+                      <small>AI synthesis stopped during</small>
                       <strong>{diagnosticStageLabel(importDiagnostic.stage)}</strong>
                     </span>
                     <i>{importDiagnostic.code.replace(/-/g, " ")}</i>
@@ -3054,11 +2952,9 @@ export function ImportStudio({
                       </span>
                     )}
                     <span>
-                      <strong>{importDiagnostic.resumable ? "Resume" : "Retry"}</strong>
+                      <strong>Recovery complete</strong>
                       <small>
-                        {importDiagnostic.resumable
-                          ? "continues from the saved checkpoint"
-                          : "starts a fresh knowledge run"}
+                        Available notes and sources are ready to keep
                       </small>
                     </span>
                   </div>
@@ -3083,8 +2979,10 @@ export function ImportStudio({
                     </dl>
                   </details>
                   <p className="import-studio__diagnostic-preservation">
-                    Your complete source text is preserved in this import. You can
-                    retry, or keep the available notes and sources as they are.
+                    Orion handled recovery automatically. Your complete source
+                    text is preserved in this import, along with the available
+                    notes. Add them to Orion to keep them; preserved text is not
+                    a completed AI synthesis.
                   </p>
                 </section>
               )}
@@ -3398,10 +3296,7 @@ export function ImportStudio({
                   Adjust import
                 </button>
                 <button
-                  className={clsx(
-                    "button",
-                    importDiagnostic ? "ghost" : "primary",
-                  )}
+                  className="button primary"
                   type="button"
                   disabled={applying || result.notes.length === 0}
                   onClick={() => void applyResult()}
@@ -3418,26 +3313,9 @@ export function ImportStudio({
                   {applying
                     ? "Adding to Orion…"
                     : importDiagnostic
-                      ? "Keep preview"
+                      ? "Keep available notes"
                       : "Add to Orion"}
                 </button>
-                {importDiagnostic && (
-                  <button
-                    className="button primary"
-                    type="button"
-                    disabled={applying}
-                    onClick={() =>
-                      void organize(
-                        importDiagnostic.resumable
-                          ? importCheckpoint ?? undefined
-                          : undefined,
-                      )
-                    }
-                  >
-                    <RefreshCw aria-hidden="true" size={15} />
-                    {importDiagnostic.resumable ? "Resume import" : "Retry import"}
-                  </button>
-                )}
               </>
             )}
           </div>

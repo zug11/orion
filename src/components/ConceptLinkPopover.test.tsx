@@ -8,7 +8,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { Note } from "../types";
+import type { Concept, Note } from "../types";
 import { ConceptLinkPopover } from "./ConceptLinkPopover";
 
 const NOW = "2026-07-28T10:00:00.000Z";
@@ -163,6 +163,54 @@ describe("ConceptLinkPopover", () => {
       }),
     );
     expect(onGenerateTitle).toHaveBeenCalledWith(selectedText);
+  });
+
+  it("keeps the composer open when AI names the selection after its source note", async () => {
+    const onSubmit = vi.fn();
+    const onGenerateTitle = vi.fn().mockResolvedValue("Project notes");
+    renderContextSelection({ onSubmit, onGenerateTitle });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Name & generate article" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "already names this note",
+    );
+    expect(screen.getByDisplayValue("Project notes")).toBeVisible();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: "Generate article" }),
+    ).toBeEnabled();
+  });
+
+  it("rejects a stale self-alias from the current note's canonical concept", async () => {
+    const onSubmit = vi.fn();
+    const onGenerateTitle = vi.fn().mockResolvedValue("Earlier title");
+    render(
+      <ConceptLinkPopover
+        initialPhrase=""
+        selectedText="A multi-block selection that needs its own page."
+        selectionMode="context"
+        initialDestinationIds={[]}
+        currentNoteId="note-current"
+        notes={[makeNote("note-current", "Project notes")]}
+        concepts={[canonicalConcept("note-current", "Project notes", ["Earlier title"])]}
+        aiArticleWritingEnabled
+        onGenerateTitle={onGenerateTitle}
+        onCancel={vi.fn()}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Name & generate article" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "already names this note",
+    );
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it("can use AI only for the title while creating a blank page", async () => {
@@ -330,5 +378,22 @@ function makeNote(id: string, title: string): Note {
     sourceIds: [],
     createdAt: NOW,
     updatedAt: NOW,
+  };
+}
+
+function canonicalConcept(
+  noteId: string,
+  label: string,
+  aliases: string[],
+): Concept {
+  return {
+    id: `concept-${noteId}`,
+    label,
+    aliases,
+    description: `${label} concept`,
+    noteIds: [noteId],
+    canonicalNoteId: noteId,
+    autoLink: true,
+    color: "#8798ff",
   };
 }

@@ -6,10 +6,10 @@ use serde_json::{json, Value};
 use std::{
     collections::{HashMap, VecDeque},
     fs::{self, File, OpenOptions},
-    io::{BufReader, Write},
+    io::{BufRead, BufReader, Write},
     net::{IpAddr, SocketAddr, ToSocketAddrs},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
@@ -21,6 +21,10 @@ use tauri_plugin_dialog::{DialogExt, FilePath};
 use tauri_plugin_opener::OpenerExt;
 use tempfile::{NamedTempFile, TempDir};
 use zeroize::{Zeroize, Zeroizing};
+
+mod assistant_bridge;
+#[path = "../shared/assistant_protocol.rs"]
+mod assistant_protocol;
 
 const KEYCHAIN_SERVICE: &str = "app.orion.knowledge";
 const KEYCHAIN_ACCOUNT: &str = "openai-api-key";
@@ -47,6 +51,8 @@ const MAX_CHAT_NOTE_ACTION_CONTENT_CHARS: usize = 24_000;
 const MAX_PENDING_KNOWLEDGE_CANCELLATIONS: usize = 512;
 const MAX_MEDIA_FILES: usize = 8;
 const MAX_MEDIA_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_VOICE_MEMO_BYTES: usize = 64 * 1024 * 1024;
+const MAX_VOICE_MEMO_BASE64_BYTES: usize = MAX_VOICE_MEMO_BYTES.div_ceil(3) * 4;
 const MAX_WEBPAGE_BYTES: usize = 5 * 1024 * 1024;
 const MAX_WEBPAGE_REDIRECTS: usize = 5;
 const MAX_OCR_DOCUMENT_BYTES: usize = 25 * 1024 * 1024;
@@ -62,15 +68,14 @@ const MAX_WEB_EXPORT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_WEB_EXPORT_WITH_IMAGES_BYTES: usize = 128 * 1024 * 1024;
 const BUNDLED_OCR_NAME: &str = "orion-ocr";
 const BUNDLED_WHISPER_NAME: &str = "orion-whisper";
-const BUNDLED_WHISPER_MODEL_NAME: &str = "ggml-base.bin";
-const BUNDLED_WHISPER_MODEL_LABEL: &str = "Whisper base · multilingual";
+const BUNDLED_WHISPER_MODEL_NAME: &str = "ggml-model.bin";
 const BUNDLED_YT_DLP_NAME: &str = "yt-dlp";
 const BUNDLED_DENO_NAME: &str = "deno";
 const BUNDLED_CLAUDE_CONNECTOR_NAME: &str = "Orion-Claude-Connector.mcpb";
 const BUNDLED_CODEX_PLUGIN_DIRECTORY: &str = "Orion-Codex-Plugin";
 const BUNDLED_CODEX_MARKETPLACE_PATH: &[&str] = &[".agents", "plugins", "marketplace.json"];
 const BUNDLED_CODEX_SERVER_PATH: &[&str] = &["plugins", "orion", "server", "orion-mcp"];
-const MIN_BUNDLED_MODEL_BYTES: u64 = 100 * 1024 * 1024;
+const MIN_BUNDLED_MODEL_BYTES: u64 = 400 * 1024 * 1024;
 const MEDIA_EXTENSIONS: &[&str] = &[
     "flac", "m4a", "mp3", "mp4", "mpeg", "mpga", "ogg", "wav", "webm",
 ];
@@ -895,6 +900,14 @@ struct WhisperConfig {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VoiceMemoRequest {
+    file_name: String,
+    mime_type: String,
+    base64_data: String,
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct YouTubeTranscriptionRequest {
     url: String,
@@ -1016,6 +1029,43 @@ struct TranscriptionRuntime {
     model: PathBuf,
     yt_dlp: PathBuf,
     deno: PathBuf,
+}
+
+struct VoiceMemoWorker {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    next_request_id: u64,
+}
+
+impl Drop for VoiceMemoWorker {
+    fn drop(&mut self) {
+        let _ = self.stdin.write_all(b"{\"quit\":true}\n");
+        let _ = self.stdin.flush();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[derive(Clone, Default)]
+struct VoiceMemoWorkers(Arc<Mutex<HashMap<String, VoiceMemoWorker>>>);
+
+#[derive(Serialize)]
+struct VoiceMemoWorkerRequest<'a> {
+    id: u64,
+    input: &'a str,
+}
+
+#[derive(Deserialize)]
+struct VoiceMemoWorkerResponse {
+    #[serde(default)]
+    id: Option<u64>,
+    #[serde(default)]
+    ready: Option<bool>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -5324,6 +5374,141 @@ fn validate_whisper_runtime(runtime: &TranscriptionRuntime) -> Result<(), String
     Ok(())
 }
 
+fn bundled_whisper_model_label(runtime: &TranscriptionRuntime) -> String {
+    match fs::metadata(&runtime.model).map(|metadata| metadata.len()) {
+        Ok(bytes) if bytes >= 1_000_000_000 => "Whisper medium · multilingual".to_string(),
+        _ => "Whisper small · multilingual".to_string(),
+    }
+}
+
+fn valid_voice_memo_session_id(session_id: &str) -> bool {
+    let length = session_id.len();
+    (8..=160).contains(&length)
+        && session_id.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | ':' | '.')
+        })
+}
+
+fn launch_voice_memo_worker(
+    runtime: &TranscriptionRuntime,
+    language: Option<&str>,
+    use_cpu: bool,
+) -> Result<VoiceMemoWorker, String> {
+    let mut command = Command::new(&runtime.whisper);
+    command
+        .arg("--server")
+        .arg("--model")
+        .arg(&runtime.model)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    if use_cpu {
+        command.arg("--cpu");
+    }
+    if let Some(language) = language {
+        command.arg("--language").arg(language);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Orion could not start its persistent Whisper worker: {error}"))?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "The persistent Whisper worker has no input channel.".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "The persistent Whisper worker has no output channel.".to_string())?;
+    let mut worker = VoiceMemoWorker {
+        child,
+        stdin,
+        stdout: BufReader::new(stdout),
+        next_request_id: 1,
+    };
+    let mut ready_line = String::new();
+    worker
+        .stdout
+        .read_line(&mut ready_line)
+        .map_err(|error| format!("The persistent Whisper worker could not initialize: {error}"))?;
+    let response: VoiceMemoWorkerResponse =
+        serde_json::from_str(ready_line.trim()).map_err(|_| {
+            "The persistent Whisper worker returned an invalid startup response.".to_string()
+        })?;
+    if response.ready != Some(true) {
+        return Err(response.error.unwrap_or_else(|| {
+            "The persistent Whisper worker stopped while loading its model.".to_string()
+        }));
+    }
+    Ok(worker)
+}
+
+fn start_voice_memo_worker(
+    runtime: &TranscriptionRuntime,
+    language: Option<String>,
+) -> Result<VoiceMemoWorker, String> {
+    validate_whisper_runtime(runtime)?;
+    match launch_voice_memo_worker(runtime, language.as_deref(), false) {
+        Ok(worker) => Ok(worker),
+        Err(gpu_error) => launch_voice_memo_worker(runtime, language.as_deref(), true).map_err(
+            |cpu_error| {
+                format!(
+                    "The persistent Whisper worker could not load on GPU ({gpu_error}) or CPU ({cpu_error})."
+                )
+            },
+        ),
+    }
+}
+
+fn transcribe_voice_memo_with_worker(
+    workers: &VoiceMemoWorkers,
+    session_id: &str,
+    media_path: &Path,
+) -> Result<String, String> {
+    let input = media_path
+        .to_str()
+        .ok_or_else(|| "The voice memo temporary path is not valid Unicode.".to_string())?;
+    let mut sessions = workers
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let worker = sessions
+        .get_mut(session_id)
+        .ok_or_else(|| "The persistent dictation session is no longer active.".to_string())?;
+    let request_id = worker.next_request_id;
+    worker.next_request_id = worker.next_request_id.saturating_add(1);
+    let encoded = serde_json::to_vec(&VoiceMemoWorkerRequest {
+        id: request_id,
+        input,
+    })
+    .map_err(|error| format!("Orion could not prepare the transcription request: {error}"))?;
+    worker
+        .stdin
+        .write_all(&encoded)
+        .and_then(|_| worker.stdin.write_all(b"\n"))
+        .and_then(|_| worker.stdin.flush())
+        .map_err(|error| {
+            format!("The persistent Whisper worker stopped accepting audio: {error}")
+        })?;
+
+    let mut response_line = String::new();
+    worker
+        .stdout
+        .read_line(&mut response_line)
+        .map_err(|error| format!("The persistent Whisper worker stopped unexpectedly: {error}"))?;
+    if response_line.is_empty() {
+        return Err("The persistent Whisper worker stopped unexpectedly.".to_string());
+    }
+    let response: VoiceMemoWorkerResponse = serde_json::from_str(response_line.trim())
+        .map_err(|_| "The persistent Whisper worker returned invalid text.".to_string())?;
+    if response.id != Some(request_id) {
+        return Err("The persistent Whisper worker returned an out-of-order response.".to_string());
+    }
+    if let Some(error) = response.error.filter(|error| !error.trim().is_empty()) {
+        return Err(error.chars().take(900).collect());
+    }
+    Ok(response.text.unwrap_or_default().trim().to_string())
+}
+
 fn validate_youtube_runtime(runtime: &TranscriptionRuntime) -> Result<(), String> {
     if !is_executable_file(&runtime.yt_dlp) {
         return Err("Orion's bundled yt-dlp is missing or damaged. Reinstall Orion.".to_string());
@@ -5882,6 +6067,67 @@ fn media_title(path: &Path) -> String {
     }
 }
 
+fn decode_voice_memo(
+    request: VoiceMemoRequest,
+) -> Result<(String, String, Zeroizing<Vec<u8>>), String> {
+    let VoiceMemoRequest {
+        file_name,
+        mime_type,
+        base64_data,
+    } = request;
+    let normalized_file_name = file_name.trim();
+    if normalized_file_name.is_empty()
+        || normalized_file_name.chars().count() > 255
+        || normalized_file_name.chars().any(char::is_control)
+        || normalized_file_name.contains(['/', '\\'])
+        || Path::new(normalized_file_name)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| !extension.eq_ignore_ascii_case("m4a"))
+            .unwrap_or(true)
+    {
+        return Err("That voice memo has an invalid M4A file name.".to_string());
+    }
+    let normalized_mime_type = mime_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if !matches!(
+        normalized_mime_type.as_str(),
+        "audio/mp4" | "audio/x-m4a" | "audio/m4a"
+    ) {
+        return Err("Orion accepts voice memos as M4A audio.".to_string());
+    }
+    let encoded = Zeroizing::new(base64_data);
+    if encoded.is_empty() {
+        return Err("The voice memo is empty.".to_string());
+    }
+    if encoded.len() > MAX_VOICE_MEMO_BASE64_BYTES {
+        return Err("Voice memos must be 64 MB or smaller.".to_string());
+    }
+    let bytes = Zeroizing::new(
+        BASE64_STANDARD
+            .decode(encoded.as_bytes())
+            .map_err(|_| "The voice memo data is not valid base64.".to_string())?,
+    );
+    if bytes.is_empty() {
+        return Err("The voice memo is empty.".to_string());
+    }
+    if bytes.len() > MAX_VOICE_MEMO_BYTES {
+        return Err("Voice memos must be 64 MB or smaller.".to_string());
+    }
+    if bytes.len() < 12 || &bytes[4..8] != b"ftyp" {
+        return Err("The voice memo contents are not valid M4A audio.".to_string());
+    }
+    Ok((
+        normalized_file_name.to_string(),
+        normalized_mime_type,
+        bytes,
+    ))
+}
+
 async fn transcribe_path(
     runtime: &TranscriptionRuntime,
     config: &WhisperConfig,
@@ -5908,12 +6154,29 @@ async fn transcribe_path(
     let model = runtime.model.clone();
     let media = path.to_path_buf();
     let output = tauri::async_runtime::spawn_blocking(move || {
-        let mut command = Command::new(whisper);
-        command.arg("--model").arg(model).arg("--input").arg(media);
-        if let Some(language) = language {
-            command.arg("--language").arg(language);
+        let run = |use_cpu: bool| {
+            let mut command = Command::new(&whisper);
+            command
+                .arg("--model")
+                .arg(&model)
+                .arg("--input")
+                .arg(&media);
+            if use_cpu {
+                command.arg("--cpu");
+            }
+            if let Some(language) = language.as_ref() {
+                command.arg("--language").arg(language);
+            }
+            command.output()
+        };
+        let first = run(false)?;
+        let gpu_allocation_failed = !first.status.success()
+            && String::from_utf8_lossy(&first.stderr).contains("ggml_metal_buffer_init: error");
+        if gpu_allocation_failed {
+            run(true)
+        } else {
+            Ok(first)
         }
-        command.output()
     })
     .await
     .map_err(|error| format!("The offline transcription task could not finish: {error}"))?
@@ -6018,6 +6281,122 @@ async fn transcribe_media_files(
         transcripts.push(transcribe_path(&runtime, &config, &path, None, None).await?);
     }
     Ok(transcripts)
+}
+
+#[tauri::command]
+async fn start_voice_memo_session(
+    app: AppHandle,
+    workers: State<'_, VoiceMemoWorkers>,
+    session_id: String,
+    config: WhisperConfig,
+) -> Result<(), String> {
+    if !valid_voice_memo_session_id(&session_id) {
+        return Err("The dictation session identifier is invalid.".to_string());
+    }
+    let runtime = bundled_transcription_runtime(&app)?;
+    let language = normalize_transcription_language(config)?;
+    let shared_workers = workers.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        {
+            let sessions = shared_workers
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if sessions.contains_key(&session_id) {
+                return Err("That dictation session is already active.".to_string());
+            }
+        }
+        let worker = start_voice_memo_worker(&runtime, language)?;
+        let mut sessions = shared_workers
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if sessions.contains_key(&session_id) {
+            return Err("That dictation session is already active.".to_string());
+        }
+        sessions.insert(session_id, worker);
+        Ok(())
+    })
+    .await
+    .map_err(|error| format!("The persistent Whisper worker could not start: {error}"))?
+}
+
+#[tauri::command]
+async fn finish_voice_memo_session(
+    workers: State<'_, VoiceMemoWorkers>,
+    session_id: String,
+) -> Result<(), String> {
+    if !valid_voice_memo_session_id(&session_id) {
+        return Err("The dictation session identifier is invalid.".to_string());
+    }
+    let shared_workers = workers.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let worker = shared_workers
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&session_id);
+        drop(worker);
+    })
+    .await
+    .map_err(|error| format!("The persistent Whisper worker could not stop: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn transcribe_voice_memo(
+    app: AppHandle,
+    workers: State<'_, VoiceMemoWorkers>,
+    request: VoiceMemoRequest,
+    config: WhisperConfig,
+    session_id: Option<String>,
+) -> Result<TranscribedMedia, String> {
+    let (file_name, mime_type, bytes) = decode_voice_memo(request)?;
+    let mut temporary = tempfile::Builder::new()
+        .prefix("orion-voice-memo-")
+        .suffix(".m4a")
+        .tempfile()
+        .map_err(|error| format!("Orion could not prepare the voice memo: {error}"))?;
+    temporary
+        .write_all(&bytes)
+        .and_then(|_| temporary.flush())
+        .map_err(|error| format!("Orion could not prepare the voice memo: {error}"))?;
+    let byte_size = bytes.len() as u64;
+    if let Some(session_id) = session_id {
+        if !valid_voice_memo_session_id(&session_id) {
+            return Err("The dictation session identifier is invalid.".to_string());
+        }
+        let shared_workers = workers.inner().clone();
+        let text = tauri::async_runtime::spawn_blocking(move || {
+            let path = temporary.path().to_path_buf();
+            transcribe_voice_memo_with_worker(&shared_workers, &session_id, &path)
+        })
+        .await
+        .map_err(|error| format!("The dictation segment could not finish: {error}"))??;
+        return Ok(TranscribedMedia {
+            title: "Voice memo".to_string(),
+            file_name,
+            mime_type,
+            byte_size,
+            text,
+            source_url: None,
+            warnings: Vec::new(),
+        });
+    }
+
+    let runtime = bundled_transcription_runtime(&app)?;
+    let mut transcript = transcribe_path(
+        &runtime,
+        &config,
+        temporary.path(),
+        Some("Voice memo".to_string()),
+        None,
+    )
+    .await?;
+    transcript.file_name = file_name;
+    transcript.mime_type = mime_type;
+    transcript.byte_size = byte_size;
+    Ok(transcript)
 }
 
 #[tauri::command]
@@ -6155,7 +6534,7 @@ async fn transcription_setup_status(app: AppHandle) -> Result<TranscriptionSetup
     Ok(TranscriptionSetupStatus {
         whisper_available,
         whisper_version,
-        whisper_model: BUNDLED_WHISPER_MODEL_LABEL.to_string(),
+        whisper_model: bundled_whisper_model_label(&runtime),
         yt_dlp_available,
         yt_dlp_version,
         deno_version,
@@ -6303,6 +6682,7 @@ pub fn run() {
         .manage(KnowledgeCancellation::default())
         .manage(VaultWriteLock::default())
         .manage(ExitHandshake::default())
+        .manage(VoiceMemoWorkers::default())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -6312,12 +6692,29 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            let bridge = assistant_bridge::AssistantBridge::new(vault_path(app.handle())?);
+            if let Err(error) = bridge.start() {
+                eprintln!("Orion desktop workflows are unavailable: {error}");
+            }
+            app.manage(bridge);
+            Ok(())
+        })
         .register_uri_scheme_protocol("orion-image", |context, request| {
             note_image_protocol_response(context.app_handle(), &request)
         })
         .invoke_handler(tauri::generate_handler![
             load_vault,
             save_vault,
+            assistant_bridge::assistant_poll,
+            assistant_bridge::assistant_assert_job,
+            assistant_bridge::assistant_begin_context,
+            assistant_bridge::assistant_previous_result,
+            assistant_bridge::assistant_read_input,
+            assistant_bridge::assistant_cancel,
+            assistant_bridge::assistant_progress,
+            assistant_bridge::assistant_finish,
+            assistant_bridge::assistant_commit_vault,
             save_note_image,
             generate_note_image,
             cancel_note_image_generation,
@@ -6344,6 +6741,9 @@ pub fn run() {
             knowledge_reading_cache_put,
             chat,
             transcribe_media_files,
+            start_voice_memo_session,
+            transcribe_voice_memo,
+            finish_voice_memo_session,
             transcribe_youtube,
             fetch_webpage,
             recognize_document_text,
@@ -8019,6 +8419,46 @@ mod tests {
             language: Some("../english".to_string())
         })
         .is_err());
+    }
+
+    #[test]
+    fn validates_voice_memo_container_type_and_bound() {
+        let m4a = b"\0\0\0\x18ftypM4A fixture";
+        let (file_name, mime_type, decoded) = decode_voice_memo(VoiceMemoRequest {
+            file_name: "voice-memo.m4a".to_string(),
+            mime_type: "audio/mp4;codecs=mp4a.40.2".to_string(),
+            base64_data: BASE64_STANDARD.encode(m4a),
+        })
+        .unwrap();
+        assert_eq!(file_name, "voice-memo.m4a");
+        assert_eq!(mime_type, "audio/mp4");
+        assert_eq!(&decoded[..], m4a);
+
+        assert!(decode_voice_memo(VoiceMemoRequest {
+            file_name: "../memo.m4a".to_string(),
+            mime_type: "audio/mp4".to_string(),
+            base64_data: BASE64_STANDARD.encode(m4a),
+        })
+        .is_err());
+        assert!(decode_voice_memo(VoiceMemoRequest {
+            file_name: "memo.m4a".to_string(),
+            mime_type: "audio/webm".to_string(),
+            base64_data: BASE64_STANDARD.encode(m4a),
+        })
+        .is_err());
+        assert!(decode_voice_memo(VoiceMemoRequest {
+            file_name: "memo.m4a".to_string(),
+            mime_type: "audio/mp4".to_string(),
+            base64_data: BASE64_STANDARD.encode(b"not-m4a"),
+        })
+        .is_err());
+        assert!(decode_voice_memo(VoiceMemoRequest {
+            file_name: "memo.m4a".to_string(),
+            mime_type: "audio/mp4".to_string(),
+            base64_data: "A".repeat(MAX_VOICE_MEMO_BASE64_BYTES + 1),
+        })
+        .unwrap_err()
+        .contains("64 MB"));
     }
 
     #[test]

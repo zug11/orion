@@ -14,6 +14,16 @@ export function buildLinkTitleRequest(
 ): ChatRequest {
   const originNote = snapshot.notes.find((note) => note.id === originNoteId);
   const context = excerptSelectedContext(selectedContext);
+  const originNames = originNote
+    ? [...new Set([originNote.title, ...originNote.aliases])]
+        .filter((name) => name.trim())
+        .slice(0, 8)
+    : [];
+  const originTitleConstraint = originNames.length
+    ? `The destination must be a different page from the origin note. Never return the origin title or one of its aliases (${originNames
+        .map((name) => JSON.stringify(truncateUnicode(name, MAX_LINK_TITLE_CHARS)))
+        .join(", ")}); choose a narrower subject from the selected passage instead.`
+    : "The destination must be a different page from the origin note; choose a specific subject from the selected passage.";
   const otherNotes = snapshot.notes
     .filter((note) => note.id !== originNoteId)
     .slice(0, 36)
@@ -27,6 +37,7 @@ export function buildLinkTitleRequest(
     prompt: [
       "Name one durable wiki page for the selected passage.",
       "Return only a concise title: no explanation, label, quotes, or Markdown.",
+      originTitleConstraint,
       "Prefer an existing exact note or concept title when it genuinely names the same subject; otherwise use a precise 2–8 word title.",
       "Name the subject rather than summarizing the passage, and preserve established capitalization such as SQL.",
     ].join(" "),
@@ -50,10 +61,13 @@ export function buildLinkTitleRequest(
       ...otherNotes,
     ],
     sources: [],
-    concepts: snapshot.concepts.slice(0, 120).map((concept) => ({
-      label: concept.label,
-      description: truncateUnicode(concept.description, 500),
-    })),
+    concepts: snapshot.concepts
+      .filter((concept) => concept.canonicalNoteId !== originNoteId)
+      .slice(0, 120)
+      .map((concept) => ({
+        label: concept.label,
+        description: truncateUnicode(concept.description, 500),
+      })),
     history: [],
     model: snapshot.settings.model,
     effort: "low",

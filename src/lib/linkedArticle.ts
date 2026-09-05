@@ -15,7 +15,8 @@ import type {
 const MAX_ORIGIN_CHARS = 24_000;
 const MAX_SELECTED_CONTEXT_CHARS = 12_000;
 const MAX_SOURCE_CHARS = 56_000;
-export const LINKED_ARTICLE_TIMEOUT_MS = 90_000;
+export const LINKED_ARTICLE_PROVIDER_TIMEOUT_MS = 240_000;
+export const LINKED_ARTICLE_WATCHDOG_TIMEOUT_MS = 300_000;
 const LINKED_ARTICLE_START_PROGRESS = 12;
 const LINKED_ARTICLE_MAX_PENDING_PROGRESS = 94;
 
@@ -109,7 +110,7 @@ export function linkedArticleStageForProgress(
 
 export function linkedArticleProgressForElapsed(
   elapsedMs: number,
-  timeoutMs = LINKED_ARTICLE_TIMEOUT_MS,
+  timeoutMs = LINKED_ARTICLE_PROVIDER_TIMEOUT_MS,
 ): number {
   const duration = Math.max(1, timeoutMs);
   const ratio = Math.min(1, Math.max(0, elapsedMs) / duration);
@@ -123,23 +124,29 @@ export function linkedArticleProgressForElapsed(
 
 export async function waitForLinkedArticle<T>(
   request: Promise<T>,
-  timeoutMs = LINKED_ARTICLE_TIMEOUT_MS,
+  timeoutMs = LINKED_ARTICLE_WATCHDOG_TIMEOUT_MS,
+  providerStarted: Promise<void> = Promise.resolve(),
 ): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  let settled = false;
   const seconds = Math.max(1, Math.round(timeoutMs / 1_000));
   const paused = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
-      reject(
-        new Error(
-          `Orion paused this article after ${seconds} seconds without a response. Restart it, or delete the unfinished page.`,
-        ),
-      );
-    }, timeoutMs);
+    void providerStarted.then(() => {
+      if (settled) return;
+      timeout = setTimeout(() => {
+        reject(
+          new Error(
+            `Orion paused this article after ${seconds} seconds without a response. Restart it, or delete the unfinished page.`,
+          ),
+        );
+      }, timeoutMs);
+    });
   });
 
   try {
     return await Promise.race([request, paused]);
   } finally {
+    settled = true;
     if (timeout) clearTimeout(timeout);
   }
 }
@@ -272,7 +279,7 @@ export function buildLinkedArticleRequest(
     }),
     model: snapshot.settings.model,
     effort: snapshot.settings.reasoningEffort,
-    timeoutMs: LINKED_ARTICLE_TIMEOUT_MS,
+    timeoutMs: LINKED_ARTICLE_PROVIDER_TIMEOUT_MS,
     taskInstructions: [
       linkedTask,
       pageInstructions

@@ -3,9 +3,9 @@
   "manifest_version": "0.4",
   "name": "orion-knowledge-atlas",
   "display_name": "Orion",
-  "version": "0.4.4",
-  "description": "Browse, summarize, cite, and edit your local Orion Spaces from Claude.",
-  "long_description": "A local bridge between Claude Desktop and Orion. Discover projects and workspaces, browse the active Space by default, read its living overview, search one Space at a time, open citation links in Orion, retrieve bounded source evidence, and directly create, edit, or delete notes without cloud sync or an API key.",
+  "version": "0.4.5",
+  "description": "Search, edit, research, import, and generate in your local Orion Spaces.",
+  "long_description": "Connect Claude Desktop to Orion's local library and optional native AI workflows. Read and edit notes without an API key, or enable scoped research, source import/reprocessing, generation, concept development, enrichment, and overview refresh while Orion is open. The app retains credentials, provider settings, and atomic writes. Jobs report evidence, coverage, freshness, and cancellation. Includes exact source passages, note sections, concept and link-path navigation, provenance, tasks, guarded text edits, atomic metadata batches, duplicate detection, and integrity checks. All 29 local library tools work while Orion is closed.",
   "author": {
     "name": "Orion"
   },
@@ -54,6 +54,134 @@
     {
       "name": "orion_delete_note",
       "description": "Delete a note and clean its Space-scoped references."
+    },
+    {
+      "name": "orion_get_capabilities",
+      "description": "Check running app availability, workflow grants, and AI/context settings without exposing credentials."
+    },
+    {
+      "name": "orion_get_context",
+      "description": "Build a local versioned context packet with exact evidence and bounded coverage."
+    },
+    {
+      "name": "orion_research",
+      "description": "Research, compare, review, find gaps, or prepare a brief using Orion AI and exact Space evidence."
+    },
+    {
+      "name": "orion_import",
+      "description": "Process text, local files, or public HTTPS sources through Orion extraction and import synthesis."
+    },
+    {
+      "name": "orion_reprocess_sources",
+      "description": "Reprocess preserved source IDs under new guidance without duplicating provenance."
+    },
+    {
+      "name": "orion_generate",
+      "description": "Generate and save a note, podcast script, slide deck, or narrated deck with Orion AI."
+    },
+    {
+      "name": "orion_develop_concept",
+      "description": "Develop a canonical article from an exact origin note and concept title."
+    },
+    {
+      "name": "orion_enrich_knowledge",
+      "description": "Enrich related Space knowledge from a saved note."
+    },
+    {
+      "name": "orion_refresh_overview",
+      "description": "Refresh the persistent Space hierarchy and Across this Space overview."
+    },
+    {
+      "name": "orion_get_job",
+      "description": "Retrieve a job stage or completed bounded result with citations and freshness."
+    },
+    {
+      "name": "orion_list_jobs",
+      "description": "List recent jobs in one exact enabled Space without result bodies."
+    },
+    {
+      "name": "orion_cancel_job",
+      "description": "Cancel queued or running work and prevent late note commits."
+    },
+    {
+      "name": "orion_list_sources",
+      "description": "Page through source metadata, optionally filtering kind, title, or source URL. No source body upload."
+    },
+    {
+      "name": "orion_search_sources",
+      "description": "Find literal evidence in preserved sources, with Unicode character offsets and source versions. Search is local and case-sensitive; results do not establish AI claims."
+    },
+    {
+      "name": "orion_get_source_passage",
+      "description": "Read an exact source range, including material beyond ordinary source previews. Offsets count Unicode scalar values, not bytes or UTF-16. Optional version rejects stale ranges."
+    },
+    {
+      "name": "orion_get_note_section",
+      "description": "Retrieve one Markdown section by heading and occurrence, including its subsections. Ignores fenced code and frontmatter; supports ATX and setext headings. Lists matching headings on ambiguity."
+    },
+    {
+      "name": "orion_get_notes",
+      "description": "Read up to 12 exact notes from one consistent vault snapshot, sharing a 60,000-character body budget. Returns versions for guarded edits and citations for every note."
+    },
+    {
+      "name": "orion_list_concepts",
+      "description": "Browse the Space's existing concept vocabulary, with canonical destinations and aliases. Tags remain a separate organizing facet."
+    },
+    {
+      "name": "orion_get_concept",
+      "description": "Open an exact concept's description, aliases, canonical article, and related note citations. Reports dangling IDs without resolving them in another Space."
+    },
+    {
+      "name": "orion_resolve_link",
+      "description": "Resolve a phrase using exact normalized note titles, aliases, and canonical concept vocabulary. Returns all distinct destinations when ambiguous; never guesses across Spaces."
+    },
+    {
+      "name": "orion_get_related_notes",
+      "description": "Rank related notes by explicit links, shared concepts, and shared source provenance. Gives derivation reasons; similarity is not proof of agreement."
+    },
+    {
+      "name": "orion_get_provenance",
+      "description": "Trace one note to preserved sources and other notes derived from them. Distinguishes forward note references and source backreferences; does not assert that a source supports every claim."
+    },
+    {
+      "name": "orion_list_tags",
+      "description": "List exact tags and note counts, optionally filtering by tag text. Tags do not create automatic concepts."
+    },
+    {
+      "name": "orion_list_tasks",
+      "description": "List portable Markdown tasks with exact note versions and line indices. Ignores code/frontmatter; optionally collapses copies with shared provenance while retaining unrelated recurring tasks."
+    },
+    {
+      "name": "orion_set_task_completion",
+      "description": "Set one exact Markdown task checkbox. Requires its current note version, zero-based line index, and exact raw task text. Does not change another copy of the task."
+    },
+    {
+      "name": "orion_edit_note_text",
+      "description": "Replace one unique exact substring in a note, guarded by the current note version. Rejects missing or ambiguous selections; preserves all other text and metadata."
+    },
+    {
+      "name": "orion_append_to_note",
+      "description": "Append exact Markdown to a note with a current-version guard. Inserts no implicit separator. Replaying a completed append with its old version fails instead of duplicating content."
+    },
+    {
+      "name": "orion_batch_update_metadata",
+      "description": "Atomically set tags and/or pinned state on up to 20 exact versioned notes. Every version must match before anything saves. Preserves bodies, titles, aliases, and unrelated notes."
+    },
+    {
+      "name": "orion_find_duplicate_notes",
+      "description": "Find duplicate candidates by identical nonempty bodies or normalized titles. Reports the matching basis and bounded scan coverage; never merges or deletes notes."
+    },
+    {
+      "name": "orion_check_space_integrity",
+      "description": "Audit Space-local references, duplicate IDs, missing canonical targets, and broken explicit Orion links. Reports bounded diagnostics without changing knowledge."
+    },
+    {
+      "name": "orion_get_recent_changes",
+      "description": "List current notes changed since an RFC3339 timestamp, sorted chronologically. This is current-state metadata, not a historical audit log; deletions and prior bodies are unavailable."
+    },
+    {
+      "name": "orion_get_link_path",
+      "description": "Find one shortest directed connection path between two exact notes using existing Orion links and persisted relationships. Search has explicit node, edge, text, and hop bounds; returns cited steps and no graph UI."
     }
   ],
   "tools_generated": false,

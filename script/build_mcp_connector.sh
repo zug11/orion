@@ -111,6 +111,10 @@ node "$ROOT_DIR/script/test_mcp_connector.mjs" \
   node "$ROOT_DIR/script/test_mcp_connector.mjs" \
     "$verification_dir/server/orion-mcp" "$FIXTURE_VAULT" \
     "$verification_dir/manifest.json"
+  node "$ROOT_DIR/script/test_mcp_workflows.mjs" \
+    "$verification_dir/server/orion-mcp" "$FIXTURE_VAULT"
+  node "$ROOT_DIR/script/test_mcp_library.mjs" \
+    "$verification_dir/server/orion-mcp" "$FIXTURE_VAULT"
 
   /bin/cp "$staged_package" "$staged_resource"
   mv "$staged_resource" "$RESOURCE_PACKAGE"

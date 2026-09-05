@@ -8,8 +8,11 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from "react";
-import { isLinkablePhrase } from "../lib/concepts";
-import type { Note } from "../types";
+import {
+  isLinkablePhrase,
+  normalizeConceptPhrase,
+} from "../lib/concepts";
+import type { Concept, Note } from "../types";
 import type { ConceptLinkSelectionMode } from "./editor/conceptLinkSelection";
 
 interface ConceptLinkPopoverProps {
@@ -19,6 +22,7 @@ interface ConceptLinkPopoverProps {
   initialDestinationIds: readonly string[];
   currentNoteId: string;
   notes: readonly Note[];
+  concepts?: readonly Concept[];
   aiArticleWritingEnabled?: boolean;
   aiProviderName?: string;
   onGenerateTitle?: (selectedContext: string) => Promise<string>;
@@ -41,6 +45,7 @@ export function ConceptLinkPopover({
   initialDestinationIds,
   currentNoteId,
   notes,
+  concepts = [],
   aiArticleWritingEnabled = false,
   aiProviderName = "AI provider",
   onGenerateTitle,
@@ -64,6 +69,7 @@ export function ConceptLinkPopover({
   const [generatingTitle, setGeneratingTitle] = useState(false);
   const [titleError, setTitleError] = useState("");
   const normalizedSelectedText = selectedText.trim().replace(/\s+/g, " ");
+  const currentNote = notes.find((note) => note.id === currentNoteId);
   const selectedTextPreview =
     selectedText.length > 520
       ? `${selectedText.slice(0, 520).trimEnd()}…`
@@ -188,6 +194,30 @@ export function ConceptLinkPopover({
   }
 
   function completeSubmit(normalizedPhrase: string) {
+    const normalizedDestination = normalizeConceptPhrase(normalizedPhrase);
+    const namesCurrentNote = [
+      currentNote?.title ?? "",
+      ...(currentNote?.aliases ?? []),
+      ...concepts
+        .filter(
+          (concept) =>
+            concept.canonicalNoteId === currentNoteId ||
+            (!concept.canonicalNoteId &&
+              concept.noteIds.length === 1 &&
+              concept.noteIds[0] === currentNoteId),
+        )
+        .flatMap((concept) => [concept.label, ...concept.aliases]),
+    ].some(
+      (candidate) =>
+        candidate.trim() &&
+        normalizeConceptPhrase(candidate) === normalizedDestination,
+    );
+    if (destinationIds.size === 0 && namesCurrentNote) {
+      setTitleError(
+        `“${normalizedPhrase}” already names this note. Choose a more specific page title so Orion can create a separate article.`,
+      );
+      return;
+    }
     onSubmit(normalizedPhrase, [...destinationIds], {
       articleMode: destinationIds.size > 0 ? "blank" : articleMode,
       ...(articleMode === "ai" && articleInstructions.trim()

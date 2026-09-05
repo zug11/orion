@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   autoResumeBackoffMs,
   formatProviderHealthConcern,
+  isTransientProviderFailure,
   providerHealthSummary,
   recordProviderHealth,
   shouldAutoResume,
@@ -158,6 +159,19 @@ describe("shouldAutoResume", () => {
     expect(autoResumeBackoffMs(1)).toBe(8_000);
     expect(autoResumeBackoffMs(2)).toBe(8_000);
   });
+});
+
+describe("transient provider failures", () => {
+  it.each(["HTTP 503", "HTTP 429", "service unavailable", "overloaded", "Bad gateway", "fetch failed", "socket hang up"])(
+    "allows bounded recovery for %s", (message) => {
+      expect(isTransientProviderFailure(message)).toBe(true);
+    },
+  );
+  it.each(["HTTP 429: billing quota exceeded", "Invalid request schema: server error", "Model does not exist", "No API key; network unavailable"])(
+    "does not disguise provider action as a transient failure: %s", (message) => {
+      expect(isTransientProviderFailure(message)).toBe(false);
+    },
+  );
 });
 
 function createMemoryStorage(): Storage {

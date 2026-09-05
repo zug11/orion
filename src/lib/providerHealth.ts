@@ -83,7 +83,7 @@ export function isTransientProviderFailure(message: string): boolean {
   ) {
     return false;
   }
-  return /could not reach|network|connection (?:reset|refused|lost)|offline|dns|temporarily unavailable|rate (?:or usage )?limits?|too many requests/i.test(message);
+  return /could not reach|network|connection (?:reset|refused|lost)|offline|dns|temporarily unavailable|service unavailable|overloaded|server error|bad gateway|gateway timeout|failed to fetch|fetch failed|socket hang up|HTTP (?:408|429|500|502|503|504|529)\b|rate (?:or usage )?limits?|too many requests/i.test(message);
 }
 
 const AUTO_RESUMABLE_IMPORT_CODES = new Set([
@@ -97,9 +97,9 @@ const AUTO_RESUMABLE_IMPORT_CODES = new Set([
 
 /**
  * Gate for the import flow's silent recovery: only transient, checkpoint-safe
- * failure codes earn an automatic resume, and only twice per run. Deliberate
- * stops (cancelled, space-changed, import-time-limit) always show the paused
- * card immediately.
+ * failure codes earn an automatic resume, and only twice per batch. The direct
+ * time limit has a separate one-time planned recovery; cancellation and stale
+ * Space snapshots must never be resumed.
  */
 export function shouldAutoResume(code: string, attempt: number): boolean {
   return attempt < 2 && AUTO_RESUMABLE_IMPORT_CODES.has(code);

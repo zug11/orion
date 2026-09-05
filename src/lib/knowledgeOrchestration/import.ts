@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { isTransientProviderFailure } from "../providerHealth";
 import type {
   AppSnapshot,
   OrganizeContentResult,
@@ -120,6 +121,8 @@ export interface KnowledgeImportBatchOptions {
     history: readonly KnowledgeRuntimeEvent[],
   ) => void;
   resume?: FixedBlueprintImportCheckpoint;
+  /** One host-authorized recovery of a failed short synthesis via saved stages. */
+  recoverDirectWithPlan?: boolean;
   /**
    * Optional fingerprint cache for completed range readings; unchanged
    * material in the fixed pipeline then skips its provider call.
@@ -162,7 +165,7 @@ export async function runKnowledgeImportBatch(
   }
   const runId = options.resume?.runId ?? `knowledge-run:${nanoid(12)}`;
   const sourceReadingPlan = createSourceReadingPlan(options.sources);
-  const compactParallel = options.sources.length > 1 &&
+  const compactParallel = (options.sources.length > 1 || options.recoverDirectWithPlan === true) &&
     [...sourceReadingPlan.values()].every((sections) => sections.length === 0);
   const needsFixedBlueprintPipeline =
     options.resume !== undefined ||
@@ -276,6 +279,7 @@ export async function runKnowledgeImportBatch(
         driver: options.driver,
         signal: options.signal,
         physicalConcurrency: 6,
+        preserveActiveRoot: true,
         ...(initialCoordinationCalls.length > 0
           ? { initialCoordinationCalls }
           : {}),
@@ -533,7 +537,7 @@ function classifyKnowledgeImportError(
   if (/cancel(?:led|ed)|aborted/i.test(message)) return "cancelled";
   if (
     error instanceof KnowledgeDeadlineExceededError ||
-    /knowledge[- ]import limit|three-minute knowledge[- ]import/i.test(message)
+    /knowledge[- ]import (?:time )?limit|three-minute knowledge[- ]import/i.test(message)
   ) {
     return "import-time-limit";
   }
@@ -546,17 +550,17 @@ function classifyKnowledgeImportError(
   if (/api key|authenticat|unauthori[sz]ed|forbidden|credential/i.test(message)) {
     return "provider-auth";
   }
-  if (/rate limit|rate or usage|too many requests|quota|billing/i.test(message)) {
+  if (/rate limit|rate or usage|too many requests|HTTP 429\b|quota|billing/i.test(message)) {
     return "provider-rate-limit";
   }
   if (
-    /could not reach|network|connection|offline|temporarily unavailable|dns/i.test(
+    isTransientProviderFailure(message) || /could not reach|network|connection|offline|temporarily unavailable|dns/i.test(
       message,
     )
   ) {
     return "provider-network";
   }
-  if (/Space context.*changed|snapshot|stale destination|base version/i.test(message)) {
+  if (/Space(?: context)?.*changed|snapshot|stale destination|base version/i.test(message)) {
     return "space-changed";
   }
   if (

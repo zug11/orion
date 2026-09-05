@@ -48,7 +48,24 @@ const tonePalettes: Record<
   },
 };
 
+const luminousPalette: AtmosphereStrokePalette = {
+  primary: "#A8B3FF",
+  secondary: "#7BC9B0",
+  tertiary: "#D8B675",
+  bright: "#E2E6FF",
+  muted: "#536982",
+};
+
 const signaturePalettes: Record<HomeAtmosphere, AtmosphereStrokePalette> = {
+  nova: luminousPalette,
+  "quiet-loom": luminousPalette,
+  flux: luminousPalette,
+  "tidal-glass": luminousPalette,
+  "prism-drift": luminousPalette,
+  nebula: luminousPalette,
+  emberwake: luminousPalette,
+  "gravity-silk": luminousPalette,
+  mirage: luminousPalette,
   "line-waves": {
     primary: "#7BC9B0",
     secondary: "#8FA1E8",
@@ -95,13 +112,26 @@ export function resolveAtmospherePalette(
   atmosphere: HomeAtmosphere,
   tone: HomeAtmosphereTone,
   themePalette?: ThemePalette,
+  customColor = "",
+  customSecondaryColor = "",
 ): AtmospherePalette {
-  const strokes =
+  const custom = /^#[0-9a-f]{6}$/i.test(customColor)
+    ? customColor.toUpperCase()
+    : "";
+  const secondary = /^#[0-9a-f]{6}$/i.test(customSecondaryColor)
+    ? customSecondaryColor.toUpperCase()
+    : "";
+  const preset =
     tone === "signature"
       ? themePalette
         ? themeSignaturePalette(atmosphere, themePalette)
         : signaturePalettes[atmosphere]
       : tonePalettes[tone];
+  const strokes = secondary
+    ? twoToneStrokePalette(custom || preset.primary, secondary)
+    : custom
+      ? customStrokePalette(custom)
+      : preset;
   const resolvedStrokes = themePalette
     ? {
         primary: ensureSignalContrast(strokes.primary, themePalette),
@@ -117,6 +147,33 @@ export function resolveAtmospherePalette(
     background: themePalette?.canvasDeep ?? "#09101d",
     backgroundSecondary: themePalette?.surface0 ?? "#101726",
     isLight: themePalette?.mode === "light",
+  };
+}
+
+function twoToneStrokePalette(
+  primary: string,
+  secondary: string,
+): AtmosphereStrokePalette {
+  // Shaders with a third colour channel use a blend of the chosen pair, not
+  // an unrelated preset hue. Existing monochrome overrides remain unchanged.
+  const middle = mixHex(primary, secondary, 0.5);
+  return {
+    primary,
+    secondary,
+    tertiary: middle,
+    bright: mixHex(middle, "#FFFFFF", 0.7),
+    muted: mixHex(middle, "#000000", 0.45),
+  };
+}
+
+function customStrokePalette(color: string): AtmosphereStrokePalette {
+  // Keep the chosen hue throughout the shader, with tonal variation for depth.
+  return {
+    primary: color,
+    secondary: mixHex(color, "#000000", 0.2),
+    tertiary: mixHex(color, "#FFFFFF", 0.24),
+    bright: mixHex(color, "#FFFFFF", 0.7),
+    muted: mixHex(color, "#000000", 0.45),
   };
 }
 
@@ -168,6 +225,21 @@ function themeSignaturePalette(
   atmosphere: HomeAtmosphere,
   palette: ThemePalette,
 ): AtmosphereStrokePalette {
+  if (
+    atmosphere === "quiet-loom" || atmosphere === "nova" ||
+    atmosphere === "flux" || atmosphere === "tidal-glass" ||
+    atmosphere === "prism-drift" || atmosphere === "nebula" ||
+    atmosphere === "emberwake" || atmosphere === "gravity-silk" ||
+    atmosphere === "mirage"
+  ) {
+    return {
+      primary: palette.accentStrong,
+      secondary: palette.mint,
+      tertiary: palette.gold,
+      bright: palette.text,
+      muted: palette.muted,
+    };
+  }
   if (atmosphere === "line-waves") {
     return {
       primary: palette.mint,

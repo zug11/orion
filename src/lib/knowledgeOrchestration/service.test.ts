@@ -12,7 +12,11 @@ import {
   validateCompleteNoteRoutingCoverage,
 } from "./context";
 import type { KnowledgeAssignmentContract } from "./protocol";
-import { runKnowledgeOrchestration, validateArtifactCompletion } from "./service";
+import {
+  KNOWLEDGE_TOTAL_BUDGET_MS,
+  runKnowledgeOrchestration,
+  validateArtifactCompletion,
+} from "./service";
 import {
   KnowledgeDeadlineExceededError,
   type KnowledgeAssignmentExecutionRequest,
@@ -50,6 +54,43 @@ describe("knowledge orchestration service", () => {
     expect(driver).toHaveBeenCalledTimes(1);
     expect(outcome.result.result.notes[0].title).toBe("Finding");
     expect(outcome.usage).toEqual({ inputTokens: 10, outputTokens: 20 });
+  });
+
+  it("gives direct root synthesis four minutes inside the primary window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const { context, root } = setup();
+    const timeouts: number[] = [];
+    await runKnowledgeOrchestration({
+      runContext: context,
+      rootAssignment: root,
+      model: "gpt-5.6-sol",
+      effort: "high",
+      driver: async ({ timeoutMs }) => {
+        timeouts.push(timeoutMs);
+        return { response: { kind: "complete", payload: runResult() } };
+      },
+    });
+
+    expect(timeouts).toEqual([4 * 60_000]);
+  });
+
+  it("lets an active import synthesis finish across the soft finalization boundary", async () => {
+    vi.useFakeTimers();
+    const { context, root } = setup();
+    const driver = vi.fn(async (_request, signal?: AbortSignal) => {
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      expect(signal?.aborted).toBe(false);
+      return { response: { kind: "complete", payload: runResult() } };
+    });
+    const pending = runKnowledgeOrchestration({
+      runContext: context, rootAssignment: root, model: "gpt-5.6-sol", effort: "high",
+      elapsedTimeMs: 4_000, explorationTimeMs: 1_200, preserveActiveRoot: true, driver,
+    });
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect((await pending).result).toEqual(runResult());
+    expect(driver).toHaveBeenCalledOnce();
+    expect(driver.mock.calls[0][0].timeoutMs).toBe(3_900);
   });
 
   it("does not start work when the caller signal is already aborted", async () => {
@@ -92,7 +133,7 @@ describe("knowledge orchestration service", () => {
       KnowledgeDeadlineExceededError,
     );
 
-    await vi.advanceTimersByTimeAsync(180_000);
+    await vi.advanceTimersByTimeAsync(KNOWLEDGE_TOTAL_BUDGET_MS);
     await rejection;
     expect(driver).toHaveBeenCalledTimes(1);
   });

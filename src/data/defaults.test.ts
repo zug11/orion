@@ -21,6 +21,15 @@ describe("normalizeHomeAtmosphere", () => {
     ["signal-decay", "signal-decay"],
     ["line-waves", "line-waves"],
     ["field", "field"],
+    ["quiet-loom", "quiet-loom"],
+    ["nova", "nova"],
+    ["flux", "flux"],
+    ["tidal-glass", "tidal-glass"],
+    ["prism-drift", "prism-drift"],
+    ["nebula", "nebula"],
+    ["emberwake", "emberwake"],
+    ["gravity-silk", "gravity-silk"],
+    ["mirage", "mirage"],
   ] as const)("keeps the active %s atmosphere", (input, expected) => {
     expect(normalizeHomeAtmosphere(input)).toBe(expected);
   });
@@ -40,6 +49,10 @@ describe("normalizeHomeAtmosphere", () => {
 });
 
 describe("home atmosphere tuning defaults", () => {
+  it("leaves both custom channels unset for the original preset palette", () => {
+    expect(defaultSettings.homeAtmosphereCustomColor).toBe("");
+    expect(defaultSettings.homeAtmosphereCustomSecondaryColor).toBe("");
+  });
   it("keeps supported curated values", () => {
     expect(normalizeHomeAtmosphereTone("gold")).toBe("gold");
     expect(normalizeHomeAtmosphereMotion("alive")).toBe("alive");
