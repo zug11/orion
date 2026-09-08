@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createEmptySnapshot } from "../data/defaults";
 import type { Concept, Note } from "../types";
 import {
   buildLinkTitleRequest,
+  generateLinkTitleWithDeduplication,
+  linkTitleConflict,
   normalizeGeneratedLinkTitle,
 } from "./linkTitle";
 
@@ -81,7 +83,133 @@ describe("AI link titles", () => {
       /too long/i,
     );
   });
+
+  it("keeps other Space vocabulary local when existing-note AI context is disabled", () => {
+    const snapshot = titleSnapshot();
+    snapshot.settings.includeExistingNotesInAIContext = false;
+    snapshot.notes.push(note("private", "Private unrelated subject", "Private body"));
+    snapshot.concepts.push(concept("private-concept", "Private vocabulary", "private"));
+
+    const request = buildLinkTitleRequest(snapshot, "origin", "Selected passage");
+
+    expect(request.notes.map((item) => item.title)).toEqual(["Selected passage", "Database notes"]);
+    expect(request.concepts).toEqual([]);
+    expect(JSON.stringify(request)).not.toContain("Private");
+  });
+
+  it("automatically retries the origin title and its concept alias before returning a distinct subject", async () => {
+    const snapshot = titleSnapshot();
+    snapshot.concepts[0].aliases = ["Earlier database title"];
+    const request = vi.fn()
+      .mockResolvedValueOnce({ reply: "  DATABASE   NOTES " })
+      .mockResolvedValueOnce({ reply: "Earlier database title" })
+      .mockResolvedValueOnce({ reply: "SQL joins" });
+
+    await expect(generateLinkTitleWithDeduplication(
+      () => snapshot, "origin", "A join combines table rows.", request,
+    )).resolves.toBe("SQL joins");
+
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls[1][0].prompt).toContain('"DATABASE NOTES"');
+    expect(request.mock.calls[2][0].prompt).toContain('"Earlier database title"');
+    expect(request.mock.calls[2][0].prompt).toContain("Do not repeat these titles or add a number suffix");
+    expect(snapshot.notes).toHaveLength(1);
+  });
+
+  it("reuses an existing canonical title through its alias without another naming request", async () => {
+    const snapshot = titleSnapshot();
+    const existing = { ...note("sql", "SQL", "Human-authored knowledge."), aliases: ["Structured Query Language"] };
+    snapshot.notes.push(existing);
+    const before = JSON.stringify(snapshot);
+    const request = vi.fn().mockResolvedValue({ reply: "structured query language" });
+
+    await expect(generateLinkTitleWithDeduplication(
+      () => snapshot, "origin", "Querying relational tables.", request,
+    )).resolves.toBe("SQL");
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(JSON.stringify(snapshot)).toBe(before);
+  });
+
+  it("rechecks live Space destinations and retries an ambiguous title", async () => {
+    const snapshot = titleSnapshot();
+    const request = vi.fn().mockImplementationOnce(async () => {
+      snapshot.notes.push(note("sql-one", "SQL", "First article."), note("sql-two", "sql", "Second article."));
+      return { reply: "SQL" };
+    }).mockResolvedValueOnce({ reply: "Relational join semantics" });
+
+    await expect(generateLinkTitleWithDeduplication(
+      () => snapshot, "origin", "A join combines table rows.", request,
+    )).resolves.toBe("Relational join semantics");
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1][0].prompt).toContain('"SQL"');
+  });
+
+  it("bounds repeated collisions without creating or renaming any note", async () => {
+    const snapshot = titleSnapshot();
+    const before = JSON.stringify(snapshot);
+    const request = vi.fn().mockResolvedValue({ reply: "Database notes" });
+
+    await expect(generateLinkTitleWithDeduplication(
+      () => snapshot, "origin", "Selected passage", request,
+    )).rejects.toThrow(/more specific page title/);
+
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify(snapshot)).toBe(before);
+  });
+
+  it("does not retry a collision after the composer cancels", async () => {
+    const snapshot = titleSnapshot();
+    const controller = new AbortController();
+    const request = vi.fn().mockImplementation(async () => {
+      controller.abort();
+      return { reply: "Database notes" };
+    });
+
+    await expect(generateLinkTitleWithDeduplication(
+      () => snapshot, "origin", "Selected passage", request, controller.signal,
+    )).rejects.toMatchObject({ name: "AbortError" });
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("stops naming if the active Space changes or the source note is deleted", async () => {
+    let snapshot = titleSnapshot();
+    const request = vi.fn().mockImplementation(async () => {
+      snapshot = createEmptySnapshot("Other Space", NOW, "other-space");
+      return { reply: "SQL joins" };
+    });
+    await expect(generateLinkTitleWithDeduplication(
+      () => snapshot, "origin", "Selected passage", request,
+    )).rejects.toThrow(/active Space changed/);
+    expect(request).toHaveBeenCalledOnce();
+
+    snapshot = titleSnapshot();
+    request.mockImplementation(async () => {
+      snapshot.notes = [];
+      return { reply: "SQL joins" };
+    });
+    await expect(generateLinkTitleWithDeduplication(
+      () => snapshot, "origin", "Selected passage", request,
+    )).rejects.toThrow(/source note was removed/);
+  });
+
+  it("recognizes normalized origin aliases without blocking an unrelated article", () => {
+    const snapshot = titleSnapshot();
+    snapshot.notes[0].aliases = ["Query–planning"];
+    snapshot.notes.push(note("joins", "SQL joins", "Existing article."));
+
+    expect(linkTitleConflict(snapshot, "origin", "QUERY-PLANNING")).toBe("self");
+    expect(linkTitleConflict(snapshot, "origin", "SQL joins")).toBeNull();
+  });
 });
+
+function titleSnapshot() {
+  const snapshot = createEmptySnapshot("Databases", NOW, "space-test");
+  snapshot.notes = [note("origin", "Database notes", "A source passage about SQL joins.")];
+  snapshot.concepts = [concept("concept-origin", "Database notes", "origin")];
+  return snapshot;
+}
 
 function note(id: string, title: string, body: string): Note {
   return {

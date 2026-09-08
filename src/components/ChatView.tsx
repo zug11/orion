@@ -15,8 +15,7 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { ChatReply } from "./ChatReply";
 import type { AppSnapshot, ChatResult } from "../types";
 import {
   isSelectedAIConfigured,
@@ -26,9 +25,12 @@ import {
 interface ChatViewProps {
   snapshot: AppSnapshot;
   busy: boolean;
+  progress?: string;
+  onCancel?: () => void;
   onSend: (prompt: string) => Promise<ChatResult>;
   onClear: () => void;
   onOpenNote: (noteId: string) => void;
+  onOpenSource?: (sourceId: string) => void;
   onSaveReply: (messageId: string) => void;
   onOpenSettings: () => void;
 }
@@ -40,20 +42,15 @@ const QUICK_PROMPTS = [
   "Challenge a weak assumption in these notes.",
 ] as const;
 
-const CHAT_MARKDOWN_COMPONENTS: Components = {
-  a: ({ children, ...props }) => (
-    <a {...props} target="_blank" rel="noreferrer noopener">
-      {children}
-    </a>
-  ),
-};
-
 export function ChatView({
   snapshot,
   busy,
+  progress,
+  onCancel,
   onSend,
   onClear,
   onOpenNote,
+  onOpenSource,
   onSaveReply,
   onOpenSettings,
 }: ChatViewProps) {
@@ -105,6 +102,7 @@ export function ChatView({
         sendError instanceof Error ? sendError.message : String(sendError),
       );
     } finally {
+      setPendingPrompt("");
       setSubmitting(false);
     }
   }
@@ -236,14 +234,7 @@ export function ChatView({
                 </div>
                   {message.role === "assistant" ? (
                     <>
-                      <div className="chat-message__body">
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm]}
-                          components={CHAT_MARKDOWN_COMPONENTS}
-                        >
-                          {message.content}
-                        </ReactMarkdown>
-                      </div>
+                      <ChatReply snapshot={snapshot} message={message} onOpenNote={onOpenNote} onOpenSource={onOpenSource} />
                       <div className="chat-message__note-actions">
                         {createdNotes.length > 0 ? (
                           createdNotes.map((note) => (
@@ -298,7 +289,7 @@ export function ChatView({
               <span className="chat-message__avatar" aria-hidden="true">
                 <Bot size={12} />
               </span>
-              <span>Reading your Space</span>
+              <span>{progress || "Reading your Space"}</span>
               <span className="chat-thinking-dots" aria-hidden="true">
                 <i />
                 <i />
@@ -335,13 +326,18 @@ export function ChatView({
               maxLength={8_000}
               disabled={isSending || !canSend}
             />
-            <button
+            {isSending && onCancel ? <button type="button" onClick={(event) => {
+              // Cancelling restores the draft and can turn this same DOM node
+              // into Submit before the click's default action runs.
+              event.preventDefault();
+              onCancel();
+            }} aria-label="Stop response" className="chat-composer__stop">Stop</button> : <button
               type="submit"
               disabled={!draft.trim() || isSending || !canSend}
               aria-label="Send message"
             >
               <ArrowUp size={16} />
-            </button>
+            </button>}
           </div>
           <div className="chat-composer__footer">
             <span>

@@ -10,6 +10,8 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import type { Concept, Note } from "../types";
 import { ConceptLinkPopover } from "./ConceptLinkPopover";
+import { createEmptySnapshot } from "../data/defaults";
+import { generateLinkTitleWithDeduplication } from "../lib/linkTitle";
 
 const NOW = "2026-07-28T10:00:00.000Z";
 
@@ -162,7 +164,94 @@ describe("ConceptLinkPopover", () => {
         articleMode: "ai",
       }),
     );
-    expect(onGenerateTitle).toHaveBeenCalledWith(selectedText);
+    expect(onGenerateTitle).toHaveBeenCalledWith(selectedText, expect.any(AbortSignal));
+  });
+
+  it("recovers from an AI title collision and submits once with the original writing instruction", async () => {
+    const snapshot = createEmptySnapshot("Test", NOW, "space-test");
+    snapshot.notes = [makeNote("note-current", "Project notes")];
+    const requestTitle = vi.fn()
+      .mockResolvedValueOnce({ reply: "Project notes" })
+      .mockResolvedValueOnce({ reply: "Inherited permissions" });
+    const onSubmit = vi.fn();
+    renderContextSelection({
+      onSubmit,
+      onGenerateTitle: (selection, signal) => generateLinkTitleWithDeduplication(
+        () => snapshot, "note-current", selection, requestTitle, signal,
+      ),
+    });
+    fireEvent.change(screen.getByPlaceholderText("What should this page explain or emphasize?"), {
+      target: { value: "Explain inherited permissions." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Name & generate article" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    expect(onSubmit).toHaveBeenCalledWith("Inherited permissions", [], {
+      articleMode: "ai", articleInstructions: "Explain inherited permissions.",
+    });
+    expect(requestTitle).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("A large selected passage about inherited permissions and user roles.")).toBeVisible();
+  });
+
+  it("shows that an existing populated article will be reused", () => {
+    const onSubmit = vi.fn();
+    const existing = { ...makeNote("note-existing", "SQL"), body: "Preserve this explanation.", aliases: ["Structured Query Language"] };
+    render(
+      <ConceptLinkPopover
+        initialPhrase="Structured Query Language"
+        initialDestinationIds={[]}
+        currentNoteId="note-current"
+        notes={[makeNote("note-current", "Project notes"), existing]}
+        aiArticleWritingEnabled
+        onCancel={vi.fn()}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("“SQL” already exists in this Space");
+    expect(screen.queryByRole("radiogroup")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Link existing article" }));
+    expect(onSubmit).toHaveBeenCalledWith("Structured Query Language", [], { articleMode: "ai" });
+    expect(existing.body).toBe("Preserve this explanation.");
+  });
+
+  it("keeps generation available for an existing empty article matched by alias", () => {
+    const existing: Note = {
+      ...makeNote("note-existing", "SQL"), kind: "wiki", summary: "",
+      aliases: ["Structured Query Language"],
+    };
+    render(
+      <ConceptLinkPopover
+        initialPhrase="Structured Query Language"
+        initialDestinationIds={[]}
+        currentNoteId="note-current"
+        notes={[makeNote("note-current", "Project notes"), existing]}
+        aiArticleWritingEnabled
+        onCancel={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Continue the existing empty article “SQL”");
+    expect(screen.getByRole("button", { name: "Generate article" })).toBeEnabled();
+  });
+
+  it("keeps a typed ambiguous title open for an explicit destination choice", () => {
+    const onSubmit = vi.fn();
+    render(
+      <ConceptLinkPopover
+        initialPhrase="SQL"
+        initialDestinationIds={[]}
+        currentNoteId="note-current"
+        notes={[makeNote("note-current", "Project notes"), makeNote("one", "SQL"), makeNote("two", "sql")]}
+        aiArticleWritingEnabled
+        onCancel={vi.fn()}
+        onSubmit={onSubmit}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Generate article" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("has several destinations");
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it("keeps the composer open when AI names the selection after its source note", async () => {
@@ -283,12 +372,12 @@ describe("ConceptLinkPopover", () => {
     );
   });
 
-  it("ignores a late title after the composer is cancelled", async () => {
+  it.each(["button", "Escape"])("ignores a late title after cancelling with %s", async (method) => {
     let resolveTitle: ((title: string) => void) | undefined;
     const onSubmit = vi.fn();
     const onCancel = vi.fn();
     const onGenerateTitle = vi.fn(
-      () =>
+      (_selection: string, _signal?: AbortSignal) =>
         new Promise<string>((resolve) => {
           resolveTitle = resolve;
         }),
@@ -302,12 +391,19 @@ describe("ConceptLinkPopover", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Name & generate article" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    const cancelButton = screen.getByRole("button", { name: "Cancel" });
+    expect(cancelButton).toHaveFocus();
+    if (method === "Escape") {
+      fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    } else {
+      fireEvent.click(cancelButton);
+    }
     view.unmount();
     await act(async () => resolveTitle?.("Late title"));
 
     expect(onCancel).toHaveBeenCalledOnce();
     expect(onSubmit).not.toHaveBeenCalled();
+    expect(onGenerateTitle.mock.calls[0][1]?.aborted).toBe(true);
   });
 });
 

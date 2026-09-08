@@ -10,8 +10,10 @@ import {
 } from "react";
 import {
   isLinkablePhrase,
-  normalizeConceptPhrase,
+  createCanonicalArticleResolver,
 } from "../lib/concepts";
+import { linkTitleConflict } from "../lib/linkTitle";
+import { isLinkedArticlePlaceholder } from "../lib/linkedArticle";
 import type { Concept, Note } from "../types";
 import type { ConceptLinkSelectionMode } from "./editor/conceptLinkSelection";
 
@@ -25,7 +27,7 @@ interface ConceptLinkPopoverProps {
   concepts?: readonly Concept[];
   aiArticleWritingEnabled?: boolean;
   aiProviderName?: string;
-  onGenerateTitle?: (selectedContext: string) => Promise<string>;
+  onGenerateTitle?: (selectedContext: string, signal?: AbortSignal) => Promise<string>;
   onGeneratingChange?: (generating: boolean) => void;
   onCancel: () => void;
   onSubmit: (
@@ -55,8 +57,10 @@ export function ConceptLinkPopover({
 }: ConceptLinkPopoverProps) {
   const phraseId = useId();
   const phraseInputRef = useRef<HTMLInputElement>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const titleRequestRef = useRef(0);
   const titlePendingRef = useRef(false);
+  const titleAbortRef = useRef<AbortController | null>(null);
   const [phrase, setPhrase] = useState(initialPhrase);
   const [query, setQuery] = useState("");
   const [destinationIds, setDestinationIds] = useState(
@@ -69,7 +73,6 @@ export function ConceptLinkPopover({
   const [generatingTitle, setGeneratingTitle] = useState(false);
   const [titleError, setTitleError] = useState("");
   const normalizedSelectedText = selectedText.trim().replace(/\s+/g, " ");
-  const currentNote = notes.find((note) => note.id === currentNoteId);
   const selectedTextPreview =
     selectedText.length > 520
       ? `${selectedText.slice(0, 520).trimEnd()}…`
@@ -78,6 +81,15 @@ export function ConceptLinkPopover({
     phrase.trim() ||
     (selectionMode === "inline" ? normalizedSelectedText : "");
   const validPhrase = isLinkablePhrase(resolvedPhrase);
+  const resolveArticle = useMemo(
+    () => createCanonicalArticleResolver(notes, concepts),
+    [notes, concepts],
+  );
+  const articleTarget = resolveArticle(resolvedPhrase);
+  const existingArticle = articleTarget.kind === "existing" &&
+    articleTarget.note.id !== currentNoteId ? articleTarget.note : undefined;
+  const reusesWrittenArticle = Boolean(existingArticle &&
+    !isLinkedArticlePlaceholder(existingArticle, existingArticle.title));
   const canGenerateTitle = Boolean(
     selectionMode === "context" &&
       !phrase.trim() &&
@@ -94,6 +106,8 @@ export function ConceptLinkPopover({
         : "Name & create blank page"
       : destinationIds.size > 0
         ? "Create branched link"
+        : reusesWrittenArticle
+          ? "Link existing article"
         : articleMode === "ai"
           ? "Generate article"
           : "Create blank article";
@@ -128,6 +142,7 @@ export function ConceptLinkPopover({
     () => () => {
       titleRequestRef.current += 1;
       titlePendingRef.current = false;
+      titleAbortRef.current?.abort();
       onGeneratingChange?.(false);
     },
     [onGeneratingChange],
@@ -149,7 +164,11 @@ export function ConceptLinkPopover({
     event.preventDefault();
     const normalizedPhrase = resolvedPhrase.replace(/\s+/g, " ");
     if (isLinkablePhrase(normalizedPhrase)) {
-      completeSubmit(normalizedPhrase);
+      try {
+        completeSubmit(normalizedPhrase);
+      } catch (error) {
+        setTitleError(error instanceof Error ? error.message : String(error));
+      }
       return;
     }
 
@@ -159,11 +178,14 @@ export function ConceptLinkPopover({
     const requestId = titleRequestRef.current + 1;
     titleRequestRef.current = requestId;
     titlePendingRef.current = true;
+    const controller = new AbortController();
+    titleAbortRef.current = controller;
     setTitleError("");
     setGeneratingTitle(true);
+    cancelButtonRef.current?.focus();
     onGeneratingChange?.(true);
     try {
-      const generatedTitle = (await onGenerateTitle(selectedText))
+      const generatedTitle = (await onGenerateTitle(selectedText, controller.signal))
         .trim()
         .replace(/\s+/g, " ");
       if (titleRequestRef.current !== requestId) return;
@@ -194,27 +216,14 @@ export function ConceptLinkPopover({
   }
 
   function completeSubmit(normalizedPhrase: string) {
-    const normalizedDestination = normalizeConceptPhrase(normalizedPhrase);
-    const namesCurrentNote = [
-      currentNote?.title ?? "",
-      ...(currentNote?.aliases ?? []),
-      ...concepts
-        .filter(
-          (concept) =>
-            concept.canonicalNoteId === currentNoteId ||
-            (!concept.canonicalNoteId &&
-              concept.noteIds.length === 1 &&
-              concept.noteIds[0] === currentNoteId),
-        )
-        .flatMap((concept) => [concept.label, ...concept.aliases]),
-    ].some(
-      (candidate) =>
-        candidate.trim() &&
-        normalizeConceptPhrase(candidate) === normalizedDestination,
+    const conflict = linkTitleConflict(
+      { notes, concepts }, currentNoteId, normalizedPhrase,
     );
-    if (destinationIds.size === 0 && namesCurrentNote) {
+    if (destinationIds.size === 0 && conflict) {
       setTitleError(
-        `“${normalizedPhrase}” already names this note. Choose a more specific page title so Orion can create a separate article.`,
+        conflict === "self"
+          ? `“${normalizedPhrase}” already names this note. Choose a more specific page title so Orion can create a separate article.`
+          : `“${normalizedPhrase}” has several destinations. Choose a more specific title or select an existing note.`,
       );
       return;
     }
@@ -229,6 +238,7 @@ export function ConceptLinkPopover({
   function cancel() {
     titleRequestRef.current += 1;
     titlePendingRef.current = false;
+    titleAbortRef.current?.abort();
     setGeneratingTitle(false);
     onGeneratingChange?.(false);
     onCancel();
@@ -345,6 +355,13 @@ export function ConceptLinkPopover({
             {titleError}
           </small>
         ) : null}
+        {destinationIds.size === 0 && existingArticle ? (
+          <small className="concept-link-field__guidance" role="status">
+            {reusesWrittenArticle
+              ? `“${existingArticle.title}” already exists in this Space. This link will use that article.`
+              : `Continue the existing empty article “${existingArticle.title}”.`}
+          </small>
+        ) : null}
       </label>
 
       {selectionMode !== "none" ? (
@@ -367,7 +384,7 @@ export function ConceptLinkPopover({
         </div>
       ) : null}
 
-      {destinationIds.size === 0 && (
+      {destinationIds.size === 0 && !reusesWrittenArticle && (
         <div className="concept-link-page-choice">
           <div className="concept-link-destinations__label">
             <span>New page</span>
@@ -494,7 +511,12 @@ export function ConceptLinkPopover({
       </details>
 
       <div className="concept-link-popover__actions">
-        <button type="button" className="button compact" onClick={cancel}>
+        <button
+          ref={cancelButtonRef}
+          type="button"
+          className="button compact"
+          onClick={cancel}
+        >
           Cancel
         </button>
         <button

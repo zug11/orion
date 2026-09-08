@@ -21,7 +21,8 @@ interface ExecutorHost {
   onComplete: (job: AssistantClaim) => void;
 }
 
-// The app owns one executor. Terminal jobs release input/result memory in native code.
+// Windows share one native renderer lease, so only one executes desktop jobs.
+// Terminal jobs release input/result memory in native code.
 export function startAssistantExecutor(host: ExecutorHost): () => void {
   const sessionId = `renderer_${nanoid(20)}`;
   let disposed = false;

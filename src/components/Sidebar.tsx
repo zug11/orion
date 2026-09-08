@@ -171,6 +171,7 @@ export function Sidebar({
 
   return (
     <aside className={collapsed ? "sidebar is-collapsed" : "sidebar"}>
+      <div className="sidebar-titlebar" data-tauri-drag-region aria-hidden="true" />
       <SpaceSwitcher
         spaces={spaces}
         activeSpaceId={activeSpaceId}

@@ -89,10 +89,10 @@ import {
 } from "./lib/storage";
 import {
   applyChatResult,
-  buildChatRequest,
   ChatRequestRegistry,
   saveChatReplyAsNote,
 } from "./lib/chat";
+import { runChatReading } from "./lib/chatReading";
 import {
   applyLinkedArticleResult,
   buildLinkedArticleRequest,
@@ -135,8 +135,8 @@ import {
   type SpeechPlaybackProgress,
 } from "./lib/speech";
 import {
-  buildLinkTitleRequest,
-  normalizeGeneratedLinkTitle,
+  generateLinkTitleWithDeduplication,
+  linkTitleConflict,
 } from "./lib/linkTitle";
 import {
   buildAIWritingRequest,
@@ -206,9 +206,10 @@ import {
   selectedAIProviderName,
 } from "./lib/ai";
 import {
-  shouldAcceptExternalVault,
   spacesNeedingOverviewRefresh,
 } from "./lib/externalVault";
+import { mergeWindowVault, persistWindowVault, preserveWindowNavigation, vaultValuesEqual, WindowVaultConflict, type ConflictChoice } from "./lib/windowVault";
+import { SaveConflictDialog } from "./components/SaveConflictDialog";
 import type {
   AppSnapshot,
   ChatResult,
@@ -304,6 +305,8 @@ function App() {
   const [chatBusySpaceIds, setChatBusySpaceIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [chatProgress, setChatProgress] = useState<Record<string, string>>({});
+  const chatControllers = useRef(new Map<string, AbortController>());
   const [overviewBusySpaceIds, setOverviewBusySpaceIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -326,8 +329,12 @@ function App() {
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const pendingSaveCount = useRef(0);
   const persistedVaultUpdatedAt = useRef<string | null>(null);
+  const persistedVault = useRef<OrionVault | null>(null);
+  const [saveConflict, setSaveConflict] = useState<WindowVaultConflict | null>(null);
+  const conflictResolution = useRef<{ choice: ConflictChoice; revision: string } | undefined>(undefined);
   const skipAutosaveVault = useRef<OrionVault | null>(null);
   const closingRef = useRef(false);
+  const openingWindow = useRef(false);
   const toastTimer = useRef<number | null>(null);
   const chatRequests = useRef(new ChatRequestRegistry());
   const pendingChatNoteSaveNotices = useRef(
@@ -528,6 +535,10 @@ function App() {
 
       const requestId = `space-overview-${nanoid(10)}`;
       const fingerprint = spaceKnowledgeFingerprint(workspace);
+      if (isTauriRuntime()) {
+        const { invoke } = await import("@tauri-apps/api/core");
+        if (!await invoke<boolean>("claim_space_overview", { spaceId, requestId })) return;
+      }
       overviewRequests.current.set(spaceId, requestId);
       setOverviewBusySpaceIds((current) => {
         const next = new Set(current);
@@ -624,6 +635,11 @@ function App() {
           return next;
         });
       } finally {
+        if (isTauriRuntime()) {
+          void import("@tauri-apps/api/core").then(({ invoke }) =>
+            invoke("release_space_overview", { spaceId, requestId }),
+          );
+        }
         if (overviewRequests.current.get(spaceId) === requestId) {
           overviewRequests.current.delete(spaceId);
           setOverviewBusySpaceIds((current) => {
@@ -684,22 +700,41 @@ function App() {
     snapshot.workspace.id,
   ]);
 
+  const persistLatestVault = useCallback(async () => {
+    const before = vaultRef.current;
+    try {
+      const saved = await persistWindowVault(persistedVault.current, before, {
+        load: loadSnapshot, save: saveSnapshot,
+      }, conflictResolution.current);
+      persistedVault.current = saved;
+      persistedVaultUpdatedAt.current = saved.updatedAt;
+      conflictResolution.current = undefined;
+      setSaveConflict(null);
+      const live = vaultRef.current;
+      const merged = mergeWindowVault(before, live, saved, "local");
+      const reconciled = { ...merged, spaces: merged.spaces.map(reconcileSnapshotConceptVocabulary) };
+      if (live === before) skipAutosaveVault.current = reconciled;
+      flushSync(() => { vaultRef.current = reconciled; setVault(reconciled); });
+    } catch (error) {
+      if (error instanceof WindowVaultConflict) setSaveConflict(error);
+      throw error;
+    }
+  }, []);
+
   const queueSnapshotSave = useCallback((_nextVault: OrionVault) => {
     pendingSaveCount.current += 1;
     const queued = saveQueue.current
       .catch(() => undefined)
       .then(async () => {
         // Coalesce at execution time so a queued autosave cannot undo a workflow commit.
-        const nextVault = vaultRef.current;
-        await saveSnapshot(nextVault, persistedVaultUpdatedAt.current);
-        persistedVaultUpdatedAt.current = nextVault.updatedAt;
+        await persistLatestVault();
       })
       .finally(() => {
         pendingSaveCount.current = Math.max(0, pendingSaveCount.current - 1);
       });
     saveQueue.current = queued;
     return queued;
-  }, []);
+  }, [persistLatestVault]);
 
   useEffect(() => {
     if (!hydrated || !persistenceEnabled || !isTauriRuntime()) return;
@@ -718,22 +753,8 @@ function App() {
       prepareSpace: (spaceId) => serialize(async () => {
         if (closingRef.current) throw new Error("Orion is closing.");
         if (saveTimer.current !== null) { window.clearTimeout(saveTimer.current); saveTimer.current = null; }
-        // Refresh an unchanged renderer before work submitted by another assistant.
-        const before = vaultRef.current;
-        if (before.updatedAt === persistedVaultUpdatedAt.current) {
-          const latest = await loadSnapshot();
-          if (latest && latest.updatedAt !== persistedVaultUpdatedAt.current && vaultRef.current === before) {
-            const reconciled = { ...latest, spaces: latest.spaces.map((space) => reconcileSnapshotConceptVocabulary({ ...space, settings: { ...defaultSettings, ...space.settings } })) };
-            persistedVaultUpdatedAt.current = latest.updatedAt;
-            skipAutosaveVault.current = reconciled;
-            flushSync(() => { vaultRef.current = reconciled; setVault(reconciled); });
-          }
-        }
+        await persistLatestVault();
         const current = vaultRef.current;
-        if (current.updatedAt !== persistedVaultUpdatedAt.current) {
-          await saveSnapshot(current, persistedVaultUpdatedAt.current);
-          persistedVaultUpdatedAt.current = current.updatedAt;
-        }
         const snapshot = current.spaces.find((space) => space.workspace.id === spaceId);
         if (!snapshot) throw new Error("This Space no longer exists.");
         return { snapshot, revision: persistedVaultUpdatedAt.current! };
@@ -741,15 +762,12 @@ function App() {
       commit: (claim, sessionId, base, generated, result) => serialize(async () => {
         if (closingRef.current) throw new Error("Orion is closing.");
         if (saveTimer.current !== null) { window.clearTimeout(saveTimer.current); saveTimer.current = null; }
+        await persistLatestVault();
         const before = vaultRef.current;
         const proposed = composeWorkflowVault(before, base, generated);
-        // Persist pending navigation/settings using the ordinary revision protocol.
-        if (before.updatedAt !== persistedVaultUpdatedAt.current) {
-          await saveSnapshot(before, persistedVaultUpdatedAt.current);
-          persistedVaultUpdatedAt.current = before.updatedAt;
-        }
         await invokeAssistantHost("assistant_commit_vault", { jobId: claim.id, sessionId, vault: proposed, expectedUpdatedAt: persistedVaultUpdatedAt.current, result });
         persistedVaultUpdatedAt.current = proposed.updatedAt;
+        persistedVault.current = proposed;
         cancelSpaceOverviewRefresh(base.workspace.id);
         assistantOverviewVersions.current.set(base.workspace.id, spaceKnowledgeFingerprint(generated));
         flushSync(() => setVault((current) => {
@@ -760,7 +778,7 @@ function App() {
         }));
       }),
     });
-  }, [hydrated, persistenceEnabled, cancelSpaceOverviewRefresh]);
+  }, [hydrated, persistenceEnabled, cancelSpaceOverviewRefresh, persistLatestVault]);
 
   useEffect(() => {
     let cancelled = false;
@@ -771,6 +789,7 @@ function App() {
       .then((saved) => {
         if (cancelled) return;
         persistedVaultUpdatedAt.current = saved?.updatedAt ?? null;
+        persistedVault.current = saved;
         const baseVault = saved ?? createEmptyVault();
         const spaces = baseVault.spaces.map((savedSpace) => {
           const base = isRetiredStarterVault(savedSpace)
@@ -853,10 +872,12 @@ function App() {
             },
           };
         });
+        const requestedSpaceId = new URLSearchParams(window.location.search).get("space");
         const nextVault: OrionVault = {
           ...baseVault,
           spaces,
-          activeSpaceId: spaces.some(
+          activeSpaceId: requestedSpaceId && spaces.some((space) => space.workspace.id === requestedSpaceId)
+            ? requestedSpaceId : spaces.some(
             (space) =>
               space.workspace.id === baseVault.activeSpaceId,
           )
@@ -937,32 +958,38 @@ function App() {
       return undefined;
     }
 
-    const flushBrowserVault = () => {
-      void saveSnapshot(vaultRef.current);
+    const flushBrowserVault = (event: BeforeUnloadEvent) => {
+      if (vaultValuesEqual(vaultRef.current, persistedVault.current)) return;
+      event.preventDefault();
+      event.returnValue = "";
+      void queueSnapshotSave(vaultRef.current).catch(() => undefined);
     };
     window.addEventListener("beforeunload", flushBrowserVault);
-    window.addEventListener("pagehide", flushBrowserVault);
     return () => {
       window.removeEventListener("beforeunload", flushBrowserVault);
-      window.removeEventListener("pagehide", flushBrowserVault);
     };
-  }, [hydrated, persistenceEnabled]);
+  }, [hydrated, persistenceEnabled, queueSnapshotSave]);
 
   useEffect(() => {
-    if (!hydrated || !persistenceEnabled || !isTauriRuntime()) {
+    if (!hydrated || !persistenceEnabled) {
       return undefined;
     }
     let disposed = false;
     let refreshing = false;
+    let retryTimer: number | undefined;
+    let stopListening: (() => void) | undefined;
 
     const refreshExternalVault = async () => {
       if (
         disposed ||
         refreshing ||
         closingRef.current ||
-        saveTimer.current !== null ||
         pendingSaveCount.current > 0
       ) {
+        if (!disposed && !closingRef.current) {
+          window.clearTimeout(retryTimer);
+          retryTimer = window.setTimeout(() => void refreshExternalVault(), 250);
+        }
         return;
       }
       refreshing = true;
@@ -970,24 +997,29 @@ function App() {
         const latest = await loadSnapshot();
         if (disposed || !latest) return;
         const previousVault = vaultRef.current;
-        if (shouldAcceptExternalVault(previousVault.updatedAt, latest.updatedAt)) {
+        if (latest.updatedAt !== persistedVaultUpdatedAt.current) {
+          const base = persistedVault.current;
+          const hadLocalChanges = !vaultValuesEqual(previousVault, base);
+          const merged = base ? mergeWindowVault(base, previousVault, latest) : preserveWindowNavigation(latest, previousVault);
           const reconciledLatest: OrionVault = {
-            ...latest,
-            spaces: latest.spaces.map(reconcileSnapshotConceptVocabulary),
+            ...merged,
+            spaces: merged.spaces.map(reconcileSnapshotConceptVocabulary),
           };
           const overviewSpaceIds = spacesNeedingOverviewRefresh(
             previousVault,
             reconciledLatest,
           );
           persistedVaultUpdatedAt.current = latest.updatedAt;
-          skipAutosaveVault.current = reconciledLatest;
+          persistedVault.current = latest;
+          if (!hadLocalChanges) skipAutosaveVault.current = reconciledLatest;
           vaultRef.current = reconciledLatest;
           setVault(reconciledLatest);
           for (const spaceId of overviewSpaceIds) {
             scheduleSpaceOverviewRefresh(spaceId, 800);
           }
         }
-      } catch {
+      } catch (error) {
+        if (error instanceof WindowVaultConflict) setSaveConflict(error);
         // A foreground refresh is opportunistic. Normal saves and explicit
         // citation opens still surface actionable persistence errors.
       } finally {
@@ -997,10 +1029,23 @@ function App() {
 
     window.addEventListener("focus", refreshExternalVault);
     document.addEventListener("visibilitychange", refreshExternalVault);
+    const storageChanged = (event: StorageEvent) => {
+      if (event.key === "orion:vault:v2") void refreshExternalVault();
+    };
+    window.addEventListener("storage", storageChanged);
+    if (isTauriRuntime()) {
+      void import("@tauri-apps/api/event").then(async ({ listen }) => {
+        const stop = await listen("orion-vault-changed", () => void refreshExternalVault());
+        if (disposed) stop(); else stopListening = stop;
+      });
+    }
     return () => {
       disposed = true;
       window.removeEventListener("focus", refreshExternalVault);
       document.removeEventListener("visibilitychange", refreshExternalVault);
+      window.removeEventListener("storage", storageChanged);
+      window.clearTimeout(retryTimer);
+      stopListening?.();
     };
   }, [hydrated, persistenceEnabled, scheduleSpaceOverviewRefresh]);
 
@@ -1049,7 +1094,7 @@ function App() {
         event.preventDefault();
         if (!(await lockAndSaveLatest())) return;
         try {
-          await invoke("complete_app_exit");
+          await invoke("close_orion_window");
         } catch (error) {
           closingRef.current = false;
           setClosing(false);
@@ -1064,13 +1109,12 @@ function App() {
         async (event) => {
           const attempt = event.payload;
           try {
-            await invoke("acknowledge_app_exit", { attempt });
             if (closingRef.current) return;
             if (!(await lockAndSaveLatest())) {
               await invoke("cancel_app_exit", { attempt });
               return;
             }
-            await invoke("complete_app_exit");
+            await invoke("complete_app_exit", { attempt });
           } catch (error) {
             void invoke("cancel_app_exit", { attempt });
             closingRef.current = false;
@@ -1082,13 +1126,18 @@ function App() {
           }
         },
       );
+      const stopQuitCancelled = await listen("orion-quit-cancelled", () => {
+        closingRef.current = false;
+        setClosing(false);
+      });
 
       if (disposed) {
         stopClose();
         stopQuit();
+        stopQuitCancelled();
       } else {
         unlistenClose = stopClose;
-        unlistenQuit = stopQuit;
+        unlistenQuit = () => { stopQuit(); stopQuitCancelled(); };
         await invoke("set_exit_guard_ready", { ready: true });
         unregisterExitGuard = () => {
           void invoke("set_exit_guard_ready", { ready: false });
@@ -1221,6 +1270,7 @@ function App() {
       );
 
       chatRequests.current.invalidate(spaceId);
+      chatControllers.current.get(spaceId)?.abort();
       setChatBusySpaceIds((current) => {
         if (!current.has(spaceId)) return current;
         const next = new Set(current);
@@ -1323,6 +1373,7 @@ function App() {
       if (!link) return;
       const { spaceId, noteId } = link;
 
+      await queueSnapshotSave(vaultRef.current);
       const latest = await loadSnapshot();
       const reconciledLatest = latest
         ? {
@@ -1363,6 +1414,7 @@ function App() {
         updatedAt: now,
       };
       persistedVaultUpdatedAt.current = latest.updatedAt;
+      persistedVault.current = latest;
       vaultRef.current = nextVault;
       setVault(nextVault);
       setScreen("note");
@@ -1374,7 +1426,7 @@ function App() {
         0,
       );
     },
-    [closeConnections, replaceHistory, showToast],
+    [closeConnections, replaceHistory, showToast, queueSnapshotSave],
   );
 
   useEffect(() => {
@@ -1400,11 +1452,13 @@ function App() {
     void import("@tauri-apps/plugin-deep-link")
       .then(async ({ getCurrent, onOpenUrl }) => {
         const current = await getCurrent();
-        if (!disposed && current) {
+        const { invoke } = await import("@tauri-apps/api/core");
+        if (!disposed && current && !new URLSearchParams(window.location.search).has("space") &&
+          await invoke<boolean>("is_citation_window")) {
           openUrls(current);
         }
-        const unlisten = await onOpenUrl((urls) => {
-          if (!disposed) openUrls(urls);
+        const unlisten = await onOpenUrl(async (urls) => {
+          if (!disposed && await invoke<boolean>("is_citation_window")) openUrls(urls);
         });
         if (disposed) {
           unlisten();
@@ -2580,6 +2634,17 @@ function App() {
       const originNote = currentSnapshot.notes.find(
         (note) => note.id === originNoteId,
       );
+      if (!originNote) {
+        throw new Error("The source note is no longer available in this Space.");
+      }
+      if (input.destinationNoteIds.length === 0) {
+        const conflict = linkTitleConflict(currentSnapshot, originNoteId, phrase);
+        if (conflict) {
+          throw new Error(conflict === "self"
+            ? `“${phrase}” already names this note. Choose a more specific page title.`
+            : `“${phrase}” has several destinations. Choose a more specific title or select an existing note.`);
+        }
+      }
       const shouldWriteWithAI =
         input.destinationNoteIds.length === 0 &&
         input.articleMode === "ai";
@@ -2631,18 +2696,35 @@ function App() {
           updatedAt: new Date().toISOString(),
         };
       });
-      if (shouldWriteWithAI && originNote) {
-        const concept = preview.concepts.find(
-          (candidate) => candidate.id === preview.conceptId,
+      const concept = preview.concepts.find(
+        (candidate) => candidate.id === preview.conceptId,
+      );
+      const articleId = concept?.canonicalNoteId ??
+        (concept?.noteIds.length === 1 ? concept.noteIds[0] : undefined);
+      const article = preview.notes.find((note) => note.id === articleId);
+      const revealArticle = () => {
+        if (!articleId) return;
+        if (vaultRef.current.activeSpaceId === currentSnapshot.workspace.id) {
+          openNote(articleId);
+        } else {
+          switchSpace(currentSnapshot.workspace.id);
+          window.setTimeout(() => openNote(articleId), 0);
+        }
+      };
+      if (
+        input.destinationNoteIds.length === 0 && article &&
+        !isLinkedArticlePlaceholder(article, article.title)
+      ) {
+        showToast(
+          "Linked existing article",
+          `“${article.title}” already exists in this Space. Your link uses that article.`,
+          { label: "Open article", run: revealArticle },
         );
-        const articleId = concept?.canonicalNoteId;
-        const article = articleId
-          ? preview.notes.find((note) => note.id === articleId)
-          : undefined;
+      } else if (shouldWriteWithAI) {
         if (
           articleId &&
           article &&
-          isLinkedArticlePlaceholder(article, phrase)
+          isLinkedArticlePlaceholder(article, article.title)
         ) {
           void generateLinkedArticle(
             {
@@ -2653,49 +2735,36 @@ function App() {
             },
             articleId,
             originNoteId,
-            phrase,
+            article.title,
             input.articleInstructions,
             input.selectedContext,
           );
         }
       } else if (input.destinationNoteIds.length === 0) {
-        const concept = preview.concepts.find(
-          (candidate) => candidate.id === preview.conceptId,
-        );
-        const blankArticleId = concept?.canonicalNoteId;
-        if (blankArticleId) {
-          window.setTimeout(() => openNote(blankArticleId), 0);
-        }
+        window.setTimeout(revealArticle, 0);
         showToast(
-          "Blank article created",
-          `“${phrase}” is ready for you to write.`,
+          articleId === candidateArticle.id ? "Blank article created" : "Blank article ready",
+          `“${article?.title ?? phrase}” is ready for you to write.`,
         );
       }
       return preview.conceptId;
     },
-    [generateLinkedArticle, openNote, showToast],
+    [generateLinkedArticle, openNote, showToast, switchSpace],
   );
 
   const generateLinkTitle = useCallback(
     async (
       originNoteId: EntityId,
       selectedContext: string,
+      signal?: AbortSignal,
     ): Promise<string> => {
-      const currentSnapshot = snapshotRef.current;
-      const workspaceId = currentSnapshot.workspace.id;
-      const result = await chatWithOrion(
-        buildLinkTitleRequest(
-          currentSnapshot,
-          originNoteId,
-          selectedContext,
-        ),
+      return generateLinkTitleWithDeduplication(
+        () => snapshotRef.current,
+        originNoteId,
+        selectedContext,
+        chatWithOrion,
+        signal,
       );
-      if (snapshotRef.current.workspace.id !== workspaceId) {
-        throw new Error(
-          "The active Space changed while Orion was naming this page. Try again in the current Space.",
-        );
-      }
-      return normalizeGeneratedLinkTitle(result.reply);
     },
     [],
   );
@@ -2801,6 +2870,9 @@ function App() {
       if (!token) {
         throw new Error("Orion is already replying in this Space.");
       }
+      const controller = new AbortController();
+      chatControllers.current.set(workspaceId, controller);
+      const baseVersion = stableSnapshotVersion(space);
       setChatBusySpaceIds((current) => {
         const next = new Set(current);
         next.add(workspaceId);
@@ -2808,7 +2880,13 @@ function App() {
       });
 
       try {
-        const result = await chatWithOrion(buildChatRequest(space, prompt));
+        const result = await runChatReading(space, prompt, chatWithOrion, {
+          signal: controller.signal,
+          currentSnapshot: () => chatRequests.current.isCurrent(token)
+            ? vaultRef.current.spaces.find((candidate) => candidate.workspace.id === workspaceId)
+            : undefined,
+          onProgress: (message) => setChatProgress((current) => ({ ...current, [workspaceId]: message })),
+        });
         if (chatRequests.current.isCurrent(token)) {
           const now = new Date().toISOString();
           const createdNotes = (result.noteActions?.length ?? 0) > 0;
@@ -2816,6 +2894,7 @@ function App() {
             ...current,
             spaces: current.spaces.map((candidate) => {
               if (candidate.workspace.id !== workspaceId) return candidate;
+              if (controller.signal.aborted || stableSnapshotVersion(candidate) !== baseVersion) return candidate;
               const next = applyChatResult(
                 candidate,
                 prompt,
@@ -2834,6 +2913,12 @@ function App() {
         }
         return result;
       } finally {
+        chatControllers.current.delete(workspaceId);
+        setChatProgress((current) => {
+          const next = { ...current };
+          delete next[workspaceId];
+          return next;
+        });
         if (chatRequests.current.finish(token)) {
           setChatBusySpaceIds((current) => {
             const next = new Set(current);
@@ -2930,6 +3015,7 @@ function App() {
   }, [openNote, scheduleSpaceOverviewRefresh, showToast, switchSpace, vault]);
 
   const clearChat = useCallback(() => {
+    chatControllers.current.get(vaultRef.current.activeSpaceId)?.abort();
     chatRequests.current.invalidate(vaultRef.current.activeSpaceId);
     const now = new Date().toISOString();
     setSnapshot((current) => {
@@ -3046,11 +3132,49 @@ function App() {
     [closeConnections, replaceHistory],
   );
 
+  const openNewWindow = useCallback(() => {
+    if (openingWindow.current || closingRef.current || !hydrated || !persistenceEnabled || saveConflict) return;
+    openingWindow.current = true;
+    const spaceId = vaultRef.current.activeSpaceId;
+    const previewWindow = isTauriRuntime() ? null : window.open("about:blank", "_blank");
+    void queueSnapshotSave(vaultRef.current).then(async () => {
+      if (isTauriRuntime()) {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("new_orion_window", { spaceId });
+      } else if (previewWindow) {
+        const url = new URL(window.location.href);
+        url.searchParams.set("space", spaceId);
+        previewWindow.location.replace(url.href);
+      }
+    }).catch((error) => {
+      previewWindow?.close();
+      showToast("Couldn’t open a window", error instanceof Error ? error.message : String(error));
+    }).finally(() => { openingWindow.current = false; });
+  }, [hydrated, persistenceEnabled, queueSnapshotSave, saveConflict, showToast]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let disposed = false;
+    let stopListening: (() => void) | undefined;
+    void import("@tauri-apps/api/event").then(async ({ listen }) => {
+      const stop = await listen("orion-new-window", openNewWindow);
+      if (disposed) stop(); else stopListening = stop;
+    });
+    return () => { disposed = true; stopListening?.(); };
+  }, [openNewWindow]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    const title = `${screen === "note" && activeNote ? `${activeNote.title} — ` : ""}${snapshot.workspace.name} — Orion`;
+    void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => getCurrentWindow().setTitle(title));
+  }, [activeNote?.title, screen, snapshot.workspace.name]);
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
         event.defaultPrevented ||
         vaultLoadError ||
+        saveConflict ||
         closingRef.current
       ) {
         return;
@@ -3071,10 +3195,15 @@ function App() {
         }
         return;
       }
+      const modifier = event.metaKey || event.ctrlKey;
+      if (modifier && event.shiftKey && !event.altKey && event.key.toLocaleLowerCase() === "n") {
+        event.preventDefault();
+        if (!event.repeat) openNewWindow();
+        return;
+      }
       if (commandOpen || exportOpen || importOpen || selectedSourceId) {
         return;
       }
-      const modifier = event.metaKey || event.ctrlKey;
       if (modifier && event.key.toLocaleLowerCase() === "k") {
         event.preventDefault();
         setCommandOpen(true);
@@ -3112,6 +3241,8 @@ function App() {
     navigateHistory,
     selectedSourceId,
     vaultLoadError,
+    openNewWindow,
+    saveConflict,
   ]);
 
   async function handleExport(request: ExportRequest): Promise<boolean> {
@@ -3353,6 +3484,7 @@ function App() {
       return;
     }
     chatRequests.current.invalidate(snapshot.workspace.id);
+    chatControllers.current.get(snapshot.workspace.id)?.abort();
     setLinkedArticleJobs((current) =>
       current.filter(
         (job) => job.workspaceId !== snapshot.workspace.id,
@@ -3392,8 +3524,8 @@ function App() {
           onRegisterConcept={(input) =>
             registerLinkConcept(input, activeNote.id)
           }
-          onGenerateLinkTitle={(selectedContext) =>
-            generateLinkTitle(activeNote.id, selectedContext)
+          onGenerateLinkTitle={(selectedContext, signal) =>
+            generateLinkTitle(activeNote.id, selectedContext, signal)
           }
           onGenerateAIWriting={(input) =>
             generateAIWriting(activeNote.id, input)
@@ -3438,11 +3570,15 @@ function App() {
     if (screen === "chat") {
       return (
         <ChatView
+          key={snapshot.workspace.id}
           snapshot={snapshot}
           busy={chatBusySpaceIds.has(snapshot.workspace.id)}
+          progress={chatProgress[snapshot.workspace.id]}
+          onCancel={() => chatControllers.current.get(snapshot.workspace.id)?.abort(new Error("Chat was stopped. Your message is ready to send again."))}
           onSend={sendChatMessage}
           onClear={clearChat}
           onOpenNote={openNote}
+          onOpenSource={setSelectedSourceId}
           onSaveReply={saveChatMessageAsNote}
           onOpenSettings={() => openView("settings")}
         />
@@ -3669,6 +3805,15 @@ function App() {
             <X size={14} />
           </button>
         </div>
+      )}
+
+      {saveConflict && (
+        <SaveConflictDialog conflict={saveConflict} onChoose={(choice) => {
+          conflictResolution.current = { choice, revision: saveConflict.revision };
+          void queueSnapshotSave(vaultRef.current).catch((error) =>
+            showToast("Changes still need saving", error instanceof Error ? error.message : String(error)),
+          );
+        }} />
       )}
 
       {!hydrated && (

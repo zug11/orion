@@ -1,12 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main"],
+  "description": "Capability for Orion's library windows",
+  "windows": ["main", "orion-window-*"],
   "permissions": [
     "core:default",
     "core:window:allow-destroy",
     "core:window:allow-start-dragging",
+    "core:window:allow-set-title",
     "deep-link:default",
     "opener:default",
     "dialog:allow-open"

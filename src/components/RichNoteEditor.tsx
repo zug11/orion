@@ -86,7 +86,7 @@ interface RichNoteEditorProps {
   onAttachSource: (sourceId: EntityId) => void;
   onOpenSource?: (sourceId: EntityId) => void;
   onRegisterConcept: (input: RegisterWikiLinkInput) => EntityId;
-  onGenerateLinkTitle?: (selectedContext: string) => Promise<string>;
+  onGenerateLinkTitle?: (selectedContext: string, signal?: AbortSignal) => Promise<string>;
   onGenerateAIWriting?: (
     input: Omit<AIWritingRequestInput, "originNoteId">,
   ) => Promise<string>;

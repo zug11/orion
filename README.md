@@ -39,6 +39,7 @@ The result is a personal wiki that gets more coherent over time:
 - **Links have destinations.** A durable phrase resolves to one canonical page inside its Space.
 - **Notes stay ordinary.** They are permanent, editable, portable Markdown from the moment they are created.
 - **Projects stay separate.** Spaces are hard boundaries for notes, sources, concepts, Chat, navigation, and AI context.
+- **Chat reads as it goes.** Chat uses the Space hierarchy and compact note directories to find promising material, searches note and source bodies, then opens exact passages and follows connections as needed. Replies can cite the passages actually read; click a citation to inspect it or open the original item. Reading is bounded, can be stopped, and reports partial coverage. Chat can create notes only when explicitly asked, and **Keep as note** preserves source links. This uses the selected OpenAI or Anthropic model and may make several requests for a question.
 - **AI stays optional.** Manual organization and the entire local knowledge layer work without OpenAI or Anthropic.
 
 ## From raw material to a personal wiki
@@ -101,6 +102,12 @@ is preserved when upgrading.
 ### A wiki that maintains itself
 
 Teach Orion a phrase once and it becomes durable vocabulary for that Space. Create a blank destination or ask the selected provider to write a focused canonical article. Future occurrences link automatically, while Unlink preserves the words and disables that phrase until it is deliberately taught again.
+
+When Orion names a page from a highlighted passage, it checks the active Space's titles and aliases. A matching article is reused, and an empty article can continue generating under its canonical name. If AI suggests the current note or an ambiguous name, Orion tries a more specific title automatically. The link composer identifies existing articles before linking, and their text stays intact.
+
+Use **Cmd+Shift+N** or **File → New Window** to open another Orion window in the current Space. Each window can browse a different note or Space, with its own Back and Forward history. Edits sync across windows; competing edits to the same text offer a choice before saving. Closing one window leaves the others open, and quitting Orion saves every window first. **Cmd+N** continues to create a note.
+
+Drag any unused part of the top bar to move the window, including the space above the sidebar and the gaps around navigation and search. Buttons keep their normal actions.
 
 When a substantive note changes, Orion can refresh the canonical articles genuinely affected by it. Useful new evidence is woven into the existing prose instead of appended as a change log or a stack of source summaries.
 

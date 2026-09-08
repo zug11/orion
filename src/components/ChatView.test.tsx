@@ -172,4 +172,24 @@ describe("ChatView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Keep as note" }));
     expect(onSaveReply).toHaveBeenCalledWith("chat-saveable");
   });
+
+  it("stops an active reading response and restores the question without leaving a duplicate pending message", async () => {
+    const snapshot = createEmptySnapshot("Research", NOW, "space-research");
+    snapshot.settings.apiKeyConfigured = true;
+    let reject!: (error: Error) => void;
+    const onSend = vi.fn(() => new Promise<never>((_resolve, failure) => { reject = failure; }));
+    const onCancel = vi.fn(() => reject(new Error("Chat was stopped.")));
+    render(<ChatView snapshot={snapshot} busy={false} progress="Reading supporting passages" onSend={onSend}
+      onCancel={onCancel} onClear={vi.fn()} onOpenNote={vi.fn()} onSaveReply={vi.fn()} onOpenSettings={vi.fn()} />);
+    const composer = screen.getByRole("textbox", { name: "Message Orion" });
+    fireEvent.change(composer, { target: { value: "Find the agreement" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+    expect(screen.getByText("Reading supporting passages")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Stop response" }));
+    await waitFor(() => expect(composer).toHaveValue("Find the agreement"));
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(screen.queryByText("Find the agreement", { selector: "p" })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Chat was stopped.");
+  });
 });

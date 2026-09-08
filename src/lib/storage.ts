@@ -53,6 +53,10 @@ import {
   MAX_CHAT_NOTE_BODY_CHARS,
   normalizeChatNoteActions,
 } from "./chat";
+import {
+  CHAT_READING_INSTRUCTIONS, CHAT_READ_REQUESTS_SCHEMA, MAX_CHAT_EVIDENCE,
+  isChatCoverage, isChatEvidence, parseChatReadingContext, parseChatReadRequests,
+} from "./chatReadingProtocol";
 
 const VAULT_STORAGE_KEY = "orion:vault:v2";
 const LEGACY_SNAPSHOT_STORAGE_KEY = "orion:vault:v1";
@@ -157,9 +161,23 @@ export async function saveSnapshot(
     });
     return;
   }
-  const storage = getLocalStorage();
-  storage?.setItem(VAULT_STORAGE_KEY, JSON.stringify(vault));
-  storage?.removeItem(LEGACY_SNAPSHOT_STORAGE_KEY);
+  const write = () => {
+    const storage = getLocalStorage();
+    if (expectedUpdatedAt !== undefined) {
+      const raw = storage?.getItem(VAULT_STORAGE_KEY) ?? storage?.getItem(LEGACY_SNAPSHOT_STORAGE_KEY);
+      const parsed = raw ? parseVault(JSON.parse(raw)) : null;
+      if (raw && !parsed) throw new Error("The browser vault could not be validated. Nothing was saved.");
+      const revision = parsed?.updatedAt ?? null;
+      if (revision !== expectedUpdatedAt) throw new Error("ORION_VAULT_CONFLICT: Another window saved first.");
+    }
+    storage?.setItem(VAULT_STORAGE_KEY, JSON.stringify(vault));
+    storage?.removeItem(LEGACY_SNAPSHOT_STORAGE_KEY);
+  };
+  if (typeof navigator !== "undefined" && navigator.locks) {
+    await navigator.locks.request("orion-vault-write", write);
+  } else {
+    write();
+  }
 }
 
 export async function openDataDirectory(): Promise<string> {
@@ -1186,7 +1204,7 @@ export async function chatWithOrion(
       { request },
       { queueKey: "chat", signal },
     );
-    result = parseChatResult(value);
+    result = parseChatResult(value, request.mode === "chat-reading");
   } else if (aiProviderForModel(request.model) === "anthropic") {
     result = await runBrowserProviderCall(
       "anthropic",
@@ -1202,7 +1220,7 @@ export async function chatWithOrion(
   }
   return chatRequestAllowsNoteActions(request)
     ? result
-    : { reply: result.reply };
+    : { reply: result.reply, ...(result.readRequests ? { readRequests: result.readRequests } : {}) };
 }
 
 export async function exportMarkdown(
@@ -1520,28 +1538,15 @@ async function chatInBrowser(
     model: request.model || "gpt-5.6-sol",
     store: false,
     max_output_tokens: inlineWriting || allowNoteActions ? 12_000 : 6_000,
-    instructions: inlineWriting
-      ? INLINE_WRITING_INSTRUCTIONS
-      : chatInstructions(allowNoteActions),
-    input: JSON.stringify({
-      question: request.prompt,
-      workspaceName: request.workspaceName,
-      conversation: request.history,
-      notes: request.notes,
-      sources: request.sources,
-      concepts: request.concepts,
-    }),
+    instructions: chatProviderInstructions(request),
+    input: JSON.stringify(chatProviderPayload(request)),
     text: {
       verbosity: "medium",
       format: {
         type: "json_schema",
         name: "orion_chat",
         strict: true,
-        schema: allowNoteActions
-          ? CHAT_RESULT_SCHEMA
-          : inlineWriting
-            ? INLINE_WRITING_RESULT_SCHEMA
-            : CHAT_REPLY_ONLY_RESULT_SCHEMA,
+        schema: chatResponseSchema(request),
       },
     },
   };
@@ -1564,7 +1569,7 @@ async function chatInBrowser(
   const data = (await response.json()) as OpenAIResponse;
   const outputText = extractBrowserOutputText(data, operation);
   try {
-    return parseChatResult(JSON.parse(outputText) as unknown);
+    return parseChatResult(JSON.parse(outputText) as unknown, request.mode === "chat-reading");
   } catch (error) {
     if (error instanceof SyntaxError) {
       throw new Error(
@@ -1651,13 +1656,7 @@ async function chatInBrowserWithAnthropic(
   const outputConfig: Record<string, unknown> = {
     format: {
       type: "json_schema",
-      schema: anthropicCompatibleSchema(
-        allowNoteActions
-          ? CHAT_RESULT_SCHEMA
-          : inlineWriting
-            ? INLINE_WRITING_RESULT_SCHEMA
-            : CHAT_REPLY_ONLY_RESULT_SCHEMA,
-      ),
+      schema: anthropicCompatibleSchema(chatResponseSchema(request)),
     },
   };
   if (request.effort && request.effort !== "none") {
@@ -1666,20 +1665,11 @@ async function chatInBrowserWithAnthropic(
   const body = {
     model: request.model || "claude-sonnet-5",
     max_tokens: inlineWriting || allowNoteActions ? 12_000 : 6_000,
-    system: inlineWriting
-      ? INLINE_WRITING_INSTRUCTIONS
-      : chatInstructions(allowNoteActions),
+    system: chatProviderInstructions(request),
     messages: [
       {
         role: "user",
-        content: JSON.stringify({
-          question: request.prompt,
-          workspaceName: request.workspaceName,
-          conversation: request.history,
-          notes: request.notes,
-          sources: request.sources,
-          concepts: request.concepts,
-        }),
+        content: JSON.stringify(chatProviderPayload(request)),
       },
     ],
     output_config: outputConfig,
@@ -1695,7 +1685,7 @@ async function chatInBrowserWithAnthropic(
     operation,
   );
   try {
-    return parseChatResult(JSON.parse(outputText) as unknown);
+    return parseChatResult(JSON.parse(outputText) as unknown, request.mode === "chat-reading");
   } catch (error) {
     if (error instanceof SyntaxError) {
       throw new Error(
@@ -2001,6 +1991,10 @@ function isStudioMessage(value: unknown): boolean {
     isStringArray(value.contextCardIds) &&
     (value.createdNoteIds === undefined ||
       isStringArray(value.createdNoteIds)) &&
+    (value.evidence === undefined ||
+      (Array.isArray(value.evidence) && value.evidence.length <= MAX_CHAT_EVIDENCE &&
+        value.evidence.every(isChatEvidence) && new Set(value.evidence.map((item) => item.id)).size === value.evidence.length)) &&
+    (value.coverage === undefined || isChatCoverage(value.coverage)) &&
     typeof value.createdAt === "string"
   );
 }
@@ -2482,21 +2476,27 @@ function parseOrganizeResult(value: unknown): OrganizeContentResult {
   return { notes, wikiArticles, concepts, suggestedConnections };
 }
 
-export function parseChatResult(value: unknown): ChatResult {
+export function parseChatResult(value: unknown, reading = false): ChatResult {
   if (
     !isRecord(value) ||
     Object.keys(value).some(
-      (key) => key !== "reply" && key !== "noteActions",
+      (key) => key !== "reply" && key !== "noteActions" && !(reading && key === "readRequests"),
     ) ||
     typeof value.reply !== "string" ||
-    !value.reply.trim()
+    (!reading && !value.reply.trim())
   ) {
     throw new Error("Chat returned an unexpected response.");
   }
+  const readRequests = reading ? parseChatReadRequests(value.readRequests) : undefined;
+  if (reading && ([...value.reply].length > 6_000 || (!readRequests?.length && !value.reply.trim()))) {
+    throw new Error("Chat returned an unexpected response.");
+  }
+  if (readRequests?.length) return { reply: "", readRequests };
   const noteActions = normalizeChatNoteActions(value.noteActions);
   return {
     reply: value.reply,
     ...(noteActions.length > 0 ? { noteActions } : {}),
+    ...(readRequests ? { readRequests } : {}),
   };
 }
 
@@ -2871,6 +2871,34 @@ function chatInstructions(allowNoteActions: boolean): string {
       ? CHAT_NOTE_ACTION_INSTRUCTIONS
       : CHAT_NO_WRITE_INSTRUCTIONS,
   ].join("\n\n");
+}
+
+function chatProviderInstructions(request: ChatRequest): string {
+  if (request.mode === "inline-writing") return INLINE_WRITING_INSTRUCTIONS;
+  const allowed = chatRequestAllowsNoteActions(request);
+  if (request.mode !== "chat-reading") return chatInstructions(allowed);
+  return [CHAT_READING_INSTRUCTIONS, allowed
+    ? `${CHAT_NOTE_ACTION_INSTRUCTIONS}\nOnly the final answer may contain noteActions. Reading responses must return an empty noteActions array.`
+    : "No note write is authorized. Do not return noteActions or claim to have created or changed notes."].join("\n\n");
+}
+
+function chatResponseSchema(request: ChatRequest): Record<string, unknown> {
+  if (request.mode === "inline-writing") return INLINE_WRITING_RESULT_SCHEMA;
+  const base = chatRequestAllowsNoteActions(request) ? CHAT_RESULT_SCHEMA : CHAT_REPLY_ONLY_RESULT_SCHEMA;
+  const schema = { ...base, required: [...base.required] as string[], properties: { ...base.properties } as Record<string, unknown> };
+  if (request.mode === "chat-reading") {
+    schema.properties.reply = { type: "string", maxLength: 6_000 };
+    schema.properties.readRequests = CHAT_READ_REQUESTS_SCHEMA;
+    schema.required.push("readRequests");
+  }
+  return schema;
+}
+
+function chatProviderPayload(request: ChatRequest): Record<string, unknown> {
+  const base = { question: request.prompt, workspaceName: request.workspaceName, conversation: request.history };
+  return request.mode === "chat-reading"
+    ? { ...base, readingContext: parseChatReadingContext(request.readingContext) }
+    : { ...base, notes: request.notes, sources: request.sources, concepts: request.concepts };
 }
 
 function anthropicCompatibleSchema(

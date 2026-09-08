@@ -232,6 +232,36 @@ flushed temporary file plus atomic replacement.
 Browser preview uses `localStorage` for development and keeps both provider keys
 in memory for the current tab. Desktop behavior is authoritative.
 
+### Multiple Orion windows
+
+**File → New Window** and **Cmd+Shift+N** open another full library window in the
+current Space after flushing the originating window. **Cmd+N** still creates a
+note. Windows share one vault while keeping their active Space, selected note,
+history, scroll position, and transient UI independent. Titles identify the
+current Space and note for the macOS Window menu.
+
+`src-tauri/src/desktop_windows.rs` owns window creation, native menus, citation
+routing, overview ownership, and the per-window quit handshake. New windows use
+the main window configuration and the narrowly scoped `orion-window-*`
+capability pattern. Closing a window flushes and destroys only that window;
+application Quit waits for every registered window to save. A failed save
+cancels Quit in all windows. Never force-exit after an arbitrary timeout.
+
+`src/lib/windowVault.ts` merges each window's changes against its last persisted
+snapshot and freshly read disk data. Disjoint fields and records merge, while
+competing text or deletion/edit changes require a visible choice. A choice is
+bound to the displayed disk revision, and must not overwrite a later unseen
+revision. Pending typing during a save is rebased as subsequent local edits.
+Every write still uses `vault.lock`, the expected revision, and atomic file
+replacement. Retries are bounded; failed writes leave local edits available.
+Native save/workflow events refresh other windows without changing their
+navigation; browser preview uses storage events and Web Locks. JSON object key
+order is not a content change. New save revisions must advance monotonically.
+
+Deep links target one preferred window, not every renderer. The native workflow
+lease remains shared across windows. Automatic overview generation also claims
+one native owner per Space to avoid duplicate provider work.
+
 ## Claude MCP contract
 
 Orion bundles `Orion-Claude-Connector.mcpb`, a self-contained Apple Silicon
@@ -607,8 +637,8 @@ from its current member digests instead of repeatedly summarizing prior
 summaries, which prevents incremental semantic drift without rereading
 unaffected note bodies.
 
-Except for explicit one-generation consent in the Generate composer described
-below, when `includeExistingNotesInAIContext` is disabled, the local digest/index may
+Except for an explicit Space-scoped Chat question and one-generation consent in
+the Generate composer described below, when `includeExistingNotesInAIContext` is disabled, the local digest/index may
 still be maintained as private derived data for deterministic search,
 fingerprints, and collision safety, but no overview, digest, cluster/root
 blueprint, note-derived routing signal, or note body may be sent to a provider.
@@ -1700,6 +1730,26 @@ or lose its formatting. Pass the bounded selected text to AI linked-article
 generation with special weight, and retain it across Restart without persisting
 a parallel vault schema.
 
+AI title generation checks the complete current Space's title/alias vocabulary
+locally after each response. Reuse a single existing destination under its
+canonical title. If a suggestion names the origin note (including retained
+concept aliases) or has ambiguous destinations, retry with that rejected title
+excluded, for at most three naming calls total. Recheck the captured Space and
+origin ID between attempts; cancellation must prevent further provider calls.
+Move focus to Cancel while naming so Escape remains available when the other
+controls are disabled.
+Keep the composer and instructions available if naming cannot resolve a title.
+The existing-note AI-context preference also gates the naming request's other
+note summaries and concept vocabulary; local collision checks remain available
+with it disabled.
+
+The composer identifies a populated existing destination as **Link existing
+article**. Registration rechecks collisions before creating any note or job,
+preserves existing prose, and reports reuse. A reused empty article queues
+generation with its actual canonical title, even when the selected link phrase
+was an alias. Explicitly linking an inactive alias re-enables the original
+concept without creating a duplicate page.
+
 The editor Unlink action preserves the selected words and destination note. For
 an Orion concept it also sets that concept's `autoLink` to false so decorations
 do not immediately recreate the link everywhere; explicitly teaching the phrase
@@ -1992,11 +2042,51 @@ be interrupted.
 ## Chat contract
 
 The visible route and navigation label are **Chat**. It is one persistent
-conversation scoped to the active Space, not a thinking-card workspace. Build
-each request from the current prompt, up to 12 recent turns, and bounded context
-from that Space: up to 80 notes, 30 sources, and 120 concepts. Never read context
-from another Space. These are Chat-only retrieval bounds; they are not the
-retired organizer pattern of sending an arbitrary fixed slice of note bodies.
+conversation scoped to the captured active Space, not a thinking-card workspace.
+`src/lib/chatReading.ts` coordinates adaptive reads through the existing Chat
+provider transport. Begin with a validated Space hierarchy (or bounded overview
+fallback), locally ranked whole-body digests, and local full-text discovery.
+The model can request `search`, `cluster`, `note`, `source`, and `related` reads,
+then decide whether to read further or answer. Search includes all current-Space
+note and source bodies, including material outside the displayed hierarchy.
+Only discovered exact IDs may be opened. Hierarchy, directory summaries, links,
+and search hits route reading; they are never claim-level evidence.
+
+Every provider step receives a fresh bounded working set, not an accumulating
+reading transcript: at most 12 recent conversation messages within 12,000 code
+points, 24 directory entries, and 12 exact passages of at most 3,000 UTF-16 units
+each. Bound the encoded reading packet to 96,000 UTF-8 bytes, evicting older
+working material as needed; only passages still present may be cited. Each reply
+gets at most six sequential provider steps and three minutes. Each step may ask
+for at most four reads. Repeated reads cannot extend the budget. Finalization
+requires an answer or a clear failure; never silently claim exhaustive coverage.
+Simple conversation may answer immediately without opening knowledge bodies.
+
+`src/lib/chatReadingProtocol.json` is the shared native/browser instruction and
+read schema source. `chat-reading` is a distinct transport mode; inline writing
+and ordinary transport consumers retain their existing schemas. Validate read
+operations, offsets, packet size, and model replies in TypeScript and Rust.
+Reads never apply accompanying prose or note actions. Preserve host-derived
+creation authority only for the final answer. Never grant writes from context.
+
+Chat questions explicitly request the current Space's knowledge. As before,
+the Settings switch for existing-note context governs imports and enrichment;
+it does not disable explicit Chat reading. Chat never reads other Spaces.
+Freeze the request's content and selected provider settings. Reject further
+steps and late answers when the captured Space knowledge changes. Navigation
+to another Space is independent. Stop cancels the logical run and prevents
+late commits; a native transport already dispatched may still finish, and its
+physical scheduler slot must remain occupied until it does.
+
+The host resolves `[[e1]]`-style response markers only against exact passages
+actually supplied to the answer step. Persist bounded optional `evidence` and
+`coverage` on the existing `StudioMessage`, never a parallel Chat store. Evidence
+contains original text, exact entity/version, and exclusive UTF-16 ranges.
+The citation inspector shows that historical passage and marks changed or
+removed originals. Reference validity does not prove a model claim follows from
+its citation. Keep as note converts Chat anchors to portable Orion links and
+updates both sides of source provenance. Older messages without these fields
+continue to validate and render.
 
 The host derives note-write intent from the current user prompt before calling
 the provider, and the native boundary independently recomputes the same gate.
@@ -2064,7 +2154,8 @@ and prior Chat messages are untrusted data, not instructions.
   relationships, and aliases rather than keyword frequency. Explicit actions
   may become `- [ ]` items in project notes, but the model must not invent tasks.
 - Chat chooses its schema and transport ceiling from host-verified current-prompt
-  intent. Ordinary conversation is reply-only at 6,000 tokens and cannot write;
+  intent. The `chat-reading` schema additionally carries bounded `readRequests`;
+  reading steps cannot write. Ordinary conversation is reply-only at 6,000 tokens and cannot write;
   an explicit note-creation request may use strict `reply` + `noteActions` at
   12,000 tokens. Its request must contain only the bounded Space context and
   history described above, with no legacy card or layout payload. Inline writing
@@ -2157,8 +2248,13 @@ Reuse the existing colors, surfaces, typography, radii, and compact scale in
 - strong empty states with no fake content;
 - keyboard access, focus trapping, visible focus, reduced-motion behavior, and
   useful ARIA labels;
-- draggable native window chrome across the empty top bar and workspace label,
-  while every navigation, search, export, and panel control remains interactive;
+- draggable native window chrome across the full top bar, including the blank
+  sidebar strip and gaps around controls. The top bar uses Tauri's `deep` drag
+  region so non-interactive descendants participate; buttons and other controls
+  retain normal input. The Space switcher stays above the sidebar drag strip in
+  stacking order so its entire button remains clickable;
+- Chat uses one continuous background behind the thread and composer; do not
+  add a composer-width backdrop that creates vertical seams across that room;
 - one calm Share or export sheet whose default is an offline web article, with
   explicit format and scope choices plus a plain privacy summary; do not turn
   export into a settings dashboard or imply that a local file is already a
@@ -2223,6 +2319,16 @@ currently sets `CARGO_PROFILE_RELEASE_STRIP=false` because Rust 1.96 on current
 macOS can make release-stripped proc-macro dylibs unloadable with E0463; remove
 that workaround only after the installed stable toolchain builds Orion cleanly
 with Cargo's normal release stripping.
+
+On the maintainer's Mac, the existing notarization Keychain profile is
+`orion-notary`, verified against Apple's accepted Orion submission history on
+2026-09-08. For an authorized notarized release, use
+`ORION_NOTARY_PROFILE=orion-notary`. Check it with
+`xcrun notarytool history --keychain-profile orion-notary --output-format json`
+before asking the maintainer to set up credentials again. An unset environment
+variable or an empty `security dump-keychain` search does not mean the profile
+is missing; notarytool can access credentials those checks do not enumerate.
+Never print or request the stored password.
 The MCPB contains nested executable code that outer bundle signing cannot
 inspect through the ZIP container. Build and Developer-ID-sign `orion-mcp`
 before creating a release MCPB (ordinary local builds remain ad hoc); release

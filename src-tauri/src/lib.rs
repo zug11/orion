@@ -10,10 +10,7 @@ use std::{
     net::{IpAddr, SocketAddr, ToSocketAddrs},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -25,6 +22,7 @@ use zeroize::{Zeroize, Zeroizing};
 mod assistant_bridge;
 #[path = "../shared/assistant_protocol.rs"]
 mod assistant_protocol;
+mod desktop_windows;
 
 const KEYCHAIN_SERVICE: &str = "app.orion.knowledge";
 const KEYCHAIN_ACCOUNT: &str = "openai-api-key";
@@ -533,15 +531,6 @@ impl KnowledgeCancellation {
 #[derive(Clone, Default)]
 struct VaultWriteLock(Arc<Mutex<()>>);
 
-#[derive(Default)]
-struct ExitHandshake {
-    allow_exit: AtomicBool,
-    renderer_ready: AtomicBool,
-    exit_attempt: AtomicU64,
-    acknowledged_attempt: AtomicU64,
-    cancelled_attempt: AtomicU64,
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ApiKeyStatus {
@@ -839,6 +828,8 @@ struct ChatRequest {
     #[serde(default)]
     allow_note_actions: bool,
     #[serde(default)]
+    reading_context: Option<String>,
+    #[serde(default)]
     model: Option<String>,
     #[serde(default)]
     effort: Option<String>,
@@ -859,6 +850,17 @@ struct ChatNoteAction {
 struct ChatResult {
     reply: String,
     note_actions: Vec<ChatNoteAction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    read_requests: Option<Vec<ChatReadRequest>>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ChatReadRequest {
+    kind: String,
+    id: String,
+    query: String,
+    start: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -1539,7 +1541,7 @@ async fn save_vault(
 ) -> Result<(), String> {
     let path = vault_path(&app)?;
     let write_lock = Arc::clone(&write_lock.0);
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let _guard = write_lock
             .lock()
             .map_err(|_| "Orion's vault save queue was interrupted.".to_string())?;
@@ -1549,7 +1551,11 @@ async fn save_vault(
         write_vault_file_if_current(&path, &vault, expected_updated_at.as_deref())
     })
     .await
-    .map_err(|error| format!("The vault save task could not finish: {error}"))?
+    .map_err(|error| format!("The vault save task could not finish: {error}"))?;
+    if result.is_ok() {
+        let _ = app.emit("orion-vault-changed", ());
+    }
+    result
 }
 
 #[tauri::command]
@@ -4001,7 +4007,105 @@ fn parse_chat_result(output_text: &str, reply_only: bool) -> Result<ChatResult, 
     Ok(ChatResult {
         reply,
         note_actions,
+        read_requests: None,
     })
+}
+
+// The renderer and native transport use the same authored reading protocol.
+fn chat_reading_protocol() -> Value {
+    serde_json::from_str(include_str!("../../src/lib/chatReadingProtocol.json"))
+        .expect("the bundled Chat reading protocol is valid JSON")
+}
+
+fn chat_transport_schema(reply_only: bool, reading: bool) -> Value {
+    let mut schema = chat_schema(reply_only);
+    if reading {
+        schema["properties"]["reply"] = json!({ "type": "string", "maxLength": 6000 });
+        schema["properties"]["readRequests"] = chat_reading_protocol()["requestsSchema"].clone();
+        schema["required"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("readRequests"));
+    }
+    schema
+}
+
+fn validate_chat_reading_context(text: Option<&str>) -> Result<Value, String> {
+    let text = text
+        .filter(|text| text.len() <= 96_000)
+        .ok_or("Chat's reading packet exceeded its limit.")?;
+    let value: Value =
+        serde_json::from_str(text).map_err(|_| "Chat received an invalid reading packet.")?;
+    if !value.is_object()
+        || !value["finalizing"].is_boolean()
+        || !value["evidence"]
+            .as_array()
+            .is_some_and(|items| items.len() <= 12)
+    {
+        return Err("Chat received an invalid reading packet.".to_string());
+    }
+    Ok(value)
+}
+
+fn parse_chat_response(
+    output_text: &str,
+    reply_only: bool,
+    reading: bool,
+) -> Result<ChatResult, ()> {
+    if !reading {
+        return parse_chat_result(output_text, reply_only);
+    }
+    let mut value: Value = serde_json::from_str(output_text).map_err(|_| ())?;
+    let object = value.as_object_mut().ok_or(())?;
+    if object.keys().any(|key| {
+        !["reply", "readRequests"].contains(&key.as_str()) && (reply_only || key != "noteActions")
+    }) {
+        return Err(());
+    }
+    let requests_value = object.remove("readRequests").ok_or(())?;
+    if !requests_value.as_array().is_some_and(|items| {
+        items.iter().all(|item| {
+            item.as_object().is_some_and(|object| {
+                object.len() == 4
+                    && ["kind", "id", "query", "start"]
+                        .iter()
+                        .all(|key| object.contains_key(*key))
+            })
+        })
+    }) {
+        return Err(());
+    }
+    let requests: Vec<ChatReadRequest> = serde_json::from_value(requests_value).map_err(|_| ())?;
+    if requests.len() > 4
+        || requests.iter().any(|request| {
+            !["search", "cluster", "note", "source", "related"].contains(&request.kind.as_str())
+                || request.id.chars().count() > 200
+                || request.query.chars().count() > 600
+                || request.start.is_some_and(|start| start > 1_000_000_000)
+                || if request.kind == "search" {
+                    !request.id.is_empty() || request.query.trim().is_empty()
+                } else {
+                    request.id.trim().is_empty()
+                }
+        })
+    {
+        return Err(());
+    }
+    let reply = object.get("reply").and_then(Value::as_str).ok_or(())?;
+    if reply.chars().count() > 6_000 {
+        return Err(());
+    }
+    if !requests.is_empty() {
+        // Reading responses cannot commit accompanying prose or note actions.
+        return Ok(ChatResult {
+            reply: String::new(),
+            note_actions: Vec::new(),
+            read_requests: Some(requests),
+        });
+    }
+    let mut result = parse_chat_result(&value.to_string(), reply_only)?;
+    result.read_requests = Some(requests);
+    Ok(result)
 }
 
 fn normalize_chat_note_action(value: &Value) -> Option<ChatNoteAction> {
@@ -4891,14 +4995,32 @@ async fn chat(client: State<'_, OpenAiClient>, request: ChatRequest) -> Result<C
     }
 
     let inline_writing = match request.mode.as_deref() {
-        None | Some("chat") => false,
+        None | Some("chat") | Some("chat-reading") => false,
         Some("inline-writing") => true,
         Some(_) => return Err("Orion received an unsupported AI request mode.".to_string()),
     };
     let allow_note_actions =
         !inline_writing && request.allow_note_actions && chat_prompt_allows_note_creation(&prompt);
+    let reading = request.mode.as_deref() == Some("chat-reading");
+    let reading_context = if reading {
+        Some(validate_chat_reading_context(
+            request.reading_context.as_deref(),
+        )?)
+    } else {
+        None
+    };
     let provider_instructions = if inline_writing {
         INLINE_WRITING_INSTRUCTIONS.trim().to_string()
+    } else if reading {
+        format!(
+            "{}\n\n{}",
+            chat_reading_protocol()["instructions"].as_str().unwrap(),
+            if allow_note_actions {
+                format!("{}\nOnly the final answer may contain noteActions. Reading responses must return an empty noteActions array.", CHAT_NOTE_ACTION_INSTRUCTIONS.trim())
+            } else {
+                "No note write is authorized. Do not return noteActions or claim to have created or changed notes.".to_string()
+            }
+        )
     } else {
         chat_instructions(allow_note_actions)
     };
@@ -4977,17 +5099,26 @@ async fn chat(client: State<'_, OpenAiClient>, request: ChatRequest) -> Result<C
             })
         })
         .collect::<Vec<_>>();
-    let chat_payload = json!({
-        "question": prompt,
-        "workspaceName": bounded_text(&request.workspace_name, 300),
-        "conversation": history,
-        "notes": notes,
-        "sources": sources,
-        "concepts": concepts
-    });
+    let chat_payload = if let Some(reading_context) = reading_context {
+        json!({
+            "question": prompt,
+            "workspaceName": bounded_text(&request.workspace_name, 300),
+            "conversation": history,
+            "readingContext": reading_context
+        })
+    } else {
+        json!({
+            "question": prompt,
+            "workspaceName": bounded_text(&request.workspace_name, 300),
+            "conversation": history,
+            "notes": notes,
+            "sources": sources,
+            "concepts": concepts
+        })
+    };
 
     if use_anthropic {
-        let mut provider_schema = chat_schema(!allow_note_actions);
+        let mut provider_schema = chat_transport_schema(!allow_note_actions, reading);
         strip_anthropic_unsupported_schema_keywords(&mut provider_schema);
         let mut output_config = json!({
             "format": {
@@ -5030,7 +5161,7 @@ async fn chat(client: State<'_, OpenAiClient>, request: ChatRequest) -> Result<C
             .await
             .map_err(|error| format!("Orion could not read Anthropic's response: {error}"))?;
         let output_text = extract_anthropic_output_text(&response, operation)?;
-        return parse_chat_result(&output_text, !allow_note_actions).map_err(|_| {
+        return parse_chat_response(&output_text, !allow_note_actions, reading).map_err(|_| {
             format!(
                 "Anthropic returned {} Orion could not read. Try again.",
                 if inline_writing {
@@ -5054,7 +5185,7 @@ async fn chat(client: State<'_, OpenAiClient>, request: ChatRequest) -> Result<C
                 "type": "json_schema",
                 "name": "orion_chat",
                 "strict": true,
-                "schema": chat_schema(!allow_note_actions)
+                "schema": chat_transport_schema(!allow_note_actions, reading)
             }
         }
     });
@@ -5083,7 +5214,7 @@ async fn chat(client: State<'_, OpenAiClient>, request: ChatRequest) -> Result<C
         .await
         .map_err(|error| format!("Orion could not read OpenAI's response: {error}"))?;
     let output_text = extract_output_text(&response, operation)?;
-    parse_chat_result(&output_text, !allow_note_actions).map_err(|_| {
+    parse_chat_response(&output_text, !allow_note_actions, reading).map_err(|_| {
         format!(
             "OpenAI returned {} Orion could not read. Try again.",
             if inline_writing {
@@ -6638,36 +6769,6 @@ async fn export_web_page(
     })
 }
 
-#[tauri::command]
-fn complete_app_exit(app: AppHandle, handshake: State<'_, ExitHandshake>) {
-    handshake.allow_exit.store(true, Ordering::SeqCst);
-    app.exit(0);
-}
-
-#[tauri::command]
-fn set_exit_guard_ready(handshake: State<'_, ExitHandshake>, ready: bool) {
-    handshake.renderer_ready.store(ready, Ordering::SeqCst);
-    if !ready {
-        handshake.exit_attempt.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
-#[tauri::command]
-fn acknowledge_app_exit(handshake: State<'_, ExitHandshake>, attempt: u64) {
-    if handshake.exit_attempt.load(Ordering::SeqCst) == attempt {
-        handshake
-            .acknowledged_attempt
-            .store(attempt, Ordering::SeqCst);
-    }
-}
-
-#[tauri::command]
-fn cancel_app_exit(handshake: State<'_, ExitHandshake>, attempt: u64) {
-    if handshake.exit_attempt.load(Ordering::SeqCst) == attempt {
-        handshake.cancelled_attempt.store(attempt, Ordering::SeqCst);
-    }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let http_client = Client::builder()
@@ -6681,10 +6782,10 @@ pub fn run() {
         .manage(OpenAiClient(http_client))
         .manage(KnowledgeCancellation::default())
         .manage(VaultWriteLock::default())
-        .manage(ExitHandshake::default())
+        .manage(desktop_windows::DesktopWindows::default())
         .manage(VoiceMemoWorkers::default())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = desktop_windows::preferred_window(app) {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
@@ -6693,6 +6794,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            desktop_windows::install_menu(app.handle())?;
             let bridge = assistant_bridge::AssistantBridge::new(vault_path(app.handle())?);
             if let Err(error) = bridge.start() {
                 eprintln!("Orion desktop workflows are unavailable: {error}");
@@ -6750,49 +6852,37 @@ pub fn run() {
             transcription_setup_status,
             export_markdown,
             export_web_page,
-            complete_app_exit,
-            set_exit_guard_ready,
-            acknowledge_app_exit,
-            cancel_app_exit
+            desktop_windows::new_orion_window,
+            desktop_windows::close_orion_window,
+            desktop_windows::is_citation_window,
+            desktop_windows::claim_space_overview,
+            desktop_windows::release_space_overview,
+            desktop_windows::complete_app_exit,
+            desktop_windows::set_exit_guard_ready,
+            desktop_windows::cancel_app_exit
         ])
         .build(tauri::generate_context!())
         .expect("error while building Orion");
 
     app.run(|app_handle, event| match event {
         tauri::RunEvent::ExitRequested { api, .. } => {
-            let handshake = app_handle.state::<ExitHandshake>();
-            if !handshake.renderer_ready.load(Ordering::SeqCst)
-                || handshake.allow_exit.load(Ordering::SeqCst)
-            {
-                return;
+            if !desktop_windows::may_exit(app_handle) {
+                api.prevent_exit();
             }
-            let attempt = handshake.exit_attempt.fetch_add(1, Ordering::SeqCst) + 1;
-            api.prevent_exit();
-            let _ = app_handle.emit("orion-quit-requested", attempt);
-
-            let fallback_handle = app_handle.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_secs(2));
-                let fallback = fallback_handle.state::<ExitHandshake>();
-                if fallback.renderer_ready.load(Ordering::SeqCst)
-                    && fallback.exit_attempt.load(Ordering::SeqCst) == attempt
-                    && fallback.acknowledged_attempt.load(Ordering::SeqCst) != attempt
-                    && fallback.cancelled_attempt.load(Ordering::SeqCst) != attempt
-                    && !fallback.allow_exit.load(Ordering::SeqCst)
-                {
-                    fallback.renderer_ready.store(false, Ordering::SeqCst);
-                    fallback_handle.exit(0);
-                }
-            });
+        }
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::Focused(true),
+            ..
+        } => {
+            desktop_windows::focused(app_handle, &label);
         }
         tauri::RunEvent::WindowEvent {
             label,
             event: tauri::WindowEvent::Destroyed,
             ..
-        } if label == "main" => {
-            let handshake = app_handle.state::<ExitHandshake>();
-            handshake.renderer_ready.store(false, Ordering::SeqCst);
-            handshake.exit_attempt.fetch_add(1, Ordering::SeqCst);
+        } => {
+            desktop_windows::destroyed(app_handle, &label);
         }
         _ => {}
     });
@@ -8151,6 +8241,71 @@ mod tests {
         assert!(KNOWLEDGE_ORCHESTRATION_INSTRUCTIONS.contains("strictly separate"));
         assert!(KNOWLEDGE_ORCHESTRATION_INSTRUCTIONS.contains("at most six writer slots"));
         assert!(!KNOWLEDGE_ORCHESTRATION_INSTRUCTIONS.contains("three readers"));
+    }
+
+    #[test]
+    fn chat_reading_schema_and_reads_keep_writes_separate() {
+        let read_only = chat_transport_schema(true, true);
+        assert_eq!(read_only["required"], json!(["reply", "readRequests"]));
+        assert!(read_only["properties"].get("noteActions").is_none());
+        assert_eq!(read_only["properties"]["readRequests"]["maxItems"], 4);
+        assert!(chat_transport_schema(false, true)["properties"]
+            .get("noteActions")
+            .is_some());
+        let response = json!({ "reply": "Premature prose", "readRequests": [
+            {"kind": "note", "id": "note-a", "query": "support", "start": null}
+        ], "noteActions": [{"title":"Injected", "summary":"", "body":"Do not create while reading", "tags":[], "aliases":[]}] });
+        let parsed = parse_chat_response(&response.to_string(), false, true).unwrap();
+        assert!(parsed.reply.is_empty());
+        assert!(parsed.note_actions.is_empty());
+        assert_eq!(parsed.read_requests.unwrap().len(), 1);
+        assert!(parse_chat_response(&response.to_string(), true, true).is_err());
+        assert!(parse_chat_response(&response.to_string(), false, false).is_err());
+        let answer = json!({"reply":"Grounded answer [[e1]].", "readRequests":[]});
+        assert_eq!(
+            parse_chat_response(&answer.to_string(), true, true)
+                .unwrap()
+                .reply,
+            "Grounded answer [[e1]]."
+        );
+    }
+
+    #[test]
+    fn chat_reading_rejects_unbounded_or_malformed_requests() {
+        let valid = json!({"kind":"source", "id":"source-a", "query":"", "start":0});
+        for request in [
+            json!({"kind":"delete", "id":"note-a", "query":"", "start":null}),
+            json!({"kind":"note", "id":"note-a", "query":""}),
+            json!({"kind":"note", "id":"note-a", "query":"", "start":-1}),
+            json!({"kind":"search", "id":"", "query":"", "start":0}),
+            json!({"kind":"note", "id":"note-a", "query":"", "start":null, "spaceId":"other"}),
+        ] {
+            assert!(parse_chat_response(
+                &json!({"reply":"", "readRequests":[request]}).to_string(),
+                true,
+                true
+            )
+            .is_err());
+        }
+        assert!(parse_chat_response(
+            &json!({"reply":"", "readRequests":vec![valid;5]}).to_string(),
+            true,
+            true
+        )
+        .is_err());
+        assert!(parse_chat_response(
+            &json!({"reply":"", "readRequests":[]}).to_string(),
+            true,
+            true
+        )
+        .is_err());
+        assert!(
+            validate_chat_reading_context(Some("{\"finalizing\":false,\"evidence\":[]}")).is_ok()
+        );
+        assert!(validate_chat_reading_context(Some("[]")).is_err());
+        let oversized =
+            json!({"finalizing":false,"evidence":[],"text":"😀".repeat(30_000)}).to_string();
+        assert!(validate_chat_reading_context(Some(&oversized)).is_err());
     }
 
     #[test]

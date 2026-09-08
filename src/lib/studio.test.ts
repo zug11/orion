@@ -55,9 +55,8 @@ describe("Chat and legacy Studio state", () => {
     expect(request).not.toHaveProperty("selectedCards");
     expect(request.history).toHaveLength(12);
     expect(request.history[0].content).toBe("Message 3");
-    expect(request.notes).toEqual([
-      expect.objectContaining({ title: "Northern sky" }),
-    ]);
+    expect(request.notes).toEqual([]);
+    expect(request.sources).toEqual([]);
     expect(request.allowNoteActions).toBe(false);
   });
 

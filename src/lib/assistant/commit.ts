@@ -2,6 +2,7 @@ import type { AppSnapshot, OrionVault } from "../../types";
 import { reconcileConceptVocabulary } from "../concepts";
 import { stableSnapshotVersion } from "../knowledgeOrchestration/context";
 import { markSpaceOverviewStale } from "../spaceOverview";
+import { nextVaultRevision } from "../windowVault";
 
 export function assertUnchangedSpace(base: AppSnapshot, current: AppSnapshot | undefined) {
   if (!current || current.workspace.id !== base.workspace.id || stableSnapshotVersion(current) !== stableSnapshotVersion(base)) {
@@ -14,7 +15,7 @@ export function composeWorkflowVault(current: OrionVault, base: AppSnapshot, gen
   const live = current.spaces.find((space) => space.workspace.id === base.workspace.id);
   assertUnchangedSpace(base, live);
   if (generated.workspace.id !== base.workspace.id) throw new Error("Workflow result crossed a Space boundary.");
-  const now = new Date().toISOString();
+  const now = nextVaultRevision(current.updatedAt);
   return { ...current, updatedAt: now, spaces: current.spaces.map((space) => space.workspace.id !== base.workspace.id ? space : {
     ...space, notes: generated.notes, sources: generated.sources, concepts: generated.concepts, relationships: generated.relationships,
     spaceOverview: generated.spaceOverview, spaceKnowledge: generated.spaceKnowledge, updatedAt: now,

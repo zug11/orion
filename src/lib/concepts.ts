@@ -52,6 +52,11 @@ export interface RegisterConceptPhraseResult extends ConceptVocabulary {
   conceptId: EntityId;
 }
 
+export type CanonicalArticleTarget =
+  | { kind: "new" }
+  | { kind: "existing"; note: Note }
+  | { kind: "ambiguous"; noteIds: EntityId[] };
+
 export function normalizeConceptPhrase(value: string): string {
   return value
     .normalize("NFKC")
@@ -411,13 +416,14 @@ export function ensureCanonicalConceptPhrase(
   }
 
   const current = reconcileConceptVocabulary(inputNotes, inputConcepts);
-  const existingConcept = findConceptByPhrase(current.concepts, phrase);
+  const existingConcept = findReusableConceptPhrase(current.concepts, phrase);
   if (
     existingConcept &&
     existingConcept.noteIds.some((noteId) =>
       current.notes.some((note) => note.id === noteId),
     )
   ) {
+    existingConcept.autoLink = true;
     return {
       ...current,
       conceptId: existingConcept.id,
@@ -452,6 +458,60 @@ export function ensureCanonicalConceptPhrase(
       noteIds: [candidateArticle.id],
       description: input.description,
     },
+  );
+}
+
+/** Uses the same reconciled vocabulary as registration, without creating a page. */
+export function resolveCanonicalArticleTarget(
+  notes: readonly Note[],
+  concepts: readonly Concept[],
+  phrase: string,
+): CanonicalArticleTarget {
+  if (!isLinkablePhrase(phrase)) return { kind: "new" };
+  return createCanonicalArticleResolver(notes, concepts)(phrase);
+}
+
+/** Reconcile once while a composer checks successive title edits. */
+export function createCanonicalArticleResolver(
+  notes: readonly Note[],
+  concepts: readonly Concept[],
+): (phrase: string) => CanonicalArticleTarget {
+  const current = reconcileConceptVocabulary(notes, concepts);
+  const noteById = new Map(current.notes.map((note) => [note.id, note]));
+  return (phrase) => {
+    if (!isLinkablePhrase(phrase)) return { kind: "new" };
+    const key = normalizeConceptPhrase(phrase);
+    const concept = findReusableConceptPhrase(current.concepts, phrase);
+    const canonical = concept?.canonicalNoteId
+      ? noteById.get(concept.canonicalNoteId)
+      : undefined;
+    if (canonical) return { kind: "existing", note: canonical };
+
+    const matches = (concept?.noteIds ?? [])
+      .map((id) => noteById.get(id))
+      .filter((note): note is Note => Boolean(note));
+    const candidates = matches.length
+      ? matches
+      : current.notes.filter((note) => normalizeConceptPhrase(note.title) === key);
+    if (candidates.length === 1) return { kind: "existing", note: candidates[0] };
+    if (candidates.length > 1) {
+      return { kind: "ambiguous", noteIds: candidates.map((note) => note.id) };
+    }
+    return { kind: "new" };
+  };
+}
+
+function findReusableConceptPhrase(
+  concepts: readonly Concept[],
+  phrase: string,
+): Concept | undefined {
+  const key = normalizeConceptPhrase(phrase);
+  return (
+    concepts.find((concept) => normalizeConceptPhrase(concept.label) === key) ??
+    findConceptByPhrase(concepts, phrase) ??
+    concepts.find((concept) => concept.aliases.some(
+      (alias) => normalizeConceptPhrase(alias) === key,
+    ))
   );
 }
 

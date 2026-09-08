@@ -15,7 +15,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 const MAX_JOBS: usize = 32;
 const MAX_QUEUED: usize = 8;
@@ -946,7 +946,7 @@ pub async fn assistant_commit_vault(
     }
     let bridge = bridge.inner().clone();
     let lock = Arc::clone(&write_lock.0);
-    tauri::async_runtime::spawn_blocking(move || {
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
         perform_commit(
             &bridge,
             &lock,
@@ -958,7 +958,11 @@ pub async fn assistant_commit_vault(
         )
     })
     .await
-    .map_err(|_| "The workflow save task was interrupted.".to_string())?
+    .map_err(|_| "The workflow save task was interrupted.".to_string())?;
+    if outcome.is_ok() {
+        let _ = app.emit("orion-vault-changed", ());
+    }
+    outcome
 }
 
 fn perform_commit(

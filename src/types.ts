@@ -342,6 +342,9 @@ export interface StudioMessage {
   contextCardIds: EntityId[];
   /** Notes created from this reply, shown as permanent Space destinations. */
   createdNoteIds?: EntityId[];
+  /** Exact passages read for this reply; optional for older conversations. */
+  evidence?: ChatEvidence[];
+  coverage?: ChatCoverage;
   createdAt: ISODateString;
 }
 
@@ -594,7 +597,7 @@ export interface ChatHistoryItem {
 }
 
 export interface ChatRequest {
-  mode?: "chat" | "inline-writing";
+  mode?: "chat" | "inline-writing" | "chat-reading";
   prompt: string;
   workspaceName: string;
   notes: ChatNoteContext[];
@@ -603,6 +606,8 @@ export interface ChatRequest {
   history: ChatHistoryItem[];
   /** Host-derived authorization for creation-only Chat note actions. */
   allowNoteActions?: boolean;
+  /** Bounded host-built reading packet. Only used by chat-reading. */
+  readingContext?: string;
   model?: string;
   effort?: ReasoningEffort;
 }
@@ -610,6 +615,40 @@ export interface ChatRequest {
 export interface ChatResult {
   reply: string;
   noteActions?: ChatNoteAction[];
+  /** Provider requests; executed locally and never persisted as conversation. */
+  readRequests?: ChatReadRequest[];
+  /** Host-built citations and coverage, never accepted from provider output. */
+  evidence?: ChatEvidence[];
+  coverage?: ChatCoverage;
+}
+
+export interface ChatReadRequest {
+  kind: "search" | "cluster" | "note" | "source" | "related";
+  id: string;
+  query: string;
+  /** UTF-16 offset for exact text, directory offset for search/cluster. */
+  start: number | null;
+}
+
+export interface ChatEvidence {
+  id: string;
+  kind: "note" | "source";
+  entityId: EntityId;
+  title: string;
+  version: string;
+  start: number;
+  end: number;
+  text: string;
+  offsetUnit: "utf16";
+}
+
+export interface ChatCoverage {
+  availableNotes: number;
+  availableSources: number;
+  openedNotes: number;
+  openedSources: number;
+  searches: number;
+  limited: boolean;
 }
 
 export interface ChatNoteAction {

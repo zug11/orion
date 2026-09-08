@@ -5,6 +5,7 @@ import {
   reconcileConceptVocabulary,
   reconcileSnapshotConceptVocabulary,
   registerConceptPhrase,
+  resolveCanonicalArticleTarget,
 } from "./concepts";
 import { createEmptySnapshot } from "../data/defaults";
 import { decorateAutoLinks } from "./wiki";
@@ -315,6 +316,46 @@ describe("ensureCanonicalConceptPhrase", () => {
     expect(result.notes.some((candidate) => candidate.id === "note-unused")).toBe(
       false,
     );
+  });
+
+  it("reuses and re-enables an unlinked alias without creating a second article", () => {
+    const article = makeNote("note-sql", "SQL", {
+      kind: "wiki",
+      summary: "",
+      aliases: ["Structured Query Language"],
+    });
+    const concept = makeConcept("concept-sql", "SQL", [article.id]);
+    concept.canonicalNoteId = article.id;
+    concept.aliases = ["Structured Query Language"];
+    concept.autoLink = false;
+    const target = resolveCanonicalArticleTarget([article], [concept], "Structured Query Language");
+    const result = ensureCanonicalConceptPhrase([article], [concept], {
+      phrase: "Structured Query Language",
+      candidateArticle: makeNote("unused", "Structured Query Language"),
+    });
+
+    expect(target).toMatchObject({ kind: "existing", note: { id: article.id, title: "SQL" } });
+    expect(result.notes).toHaveLength(1);
+    expect(result.notes[0]).toMatchObject({ id: article.id, title: "SQL", body: "" });
+    expect(result.concepts.find((item) => item.id === result.conceptId)).toMatchObject({
+      canonicalNoteId: article.id, autoLink: true,
+    });
+    expect(concept.autoLink).toBe(false);
+  });
+
+  it("reports duplicate titles and shared aliases as ambiguous without choosing or changing a note", () => {
+    const notes = [
+      makeNote("one", "SQL", { aliases: ["Query language"], body: "First explanation." }),
+      makeNote("two", "sql", { aliases: ["Query language"], body: "Second explanation." }),
+    ];
+    const before = JSON.stringify(notes);
+    expect(resolveCanonicalArticleTarget(notes, [], "SQL")).toEqual({
+      kind: "ambiguous", noteIds: ["one", "two"],
+    });
+    expect(resolveCanonicalArticleTarget(notes, [], "Query language")).toEqual({
+      kind: "ambiguous", noteIds: ["one", "two"],
+    });
+    expect(JSON.stringify(notes)).toBe(before);
   });
 
   it("preserves an existing ambiguous concept instead of inventing an article", () => {

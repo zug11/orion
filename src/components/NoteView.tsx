@@ -91,7 +91,7 @@ interface NoteViewProps {
   onDeleteNote: (noteId: string) => void;
   onFinishEditing?: (noteId: string) => void;
   onRegisterConcept: (input: RegisterWikiLinkInput) => string;
-  onGenerateLinkTitle?: (selectedContext: string) => Promise<string>;
+  onGenerateLinkTitle?: (selectedContext: string, signal?: AbortSignal) => Promise<string>;
   onGenerateAIWriting?: (
     input: Omit<AIWritingRequestInput, "originNoteId">,
   ) => Promise<string>;

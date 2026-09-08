@@ -31,7 +31,7 @@ export function Topbar({
   onForward,
 }: TopbarProps) {
   return (
-    <header className="topbar" data-tauri-drag-region>
+    <header className="topbar" data-tauri-drag-region="deep">
       <div className="history-controls">
         <button
           type="button"

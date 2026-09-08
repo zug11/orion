@@ -3,6 +3,7 @@ import type {
   ChatNoteAction,
   ChatRequest,
   ChatResult,
+  ChatEvidence,
   Note,
   StudioMessage,
 } from "../types";
@@ -10,6 +11,8 @@ import { slugifyTitle } from "../data/defaults";
 import { reconcileConceptVocabulary } from "./concepts";
 import { normalizeStudio } from "./studio";
 import { truncateUnicode } from "./text";
+import { portableChatEvidence } from "./chatCitations";
+import { isChatCoverage, isChatEvidence, MAX_CHAT_EVIDENCE } from "./chatReadingProtocol";
 
 export const MAX_CHAT_NOTE_ACTIONS = 3;
 const MAX_CHAT_NOTE_TITLE_CHARS = 200;
@@ -81,27 +84,21 @@ export function buildChatRequest(
   prompt: string,
 ): ChatRequest {
   const studio = normalizeStudio(snapshot.studio);
+  let historyBudget = 12_000;
+  const history = studio.messages.slice(-12).reverse().map((message) => {
+    const content = truncateUnicode(message.content, Math.min(2_000, historyBudget));
+    historyBudget -= [...content].length;
+    return { role: message.role, content };
+  }).filter((message) => message.content).reverse();
 
   return {
-    prompt: prompt.trim().slice(0, 8_000),
+    prompt: truncateUnicode(prompt.trim(), 8_000),
     workspaceName: snapshot.workspace.name,
-    notes: snapshot.notes.slice(0, 80).map((note) => ({
-      title: note.title,
-      summary: note.summary.slice(0, 1_000),
-      body: note.body.slice(0, 8_000),
-    })),
-    sources: snapshot.sources.slice(0, 30).map((source) => ({
-      title: source.title,
-      text: source.text.slice(0, 6_000),
-    })),
-    concepts: snapshot.concepts.slice(0, 120).map((concept) => ({
-      label: concept.label,
-      description: concept.description.slice(0, 1_000),
-    })),
-    history: studio.messages.slice(-12).map((message) => ({
-      role: message.role,
-      content: message.content.slice(0, 4_000),
-    })),
+    // The reading coordinator discovers and opens evidence incrementally.
+    notes: [],
+    sources: [],
+    concepts: [],
+    history,
     allowNoteActions: chatPromptAllowsNoteCreation(prompt),
     model: snapshot.settings.model,
     effort: snapshot.settings.reasoningEffort,
@@ -117,11 +114,14 @@ export function applyChatResult(
   noteIdFactory: () => string = messageIdFactory,
 ): AppSnapshot {
   const studio = normalizeStudio(snapshot.studio);
+  const evidence = (result.evidence ?? []).filter(isChatEvidence).filter((item) =>
+    (item.kind === "note" ? snapshot.notes : snapshot.sources).some((entity) => entity.id === item.entityId),
+  ).slice(0, MAX_CHAT_EVIDENCE);
   const noteActions = chatPromptAllowsNoteCreation(prompt)
     ? normalizeChatNoteActions(result.noteActions)
     : [];
   const createdNotes = noteActions.map((action) =>
-    chatNoteFromAction(action, now, noteIdFactory()),
+    attachChatSourceIds(chatNoteFromAction(action, now, noteIdFactory()), evidence, snapshot),
   );
   const createdNoteIds = createdNotes.map((note) => note.id);
   const messages: StudioMessage[] = [
@@ -141,6 +141,8 @@ export function applyChatResult(
       cardIds: [],
       contextCardIds: [],
       ...(createdNoteIds.length > 0 ? { createdNoteIds } : {}),
+      ...(evidence.length ? { evidence } : {}),
+      ...(isChatCoverage(result.coverage) ? { coverage: result.coverage } : {}),
       createdAt: now,
     },
   ];
@@ -153,6 +155,7 @@ export function applyChatResult(
     ...snapshot,
     notes: vocabulary.notes,
     concepts: vocabulary.concepts,
+    sources: attachChatSourceNotes(snapshot, createdNotes),
     studio: {
       ...studio,
       messages,
@@ -181,7 +184,8 @@ export function saveChatReplyAsNote(
   }
 
   const action = chatActionFromReply(message.content);
-  const note = chatNoteFromAction(action, now, noteId);
+  action.body = portableChatEvidence(action.body, message.evidence ?? []);
+  const note = attachChatSourceIds(chatNoteFromAction(action, now, noteId), message.evidence ?? [], snapshot);
   const vocabulary = reconcileConceptVocabulary(
     [note, ...snapshot.notes],
     snapshot.concepts,
@@ -190,6 +194,7 @@ export function saveChatReplyAsNote(
     ...snapshot,
     notes: vocabulary.notes,
     concepts: vocabulary.concepts,
+    sources: attachChatSourceNotes(snapshot, [note]),
     studio: {
       ...studio,
       messages: studio.messages.map((candidate) =>
@@ -200,6 +205,22 @@ export function saveChatReplyAsNote(
     },
     updatedAt: now,
   };
+}
+
+function attachChatSourceIds(note: Note, evidence: readonly ChatEvidence[], snapshot: AppSnapshot): Note {
+  const sourceIds = [...new Set(evidence.filter((item) => item.kind === "source" &&
+    snapshot.sources.some((source) => source.id === item.entityId) &&
+    note.body.includes(`](orion-source://${encodeURIComponent(item.entityId)})`),
+  ).map((item) => item.entityId))];
+  return { ...note, sourceIds };
+}
+
+function attachChatSourceNotes(snapshot: AppSnapshot, notes: Note[]) {
+  if (!notes.length) return snapshot.sources;
+  return snapshot.sources.map((source) => {
+    const linked = notes.filter((note) => note.sourceIds.includes(source.id));
+    return linked.length ? { ...source, noteIds: [...new Set([...source.noteIds, ...linked.map((note) => note.id)])] } : source;
+  });
 }
 
 export function normalizeChatNoteActions(
@@ -354,7 +375,7 @@ function chatActionFromReply(reply: string): ChatNoteAction {
     .replace(/[^\P{Cc}\n\t]/gu, "")
     .trim() || "Saved from Orion Chat.";
   const firstLine = trimmed.split(/\r?\n/).find((line) => line.trim()) ?? "Chat note";
-  const plainFirstLine = firstLine
+  const plainFirstLine = chatProse(firstLine)
     .replace(/^#{1,6}\s+/, "")
     .replace(/[*_`~\[\]]/g, "")
     .trim();
@@ -369,12 +390,18 @@ function chatActionFromReply(reply: string): ChatNoteAction {
 }
 
 function summarizeMarkdown(markdown: string): string {
-  const plain = markdown
+  const plain = chatProse(markdown)
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/[#>*_`~\[\]()!-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
   return truncateAtWord(plain || "Saved from Orion Chat.", 280);
+}
+
+function chatProse(markdown: string): string {
+  return markdown
+    .replace(/[ \t]*\[[^\]]*\]\(#orion-evidence-e\d+\)/g, "")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
 }
 
 function truncateAtWord(value: string, maxChars: number): string {
