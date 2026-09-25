@@ -2,8 +2,14 @@ import type {
   HomeAtmosphere,
   HomeAtmosphereMotion,
   HomeAtmosphereTone,
+  Settings,
 } from "../types";
-import { contrastRatio, type ThemePalette } from "./theme";
+import { contrastRatio, resolveThemePalette, type ThemePalette } from "./theme";
+
+export function resolveAtmosphereTheme(settings: Settings, active: ThemePalette): ThemePalette {
+  return settings.homeAtmosphereAppearance === "dark" && active.mode !== "dark"
+    ? resolveThemePalette(settings, "dark") : active;
+}
 
 export interface AtmospherePalette {
   primary: string;
@@ -115,6 +121,15 @@ export function resolveAtmospherePalette(
   customColor = "",
   customSecondaryColor = "",
 ): AtmospherePalette {
+  // A stone/paper room gives daylight highlights somewhere to sit. Keep the
+  // user's room hue, but avoid near-white backdrops washing out the artwork.
+  if (themePalette?.mode === "light") {
+    themePalette = {
+      ...themePalette,
+      canvasDeep: mixHex(themePalette.canvasDeep, "#817e78", 0.1),
+      surface0: mixHex(themePalette.surface0, "#817e78", 0.12),
+    };
+  }
   const custom = /^#[0-9a-f]{6}$/i.test(customColor)
     ? customColor.toUpperCase()
     : "";

@@ -6,7 +6,9 @@ import { TableKit } from "@tiptap/extension-table";
 import TaskItem from "@tiptap/extension-task-item";
 import TaskList from "@tiptap/extension-task-list";
 import { EditorContent, useEditor } from "@tiptap/react";
-import StarterKit from "@tiptap/starter-kit";
+import { NoteStarterKit } from "./editor/NoteStarterKit";
+import { mergeSavedChatPassages, savedChatEvidence, splitSavedChatPassages } from "../lib/chatCitations";
+import { citedPassageStatus } from "./CitedPassage";
 import { nanoid } from "nanoid";
 import {
   useCallback,
@@ -41,7 +43,7 @@ import {
   canonicalizeSourceCitations,
   type SourceCitationReference,
 } from "../lib/sourceCitations";
-import type { Concept, EntityId, Note, Source } from "../types";
+import type { Concept, EntityId, Note, NoteTypeface, Source } from "../types";
 import {
   AIWritingControls,
   type AIWritingControlPosition,
@@ -76,6 +78,8 @@ import {
 import { resolveAIWritingSelectionPosition } from "./editor/aiWritingPosition";
 
 interface RichNoteEditorProps {
+  noteTypeface?: NoteTypeface;
+  onNoteTypefaceChange?: (typeface: NoteTypeface) => void;
   noteId: EntityId;
   markdown: string;
   notes: readonly Note[];
@@ -165,6 +169,8 @@ function sameCitationReferences(
 }
 
 export function RichNoteEditor({
+  noteTypeface = "sans",
+  onNoteTypefaceChange,
   noteId,
   markdown,
   notes,
@@ -191,8 +197,10 @@ export function RichNoteEditor({
   const [initialDocument] = useState(() => {
     const document = splitMarkdownFrontmatter(markdown);
     const citations = canonicalizeSourceCitations(document.content, sources);
+    const passages = splitSavedChatPassages(citations.body);
     return {
-      content: citations.body,
+      content: passages.body,
+      passages,
       prefix: document.prefix,
       references: citations.references,
     };
@@ -201,6 +209,8 @@ export function RichNoteEditor({
   const sourcesRef = useRef(sources);
   const onChangeRef = useRef(onChange);
   const frontmatterRef = useRef(initialDocument.prefix);
+  const savedPassagesRef = useRef(initialDocument.passages.footer);
+  const [savedPassages, setSavedPassages] = useState(initialDocument.passages.evidence);
   const lastEmittedMarkdownRef = useRef(markdown);
   const findQueryRef = useRef(findQuery);
   const onFindDecorationsChangedRef = useRef(onFindDecorationsChanged);
@@ -244,7 +254,7 @@ export function RichNoteEditor({
 
   const extensions = useMemo(
     () => [
-      StarterKit.configure({
+      NoteStarterKit.configure({
         heading: { levels: [1, 2, 3] },
         link: {
           autolink: true,
@@ -325,9 +335,10 @@ export function RichNoteEditor({
       },
       onUpdate: ({ editor: current }) => {
         const citations = canonicalizeSourceCitations(
-          current.getMarkdown(),
+          mergeSavedChatPassages(current.getMarkdown(), savedPassagesRef.current),
           sourcesRef.current,
         );
+        setSavedPassages(savedChatEvidence(citations.body));
         const nextMarkdown = restoreMarkdownFrontmatter(
           frontmatterRef.current,
           citations.markdown,
@@ -386,7 +397,10 @@ export function RichNoteEditor({
       sourcesRef.current,
     );
     frontmatterRef.current = nextDocument.prefix;
-    editor.commands.setContent(citations.body, {
+    const passages = splitSavedChatPassages(citations.body);
+    savedPassagesRef.current = passages.footer;
+    setSavedPassages(passages.evidence);
+    editor.commands.setContent(passages.body, {
       contentType: "markdown",
       emitUpdate: false,
     });
@@ -1249,6 +1263,8 @@ export function RichNoteEditor({
     >
       <div className="editor-toolbar-shell">
         <EditorToolbar
+          noteTypeface={noteTypeface}
+          onNoteTypefaceChange={onNoteTypefaceChange}
           editor={editor}
           concepts={concepts}
           onOpenLink={openLinkComposer}
@@ -1305,6 +1321,14 @@ export function RichNoteEditor({
         }}
         onDrop={() => setImageDragActive(false)}
       />
+      {savedPassages.length > 0 && <section className="source-references" aria-label="Cited passages">
+        <h2>Cited passages</h2>
+        {savedPassages.map((passage) => <div key={passage.id}>
+          <strong>{passage.title}</strong>
+          <blockquote>{passage.text}</blockquote>
+          <p>{citedPassageStatus(passage, notes, sources, "note").description}</p>
+        </div>)}
+      </section>}
       <SourceReferences
         references={citationReferences}
         onOpenSource={onOpenSource}

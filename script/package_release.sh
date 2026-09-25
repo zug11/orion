@@ -24,6 +24,7 @@ APP_ENTITLEMENTS="$ROOT_DIR/src-tauri/entitlements/app.plist"
 NOTARY_PROFILE="${ORION_NOTARY_PROFILE:-}"
 CODE_SIGN_IDENTITY="${ORION_CODESIGN_IDENTITY:-}"
 WHISPER_MODEL_EDITION="${ORION_WHISPER_MODEL:-small}"
+EXPECTED_YT_DLP_VERSION="2026.08.19"
 
 case "$WHISPER_MODEL_EDITION" in
   small)
@@ -201,7 +202,7 @@ source_fingerprint() (
 
   {
     find src src-tauri/src src-tauri/shared src-tauri/native src-tauri/mcp-server/src \
-      src-tauri/entitlements \
+      src-tauri/entitlements src-tauri/icons public assets/brand \
       mcp/orion-claude codex/orion -type f ! -name '.DS_Store'
     printf '%s\n' \
       AGENTS.md \
@@ -217,6 +218,10 @@ source_fingerprint() (
       src-tauri/mcp-server/Cargo.lock \
       src-tauri/Info.plist \
       src-tauri/resources/THIRD_PARTY_NOTICES.md \
+      src-tauri/binaries/yt-dlp-macos \
+      src-tauri/binaries/deno \
+      src-tauri/resources/licenses/yt-dlp-LICENSE \
+      src-tauri/resources/licenses/yt-dlp-THIRD_PARTY_LICENSES.txt \
       "$WHISPER_MODEL_RESOURCE_RELATIVE" \
       src-tauri/tauri.conf.json \
       script/build_codex_plugin.sh \
@@ -596,7 +601,10 @@ verify_final_dmg() (
   fi
   "$copied_app/Contents/MacOS/orion-whisper" --version
   "$copied_app/Contents/MacOS/orion-ocr" --version
-  "$copied_app/Contents/MacOS/yt-dlp" --version
+  if [[ "$("$copied_app/Contents/MacOS/yt-dlp" --version)" != "$EXPECTED_YT_DLP_VERSION" ]]; then
+    echo "final DMG contains an unexpected yt-dlp version" >&2
+    exit 1
+  fi
   "$copied_app/Contents/MacOS/deno" --version
   verify_no_build_user_paths "$copied_app"
   verify_connector_package "$copied_app/$CONNECTOR_RELATIVE_PATH"
@@ -619,7 +627,7 @@ case "$BUILD_MODE" in
       npm run build:mcp
       npm run build:codex -- --use-existing
       configure_release_rustflags
-      npm run tauri -- build \
+      npm run tauri -- build --bundles app \
         --config "$TAURI_BUILD_CONFIG"
     )
     # Cargo must keep release symbols until linking so proc-macro dylibs remain
@@ -641,12 +649,9 @@ case "$BUILD_MODE" in
     ;;
 esac
 
-if [[ ! -f "$SOURCE_DMG" ]]; then
-  echo "missing release DMG: $SOURCE_DMG" >&2
-  exit 1
-fi
-
-mkdir -p "$OUTPUT_DIR"
+# Tauri builds the app only. The signed APFS image is created below, so no
+# preliminary Finder-scripted Tauri DMG is needed.
+mkdir -p "$OUTPUT_DIR" "$(dirname "$SOURCE_DMG")"
 sign_app_bundle
 repack_signed_app
 stage_final_dmg

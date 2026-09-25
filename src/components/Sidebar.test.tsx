@@ -10,6 +10,24 @@ import { Sidebar } from "./Sidebar";
 const NOW = "2026-07-29T01:00:00.000Z";
 
 describe("Sidebar generate composer", () => {
+  it("keeps New note available and hides generation without a provider key", () => {
+    const snapshot = createEmptySnapshot("Stories", NOW);
+    const onGenerate = vi.fn();
+    const onNewNote = vi.fn();
+    render(<Sidebar view="home" notes={[]} spaces={[snapshot]}
+      activeSpaceId={snapshot.workspace.id} activeNoteId={null} linkedArticleJobs={[]}
+      generateEnabled={false} onGenerate={onGenerate} onViewChange={vi.fn()}
+      onOpenNote={vi.fn()} onDeleteNote={vi.fn()} onNewNote={onNewNote}
+      onCreateSpace={vi.fn()} onDeleteSpace={vi.fn()} onSwitchSpace={vi.fn()}
+      onRestartLinkedArticle={vi.fn()} onDeleteLinkedArticle={vi.fn()} />);
+
+    expect(screen.queryByRole("button", { name: "Generate options" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Generate" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "New note" }));
+    expect(onNewNote).toHaveBeenCalledOnce();
+    expect(onGenerate).not.toHaveBeenCalled();
+  });
+
   it("keeps New note blank and opens Generate from the chevron", () => {
     const onNewNote = vi.fn();
     const onGenerate = vi.fn();

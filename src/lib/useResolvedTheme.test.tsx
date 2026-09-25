@@ -6,13 +6,49 @@ import { defaultSettings } from "../data/defaults";
 import { resolveThemePalette } from "./theme";
 import { useResolvedTheme } from "./useResolvedTheme";
 
+const nativeWindow = vi.hoisted(() => ({
+  isTauri: vi.fn(() => false),
+  setTheme: vi.fn(() => Promise.resolve()),
+  invoke: vi.fn(async () => ({ material: "liquid", liquidAvailable: true, interactiveAvailable: true })),
+}));
+
+vi.mock("@tauri-apps/api/core", () => ({ isTauri: nativeWindow.isTauri, invoke: nativeWindow.invoke }));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ setTheme: nativeWindow.setTheme }),
+}));
+
 describe("useResolvedTheme", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    nativeWindow.isTauri.mockReturnValue(false);
+    nativeWindow.setTheme.mockClear();
+    nativeWindow.invoke.mockClear();
     document.documentElement.removeAttribute("data-theme");
     document.documentElement.removeAttribute("data-theme-preset");
+    document.documentElement.removeAttribute("data-native-glass");
     document.documentElement.removeAttribute("style");
     document.head.innerHTML = "";
+  });
+
+  it("matches native glass to explicit modes and returns System to macOS control", async () => {
+    nativeWindow.isTauri.mockReturnValue(true);
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)");
+    const { rerender, unmount } = renderHook(
+      ({ theme }: { theme: "dark" | "light" | "system" }) =>
+        useResolvedTheme({ ...defaultSettings, theme }),
+      { initialProps: { theme: "dark" as "dark" | "light" | "system" } },
+    );
+
+    await waitFor(() => expect(nativeWindow.setTheme).toHaveBeenLastCalledWith("dark"));
+    await waitFor(() => expect(document.documentElement.dataset.nativeGlass).toBe("true"));
+    rerender({ theme: "light" });
+    await waitFor(() => expect(nativeWindow.setTheme).toHaveBeenLastCalledWith("light"));
+    rerender({ theme: "system" });
+    await waitFor(() => expect(nativeWindow.setTheme).toHaveBeenLastCalledWith(null));
+
+    unmount();
+    expect(document.documentElement.dataset.nativeGlass).toBeUndefined();
   });
 
   it("updates the root palette and browser chrome when System mode changes", async () => {
@@ -56,6 +92,8 @@ describe("useResolvedTheme", () => {
     const { result, unmount } = renderHook(() => useResolvedTheme(settings));
 
     await waitFor(() => expect(result.current.mode).toBe("dark"));
+    expect(document.documentElement.dataset.nativeGlass).toBeUndefined();
+    expect(nativeWindow.setTheme).not.toHaveBeenCalled();
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(
       document.documentElement.style.getPropertyValue("--ink"),

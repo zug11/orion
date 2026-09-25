@@ -6,6 +6,19 @@ import type { Source } from "../types";
 import { SourcesView } from "./SourcesView";
 
 describe("SourcesView", () => {
+  it("filters preserved text with a nearby excerpt and opens that source", () => {
+    const source: Source = {
+      id: "source-extract", title: "Extracted document", kind: "pdf", importedAt: "2026-09-01T00:00:00.000Z",
+      text: `${"Earlier text. ".repeat(80)}The preserved passage explains absolute\nknowing.`, noteIds: [],
+    };
+    const onOpenSource = vi.fn();
+    render(<SourcesView sources={[source]} onOpenSource={onOpenSource} onDeleteSource={vi.fn()} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Find a source" }), { target: { value: "absolute knowing" } });
+    expect(screen.getByText(/The preserved passage explains absolute knowing/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Open source Extracted document" }));
+    expect(onOpenSource).toHaveBeenCalledWith(source.id);
+  });
+
   it("opens a preserved source from the source list", () => {
     const source: Source = {
       id: "source-lecture",

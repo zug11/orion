@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { nanoid } from "nanoid";
 import { buildImportPayload, classifyImportUrl, pastedTextToParsedImport } from "../../components/ImportStudio";
 import type { AppSnapshot, ParsedImport, TranscribedMedia } from "../../types";
-import { chatWithOrion, createFailoverKnowledgeDriver, fetchWebPage, generateNoteImage, organizeWithAI, recognizeDocumentText, saveNoteImage, transcribeYouTube } from "../storage";
+import { chatWithOrion, createFailoverKnowledgeDriver, fetchWebPage, generateNoteImage, organizeWithAI, recognizeDocumentText, saveNoteImage, transcribeYouTube, withMediaImportCancellation } from "../storage";
 import { parseImportFile } from "../files";
 import { transcriptToParsedImport } from "../transcription";
 import { buildSlideImagePrompt, MAX_DECK_SLIDE_IMAGES, parseDeckSlides } from "../slideDeck";
@@ -78,10 +78,10 @@ export function startAssistantExecutor(host: ExecutorHost): () => void {
           if (input.kind === "text") return pastedTextToParsedImport(input.title, input.text);
           if (input.kind === "url") {
             const url = classifyImportUrl(input.url);
-            if (url.kind === "youtube") return transcriptToParsedImport(await transcribeYouTube(url.url, { language: snapshot.settings.whisperLanguage }));
+            if (url.kind === "youtube") return transcriptToParsedImport(await transcribeYouTube(url.url, { language: snapshot.settings.whisperLanguage }, signal));
             return fetchWebPage(url.url);
           }
-          const result = await invoke<{ kind: "transcript"; transcript: TranscribedMedia } | { kind: "file"; fileName: string; base64Data: string }>("assistant_read_input", { ...jobArgs, index });
+          const result = await withMediaImportCancellation((mediaRequestId) => invoke<{ kind: "transcript"; transcript: TranscribedMedia } | { kind: "file"; fileName: string; base64Data: string }>("assistant_read_input", { ...jobArgs, index, mediaRequestId }), signal);
           await gate();
           if (result.kind === "transcript") return transcriptToParsedImport(result.transcript);
           const bytes = Uint8Array.from(atob(result.base64Data), (character) => character.charCodeAt(0));

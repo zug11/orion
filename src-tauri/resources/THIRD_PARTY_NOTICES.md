@@ -45,12 +45,12 @@ without separately installed software or a local server.
 - Model origin: OpenAI Whisper
 - License: MIT (`licenses/openai-whisper-LICENSE`)
 
-## yt-dlp 2026.07.04
+## yt-dlp 2026.08.19
 
 - Project: https://github.com/yt-dlp/yt-dlp
 - Artifact: official universal `yt-dlp_macos` standalone executable
 - SHA-256:
-  `498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b`
+  `0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202`
 - The PyInstaller-combined executable is distributed under GPLv3+ and contains
   components under additional licenses. See `licenses/yt-dlp-LICENSE`,
   `licenses/yt-dlp-THIRD_PARTY_LICENSES.txt`, and

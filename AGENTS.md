@@ -77,8 +77,13 @@ These product decisions are intentional:
   are modes within that preset rather than separate themes. Keep tuning to
   accent, canvas, surface, text warmth, and contrast; optional custom accent,
   canvas, and surface colors must be validated, mode-clamped, and paired with
-  derived accessible foregrounds. Do not add per-widget or full-shader theme
-  controls. Home-atmosphere controls remain a separate persisted choice, but
+  derived accessible foregrounds. New visual directions must be optional and
+  offer meaningful, bounded adjustments and a reset. Window glass explicitly
+  uses one optional Regular surface shared by the top bar and sidebar, with
+  shared tint opacity and blur blend. Keep the frame continuous without a
+  divider between those areas. Do not restore style, radius, interaction, or
+  per-area controls. Do not create an unbounded
+  per-widget styling system. Home-atmosphere controls remain a separate persisted choice, but
   their room, readable strokes, preview, and Theme accent resolve from that
   same active palette and must react to a live System-mode appearance change.
 - Notes are permanent, editable, and evolving from the moment they are created.
@@ -177,6 +182,18 @@ npm run tauri build
 ```
 
 `npm run check` runs renderer tests and a production renderer build.
+`script/build_and_run.sh` and the Codex Run action create a local native
+**Orion Preview** under `~/Applications/Orion Previews`, linked from
+`outputs/native-preview` to keep signed frameworks outside indexed Documents.
+The script stages current
+sources in `/private/tmp`, uses the exact npm lockfile, rebuilds desktop
+dependencies, and bundles with Tauri. Only the staged config and Keychain
+service change to `app.orion.desktop-preview`, with a separate URL scheme.
+Never copy, reset, or seed the user's vault for this preview. Its library
+persists across preview builds; normal Quit must complete before rebuilding
+a running preview. This ad-hoc local app is not a release artifact.
+Vitest excludes `outputs/`, which may contain archived diagnostic test fixtures;
+maintained application tests belong in `src/`.
 `npm run tauri build` is the canonical native integration and release check.
 Native artifacts are produced under `src-tauri/target/release/bundle/`.
 
@@ -205,6 +222,17 @@ flushed temporary file plus atomic replacement.
   vaults remain valid, but are always normalized into complete runtime settings.
   System mode must react to macOS appearance changes without rewriting the
   user's selected mode or preset.
+- Optional `Settings.themeIcon` defaults to true and `homeAtmosphereAppearance`
+  defaults to `theme` (`dark` is the only override). These are shared appearance
+  settings, not Space-specific identities. `resolveAtmosphereTheme` resolves
+  Always dark from the same complete theme preferences. Scope its CSS palette to
+  the Home hero, including text/actions, and use the same palette in Settings
+  previews. Light atmosphere rooms are gently deepened paper tones; physical
+  surface shaders use explicit diffuse/specular daylight lighting, not inverse
+  emission. Mirage uses a render-resolution-aware daylight silhouette rather
+  than its broad night-glow mask, and retains refraction and rim detail. Both
+  modes use the same pixel budget. Preserve dark rendering, custom colour pairs,
+  and bounded lifecycles.
 - `homeAtmosphereCustomColor` and `homeAtmosphereCustomSecondaryColor` are
   optional six-digit hex colours (or empty) at the storage boundary, hydrated
   to empty for older vaults. Together they override the first two colour
@@ -224,6 +252,48 @@ flushed temporary file plus atomic replacement.
   `updatedAt`, but it must never reorder the sidebar. The active Space's stored
   note-array order is the stable visible order.
 - Settings currently apply across all Spaces; content remains Space-local.
+- Optional `Settings.windowGlass` hydrates to complete bounded defaults in
+  `src/lib/windowGlass.ts`: `enabled`, shared 0–100% `tintOpacity`, and `blur`.
+  Defaults are on, 30% tint, and 50% added blur. Legacy material/style, area
+  switches/tints, radius, and interaction fields still validate. Hydration
+  preserves an explicit Solid/both-off choice and averages the enabled areas'
+  tints (both saved tints when both were off); new fields take precedence.
+  Off choices retain their tuning. `src-tauri/src/window_glass.rs` owns the
+  per-window native view: Liquid uses the public `NSGlassEffectView` on macOS
+  26+, with a `contentView` container hosting the existing WKWebView. The
+  renderer always requests Regular, a 16 pt radius, and no interaction.
+  Runtime class detection falls back to a sidebar `NSVisualEffectView` on older
+  Macs. The native command retains its bounded compatibility contract, including
+  a guarded macOS 27 interactive setter. Never emulate Apple's glass
+  with a CSS shader or put an unrelated glass sibling behind the WKWebView.
+  Switches reparent the same WebView on the main thread; native views are owned
+  by that window's hierarchy, not global pointers. IPC targets only its caller.
+  Never assign the WKWebView directly as the glass's `contentView`: AppKit's
+  Auto Layout changes break Wry's frame-based sizing on material switches.
+  A disposable NSView container absorbs those constraints; the WKWebView keeps
+  its width/height autoresizing and focus when moved back to the original host.
+  `blur` is a bounded 0–100% mix of a native behind-window sidebar visual-effect
+  backdrop. Its public `alphaValue` controls added frosting independently from
+  the shared HTML colour overlay. It never fades or blurs the WebView. Zero removes
+  the extra backdrop; Liquid Glass still retains Regular's system blur.
+  Do not label this a pixel blur radius or use undocumented Apple filter keys.
+- `useWindowGlass` serializes native material updates, ignores stale responses,
+  and changes opacity through CSS without rebuilding native views. Fully hidden
+  or disabled glass removes the native material. Only top/left navigation can
+  reveal glass; text, controls, and the reading canvas retain full opacity.
+  The reading canvas has a 13 px top-left inner radius with its top border
+  following the curve. Solid mode adds a matching left border, joining the top
+  edge into one continuous curved boundary; never extend it through the top bar.
+  The workspace shell carries the shared frame tint
+  behind that corner; keep the top bar transparent to avoid double tinting.
+  New library windows apply the same shared settings through their own hook.
+  Reduce Transparency/Increase Contrast select solid surfaces without rewriting
+  the saved preference. Interactive glass is always disabled. Browser preview
+  remains opaque. `useResolvedTheme` must call `setTheme(null)` for System so
+  OS appearance changes continue propagating. Tauri's `macos-private-api` and
+  `app.macOSPrivateApi` are still needed for its transparent WebView, even though
+  the glass APIs themselves are public. This direct-distribution configuration
+  is not compatible with Mac App Store submission. See `docs/window-glass.md`.
 - The intelligence picker includes GPT-6 Astra (`gpt-6-astra`) through the
   existing OpenAI request path. Selecting it changes None reasoning to Low and
   disables None while selected; its visible supported depths run Low through
@@ -541,6 +611,15 @@ Orion persists a versioned semantic hierarchy for every substantive Space.
 The saved **Across this Space** overview is the human-readable projection of
 its validated root, while a saved/local overview remains the bounded runtime
 fallback whenever the hierarchy is missing or stale.
+
+One note is enough for Across this Space. The overview and digest index share
+the same eligibility check: any readable note body or meaningful summary counts,
+without a minimum character count. Exclude archived/in-flight pages, blank notes,
+and the default "A new thread in your atlas." starter description. Brief Spaces
+may have a single-sentence overview; provider requests must scale to the available
+evidence rather than insist on a long essay or ask for more notes. Keep the local
+summary visible while AI refreshes, and check index freshness on load so notes
+excluded by an older eligibility rule can enter the current hierarchy.
 
 A mature Space should not be reread from raw note bodies before every import,
 overview refresh, or enrichment. Orion should maintain a persistent,
@@ -1646,6 +1725,22 @@ overlap duplicates and only then inserts and persists the combined ordered
 transcript. Silent intermediate windows are valid. The overall dictation
 session has no fixed duration limit.
 
+Imported media uses a separate bounded path: decode five-minute windows with
+two seconds of overlap and reuse one loaded Whisper context. Check allocation
+limits before extending decoded buffers; cap a file at 12 hours of decoded
+audio and the finished transcript at 2 MiB. Keep the edition's selected model.
+`src-tauri/src/media_jobs.rs` owns each import request, exact window identity,
+cancellation, and subprocess lifetime. At most eight requests may queue; one
+physical media subprocess runs across windows. Bound download/transcription
+stages to 20/60 minutes and a request to 90 minutes, including slot wait time.
+Drain bounded stdout/stderr pipes, terminate the owned process group before
+reaping its leader, and finish cleanup before dropping temporary media. Removing
+an input, changing Space, or closing its window cancels the owned request;
+application Quit drains these jobs after the successful vault-save handshake.
+Batch results return completed transcripts and per-file failures so a later
+failure or deadline does not discard earlier successes. Cancellation prevents
+late queue commits. Desktop workflow imports share this ownership boundary.
+
 The upstream framework is built for macOS 13.3, which defines Orion's current
 minimum system version. The model must be at least 400 MiB or setup validation
 treats it as incomplete. `THIRD_PARTY_NOTICES.md` records artifact versions,
@@ -1688,6 +1783,23 @@ gets an explicit bounded batch design.
 Homebrew, Python, ffmpeg, an external `yt-dlp`, and a Whisper server are not
 runtime prerequisites. Browser preview cannot run the YouTube workflow.
 
+The pinned downloader is yt-dlp 2026.08.19. The native build verifies its
+upstream byte hash and version before use. Release fingerprints include the
+actual downloader and Deno executables and their license records, and final
+bundle verification checks the downloader version. Apply a 2 GiB encoded-file
+ceiling to the downloader, including the inherited Unix file-size resource
+limit, so an absent remote Content-Length cannot bypass it.
+
+## Ordinary local search
+
+`src/lib/localSearch.ts` serves the command palette, Notes, and Sources. Match
+literal case-insensitive phrases across complete note bodies and preserved
+source text, allowing whitespace and line breaks within a phrase. Rank titles,
+aliases, tags, and body matches before limiting results; bound only the displayed
+excerpt. Search only the supplied active Space. Source results open their exact
+source ID through the preserved source viewer. Do not scan a closed palette or
+truncate searchable bodies to the preview length.
+
 ## Linking model
 
 A `Concept` is a Space-scoped reusable phrase. `canonicalNoteId` identifies its
@@ -1724,7 +1836,11 @@ concept, note, or generation job. Orion then inserts only the linked title
 immediately above the containing block, and the original selection remains
 content- and formatting-equivalent in Markdown. Short selections continue to
 use their exact selected words by default without an AI request; a custom title
-on a short selection chooses the same contextual behavior. Never wrap a code
+on a short selection chooses the same contextual behavior. A **Generate title
+with AI** checkbox opts a short selection into the same bounded naming flow,
+even when its selected words already fill the title field. Keep naming off by
+default for short selections, disable it for explicit existing destinations,
+and preserve the typed title when the checkbox is turned off. Never wrap a code
 block or a whole passage in a link mark, replace the selection with its title,
 or lose its formatting. Pass the bounded selected text to AI linked-article
 generation with special weight, and retain it across Restart without persisting
@@ -1849,8 +1965,9 @@ Never search another Space for an upsert target.
 
 ## Generate from New note
 
-**+ New note** and `⌘N` still create a blank page. When a writing key is
-configured, the chevron opens one Generate composer: kind (Note, Podcast, Slide
+**+ New note** and `⌘N` still create a blank page. The generation chevron and
+composer stay hidden without a key for the selected AI provider. When configured,
+the chevron opens one Generate composer: kind (Note, Podcast, Slide
 deck, Slide deck with narration), optional instructions, a **Use notes from this
 Space** checkbox, and one Generate action. The checkbox defaults to the global
 context preference each time the composer opens. Explicitly enabling it grants
@@ -1862,7 +1979,12 @@ Playground route, or Share-as-create.
 
 Generation is a transient job (linked-article pattern: attempt ownership, late
 results ignored, Restart/Delete). Ordinary generated notes use one writing
-pass. Decks and podcasts use one bounded JSON outline, then up to six disjoint
+pass that begins with one bounded H1 title, followed by the article body. Parse
+and validate both before committing, remove that first heading from the body,
+and update the note title, slug, and canonical vocabulary together. Never keep
+the user instruction as the completed note title. Preserve a title the user
+edited while generation ran and an explicit desktop-workflow title. Invalid or
+empty title/body output remains a retryable generation error. Decks and podcasts use one bounded JSON outline, then up to six disjoint
 copy writers with a shared thesis and ordered section titles. Outline planning
 caps high/xhigh effort at medium; writers retain the selected effort. Validate
 exact Space-local note IDs and unique headings, and reject partial copy on
@@ -2084,9 +2206,26 @@ actually supplied to the answer step. Persist bounded optional `evidence` and
 contains original text, exact entity/version, and exclusive UTF-16 ranges.
 The citation inspector shows that historical passage and marks changed or
 removed originals. Reference validity does not prove a model claim follows from
-its citation. Keep as note converts Chat anchors to portable Orion links and
-updates both sides of source provenance. Older messages without these fields
-continue to validate and render.
+its citation. Both Keep as note and authorized note creation preserve cited
+passages in ordinary Markdown: inline local anchors, a readable quoted-passage
+section, original Orion links, and strictly bounded version/range metadata in
+link titles. The metadata must survive the rich editor and source-footer
+canonicalization; exported HTML keeps readable quotes and local anchors without
+exposing the encoded title. While editing, retain a validated generated passage
+section outside contenteditable and show its literal historical quotes beside
+the generated References footer. Ordinary authored sections with the same
+heading remain editable. Never interpret quoted source Markdown as executable
+links or control syntax. Source evidence versions exclude derived `noteIds` so
+saving provenance does not falsely mark the source text changed; legacy hashes
+remain readable and exact text ranges are always checked. Update both sides of
+source provenance. Older messages without these fields continue to validate and
+render. Host-added passage sections are separate from the model action limits
+and must never cause an otherwise valid 6,000-code-point action to be dropped.
+
+Passage selection finds query matches in original text before constructing
+windows. Prioritize uncovered query terms, merge overlapping ranges, preserve
+exact UTF-16 offsets, and keep the combined text within the caller's budget.
+Fixed chunk boundaries and frequent terms must not hide another query term.
 
 The host derives note-write intent from the current user prompt before calling
 the provider, and the native boundary independently recomputes the same gate.
@@ -2170,6 +2309,89 @@ and prior Chat messages are untrusted data, not instructions.
 - The renderer CSP intentionally blocks arbitrary network access.
 
 ## UI principles
+
+The app identity is the teal/cobalt Imprint O with no wordmark. The sidebar uses
+only the freestanding O: `assets/brand/orion-imprint-symbol.png`, exported to
+`public/orion-symbol.png`, with transparent surroundings and central hole. Never
+add a background tile behind this sidebar mark. The original rounded renderer
+master `assets/brand/orion-imprint.png` and `public/orion-mark.png` remain for
+the favicon/startup screens and Codex plugin artwork.
+Native desktop exports in `src-tauri/icons` instead come from the opaque,
+full-bleed RGB `assets/brand/orion-imprint-native.png`. Do not export the rounded
+transparent renderer tile as ICNS: macOS wraps it in an unwanted white tile.
+Verify native changes using `NSWorkspace.shared.icon(forFile:)` on an actual
+app bundle, not only by opening the source PNG. Release fingerprints include
+both masters, public assets, and native icons so a changed icon cannot reuse a
+stale app.
+
+`themeIcon.ts` recolours the approved symbol's luminance while preserving every
+alpha value; `public/orion-symbol-source.png` is an exact copy of the high-resolution
+symbol master. Rendering is debounced, cached to four colour choices, and never
+animated continuously. `useThemeIcon` serializes native changes, ignores late
+renders, waits for vault hydration, and follows live resolved System colours.
+Original restores the original mark. `theme_icon.rs` accepts only a bounded
+512-pixel PNG (or nil reset), never a file path. On the main thread, only the
+preferred library window may update the app-global icon. The public
+`NSApplication.applicationIconImage` owns the running Dock image; public
+`NSWorkspace.setIcon` adds/removes Finder custom-icon metadata only on the running
+app's own verified bundle path. Never replace packaged ICNS, re-sign an installed
+app, elevate permissions, target another installation, or modify a vault for this.
+Read-only/translocated/unbundled cases leave Dock working and report the Finder
+limitation in Appearance. Finder keeps the last colour while the app is closed.
+Apple's custom-icon metadata is accepted by normal signature checks and Gatekeeper,
+but `codesign --strict` flags it as Finder detritus until Original removes it.
+Release artifacts must remain clean and pass the existing strict verification;
+check installed theme icons with normal signature verification, and verify strict
+checks again after resetting Original. Do not strip user metadata during launch.
+
+With native glass active, New note and its generation chevron share one light
+rim and translucent surface that exposes the existing AppKit material. Keep
+the text opaque, the chevron separator inset, and solid styling when glass is
+off or accessibility requests reduced transparency/increased contrast. The
+control follows the shared glass tint with a small additional 12% surface tint
+to remain slightly more opaque than its surroundings. It adds no appearance
+setting or native material view. Compact sidebars stack the two actions inside
+one outline. Gate this treatment on `data-native-glass`, whose native response
+already handles accessibility; unsupported positive transparency media queries
+must not suppress the treatment in WKWebView.
+Selected navigation pills and the open/hovered Space switcher use the same
+translucent treatment. Generate and Space dropdowns use a stronger bounded tint
+derived from shared glass opacity, with a web backdrop blur to keep underlying
+navigation from showing through their text. This is a renderer popover over the
+existing AppKit frame, not an independent native glass view. Their selected rows
+and New blank space control stay translucent; all overrides require native glass.
+Keep these fills uniform and translucent: do not paint gradients or simulated
+diagonal highlights onto the controls or popovers. Popover tint tracks the shared
+setting plus 12 percentage points, bounded to 24–92% for readable content.
+
+Typography uses two deliberate brand roles: bundled Hanken Grotesk (400) for the
+interface and default note text; bundled Lora (400) for the Home headline and
+its supporting paragraph, plus note titles on Home, Notes, and the open note.
+Small navigation uses Hanken Grotesk 400 and
+controls keep stronger weights for readability. The editor toolbar’s Note font
+dropdown owns the shared Sans serif / Serif choice; do not place it in Settings.
+`Settings.noteTypeface` accepts
+only `sans` or `serif`, is optional at the storage boundary, and hydrates to
+`sans`; the app-shell attribute applies it to reading and rich editing without
+changing persisted prose. Do not add a font catalogue or use serif type for
+ordinary UI headings. `public/fonts` contains the four unmodified variable TTF
+faces (Hanken Grotesk 100–900, Lora 400–700, upright and real italic), their OFL copyright
+and licence texts, and pinned source/checksum metadata. Keep these assets local
+and preserve their licences in renderer builds; do not fetch fonts at runtime.
+`src/App.css` defines the faces and `index.html` preloads the upright fonts.
+See `docs/typography.md` for font roles and the reading scale.
+Primary navigation and sidebar notes are 13 px, note text is 18 px sans / 19 px serif, and the
+Space overview uses a 22 px heading and 13 px body text in a 460 px tall card; the body matches the task empty state. Keep the adjacent
+task card aligned at that height, with both bodies independently scrollable.
+
+Selected sidebar notes use the full-row background highlight without a decorative
+outline on the inner note button. Preserve keyboard focus-visible outlines.
+
+Keep the sidebar footer anchored at the bottom in both expanded and compact
+layouts. Expanded sidebars place the collapse toggle first and Settings beside
+it. Compact rails stack Settings above the sidebar toggle, with no divider
+above those bottom controls. The navigation
+divider stays below Chat; hiding the note list must not pull the footer upward.
 
 Orion should feel calm, editorial, and spatial rather than dashboard-heavy.
 Reuse the existing colors, surfaces, typography, radii, and compact scale in
@@ -2351,6 +2573,9 @@ the Claude connector, stage Codex with `--use-existing`, remove the prior Codex
 resource directory, and copy the new complete tree before resealing. Never use
 a merging directory copy that can retain stale plugin files.
 
+Build only the app with Tauri (`--bundles app`); the release script creates
+the final APFS DMG directly. Do not require a preliminary Finder-scripted Tauri
+DMG that would be discarded by the APFS packaging step.
 Rebuild the final drag-install image on APFS rather than HFS+. The plugin
 contract necessarily includes nested dotfiles (`.agents`, `.codex-plugin`, and
 `.mcp.json`); HFS+ can synthesize `com.apple.FinderInfo` for them when Finder or

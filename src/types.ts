@@ -163,6 +163,15 @@ export type ThemeCanvasTone = "deep" | "balanced" | "airy";
 export type ThemeSurfaceLift = "quiet" | "balanced" | "lifted";
 export type ThemeTextWarmth = "cool" | "neutral" | "warm";
 export type ThemeContrast = "soft" | "balanced" | "high";
+export type NoteTypeface = "sans" | "serif";
+
+export interface WindowGlassSettings {
+  enabled: boolean;
+  /** Shared palette-tint opacity for the sidebar and top bar; text stays opaque. */
+  tintOpacity: number;
+  /** Blend amount for the extra native behind-window frosting. */
+  blur: number;
+}
 
 export type SpeechVoice = "system" | "openai" | "elevenlabs";
 
@@ -218,6 +227,14 @@ export interface Settings {
   themeSurfaceCustom: string;
   themeTextWarmth: ThemeTextWarmth;
   themeContrast: ThemeContrast;
+  /** Optional in older vaults; Sans serif is the default reading/writing face. */
+  noteTypeface: NoteTypeface;
+  /** Optional in older vaults; hydrated to a complete appearance preference. */
+  windowGlass: WindowGlassSettings;
+  /** Optional in older vaults; recolours the mark and macOS Dock/Finder icons. */
+  themeIcon: boolean;
+  /** Independent of the app mode; only the Home hero can stay dark. */
+  homeAtmosphereAppearance: "theme" | "dark";
   homeAtmosphere: HomeAtmosphere;
   homeAtmosphereTone: HomeAtmosphereTone;
   homeAtmosphereCustomColor: string;
@@ -417,6 +434,11 @@ export interface TranscribedMedia {
   text: string;
   sourceUrl?: string;
   warnings: string[];
+}
+
+export interface MediaTranscriptionBatch {
+  transcripts: TranscribedMedia[];
+  failures: { fileName: string; error: string }[];
 }
 
 export interface TranscriptionSetupStatus {

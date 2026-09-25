@@ -23,11 +23,14 @@ import { decorateAutoLinks } from "../lib/wiki";
 import {
   resolveThemeMode,
   resolveThemePalette,
+  themePaletteCssVariables,
   type ThemePalette,
 } from "../lib/theme";
 import type { AppSnapshot, Note } from "../types";
 import BorderGlow from "./BorderGlow";
 import HomeAtmosphere from "./HomeAtmosphere";
+import { resolveAtmosphereTheme } from "../lib/homeAtmosphere";
+import type { CSSProperties } from "react";
 
 interface HomeViewProps {
   snapshot: AppSnapshot;
@@ -127,16 +130,19 @@ export function HomeView({
       ),
     );
 
+  const atmosphereTheme = resolveAtmosphereTheme(snapshot.settings, activeThemePalette);
+
   return (
     <div className="view home-view">
-      <section className="home-hero">
+      <section className="home-hero" data-atmosphere-mode={atmosphereTheme.mode}
+        style={themePaletteCssVariables(atmosphereTheme) as CSSProperties}>
         <HomeAtmosphere
           atmosphere={snapshot.settings.homeAtmosphere}
           tone={snapshot.settings.homeAtmosphereTone}
           customColor={snapshot.settings.homeAtmosphereCustomColor}
           customSecondaryColor={snapshot.settings.homeAtmosphereCustomSecondaryColor}
           motion={snapshot.settings.homeAtmosphereMotion}
-          themePalette={activeThemePalette}
+          themePalette={atmosphereTheme}
         />
         <div className="home-hero-shade" />
         <div className="home-hero-content">
@@ -390,9 +396,9 @@ export function HomeView({
                     : overviewError
                       ? overviewError
                       : usingLocalOverview
-                        ? aiConfigured
-                          ? "A local orientation while Orion prepares the living overview"
-                          : "A local orientation until AI is configured"
+                        ? localOverview.relatedNoteIds.length
+                          ? "Based on your notes · Updated locally"
+                          : "Add text to a note to begin your Space summary"
                         : snapshot.spaceOverview?.stale
                           ? aiConfigured
                             ? "New context is waiting to be integrated"

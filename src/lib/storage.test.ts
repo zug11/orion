@@ -1253,6 +1253,10 @@ describe("browser persistence fallback", () => {
     delete legacy.settings.themeSurfaceCustom;
     delete legacy.settings.themeTextWarmth;
     delete legacy.settings.themeContrast;
+    delete legacy.settings.noteTypeface;
+    delete legacy.settings.windowGlass;
+    delete legacy.settings.themeIcon;
+    delete legacy.settings.homeAtmosphereAppearance;
     delete legacy.settings.homeAtmosphere;
     delete legacy.settings.homeAtmosphereTone;
     delete legacy.settings.homeAtmosphereCustomColor;
@@ -1264,6 +1268,24 @@ describe("browser persistence fallback", () => {
       schemaVersion: 2,
       spaces: [{ workspace: { id: "workspace-test-vault" } }],
     });
+  });
+
+  it.each(["sans", "serif"] as const)("persists the %s note typeface without changing note text", async (noteTypeface) => {
+    const vault = createEmptyVault("Typography", TEST_NOW);
+    vault.spaces[0] = createPopulatedSnapshot();
+    vault.activeSpaceId = vault.spaces[0].workspace.id;
+    vault.spaces[0].settings.noteTypeface = noteTypeface;
+    vault.spaces[0].settings.themeIcon = false;
+    vault.spaces[0].settings.homeAtmosphereAppearance = "dark";
+    const originalNotes = structuredClone(vault.spaces[0].notes);
+
+    await saveSnapshot(vault);
+    const loaded = await loadSnapshot();
+
+    expect(loaded?.spaces[0].settings.noteTypeface).toBe(noteTypeface);
+    expect(loaded?.spaces[0].settings.themeIcon).toBe(false);
+    expect(loaded?.spaces[0].settings.homeAtmosphereAppearance).toBe("dark");
+    expect(loaded?.spaces[0].notes).toEqual(originalNotes);
   });
 
   it.each([
@@ -1589,6 +1611,26 @@ describe("browser persistence fallback", () => {
       "unsupported theme preset",
       (snapshot: MutableSnapshot) => {
         snapshot.settings.themePreset = "laser";
+      },
+    ],
+    [
+      "unsupported note typeface",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.noteTypeface = "comic-sans";
+      },
+    ],
+    ["unsupported atmosphere appearance", (snapshot: MutableSnapshot) => { snapshot.settings.homeAtmosphereAppearance = "inverted"; }],
+    ["invalid icon preference", (snapshot: MutableSnapshot) => { snapshot.settings.themeIcon = "true"; }],
+    [
+      "out-of-range glass opacity",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.windowGlass = { sidebarOpacity: 101 };
+      },
+    ],
+    [
+      "out-of-range shared glass tint",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.windowGlass = { enabled: true, tintOpacity: 101, blur: 50 };
       },
     ],
     [

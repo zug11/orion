@@ -1,6 +1,6 @@
 import type { AppSnapshot, ChatRequest, ChatResult } from "../types";
 import { buildGenerationContext, generationNoteEvidence } from "./generationContext";
-import { buildGenerateWritingRequest, extractSlideHeadings, GENERATE_TIMEOUT_MS, type GenerateKind, writingPromptForGenerateKind } from "./generate";
+import { buildGenerateWritingRequest, extractSlideHeadings, GENERATE_TIMEOUT_MS, type GenerateKind, type GeneratedContent, parseGeneratedNote, writingPromptForGenerateKind } from "./generate";
 import { runPresentationWaves } from "./knowledgeOrchestration/waves";
 import { normalizeAIWritingReply } from "./aiWriting";
 
@@ -69,11 +69,11 @@ export async function generateFromSpace(
   input: GenerateInput,
   driver: (request: ChatRequest, signal?: AbortSignal) => Promise<ChatResult>,
   options: { signal?: AbortSignal; onProgress?: (stage: "preparing" | "writing", completed: number, total: number) => void } = {},
-): Promise<string> {
+): Promise<GeneratedContent> {
   const base = buildGenerateWritingRequest(snapshot, input);
   if (input.kind === "note") {
     options.onProgress?.("writing", 0, 1);
-    return normalizeAIWritingReply((await boundedCall(base, driver, options.signal)).reply);
+    return parseGeneratedNote((await boundedCall(base, driver, options.signal)).reply);
   }
   const context = buildGenerationContext(snapshot, input.instruction, input.useSpaceNotes);
   options.onProgress?.("preparing", 0, 1);
@@ -145,5 +145,5 @@ export async function generateFromSpace(
     const cause = result.failures[0].error;
     throw new Error(`Generation paused: ${result.failures.length} writing sections failed. ${cause instanceof Error ? cause.message : String(cause)}`);
   }
-  return result.results.map(({ result }) => result).sort((a, b) => a.index - b.index).map(({ body }) => body).join("\n\n");
+  return { body: result.results.map(({ result }) => result).sort((a, b) => a.index - b.index).map(({ body }) => body).join("\n\n") };
 }

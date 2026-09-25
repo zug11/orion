@@ -24,12 +24,14 @@ import {
   type MouseEvent,
 } from "react";
 import { findConceptByPhrase } from "../lib/concepts";
-import type { Concept, EntityId } from "../types";
+import type { Concept, EntityId, NoteTypeface } from "../types";
 import { AIWritingMark } from "./icons/AIWritingMark";
 import { NOTE_IMAGE_ACCEPT } from "../lib/noteImages";
 import { VoiceMemoButton } from "./VoiceMemoButton";
 
 interface EditorToolbarProps {
+  noteTypeface?: NoteTypeface;
+  onNoteTypefaceChange?: (typeface: NoteTypeface) => void;
   editor: Editor;
   concepts: readonly Concept[];
   onOpenLink: () => void;
@@ -55,6 +57,8 @@ interface EditorToolbarProps {
 }
 
 export function EditorToolbar({
+  noteTypeface = "sans",
+  onNoteTypefaceChange,
   editor,
   concepts,
   onOpenLink,
@@ -257,6 +261,26 @@ export function EditorToolbar({
         className="editor-toolbar-main"
         inert={aiWritingBusy ? true : undefined}
       >
+        {onNoteTypefaceChange ? (
+          <label className="editor-style-select editor-typeface-select" title="Note font · applies to reading and writing">
+            <span className="sr-only">Note font</span>
+            <select
+              aria-label="Note font"
+              value={noteTypeface}
+              onKeyDown={(event) => event.stopPropagation()}
+              onChange={(event) => {
+                const typeface = event.target.value;
+                if (typeface === "sans" || typeface === "serif") {
+                  onNoteTypefaceChange(typeface);
+                  editor.commands.focus();
+                }
+              }}
+            >
+              <option value="sans">Sans serif</option>
+              <option value="serif">Serif</option>
+            </select>
+          </label>
+        ) : null}
         <label className="editor-style-select" title="Text style">
           <span className="sr-only">Text style</span>
           <select

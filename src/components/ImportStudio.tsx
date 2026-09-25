@@ -1195,6 +1195,7 @@ export function ImportStudio({
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
   const organizeAbortRef = useRef<AbortController | null>(null);
+  const mediaAbortRef = useRef(new Map<EntityId, AbortController>());
   const organizeProgressFrameRef = useRef<number | null>(null);
   const pendingOrganizeProgressRef = useRef<OrganizeProgress | null>(null);
   const latestOrchestrationStageRef = useRef<UserFacingImportStage>("direct");
@@ -1259,6 +1260,12 @@ export function ImportStudio({
   };
 
   const reset = (remainingItems: ImportItem[] = []) => {
+    for (const [id, controller] of mediaAbortRef.current) {
+      if (!remainingItems.some((item) => item.id === id)) {
+        controller.abort(new Error("The media import was cancelled."));
+        mediaAbortRef.current.delete(id);
+      }
+    }
     organizeAbortRef.current?.abort(
       new Error("The knowledge import was cancelled."),
     );
@@ -1317,6 +1324,8 @@ export function ImportStudio({
 
   useEffect(
     () => () => {
+      for (const controller of mediaAbortRef.current.values()) controller.abort(new Error("The media import was cancelled."));
+      mediaAbortRef.current.clear();
       organizeAbortRef.current?.abort(
         new Error("The knowledge import was cancelled."),
       );
@@ -1519,11 +1528,12 @@ export function ImportStudio({
   const replaceWithTranscripts = (
     itemId: EntityId,
     transcripts: readonly TranscribedMedia[],
+    failures: readonly { fileName: string; error: string }[] = [],
   ) => {
     updateItems((current) => {
       const placeholder = current.find((item) => item.id === itemId);
       if (!placeholder) return current;
-      if (transcripts.length === 0) {
+      if (transcripts.length === 0 && failures.length === 0) {
         return current.filter((item) => item.id !== itemId);
       }
       const existingKeys = new Set(
@@ -1536,16 +1546,19 @@ export function ImportStudio({
       );
       const capacity = Math.max(0, MAX_FILES - (current.length - 1));
       const accepted = transcripts.slice(0, capacity);
+      const acceptedFailures = failures.slice(0, Math.max(0, capacity - accepted.length));
+      const omittedFailures = failures.length - acceptedFailures.length;
       const omitted = transcripts.length - accepted.length;
-      const replacements = accepted.map((transcript, index) => {
+      const replacements: ImportItem[] = accepted.map((transcript, index) => {
         const initialParsed = transcriptToParsedImport(transcript);
         const parsed =
-          omitted > 0 && index === accepted.length - 1
+          (omitted > 0 || omittedFailures > 0) && index === accepted.length - 1
             ? {
                 ...initialParsed,
                 warnings: [
                   ...initialParsed.warnings,
-                  `${omitted} additional media ${omitted === 1 ? "file was" : "files were"} not added because the queue can hold up to ${MAX_FILES} sources.`,
+                  ...(omitted > 0 ? [`${omitted} additional media ${omitted === 1 ? "file was" : "files were"} not added because the queue can hold up to ${MAX_FILES} sources.`] : []),
+                  ...(omittedFailures > 0 ? [`${omittedFailures} other selected media ${omittedFailures === 1 ? "file failed" : "files failed"}: ${failures.slice(acceptedFailures.length).map((failure) => `${failure.fileName}: ${failure.error}`).join("; ")}`] : []),
                 ],
               }
             : initialParsed;
@@ -1569,6 +1582,11 @@ export function ImportStudio({
             : undefined,
         };
       });
+      for (const [index, failure] of acceptedFailures.entries()) {
+        replacements.push({ id: replacements.length === 0 ? itemId : `import_${nanoid(12)}`,
+          fileName: failure.fileName, mimeType: "audio/video", byteSize: 0,
+          status: "error", included: false, error: `${failure.error}${accepted.length === 0 && omittedFailures > 0 && index === acceptedFailures.length - 1 ? ` ${omittedFailures} other selected media files failed: ${failures.slice(acceptedFailures.length).map((entry) => `${entry.fileName}: ${entry.error}`).join("; ")}` : ""}` });
+      }
       return replaceImportItem(current, itemId, replacements);
     });
   };
@@ -1614,19 +1632,23 @@ export function ImportStudio({
       },
     ]);
     if (duplicate) return;
+    const controller = new AbortController();
+    mediaAbortRef.current.set(itemId, controller);
     try {
-      const transcripts = await transcribeMediaFiles(
+      const batch = await transcribeMediaFiles(
         whisperConfig(),
         browserFiles,
+        controller.signal,
       );
-      replaceWithTranscripts(itemId, transcripts);
+      if (!controller.signal.aborted) replaceWithTranscripts(itemId, batch.transcripts, batch.failures);
     } catch (error) {
+      if (controller.signal.aborted) return;
       updateItems((current) =>
         settleImportItem(current, itemId, {
           error: errorMessage(error),
         }),
       );
-    }
+    } finally { mediaAbortRef.current.delete(itemId); }
   };
 
   const chooseMedia = () => {
@@ -1694,26 +1716,32 @@ export function ImportStudio({
     setImportUrl("");
     setUrlError("");
     if (duplicate) return;
+    const controller = new AbortController();
+    mediaAbortRef.current.set(itemId, controller);
     try {
       const parsed =
         classified.kind === "youtube"
           ? transcriptToParsedImport(
-              await transcribeYouTube(classified.url, whisperConfig()),
+              await transcribeYouTube(classified.url, whisperConfig(), controller.signal),
             )
           : await fetchWebPage(classified.url);
+      if (controller.signal.aborted) return;
       updateItems((current) =>
         settleImportItem(current, itemId, { parsed }),
       );
     } catch (error) {
+      if (controller.signal.aborted) return;
       updateItems((current) =>
         settleImportItem(current, itemId, {
           error: errorMessage(error),
         }),
       );
-    }
+    } finally { mediaAbortRef.current.delete(itemId); }
   };
 
   const removeItem = (itemId: EntityId) => {
+    mediaAbortRef.current.get(itemId)?.abort(new Error("The media import was cancelled."));
+    mediaAbortRef.current.delete(itemId);
     updateItems((current) =>
       current.filter((item) => item.id !== itemId),
     );

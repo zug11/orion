@@ -13,6 +13,8 @@ import {
 } from "../lib/icons";
 import { useMemo, useState } from "react";
 import type { Source } from "../types";
+import { searchLocalSources } from "../lib/localSearch";
+import "./LocalSearch.css";
 
 interface SourcesViewProps {
   sources: Source[];
@@ -41,16 +43,7 @@ export function SourcesView({
   onDeleteSource,
 }: SourcesViewProps) {
   const [query, setQuery] = useState("");
-  const visible = useMemo(() => {
-    const needle = query.toLocaleLowerCase().trim();
-    return sources.filter((source) =>
-      needle
-        ? `${source.title} ${source.fileName ?? ""}`
-            .toLocaleLowerCase()
-            .includes(needle)
-        : true,
-    );
-  }, [query, sources]);
+  const visible = useMemo(() => searchLocalSources(sources, query), [query, sources]);
 
   return (
     <div className="view index-view">
@@ -81,7 +74,7 @@ export function SourcesView({
           <span>Imported</span>
           <span className="sr-only">Actions</span>
         </div>
-        {visible.map((source) => {
+        {visible.map(({ item: source, snippet }) => {
           const Icon = sourceIcons[source.kind] ?? File;
           return (
             <div className="source-table-row" key={source.id}>
@@ -97,7 +90,9 @@ export function SourcesView({
                 </i>
                 <span>
                   <strong>{source.title}</strong>
-                  <small>{source.fileName ?? "Written in Orion"}</small>
+                  <small className={query.trim() ? "local-search-excerpt" : undefined}>
+                    {query.trim() ? snippet : source.fileName ?? "Written in Orion"}
+                  </small>
                 </span>
               </span>
               <span>
@@ -129,7 +124,7 @@ export function SourcesView({
             <strong>{query ? "No sources match" : "No sources yet"}</strong>
             <span>
               {query
-                ? "Try a different source name."
+                ? "Try a source name or words inside its preserved text."
                 : "Imported material and provenance will appear here."}
             </span>
           </div>

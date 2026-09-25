@@ -25,6 +25,11 @@ const sources: Source[] = [
 ];
 
 describe("source citation Markdown", () => {
+  it("does not let an escaped link example consume a later real source citation", () => {
+    const result = canonicalizeSourceCitations("\\[example\\]\\(https://example.com\\)\n\nOriginal: [Alpha](orion-source://source-alpha)", sources);
+    expect(result.references.map((reference) => reference.sourceId)).toEqual(["source-alpha"]);
+    expect(removeSourceCitations(result.markdown, ["source-alpha"], [])).not.toContain("orion-source://source-alpha");
+  });
   it("numbers legacy links by first appearance and generates one bottom entry per source", () => {
     const result = canonicalizeSourceCitations(
       "Alpha [Alpha field notes](orion-source://source-alpha), beta [Beta lecture](orion-source://source-beta), alpha again [old label](orion-source://source-alpha).",

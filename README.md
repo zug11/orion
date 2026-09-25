@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/orion-mark.svg" width="76" height="76" alt="Orion">
+  <img src="public/orion-mark.png" width="76" height="76" alt="Orion">
 </p>
 
 <h1 align="center">Orion</h1>
@@ -39,7 +39,8 @@ The result is a personal wiki that gets more coherent over time:
 - **Links have destinations.** A durable phrase resolves to one canonical page inside its Space.
 - **Notes stay ordinary.** They are permanent, editable, portable Markdown from the moment they are created.
 - **Projects stay separate.** Spaces are hard boundaries for notes, sources, concepts, Chat, navigation, and AI context.
-- **Chat reads as it goes.** Chat uses the Space hierarchy and compact note directories to find promising material, searches note and source bodies, then opens exact passages and follows connections as needed. Replies can cite the passages actually read; click a citation to inspect it or open the original item. Reading is bounded, can be stopped, and reports partial coverage. Chat can create notes only when explicitly asked, and **Keep as note** preserves source links. This uses the selected OpenAI or Anthropic model and may make several requests for a question.
+- **Chat reads as it goes.** Chat uses the Space hierarchy and compact note directories to find promising material, searches note and source bodies, then opens exact passages and follows connections as needed. Replies can cite the passages actually read; click a citation to inspect it or open the original item. Reading is bounded, can be stopped, and reports partial coverage. Chat can create notes only when explicitly asked. Created notes and **Keep as note** retain exact quoted passages and source links, including when an original later changes or is removed. This uses the selected OpenAI or Anthropic model and may make several requests for a question.
+- **Search reaches the original text.** Search finds phrases throughout note bodies and preserved source text, including across line breaks. Results show the matching passage and open the exact note or source in the current Space.
 - **AI stays optional.** Manual organization and the entire local knowledge layer work without OpenAI or Anthropic.
 
 ## From raw material to a personal wiki
@@ -71,6 +72,13 @@ Import supports:
 
 Choose **Manual** to create one editable note per source without an AI request. Choose **Organize with AI** to turn the material into idea-first notes, reusable concepts, source-backed links, and integrated canonical articles.
 
+Media imports can be cancelled by removing the queued input. If one file fails,
+completed siblings remain available and Orion reports each failure. Long media
+is decoded in bounded overlapping windows with one loaded Whisper model.
+Downloads have a 20-minute limit, transcription has a 60-minute limit, and each
+request has a 90-minute total limit. Inputs are limited to 2 GiB and 12 hours of
+decoded audio; longer material can be split into separate files.
+
 **Settings → Intelligence** includes **GPT-6 Astra** for complex research and
 synthesis through your OpenAI connection, with Low through Extra high reasoning.
 
@@ -86,7 +94,7 @@ The ordinary `0.4.5` download bundles Whisper Small and processes two-minute seg
 
 Inline AI writing is deliberately non-destructive. Continue at the caret or select a passage to Rewrite, Clarify, Tighten, Simplify, Expand, or Enrich from the active Space. A proposal is never saved until you accept it, and acceptance is one ordinary Undo step. An OpenAI key also enables selected-passage image generation; image bytes remain transient until accepted.
 
-**New note** still opens a blank page. When a writing key is configured, the chevron next to it opens **Generate**: a note, a podcast script, a slide deck, or a slide deck written to be heard. Each lands as an ordinary note. **Play** in the note header reads the open page with System speech, OpenAI `gpt-4o-mini-tts`, or an optional ElevenLabs key. Slide decks generate complete `gpt-image-2` slides that letter the title and bullets in distinctive fonts, hide speaker notes on screen, and Play times those slides to the narration.
+**New note** still opens a blank page. When a key is configured for your selected AI provider, the chevron next to it opens **Generate**: a note, a podcast script, a slide deck, or a slide deck written to be heard. The chevron stays hidden without that key. Each result lands as an ordinary note. Generated articles receive an AI-written title alongside their body; a title you edit during generation is preserved. **Play** in the note header reads the open page with System speech, OpenAI `gpt-4o-mini-tts`, or an optional ElevenLabs key. Slide decks generate complete `gpt-image-2` slides that letter the title and bullets in distinctive fonts, hide speaker notes on screen, and Play times those slides to the narration.
 
 Generate shows **Use notes from this Space**, initially matching your context setting. Turn it on for a single generation without changing that setting. Authored notes provide context even without imported Sources: Orion uses the Space overview, a compact note directory, and relevant note excerpts. Decks and podcasts share one outline before up to six writers work on separate sections; slide images follow in their own parallel waves. Planning caps high reasoning at medium while writers keep your selected effort. With context off, Orion uses only your instructions and cannot describe the saved project.
 
@@ -109,6 +117,45 @@ Use **Cmd+Shift+N** or **File → New Window** to open another Orion window in t
 
 Drag any unused part of the top bar to move the window, including the space above the sidebar and the gaps around navigation and search. Buttons keep their normal actions.
 
+The note editor’s **Note font** dropdown offers Sans serif (default) and Serif for
+reading and writing. Interface text uses Hanken Grotesk; the Home headline,
+its supporting paragraph, and note titles use Lora. Hanken Grotesk provides the main sans-serif style, with stronger weights
+for small controls. Both font families and their real italics are bundled for offline
+use under the SIL Open Font License; see
+[`docs/typography.md`](docs/typography.md).
+
+**Settings → Appearance → Liquid Glass** has one on/off switch, a shared tint
+opacity slider, and a background blur slider. The top bar and sidebar form one
+continuous surface, with matching colour and opacity and no divider between
+them. The reading canvas meets this frame with a softly rounded top-left corner.
+With glass off, a continuous thin border follows its top and left edges.
+Glass always uses Apple's Regular style. macOS 26 and later use native
+`NSGlassEffectView`; older Macs fall back to native frosted glass.
+
+Tint opacity runs from 0–100%; lower values reveal more of the desktop, while
+100% makes the frame solid. Background blur controls added native frosting;
+Regular glass keeps its own blur at zero. Turning glass off preserves both
+sliders, and Reset glass restores the defaults. Existing separate area tints
+are combined into one shared value when loaded.
+
+Text stays fully opaque and the reading surface stays solid. Light/Dark/System
+appearance and macOS Reduce Transparency and Increase Contrast are respected.
+Browser previews remain opaque. See [native glass implementation notes](docs/window-glass.md)
+for the Apple references and platform boundaries.
+
+New note and its generation chevron share a translucent control surface when
+native glass is active. It is slightly more opaque than the surrounding sidebar
+and returns to solid styling when glass is off. The sidebar brand mark is a
+freestanding O with no background tile.
+**Icon colours → Theme** colours this O and the macOS Dock and Finder icons from
+the active accent, with a deeper dark-mode finish and a lighter daylight finish.
+Custom accents and live System-mode changes carry through. **Original** restores
+the teal/cobalt mark and removes the Finder custom icon. Finder retains the last
+colour after quitting; changes resume when Orion opens. Install Orion in a
+writable Applications folder to update Finder (a mounted DMG is read-only).
+Selected navigation items, the Space switcher, and both dropdowns also follow
+the glass toggle. Dropdowns have stronger frosting to keep their content readable.
+
 When a substantive note changes, Orion can refresh the canonical articles genuinely affected by it. Useful new evidence is woven into the existing prose instead of appended as a change log or a stack of source summaries.
 
 ### Sources and tasks remain first-class
@@ -118,6 +165,9 @@ Every citation opens the preserved source. Every open Markdown task appears on H
 ### A Space has memory
 
 Home carries a living **Across this Space** orientation beside the task list. It keeps the last useful overview visible while knowledge changes and falls back to a deterministic local summary when AI is unavailable.
+Even one short note can produce a summary. The overview grows with the material;
+brief Spaces can stay at a sentence or a few short paragraphs. Blank starter
+notes do not count as knowledge, and a local summary stays visible during AI refreshes.
 
 **Settings → Appearance → Home atmosphere** includes nine original procedural
 effects alongside Line Waves, Signal Decay, and Field:
@@ -135,6 +185,13 @@ effects alongside Line Waves, Signal Decay, and Field:
 The last seven fill the Home backdrop. All nine are written directly in local
 WebGL, with no downloaded artwork, textures, or external shader dependencies.
 Their colours follow your room and accent; Still, Calm, and Alive control motion.
+Light mode uses a gently shaded paper backdrop, richer coloured midtones, and
+restrained highlights. Lenses, facets, and fabric use separate daylight lighting
+so their highlights stay light. Mirage retains crisp lens edges and refraction
+detail in light mode, using the same rendering resolution as dark mode.
+**Appearance → Always dark** keeps just the Home
+hero dark, including readable text and controls; **Match theme** restores normal
+light/dark behaviour. Existing colour and motion choices are preserved.
 Choose **Colour 1** and **Colour 2** with their colour pickers or hex fields
 beside the four presets. The pair colours every shader and preview, saves with
 appearance settings, and adapts its brightness for light and dark rooms. Any
@@ -336,7 +393,7 @@ Each release bundle is self-contained. It includes the Vision OCR helper, its se
 ### Prerequisites
 
 - [Git LFS](https://git-lfs.com/) 3.x
-- Node.js `^20.19.0`, `^22.12.0`, or `>=24.0.0`, with npm
+- Node.js `^22.13.0` or `>=24.0.0`, with npm
 - A stable Rust toolchain with Cargo
 - Xcode Command Line Tools or Xcode
 - Apple Silicon macOS 13.3 or later for the bundled native runtime
@@ -351,6 +408,20 @@ npm run tauri dev
 ```
 
 The first Rust build is substantial because Tauri and native dependencies compile from a clean target directory.
+
+### Run an isolated native preview
+
+Run `./script/build_and_run.sh --verify` (or the Codex **Run** action) to build
+and open **Orion Preview** with native Liquid Glass and the bundled fonts.
+It stages the current sources under `/private/tmp`, installs the exact npm
+lockfile, rebuilds helpers and connectors, and creates a local ad-hoc signed
+app under `~/Applications/Orion Previews`, linked from `outputs/native-preview`.
+The runnable copy stays outside Documents to avoid File Provider metadata
+invalidating bundled framework signatures. Its library and Keychain service use
+`app.orion.desktop-preview`; it does not replace the installed Orion or copy
+its library. Preview data persists between builds. This is a local preview,
+not a notarized release. `outputs/native-preview/latest-app.txt` records the
+latest bundle path.
 
 ### Run the browser preview
 
@@ -447,3 +518,7 @@ Contributors should read [AGENTS.md](AGENTS.md) before changing Orion. It is the
 <p align="center">
   <strong>Orion turns a collection of material into a place you can think.</strong>
 </p>
+
+Short text selections can opt into **Generate title with AI** in the link composer.
+Orion names the destination before creating the article; the selected prose stays
+intact, with a different linked title inserted above its containing block.

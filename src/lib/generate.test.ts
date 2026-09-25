@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { createEmptySnapshot } from "../data/defaults";
 import { SLIDE_DECK_TAG } from "./slideDeck";
 import {
+  applyGeneratedNoteTitle,
+  parseGeneratedNote,
   buildGenerateWritingRequest,
   createGeneratePlaceholderNote,
   extractSlideHeadings,
@@ -14,6 +16,21 @@ import {
 } from "./generate";
 
 describe("generate helpers", () => {
+  it("parses a fenced article without flattening its body or duplicating the title", () => {
+    expect(parseGeneratedNote("```markdown\n# Deleuze\n\n## Difference\n\n- An idea\n- Another\n```"))
+      .toEqual({ title: "Deleuze", body: "## Difference\n\n- An idea\n- Another" });
+    expect(() => parseGeneratedNote("# " + "a".repeat(121) + "\n\nBody")).toThrow(/title/);
+    expect(() => parseGeneratedNote("# Deleuze\n\n")).toThrow();
+    expect(() => parseGeneratedNote("# Deleuze\n\n<!-- orion-generate-pending -->")).toThrow(/metadata/);
+  });
+
+  it("updates the generated title and slug, while preserving a user's intervening rename", () => {
+    const note = createGeneratePlaceholderNote({ id: "n", title: "write an article about deleuze", kind: "note", now: "2026-09-25" });
+    expect(applyGeneratedNoteTitle(note, note.title, "Deleuze and Becoming")).toMatchObject({ title: "Deleuze and Becoming", slug: "deleuze-and-becoming", id: "n" });
+    const renamed = { ...note, title: "My reading of Deleuze", slug: "my-reading" };
+    expect(applyGeneratedNoteTitle(renamed, note.title, "Deleuze and Becoming")).toBe(renamed);
+  });
+
   it("takes the title from the first instruction line", () => {
     expect(
       titleFromGenerateInstruction("Phenomenology of Spirit\nGo slowly.", "note"),

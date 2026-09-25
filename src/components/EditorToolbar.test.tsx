@@ -57,6 +57,33 @@ afterEach(() => {
 });
 
 describe("EditorToolbar", () => {
+  it("changes the reading font without changing prose, undo history, or selection", () => {
+    const editor = createEditor();
+    editor.commands.setTextSelection({ from: 1, to: 6 });
+    const onNoteTypefaceChange = vi.fn();
+    const props = {
+      editor, concepts: [], onOpenLink: vi.fn(), onUnlink: vi.fn(),
+      citationAvailable: false, onOpenCitation: vi.fn(), onNoteTypefaceChange,
+    };
+    const { rerender } = render(<EditorToolbar {...props} noteTypeface="sans" />);
+    const select = screen.getByRole("combobox", { name: "Note font" });
+    expect([...select.querySelectorAll("option")].map((option) => option.textContent))
+      .toEqual(["Sans serif", "Serif"]);
+    fireEvent.change(select, { target: { value: "serif" } });
+    expect(onNoteTypefaceChange).toHaveBeenLastCalledWith("serif");
+    rerender(<EditorToolbar {...props} noteTypeface="serif" />);
+    expect(select).toHaveValue("serif");
+    expect(editor.getMarkdown()).toBe("Alpha beta");
+    expect(editor.state.selection.from).toBe(1);
+    expect(editor.state.selection.to).toBe(6);
+    expect(editor.can().undo()).toBe(false);
+    select.focus();
+    fireEvent.keyDown(select, { key: "Home" });
+    expect(select).toHaveFocus();
+    fireEvent.change(select, { target: { value: "sans" } });
+    expect(onNoteTypefaceChange).toHaveBeenLastCalledWith("sans");
+  });
+
   it("round-trips inline code, strikethrough, fenced code, and dividers", () => {
     const inline = createEditor();
     inline.commands.setTextSelection({ from: 1, to: 6 });

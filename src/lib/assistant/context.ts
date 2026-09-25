@@ -1,6 +1,7 @@
 import type { AppSnapshot, Note, Source } from "../../types";
 import { buildGenerationContext } from "../generationContext";
-import { spaceNoteVersion, stableKnowledgeHash } from "../spaceKnowledge";
+import { spaceNoteVersion } from "../spaceKnowledge";
+import { sourceEvidenceVersion } from "../evidenceVersions";
 import { stableSnapshotVersion } from "../knowledgeOrchestration/context";
 import { truncateUnicode } from "../text";
 import type { ContextInput, ResearchInput, WorkflowDependencies } from "./types";
@@ -20,24 +21,60 @@ export interface Evidence {
 
 /** Offsets and text always refer to the exact original body, including whitespace. */
 export function exactPassages(body: string, query: string, budget = 4_000): Passage[] {
-  if (body.length <= budget) return [{ start: 0, end: body.length, text: body }];
-  const tokens = [...new Set(query.toLocaleLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [])].slice(0, 80);
-  const chunks: Array<Passage & { score: number }> = [];
-  for (let start = 0; start < body.length;) {
-    let end = Math.min(body.length, start + 1_000);
-    // Never split a UTF-16 surrogate pair at an excerpt boundary.
+  const limit = Number.isFinite(budget) ? Math.max(0, Math.floor(budget)) : 0;
+  if (!limit) return [];
+  if (body.length <= limit) return [{ start: 0, end: body.length, text: body }];
+  const width = Math.min(1_000, limit);
+  const tokens = [...new Set(query.match(/[\p{L}\p{N}]{2,}/gu) ?? [])].slice(0, 80);
+  const literal = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const terms = tokens.map((token) => new RegExp(literal(token), "iu"));
+  const candidates = new Map<number, Passage & { matchedTerms: number[] }>();
+  const add = (position: number) => {
+    let start = Math.max(0, Math.min(body.length - width, Math.floor(position)));
+    // Original UTF-16 offsets remain authoritative, including case mappings
+    // whose lowercase spelling has a different length from the source text.
+    if (start > 0 && /[\uDC00-\uDFFF]/.test(body[start])) start -= 1;
+    let end = Math.min(body.length, start + width);
     if (end < body.length && /[\uD800-\uDBFF]/.test(body[end - 1])) end -= 1;
+    if (end <= start || candidates.has(start)) return;
     const text = body.slice(start, end);
-    chunks.push({ start, end, text, score: tokens.reduce((n, token) => n + (text.toLocaleLowerCase().includes(token) ? 1 : 0), 0) + (start === 0 || end === body.length ? 0.1 : 0) });
-    start = end;
+    candidates.set(start, { start, end, text,
+      matchedTerms: terms.flatMap((term, index) => term.test(text) ? [index] : []) });
+  };
+  add(0);
+  add(body.length - width);
+  if (tokens.length) {
+    // Find matches in untouched text before selecting windows. Fixed chunk
+    // boundaries must never make a term invisible to query-based reading.
+    const matcher = new RegExp(tokens.sort((a, b) => b.length - a.length).map(literal).join("|"), "giu");
+    const seenBuckets = new Set<string>();
+    for (const match of body.matchAll(matcher)) {
+      // A frequent term must not suppress a different term in the same region.
+      const bucket = `${Math.floor(match.index / width)}:${match[0].toLocaleLowerCase()}`;
+      if (seenBuckets.has(bucket)) continue;
+      seenBuckets.add(bucket);
+      add(match.index - Math.floor(Math.max(0, width - match[0].length) / 2));
+    }
   }
-  const ranked = chunks.sort((a, b) => b.score - a.score || a.start - b.start);
-  const chosen: Passage[] = [];
-  let remaining = budget;
-  for (const chunk of ranked) {
-    if (chunk.text.length > remaining) continue;
-    chosen.push({ start: chunk.start, end: chunk.end, text: chunk.text }); remaining -= chunk.text.length;
-    if (remaining < 2) break;
+  const pending = [...candidates.values()];
+  let chosen: Passage[] = [];
+  const coveredTerms = new Set<number>();
+  let remaining = limit;
+  while (pending.length && remaining > 0) {
+    const newTerms = (item: typeof pending[number]) => item.matchedTerms.filter((index) => !coveredTerms.has(index)).length;
+    pending.sort((a, b) => newTerms(b) - newTerms(a) || b.matchedTerms.length - a.matchedTerms.length || a.start - b.start);
+    const chunk = pending.shift()!;
+    const overlapping = chosen.filter((item) => chunk.start <= item.end && chunk.end >= item.start);
+    const start = Math.min(chunk.start, ...overlapping.map((item) => item.start));
+    const end = Math.max(chunk.end, ...overlapping.map((item) => item.end));
+    const additional = end - start - overlapping.reduce((sum, item) => sum + item.text.length, 0);
+    if (additional > remaining) continue;
+    // Merge overlaps instead of discarding the later window or splitting a
+    // matched word at the boundary between two saved passages.
+    chosen = chosen.filter((item) => !overlapping.includes(item));
+    chosen.push({ start, end, text: body.slice(start, end) });
+    remaining -= additional;
+    chunk.matchedTerms.forEach((index) => coveredTerms.add(index));
   }
   return chosen.sort((a, b) => a.start - b.start);
 }
@@ -93,7 +130,7 @@ function makeEvidence(snapshot: AppSnapshot, value: Note | Source, kind: "note" 
   const source = kind === "source" ? value as Source : undefined;
   return {
     id: `${kind}:${value.id}`, kind, entityId: value.id, title: value.title,
-    version: note ? spaceNoteVersion(note) : stableKnowledgeHash(JSON.stringify(source)),
+    version: note ? spaceNoteVersion(note) : sourceEvidenceVersion(source!),
     passages, offsetUnit: "utf16", fullTextLength: body.length,
     complete: passages.reduce((n, passage) => n + passage.text.length, 0) === body.length,
     notes: (note ? [note] : snapshot.notes.filter((item) => source!.noteIds.includes(item.id)).slice(0, 5)).map((item) => noteCitation(snapshot.workspace.id, item)),

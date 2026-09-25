@@ -291,7 +291,9 @@ void main() {
     0.012;
   color += grain;
   color = clamp(color, 0.0, 1.0);
-  color = color * color * (3.0 - 2.0 * color);
+  // The night contrast curve pushes paper colours towards white. Keep
+  // daylight in its already contrast-corrected palette instead.
+  color = mix(color * color * (3.0 - 2.0 * color), color, uLightMode);
 
   gl_FragColor = vec4(color, 1.0);
 }

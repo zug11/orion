@@ -17,6 +17,9 @@ const MAX_DIGEST_RELATIONSHIPS = 24;
 const MAX_BLUEPRINT_BODY_CHARS = 8_000;
 const MAX_BLUEPRINT_LABELS = 24;
 
+export const SPACE_OVERVIEW_WRITING_GUIDANCE =
+  "A single note is enough: summarize the available material even when it is brief. Match length to evidence: one sentence or one to three compact paragraphs for a small Space; roughly five to eight compact paragraphs (usually 450–700 words) only when the material supports it. Never pad, invent connections, or withhold a summary because there are too few notes.";
+
 export interface SpaceBlueprintOrientation {
   root: {
     id: string;
@@ -138,7 +141,7 @@ export function buildSpaceNoteDigests(snapshot: AppSnapshot): SpaceNoteDigest[] 
     const headings = extractNoteHeadings(note.body);
     const wholeBodySketch = buildNoteWholeBodySketch(note.body, headings);
     const summary = truncateUnicode(
-      plainText(note.summary) || wholeBodySketch,
+      spaceNoteSummary(note) || wholeBodySketch,
       MAX_DIGEST_SUMMARY_CHARS,
     );
     const quality = !wholeBodySketch
@@ -548,7 +551,7 @@ export function buildSpaceRootRequest(
     effort: boundedBlueprintEffort(snapshot.settings.reasoningEffort),
     timeoutMs: 300_000,
     taskInstructions:
-      "Root Space-blueprint task: return exactly one entry in notes and empty wikiArticles, concepts, and suggestedConnections. Write the note as the living Across this Space orientation. Its editorial title should capture the Space's current intellectual centre. Its cohesive body should explain the central material, meaningful relationships, tensions, open questions, and direction of work in roughly five to eight compact paragraphs. Synthesize only the validated child blueprints. Do not make a source inventory, change log, Context from section, or [[wiki]] links; do not invent facts. Preserve a worthwhile previous title unless the centre materially changed.",
+      `Root Space-blueprint task: return exactly one entry in notes and empty wikiArticles, concepts, and suggestedConnections. Write the note as the living Across this Space orientation. Its editorial title should capture the Space's current intellectual centre. Explain the central material and any supported relationships, tensions, open questions, or direction of work. ${SPACE_OVERVIEW_WRITING_GUIDANCE} Synthesize only the validated child blueprints. Do not make a source inventory, change log, Context from section, or [[wiki]] links; do not invent facts. Preserve a worthwhile previous title unless the centre materially changed.`,
     organizationInstructions: snapshot.settings.organizationInstructions,
   };
 }
@@ -849,7 +852,13 @@ function blueprintId(level: number, index: number, noteIds: readonly string[]): 
   ).slice(0, 10)}`;
 }
 
-function isKnowledgeNote(note: Note): boolean {
+export function spaceNoteSummary(note: Note): string {
+  const summary = plainText(note.summary);
+  // The starter description is UI copy, not knowledge supplied by the user.
+  return summary === "A new thread in your atlas." ? "" : summary;
+}
+
+export function isKnowledgeNote(note: Note): boolean {
   if (
     note.status === "archived" ||
     note.tags.includes("orion-link-pending") ||
@@ -858,7 +867,7 @@ function isKnowledgeNote(note: Note): boolean {
   ) {
     return false;
   }
-  return `${plainText(note.summary)} ${plainText(note.body)}`.trim().length >= 24;
+  return /[\p{L}\p{N}]/u.test(`${spaceNoteSummary(note)} ${plainText(note.body)}`);
 }
 
 export function extractNoteHeadings(body: string): string[] {

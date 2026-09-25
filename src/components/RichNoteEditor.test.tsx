@@ -2,7 +2,9 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import type { Source } from "../types";
+import type { ChatEvidence, Source } from "../types";
+import { portableChatEvidence, savedChatEvidence } from "../lib/chatCitations";
+import { sourceEvidenceVersion } from "../lib/evidenceVersions";
 import { RichNoteEditor } from "./RichNoteEditor";
 
 const NOW = "2026-08-07T00:00:00.000Z";
@@ -49,6 +51,31 @@ const spaceSource: Source = {
 };
 
 describe("RichNoteEditor source citations", () => {
+  it("keeps exact literal passages in a read-only footer through real editor changes", async () => {
+    const text = "November. [literal](https://example.com) <img src=x> **words** & punctuation!";
+    const source = { ...attachedSource, text };
+    const evidence: ChatEvidence = { id: "e1", kind: "source", entityId: source.id, title: source.title, version: sourceEvidenceVersion(source), start: 0, end: text.length, text, offsetUnit: "utf16" };
+    const markdown = portableChatEvidence("A claim [1](#orion-evidence-e1).", [evidence]);
+    const onChange = vi.fn();
+    const props = { noteId: "saved", markdown, notes: [], concepts: [], sources: [source], attachedSourceIds: [source.id], onChange, onAttachSource: vi.fn(), onRegisterConcept: vi.fn(), onDisableConceptAutoLink: vi.fn() };
+    const { rerender } = render(<RichNoteEditor {...props} />);
+    const footer = screen.getByRole("region", { name: "Cited passages" });
+    expect(footer.querySelector("blockquote")!.textContent).toBe(text);
+    expect(footer.querySelectorAll("a, img")).toHaveLength(0);
+    expect(screen.getByRole("textbox", { name: "Note body" })).not.toHaveTextContent("&#46;");
+    expect(screen.getByRole("textbox", { name: "Note body" })).not.toHaveTextContent("orion-passage:v1:");
+    fireEvent.click(screen.getByRole("button", { name: "Cite a source" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Cite a source" })).getByRole("button", { name: /Attached lecture/ }));
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const saved = onChange.mock.calls[onChange.mock.calls.length - 1][0] as string;
+    expect(savedChatEvidence(saved)).toEqual([evidence]);
+    expect(saved.match(/## Cited passages/g)).toHaveLength(1);
+    rerender(<RichNoteEditor {...props} markdown={saved} sources={[{ ...source, text: "Changed." }]} />);
+    expect(footer).toHaveTextContent("has changed");
+    expect(footer.querySelector("blockquote")!.textContent).toBe(text);
+    rerender(<RichNoteEditor {...props} markdown={saved} sources={[]} />);
+    expect(footer).toHaveTextContent("no longer in this Space");
+  });
   it("lists attached sources first and writes a portable citation", async () => {
     const onChange = vi.fn();
     const onAttachSource = vi.fn();

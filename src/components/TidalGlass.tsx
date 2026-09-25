@@ -35,7 +35,10 @@ void main() {
   energy += uPrimary * uPrimary * focus.x * 0.62
     + uSecondary * uSecondary * focus.y * 0.55
     + uTertiary * uTertiary * focus.z * 0.32;
-  gl_FragColor = finishAtmosphere(uv, energy);
+  gl_FragColor = uLight > 0.5
+    ? finishDaylightSurface(uv, tint(depth * 2.0 + p.x * 0.12),
+        0.55 + sin(depth * 2.0) * 0.2, max(focus.x, max(focus.y, focus.z)), 0.86)
+    : finishAtmosphere(uv, energy);
 }
 `;
 

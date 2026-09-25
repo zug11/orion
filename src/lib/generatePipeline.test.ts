@@ -58,6 +58,21 @@ describe("Space generation context", () => {
   });
 });
 
+describe("generated note titles", () => {
+  it("extracts a title and body from one writing response instead of retaining the instruction", async () => {
+    const driver = vi.fn(async (_request: ChatRequest) => reply("# Gilles Deleuze: Difference and Becoming\n\nA clear introduction.\n\n## Difference\n\nA substantive explanation."));
+    const result = await generateFromSpace(fixture(), { ...input, kind: "note", instruction: "write an article about deleuze" }, driver);
+    expect(result.title).toBe("Gilles Deleuze: Difference and Becoming");
+    expect(result.body).toBe("A clear introduction.\n\n## Difference\n\nA substantive explanation.");
+    expect(driver).toHaveBeenCalledOnce();
+    expect(driver.mock.calls[0]?.[0].prompt).toContain("Begin with exactly one # title heading");
+  });
+
+  it("does not save malformed output as a completed article", async () => {
+    await expect(generateFromSpace(fixture(), { ...input, kind: "note" }, async () => reply("A body with no title."))).rejects.toThrow(/title/);
+  });
+});
+
 describe("parallel generation", () => {
   it("uses one medium outline followed by six scoped high-effort writers, with local ordered assembly", async () => {
     const snapshot = fixture();
@@ -85,7 +100,7 @@ describe("parallel generation", () => {
     await vi.waitFor(() => expect(active).toBe(6));
     expect(requests[0].effort).toBe("medium");
     release();
-    const body = await pending;
+    const { body } = await pending;
     expect(maximum).toBe(6);
     expect(driver).toHaveBeenCalledTimes(7);
     expect(body.match(/^## .+$/gm)).toEqual(outline().sections.map(({ title }) => `## ${title}`));

@@ -39,7 +39,9 @@ void main() {
   vec3 dye = tint(height * 2.3 + cell.x * 0.25 + cell.y * 0.18);
   vec3 energy = dye * (0.06 + diffuse * 0.31 + reflection * 0.64);
   energy += mix(dye, uTertiary, 0.5) * edge * (0.12 + glint * 0.7);
-  gl_FragColor = finishAtmosphere(uv, energy);
+  gl_FragColor = uLight > 0.5
+    ? finishDaylightSurface(uv, dye, diffuse, reflection + edge * glint * 0.15, 0.92)
+    : finishAtmosphere(uv, energy);
 }
 `;
 

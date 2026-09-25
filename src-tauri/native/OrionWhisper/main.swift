@@ -34,7 +34,13 @@ private func option(_ name: String, in arguments: [String]) -> String? {
     return arguments[index + 1]
 }
 
-private func decodeAudio(at path: String) async throws -> [Float] {
+private let sampleRate = 16_000
+private let importWindowSamples = 5 * 60 * sampleRate
+private let importOverlapSamples = 2 * sampleRate
+private let maximumImportSamples = 12 * 60 * 60 * sampleRate
+private let maximumTranscriptBytes = 2 * 1024 * 1024 - 1
+
+private func readAudio(at path: String, maximumSamples: Int, consume: ([Float]) throws -> Void) async throws {
     let url = URL(fileURLWithPath: path)
     let asset = AVURLAsset(url: url)
     guard let track = try await asset.loadTracks(withMediaType: .audio).first else {
@@ -63,7 +69,8 @@ private func decodeAudio(at path: String) async throws -> [Float] {
         )
     }
 
-    var samples: [Float] = []
+    defer { reader.cancelReading() }
+    var totalSamples = 0
     while let sampleBuffer = output.copyNextSampleBuffer() {
         defer { CMSampleBufferInvalidate(sampleBuffer) }
         guard let block = CMSampleBufferGetDataBuffer(sampleBuffer) else {
@@ -73,9 +80,15 @@ private func decodeAudio(at path: String) async throws -> [Float] {
         guard byteCount > 0, byteCount.isMultiple(of: MemoryLayout<Float>.size) else {
             continue
         }
+        let count = byteCount / MemoryLayout<Float>.size
+        // Check before allocation, including malformed decoder buffers and the
+        // total decoded duration. Compressed file size does not bound audio RAM.
+        guard count <= 30 * sampleRate, count <= maximumSamples - totalSamples else {
+            throw RunnerFailure.message("The selected recording exceeds the safe decoded-audio limit.")
+        }
         var chunk = [Float](
             repeating: 0,
-            count: byteCount / MemoryLayout<Float>.size
+            count: count
         )
         let status = chunk.withUnsafeMutableBytes { bytes in
             CMBlockBufferCopyDataBytes(
@@ -88,7 +101,8 @@ private func decodeAudio(at path: String) async throws -> [Float] {
         guard status == kCMBlockBufferNoErr else {
             throw RunnerFailure.message("macOS returned malformed decoded audio.")
         }
-        samples.append(contentsOf: chunk)
+        totalSamples += count
+        try consume(chunk)
     }
 
     if reader.status == .failed {
@@ -96,13 +110,40 @@ private func decodeAudio(at path: String) async throws -> [Float] {
             reader.error?.localizedDescription ?? "macOS could not decode this media."
         )
     }
-    guard !samples.isEmpty else {
+    guard totalSamples > 0 else {
         throw RunnerFailure.message("The selected media contains no decodable audio samples.")
     }
-    guard samples.count <= Int(Int32.max) else {
-        throw RunnerFailure.message("The selected recording is too long to transcribe safely.")
-    }
+}
+
+private func decodeAudio(at path: String) async throws -> [Float] {
+    var samples: [Float] = []
+    // This complete-buffer path is only used for bounded dictation segments.
+    try await readAudio(at: path, maximumSamples: 150 * sampleRate) { samples.append(contentsOf: $0) }
     return samples
+}
+
+private func appendTranscript(_ next: String, to transcript: inout String) throws {
+    guard !next.isEmpty else { return }
+    let previousWords = transcript.split(separator: " ")
+    let nextWords = next.split(separator: " ")
+    let maximumOverlap = min(32, min(previousWords.count, nextWords.count))
+    func normalized(_ word: Substring) -> String {
+        String(word.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }).lowercased()
+    }
+    var overlap = 0
+    if maximumOverlap >= 2 {
+        for count in stride(from: maximumOverlap, through: 2, by: -1) {
+            if zip(previousWords.suffix(count), nextWords.prefix(count)).allSatisfy({ normalized($0.0) == normalized($0.1) && !normalized($0.0).isEmpty }) {
+                overlap = count
+                break
+            }
+        }
+    }
+    let addition = nextWords.dropFirst(overlap).joined(separator: " ")
+    guard transcript.utf8.count + addition.utf8.count + 1 <= maximumTranscriptBytes else {
+        throw RunnerFailure.message("The recording produced too much text for one import. Split it into shorter recordings.")
+    }
+    if !addition.isEmpty { transcript += (transcript.isEmpty ? "" : " ") + addition }
 }
 
 private func loadContext(modelPath: String, useGPU: Bool) throws -> OpaquePointer {
@@ -186,10 +227,25 @@ private func transcribe(
     language: String?,
     useGPU: Bool
 ) async throws -> String {
-    let samples = try await decodeAudio(at: mediaPath)
     let context = try loadContext(modelPath: modelPath, useGPU: useGPU)
     defer { whisper_free(context) }
-    let transcript = try transcribe(samples: samples, context: context, language: language)
+    var pending: [Float] = []
+    pending.reserveCapacity(importWindowSamples + 30 * sampleRate)
+    var transcript = ""
+    var completedWindows = 0
+    try await readAudio(at: mediaPath, maximumSamples: maximumImportSamples) { chunk in
+        pending.append(contentsOf: chunk)
+        while pending.count >= importWindowSamples {
+            let text = try transcribe(samples: Array(pending.prefix(importWindowSamples)), context: context, language: language)
+            try appendTranscript(text, to: &transcript)
+            pending.removeFirst(importWindowSamples - importOverlapSamples)
+            completedWindows += 1
+        }
+    }
+    if pending.count > (completedWindows > 0 ? importOverlapSamples : 0) {
+        let text = try transcribe(samples: pending, context: context, language: language)
+        try appendTranscript(text, to: &transcript)
+    }
     guard !transcript.isEmpty else {
         throw RunnerFailure.message("Whisper finished without detecting any speech.")
     }

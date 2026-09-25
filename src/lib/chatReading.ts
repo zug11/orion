@@ -8,10 +8,11 @@ import { buildGenerationContext } from "./generationContext";
 import { stableSnapshotVersion } from "./knowledgeOrchestration/context";
 import {
   buildSpaceNoteDigests, getSpaceKnowledgeRoot, spaceKnowledgeIsCurrent,
-  spaceNoteVersion, stableKnowledgeHash,
+  spaceNoteVersion,
 } from "./spaceKnowledge";
 import { truncateUnicode } from "./text";
-import { portableChatEvidence, resolveChatEvidenceMarkers } from "./chatCitations";
+import { resolveChatEvidenceMarkers } from "./chatCitations";
+import { sourceEvidenceVersion } from "./evidenceVersions";
 import { resolveWikiLinks } from "./wiki";
 import {
   MAX_CHAT_EVIDENCE, MAX_CHAT_PASSAGE_CHARS,
@@ -52,7 +53,7 @@ function abortReason(signal: AbortSignal): unknown {
 }
 
 function sourceVersion(source: Source): string {
-  return stableKnowledgeHash(JSON.stringify(source));
+  return sourceEvidenceVersion(source);
 }
 
 /** A fresh, bounded working set replaces the previous packet on every turn. */
@@ -326,10 +327,11 @@ class ChatReadingSession {
   finish(result: ChatResult, limited: boolean): ChatResult {
     const cited = new Map<string, ChatEvidence>();
     const reply = resolveChatEvidenceMarkers(result.reply, this.evidence, cited);
-    const noteActions = normalizeChatNoteActions(result.noteActions).map((action) => ({
-      ...action, body: portableChatEvidence(resolveChatEvidenceMarkers(action.body, this.evidence, cited), this.evidence),
-    }));
-    return { reply, ...(noteActions.length ? { noteActions: normalizeChatNoteActions(noteActions) } : {}),
+    const noteActions = normalizeChatNoteActions(result.noteActions);
+    // Validate/register each citation now. Expand markers and append retained
+    // quotes only after the model's original action passes the host firewall.
+    for (const action of noteActions) resolveChatEvidenceMarkers(action.body, this.evidence, cited);
+    return { reply, ...(noteActions.length ? { noteActions } : {}),
       evidence: [...cited.values()], coverage: this.coverage(limited) };
   }
 }

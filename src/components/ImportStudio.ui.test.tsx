@@ -13,6 +13,8 @@ import {
   preflightKnowledgeProvider,
   recognizeDocumentText,
   runKnowledgeAssignment,
+  transcribeMediaFiles,
+  transcribeYouTube,
 } from "../lib/storage";
 import type {
   AppSnapshot,
@@ -39,6 +41,8 @@ vi.mock("../lib/storage", async (importOriginal) => {
   return {
     ...actual,
     fetchWebPage: vi.fn(),
+    transcribeMediaFiles: vi.fn(),
+    transcribeYouTube: vi.fn(),
     organizeWithAI: vi.fn(),
     preflightKnowledgeProvider: vi.fn().mockResolvedValue({ ok: true, latencyMs: 0 }),
     recognizeDocumentText: vi.fn(),
@@ -159,6 +163,8 @@ describe("Import unified intake", () => {
   beforeEach(() => {
     pdfUiState.pages = [];
     vi.mocked(fetchWebPage).mockReset();
+    vi.mocked(transcribeMediaFiles).mockReset();
+    vi.mocked(transcribeYouTube).mockReset();
     vi.mocked(organizeWithAI).mockReset();
     vi.mocked(recognizeDocumentText).mockReset();
     vi.mocked(runKnowledgeAssignment).mockReset();
@@ -338,6 +344,60 @@ describe("Import unified intake", () => {
     ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open import" }));
     expect(screen.getByText("Field memo")).toBeVisible();
+  });
+
+  it("shows a successful media file and its failed sibling independently", async () => {
+    vi.mocked(transcribeMediaFiles).mockResolvedValueOnce({ transcripts: [{ title: "Recorded argument", fileName: "argument.m4a", mimeType: "audio/mp4", byteSize: 100, text: "A useful recorded argument.", warnings: [] }], failures: [{ fileName: "broken.m4a", error: "The recording has no audio." }] });
+    const view = render(<Harness />);
+    const mediaInput = view.container.querySelector('input[accept*=".m4a"]')!;
+    fireEvent.change(mediaInput, { target: { files: [new File(["audio"], "argument.m4a"), new File(["broken"], "broken.m4a")] } });
+    expect(await screen.findByText("Recorded argument")).toBeVisible();
+    expect(screen.getByText("The recording has no audio.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Review sources" })).toBeEnabled();
+  });
+
+  it("physically cancels removed YouTube work and ignores late completion", async () => {
+    const pending = deferred<Awaited<ReturnType<typeof transcribeYouTube>>>();
+    vi.mocked(transcribeYouTube).mockReturnValueOnce(pending.promise);
+    render(<Harness />);
+    fireEvent.change(screen.getByLabelText("Webpage or YouTube URL"), { target: { value: "https://youtu.be/abcdefghijk" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add URL" }));
+    const calls = vi.mocked(transcribeYouTube).mock.calls;
+    const signal = calls[calls.length - 1][2]!;
+    fireEvent.click(screen.getByRole("button", { name: "Remove YouTube video" }));
+    expect(signal.aborted).toBe(true);
+    await act(async () => { pending.resolve({ title: "Late video", fileName: "video.m4a", mimeType: "audio/mp4", byteSize: 100, text: "Should never return.", warnings: [] }); await pending.promise; });
+    expect(screen.queryByText("Late video")).not.toBeInTheDocument();
+  });
+
+  it("reports failed siblings even when the queue has room only for the successful file", async () => {
+    vi.mocked(transcribeMediaFiles).mockResolvedValueOnce({ transcripts: [{ title: "Successful recording", fileName: "good.m4a", mimeType: "audio/mp4", byteSize: 100, text: "A useful recording.", warnings: [] }], failures: [{ fileName: "failed.m4a", error: "No audio found." }] });
+    const view = render(<Harness />);
+    for (let index = 0; index < 11; index += 1) {
+      fireEvent.click(screen.getByRole("button", { name: "Paste text" }));
+      fireEvent.change(screen.getByLabelText(/Title/), { target: { value: `Existing source ${index}` } });
+      fireEvent.change(screen.getByLabelText("Text"), { target: { value: `Existing source content ${index}.` } });
+      fireEvent.click(screen.getByRole("button", { name: "Add to queue" }));
+    }
+    fireEvent.change(view.container.querySelector('input[accept*=".m4a"]')!, { target: { files: [new File(["audio"], "good.m4a"), new File(["broken"], "failed.m4a")] } });
+    expect(await screen.findByText("Successful recording")).toBeVisible();
+    expect(screen.getByText(/1 other selected media file failed: failed.m4a: No audio found/)).toBeVisible();
+  });
+
+  it("cancels in-flight media on a Space change but preserves it when Import is merely hidden", async () => {
+    const pending = deferred<Awaited<ReturnType<typeof transcribeYouTube>>>();
+    vi.mocked(transcribeYouTube).mockReturnValueOnce(pending.promise);
+    const view = render(<Harness />);
+    fireEvent.change(screen.getByLabelText("Webpage or YouTube URL"), { target: { value: "https://youtu.be/abcdefghijk" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add URL" }));
+    const signal = vi.mocked(transcribeYouTube).mock.calls[0][2]!;
+    fireEvent.click(screen.getByRole("button", { name: "Close import" }));
+    expect(signal.aborted).toBe(false);
+    view.rerender(<Harness testSnapshot={createEmptySnapshot("Another Space", "2026-09-09T00:00:00Z")} />);
+    expect(signal.aborted).toBe(true);
+    await act(async () => { pending.resolve({ title: "Wrong Space transcript", fileName: "late.m4a", mimeType: "audio/mp4", byteSize: 100, text: "Do not resurrect.", warnings: [] }); await pending.promise; });
+    fireEvent.click(screen.getByRole("button", { name: "Open import" }));
+    expect(screen.queryByText("Wrong Space transcript")).not.toBeInTheDocument();
   });
 
   it("imports ready material while another source prepares, retaining the pending source after apply", async () => {

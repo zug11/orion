@@ -6,6 +6,7 @@ import {
   applySpaceRootResult,
   buildSpaceBlueprintOrientation,
   buildSpaceNoteDigests,
+  buildSpaceRootRequest,
   getSpaceKnowledgeRoot,
   pendingSpaceBlueprints,
   prepareSpaceKnowledgeIndex,
@@ -51,6 +52,28 @@ function result(title: string, body: string): OrganizeContentResult {
 }
 
 describe("persistent Space knowledge topology", () => {
+  it("builds a root from brief notes and invalidates an index that previously skipped them", () => {
+    const snapshot = createEmptySnapshot("Database", NOW);
+    snapshot.spaceKnowledge = { ...prepareSpaceKnowledgeIndex(snapshot, NOW), stale: false };
+    snapshot.notes = [
+      { ...note("short-body", "Use PostgreSQL."), summary: "A new thread in your atlas." },
+      { ...note("short-summary", ""), summary: "SQLite for tests." },
+      { ...note("blank", ""), summary: "A new thread in your atlas." },
+    ];
+
+    expect(spaceKnowledgeIsCurrent(snapshot)).toBe(false);
+    const index = prepareSpaceKnowledgeIndex(snapshot, NOW);
+    expect(index.digests.map(({ noteId }) => noteId)).toEqual(["short-body", "short-summary"]);
+    expect(index.digests[0].summary).toBe("Use PostgreSQL.");
+    expect(getSpaceKnowledgeRoot(index)?.noteIds).toEqual(["short-body", "short-summary"]);
+    const request = buildSpaceRootRequest(snapshot, index);
+    expect(request.content).toContain("Use PostgreSQL.");
+    expect(request.content).toContain("SQLite for tests.");
+    expect(request.content).not.toContain("A new thread in your atlas.");
+    expect(request.taskInstructions).toContain("A single note is enough");
+    expect(request.taskInstructions).toContain("one sentence");
+  });
+
   it("builds a distributed whole-body digest with an explicit fingerprint and quality", () => {
     const snapshot = createEmptySnapshot("Topology", NOW);
     snapshot.notes = [

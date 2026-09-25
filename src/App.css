@@ -1,8 +1,41 @@
 /* Orion — midnight observatory */
 
+/* Bundled OFL fonts: no runtime dependency on Google Fonts or local installs. */
+@font-face {
+  font-family: "Hanken Grotesk";
+  src: url("/fonts/HankenGrotesk-Variable.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Hanken Grotesk";
+  src: url("/fonts/HankenGrotesk-Italic-Variable.ttf") format("truetype");
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Lora";
+  src: url("/fonts/Lora-Variable.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Lora";
+  src: url("/fonts/Lora-Italic-Variable.ttf") format("truetype");
+  font-style: italic;
+  font-weight: 400 700;
+  font-display: swap;
+}
+
 :root {
-  font-family:
-    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  font-family: var(--ui-font);
+  font-weight: 400;
   color: #dfe5f1;
   background: #090d15;
   font-synthesis: none;
@@ -42,11 +75,16 @@
   --shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.18);
   --shadow-md: 0 18px 50px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 34px 90px rgba(0, 0, 0, 0.46);
+  /* Hanken Grotesk carries the interface; Lora gives note titles their serif role. */
   --ui-font:
-    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
-  --display-font:
-    "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua",
-    Baskerville, Georgia, serif;
+    "Hanken Grotesk", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  --editorial-font:
+    "Lora", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --body-font: var(--ui-font);
+  --note-font: var(--ui-font);
+  --note-weight: 400;
+  --note-text-size: 18px;
+  --note-leading: 1.7;
   --mono-font:
     "SFMono-Regular", "Cascadia Code", "Liberation Mono", Menlo, monospace;
   --sidebar-width: 238px;
@@ -58,6 +96,13 @@
   --radius-lg: 18px;
   --radius-xl: 24px;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.app-shell[data-note-typeface="serif"] {
+  --note-font: var(--editorial-font);
+  --note-weight: 400;
+  --note-text-size: 19px;
+  --note-leading: 1.75;
 }
 
 [data-theme="light"] {
@@ -287,6 +332,7 @@ kbd {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  background: var(--surface-0);
 }
 
 .workspace-body,
@@ -307,6 +353,9 @@ kbd {
   min-width: 0;
   min-height: 0;
   overflow: auto;
+  border-top: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+  border-top-left-radius: var(--radius-md);
   background:
     radial-gradient(circle at 92% 2%, rgba(108, 123, 191, 0.05), transparent 29%),
     var(--surface-0);
@@ -331,7 +380,7 @@ kbd {
   color: var(--text-soft);
   background: var(--surface-2);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.025);
-  font-size: 12.5px;
+  font-size: 14px;
   font-weight: 650;
   letter-spacing: -0.01em;
   transition:
@@ -416,7 +465,7 @@ kbd {
 .button.compact {
   min-height: 32px;
   padding-inline: 11px;
-  font-size: 11.5px;
+  font-size: 14px;
 }
 
 .icon-button {
@@ -469,7 +518,7 @@ kbd {
   padding: 5px 0;
   color: var(--muted);
   background: transparent;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   transition: color 150ms ease;
 }
@@ -506,7 +555,7 @@ kbd {
   border-radius: 6px;
   color: var(--muted);
   background: transparent;
-  font-size: 11.5px;
+  font-size: 14px;
   font-weight: 600;
   transition:
     color 140ms ease,
@@ -533,7 +582,7 @@ kbd {
   align-items: center;
   gap: 7px;
   color: #b7c1ff;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 750;
   letter-spacing: 0.13em;
   line-height: 1;
@@ -556,10 +605,7 @@ kbd {
   flex-direction: column;
   padding: 46px 12px 12px;
   overflow: visible;
-  border-right: 1px solid var(--line);
-  background:
-    linear-gradient(180deg, rgba(122, 137, 208, 0.045), transparent 25%),
-    var(--surface-0);
+  background: var(--surface-0);
 }
 
 .sidebar-titlebar {
@@ -595,7 +641,7 @@ kbd {
 
 .brand-copy strong {
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 18px;
   font-weight: 600;
   letter-spacing: 0.01em;
@@ -603,7 +649,7 @@ kbd {
 
 .brand-copy span {
   color: var(--faint);
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -648,32 +694,18 @@ kbd {
 }
 
 .space-switcher-mark {
-  --space-color: var(--periwinkle);
   position: relative;
   display: grid;
   width: 31px;
   height: 31px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--space-color) 31%, var(--line));
-  border-radius: 10px;
-  background:
-    radial-gradient(
-      circle at 72% 18%,
-      color-mix(in srgb, var(--space-color) 25%, transparent),
-      transparent 52%
-    ),
-    var(--surface-1);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
 }
 
 .space-switcher-mark img {
-  width: 23px;
-  height: 23px;
+  width: 31px;
+  height: 31px;
   object-fit: contain;
-  filter: drop-shadow(
-    0 4px 10px color-mix(in srgb, var(--space-color) 24%, transparent)
-  );
 }
 
 .space-switcher-copy {
@@ -687,7 +719,7 @@ kbd {
 .space-switcher-copy strong {
   overflow: hidden;
   color: inherit;
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 14px;
   font-weight: 610;
   letter-spacing: -0.01em;
@@ -698,7 +730,7 @@ kbd {
 .space-switcher-copy small {
   overflow: hidden;
   color: var(--faint);
-  font-size: 8.5px;
+  font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.055em;
   text-overflow: ellipsis;
@@ -740,7 +772,7 @@ kbd {
   justify-content: space-between;
   padding: 0 6px 5px;
   color: var(--faint);
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 720;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -757,7 +789,7 @@ kbd {
   padding: 2px 6px;
   border-radius: 99px;
   background: var(--surface-0);
-  font-size: 9px;
+  font-size: 12px;
   font-style: normal;
   text-align: center;
 }
@@ -849,14 +881,14 @@ kbd {
 
 .space-option strong {
   color: inherit;
-  font-family: var(--display-font);
-  font-size: 12.5px;
+  font-family: var(--ui-font);
+  font-size: 14px;
   font-weight: 600;
 }
 
 .space-option small {
   color: var(--faint);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .space-option > svg {
@@ -938,12 +970,12 @@ kbd {
 }
 
 .space-create-button strong {
-  font-size: 11.5px;
+  font-size: 14px;
 }
 
 .space-create-button small {
   color: var(--faint);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .space-creator {
@@ -966,7 +998,7 @@ kbd {
 
 .space-creator-title {
   color: var(--text-soft);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 690;
 }
 
@@ -993,7 +1025,7 @@ kbd {
   border-radius: 8px;
   color: var(--text);
   background: var(--surface-1);
-  font-size: 11px;
+  font-size: 14px;
 }
 
 .space-creator input:focus {
@@ -1008,7 +1040,7 @@ kbd {
 
 .space-creator-footer small {
   color: var(--faint);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .space-creator-footer button {
@@ -1018,7 +1050,7 @@ kbd {
   border-radius: 7px;
   color: var(--ink-deep);
   background: var(--mint);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 750;
 }
 
@@ -1049,7 +1081,7 @@ kbd {
   box-shadow:
     0 6px 16px rgba(0, 0, 0, 0.12),
     inset 0 1px 0 rgba(255, 255, 255, 0.025);
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 650;
   transition:
     color 150ms ease,
@@ -1101,16 +1133,24 @@ kbd {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
-  right: 0;
+  right: auto;
+  width: min(300px, calc(100vw - 36px));
   z-index: 8;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  max-height: calc(100dvh - 164px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 10px;
   border: 1px solid var(--line-strong);
   border-radius: 10px;
   background: var(--surface-1);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+}
+
+.new-note-generate-composer > * {
+  flex-shrink: 0;
 }
 
 .new-note-generate-kinds {
@@ -1125,7 +1165,7 @@ kbd {
   border-radius: 999px;
   color: var(--text-soft);
   background: transparent;
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 650;
 }
 
@@ -1138,7 +1178,7 @@ kbd {
 .new-note-generate-composer label {
   display: flex;
   justify-content: space-between;
-  font-size: 11px;
+  font-size: 14px;
   color: var(--text-soft);
 }
 
@@ -1151,7 +1191,7 @@ kbd {
   color: var(--text);
   background: var(--surface-2);
   font: inherit;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .primary-nav {
@@ -1179,12 +1219,12 @@ kbd {
 }
 
 .nav-item {
-  min-height: 34px;
+  min-height: 38px;
   gap: 10px;
   padding: 0 9px;
   border-radius: 8px;
-  font-size: 11.5px;
-  font-weight: 570;
+  font-size: 13px;
+  font-weight: 400;
 }
 
 .nav-item:hover,
@@ -1210,7 +1250,7 @@ kbd {
   border-radius: 99px;
   color: var(--faint);
   background: var(--surface-0);
-  font-size: 9px;
+  font-size: 12px;
   font-style: normal;
   text-align: center;
 }
@@ -1238,7 +1278,7 @@ kbd {
   align-items: center;
   justify-content: space-between;
   color: var(--faint);
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 720;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -1252,7 +1292,7 @@ kbd {
   border-radius: 99px;
   color: var(--periwinkle-strong);
   background: var(--periwinkle-wash);
-  font-size: 8px;
+  font-size: 11px;
   font-style: normal;
   letter-spacing: 0;
 }
@@ -1305,14 +1345,14 @@ kbd {
 
 .sidebar-generation-job__copy strong {
   color: var(--text);
-  font-family: var(--display-font);
-  font-size: 11px;
+  font-family: var(--ui-font);
+  font-size: 14px;
   font-weight: 610;
 }
 
 .sidebar-generation-job__copy small {
   color: var(--muted);
-  font-size: 8.5px;
+  font-size: 12px;
 }
 
 .sidebar-generation-job__progress {
@@ -1384,7 +1424,7 @@ kbd {
   border-radius: 7px;
   color: var(--text-soft);
   background: color-mix(in srgb, var(--surface-3) 72%, transparent);
-  font-size: 8.5px;
+  font-size: 12px;
   font-weight: 680;
 }
 
@@ -1428,7 +1468,7 @@ kbd {
   justify-content: space-between;
   padding: 0 8px 6px;
   color: var(--faint);
-  font-size: 8.5px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.11em;
   text-transform: uppercase;
@@ -1438,7 +1478,7 @@ kbd {
   min-width: 17px;
   color: var(--faint);
   font-family: var(--mono-font);
-  font-size: 8px;
+  font-size: 11px;
   font-style: normal;
   font-weight: 560;
   letter-spacing: 0;
@@ -1454,11 +1494,12 @@ kbd {
 }
 
 .note-nav-item {
-  min-height: 31px;
+  min-height: 34px;
   gap: 8px;
   padding: 0 8px;
   border-radius: 7px;
-  font-size: 10.75px;
+  font-size: 13px;
+  font-weight: 400;
 }
 
 .note-nav-title {
@@ -1480,7 +1521,7 @@ kbd {
 
 .sidebar-note-row.active .note-nav-item {
   color: var(--text);
-  border-color: rgba(139, 154, 244, 0.15);
+  border-color: transparent;
 }
 
 .sidebar-note-delete {
@@ -1515,12 +1556,14 @@ kbd {
 .sidebar-notes-empty {
   padding: 10px 8px;
   color: var(--faint);
-  font-family: var(--display-font);
-  font-size: 10px;
+  font-family: var(--ui-font);
+  font-size: 12px;
 }
 
 .sidebar-footer {
   display: flex;
+  flex-shrink: 0;
+  margin-top: auto;
   align-items: center;
   justify-content: flex-start;
   gap: 8px;
@@ -1595,7 +1638,7 @@ kbd {
 
 .sidebar.is-collapsed .primary-nav {
   align-items: center;
-  border-bottom: 0;
+  border-bottom: 1px solid var(--line);
 }
 
 .sidebar.is-collapsed .nav-item {
@@ -1607,8 +1650,9 @@ kbd {
 
 .sidebar.is-collapsed .sidebar-footer {
   justify-content: center;
-  flex-direction: column;
+  flex-direction: column-reverse;
   padding-top: 10px;
+  border-top: 0;
 }
 
 /* Top bar */
@@ -1626,8 +1670,7 @@ kbd {
   align-items: center;
   gap: 16px;
   padding: 0 13px 0 15px;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--surface-0) 96%, transparent);
+  background: transparent;
   -webkit-app-region: drag;
 }
 
@@ -1636,10 +1679,175 @@ kbd {
   -webkit-app-region: no-drag;
 }
 
+/* The macOS material supplies the desktop blur below the transparent WebView.
+   Only the navigation chrome exposes it; the reading canvas stays opaque. */
+:root[data-native-glass="true"],
+[data-native-glass="true"] body,
+[data-native-glass="true"] .app-shell {
+  background: transparent;
+}
+
+[data-native-glass="true"] .sidebar,
+[data-native-glass="true"] .topbar {
+  --muted: var(--text);
+  --faint: var(--text-soft);
+}
+
+/* Solid mode joins the canvas's top and left borders around one inner curve.
+   Native glass retains its existing open left edge. */
+[data-native-glass="true"] .workspace-content,
+[data-native-glass="true"] .main-content,
+[data-native-glass="true"] .view-host,
+[data-native-glass="true"] .content-area {
+  border-left: 0;
+}
+
+/* The frame tint continues behind the canvas's rounded inner corner.
+   The transparent top bar exposes it once, without stacking tint layers. */
+[data-native-glass="true"] .sidebar,
+[data-native-glass="true"] .workspace-shell {
+  background: color-mix(in srgb, var(--surface-0) var(--glass-tint-opacity, 30%), transparent);
+}
+
+/* Expose the existing AppKit material through one shared control surface.
+   Only the rim/tint lives in CSS; the desktop blur remains native.
+   The native-glass flag already includes the accessibility fallback. Avoid a
+   positive reduced-transparency media query: older WebViews do not support it. */
+[data-native-glass="true"] .new-note-split::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+[data-native-glass="true"] .new-note-split::before,
+[data-native-glass="true"] .primary-nav .nav-item.active,
+[data-native-glass="true"] .space-switcher-trigger.open,
+[data-native-glass="true"] .space-switcher-trigger:hover,
+[data-native-glass="true"] .space-create-button {
+  border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-0) 12%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 3px 9px rgba(0, 0, 0, 0.08);
+}
+
+[data-native-glass="true"] .primary-nav .nav-item:not(.active):hover {
+  border-color: color-mix(in srgb, var(--text) 12%, transparent);
+  background: color-mix(in srgb, var(--surface-0) 18%, transparent);
+}
+
+/* Frost the web content behind this popover while the window retains its
+   AppKit material. Use a uniform tint, never a painted glass gradient. */
+[data-native-glass="true"] .new-note-generate-composer,
+[data-native-glass="true"] .space-switcher-popover {
+  border-color: color-mix(in srgb, var(--text) 18%, transparent);
+  background: color-mix(in srgb, var(--surface-0) clamp(24%, calc(var(--glass-tint-opacity, 30%) + 12%), 92%), transparent);
+  -webkit-backdrop-filter: blur(22px) saturate(120%);
+  backdrop-filter: blur(22px) saturate(120%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 12px 32px rgba(0, 0, 0, 0.2);
+}
+
+[data-native-glass="true"] .new-note-generate-composer textarea,
+[data-native-glass="true"] .space-creator input {
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+}
+
+[data-native-glass="true"] .new-note-generate-kinds button.active,
+[data-native-glass="true"] .space-option.active {
+  background: color-mix(in srgb, var(--periwinkle) 20%, transparent);
+}
+
+[data-native-glass="true"] .space-option:not(.active):hover,
+[data-native-glass="true"] .space-create-button:hover {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+[data-native-glass="true"] .space-creator {
+  background: color-mix(in srgb, var(--mint) 10%, transparent);
+}
+
+[data-native-glass="true"] .sidebar .new-note-split > :is(.new-note-button, .new-note-generate-toggle) {
+  position: relative;
+  color: var(--text);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+[data-native-glass="true"] .sidebar .new-note-button:hover,
+[data-native-glass="true"] .sidebar .new-note-generate-toggle:hover,
+[data-native-glass="true"] .sidebar .new-note-generate-toggle.is-open {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+[data-native-glass="true"] .sidebar .new-note-button:active,
+[data-native-glass="true"] .sidebar .new-note-generate-toggle:active {
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+[data-native-glass="true"] .new-note-button kbd {
+  color: var(--text-soft);
+}
+
+[data-native-glass="true"] .new-note-generate-toggle::before {
+  content: "";
+  position: absolute;
+  inset: 8px auto 8px 0;
+  width: 1px;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--text) 18%, transparent);
+}
+
+[data-native-glass="true"] .sidebar.is-collapsed .new-note-generate-toggle::before {
+  inset: 0 8px auto;
+  width: auto;
+  height: 1px;
+}
+
+@media (max-width: 1100px) {
+  [data-native-glass="true"] .new-note-generate-toggle::before {
+    inset: 0 8px auto;
+    width: auto;
+    height: 1px;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  [data-native-glass="true"] .sidebar,
+  [data-native-glass="true"] .workspace-shell {
+    background: var(--surface-0);
+  }
+}
+
 .history-controls {
   display: flex;
   align-items: center;
   gap: 1px;
+}
+
+/* Appearance controls retain solid, readable surfaces above the window frame. */
+.window-glass-setting { padding: 20px; }
+.window-glass-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.window-glass-heading > button { flex: 0 0 auto; }
+.window-glass-heading strong { font-size: 16px; }
+.window-glass-setting small { display: block; margin-top: 5px; color: var(--muted); font-size: 14px; line-height: 1.5; font-weight: 400; }
+.window-glass-status, .window-glass-help { margin-top: 12px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+.window-glass-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; min-width: 0; margin: 20px 0 0; padding: 18px 0 0; border: 0; border-top: 1px solid var(--line); }
+.window-glass-toggle { display: flex; align-items: center; gap: 9px; color: var(--text); font-size: 14px; font-weight: 550; }
+.window-glass-toggle input { flex: 0 0 auto; accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.window-glass-slider { display: grid; gap: 12px; color: var(--text-soft); font-size: 14px; }
+.window-glass-slider > span { display: flex; justify-content: space-between; gap: 12px; }
+.window-glass-slider output { color: var(--text); font-variant-numeric: tabular-nums; }
+.window-glass-slider input[type="range"] { width: 100%; min-width: 0; margin: 0; accent-color: var(--accent); }
+.window-glass-setting :disabled { cursor: default; opacity: 0.45; }
+.window-glass-setting input:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+@media (max-width: 1080px) {
+  .window-glass-options { gap: 16px; }
 }
 
 .workspace-crumb {
@@ -1648,35 +1856,15 @@ kbd {
   align-items: center;
   gap: 7px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 14px;
 }
 
-.workspace-crumb > span:nth-child(2) {
+.workspace-crumb > span {
   overflow: hidden;
   color: var(--text-soft);
   font-weight: 620;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.workspace-crumb small {
-  padding: 2px 5px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  color: var(--faint);
-  font-size: 8px;
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.workspace-pulse {
-  width: 5px;
-  height: 5px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: var(--mint);
-  box-shadow: 0 0 0 3px var(--mint-wash);
 }
 
 .search-trigger {
@@ -1692,7 +1880,7 @@ kbd {
   color: var(--faint);
   background: var(--surface-1);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.015);
-  font-size: 10.75px;
+  font-size: 14px;
   text-align: left;
   transition:
     color 150ms ease,
@@ -1752,8 +1940,8 @@ kbd {
 .view-title-row h1,
 .section-heading h2 {
   color: var(--text);
-  font-family: var(--display-font);
-  font-weight: 560;
+  font-family: var(--ui-font);
+  font-weight: 400;
   letter-spacing: -0.025em;
 }
 
@@ -1766,8 +1954,8 @@ kbd {
 .view-title-row p {
   margin-top: 9px;
   color: var(--muted);
-  font-family: var(--display-font);
-  font-size: 14px;
+  font-family: var(--ui-font);
+  font-size: 16px;
 }
 
 .section-heading h2 {
@@ -1992,22 +2180,29 @@ kbd {
   padding: 56px 56px 84px;
 }
 
+.home-hero[data-atmosphere-mode="light"] .home-hero-shade {
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--surface-1) 97%, transparent) 0%,
+    color-mix(in srgb, var(--surface-1) 88%, transparent) 39%,
+    transparent 83%);
+}
+
 .home-hero-content h1 {
   margin: 0 0 16px;
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--editorial-font);
   font-size: clamp(43px, 4.6vw, 61px);
-  font-weight: 500;
-  letter-spacing: -0.045em;
-  line-height: 0.98;
+  font-weight: 400;
+  letter-spacing: -0.025em;
+  line-height: 1.06;
   text-wrap: balance;
 }
 
 .home-hero-content > p {
   max-width: 500px;
   color: var(--text-soft);
-  font-family: var(--display-font);
-  font-size: 15px;
+  font-family: var(--editorial-font);
+  font-size: 17px;
   line-height: 1.58;
 }
 
@@ -2039,7 +2234,7 @@ kbd {
   gap: 1px;
   padding: 0 14px;
   color: var(--muted);
-  font-size: 8.5px;
+  font-size: 12px;
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2051,7 +2246,7 @@ kbd {
 
 .hero-stat-row strong {
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 18px;
   font-weight: 520;
   letter-spacing: 0;
@@ -2066,7 +2261,7 @@ kbd {
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .home-empty-private svg {
@@ -2115,14 +2310,14 @@ kbd {
 
 .home-empty-options strong {
   color: var(--text);
-  font-family: var(--display-font);
-  font-size: 15px;
+  font-family: var(--ui-font);
+  font-size: 17px;
   font-weight: 600;
 }
 
 .home-empty-options small {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.4;
 }
 
@@ -2196,16 +2391,16 @@ kbd {
 
 .home-linking-promise strong {
   color: var(--text-soft);
-  font-family: var(--display-font);
-  font-size: 14px;
+  font-family: var(--ui-font);
+  font-size: 16px;
   font-weight: 600;
 }
 
 .home-linking-promise p {
   max-width: 760px;
   color: var(--muted);
-  font-family: var(--display-font);
-  font-size: 11.5px;
+  font-family: var(--ui-font);
+  font-size: 14px;
   line-height: 1.55;
 }
 
@@ -2252,11 +2447,11 @@ kbd {
   margin-top: 3px;
   overflow: hidden;
   color: var(--text);
-  font-family: var(--display-font);
-  font-size: 18px;
-  font-weight: 570;
+  font-family: var(--editorial-font);
+  font-size: 22px;
+  font-weight: 400;
   letter-spacing: -0.015em;
-  line-height: 1.15;
+  line-height: 1.25;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
@@ -2266,8 +2461,8 @@ kbd {
   margin-top: 8px;
   overflow: hidden;
   color: var(--muted);
-  font-family: var(--display-font);
-  font-size: 12.5px;
+  font-family: var(--ui-font);
+  font-size: 15px;
   line-height: 1.42;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -2286,7 +2481,7 @@ kbd {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .recent-note-card:hover .card-footer > svg {
@@ -2350,7 +2545,7 @@ kbd {
 
 .concept-row strong {
   color: var(--text-soft);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 13px;
   font-weight: 580;
 }
@@ -2418,7 +2613,10 @@ kbd {
 
 .task-panel {
   position: relative;
+  display: flex;
+  height: 460px;
   min-height: 0;
+  flex-direction: column;
   overflow: hidden;
   background: var(--surface-1);
 }
@@ -2426,11 +2624,11 @@ kbd {
 .space-overview-panel {
   position: relative;
   display: flex;
-  height: 340px;
+  height: 460px;
   min-width: 0;
-  min-height: 340px;
+  min-height: 460px;
   flex-direction: column;
-  padding: 22px;
+  padding: 28px;
   border: 1px solid transparent;
   border-radius: var(--radius-lg);
   background: var(--surface-1);
@@ -2450,7 +2648,9 @@ kbd {
   max-width: none;
   margin-top: 10px;
   overflow: visible;
-  line-height: 1.14;
+  font-size: 22px;
+  font-weight: 560;
+  line-height: 1.25;
   overflow-wrap: anywhere;
   text-overflow: clip;
   white-space: normal;
@@ -2490,8 +2690,8 @@ kbd {
   min-height: 0;
   flex: 1 1 auto;
   align-content: start;
-  gap: 11px;
-  margin-top: 16px;
+  gap: 16px;
+  margin-top: 20px;
   padding-right: 10px;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -2499,10 +2699,10 @@ kbd {
 }
 
 .space-overview-body p {
-  color: var(--muted);
-  font-family: var(--display-font);
+  color: var(--text-soft);
+  font-family: var(--ui-font);
   font-size: 13px;
-  line-height: 1.68;
+  line-height: 1.45;
 }
 
 .space-overview-body .wiki-link {
@@ -2513,9 +2713,10 @@ kbd {
 .space-overview-footer {
   margin-top: auto;
   padding-top: 14px;
-  color: var(--faint);
-  font-family: var(--mono-font);
-  font-size: 7.5px;
+  color: var(--muted);
+  font-family: var(--ui-font);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .task-panel-count {
@@ -2524,12 +2725,15 @@ kbd {
   gap: 7px;
   color: var(--mint);
   font-family: var(--mono-font);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .home-task-list {
   display: grid;
-  max-height: 224px;
+  grid-auto-rows: max-content;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-content: start;
   gap: 4px;
   margin-top: 14px;
   overflow-y: auto;
@@ -2539,9 +2743,9 @@ kbd {
 
 .home-task-row {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
+  grid-template-columns: 20px minmax(0, 1fr);
   align-items: start;
-  gap: 11px;
+  gap: 6px 11px;
   min-height: 52px;
   padding: 9px 2px;
   background: transparent;
@@ -2579,7 +2783,7 @@ kbd {
   overflow: visible;
   color: var(--text-soft);
   font-family: var(--body-font);
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 520;
   line-height: 1.35;
   overflow-wrap: anywhere;
@@ -2590,13 +2794,14 @@ kbd {
 .home-task-copy small {
   overflow: hidden;
   color: var(--faint);
-  font-size: 9.5px;
+  font-size: 12px;
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .home-task-concept {
+  grid-column: 2;
   max-width: 92px;
   margin-top: 2px;
   padding: 2px 0;
@@ -2604,7 +2809,7 @@ kbd {
   border: 0;
   color: color-mix(in srgb, var(--mint) 78%, var(--text-soft));
   background: transparent;
-  font-size: 9px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2632,22 +2837,22 @@ kbd {
 
 .home-task-empty strong {
   color: var(--text-soft);
-  font-family: var(--display-font);
-  font-size: 12px;
+  font-family: var(--ui-font);
+  font-size: 14px;
   font-weight: 560;
 }
 
 .home-task-empty p {
   max-width: 230px;
   margin-top: 5px;
-  font-size: 8.5px;
+  font-size: 13px;
   line-height: 1.45;
 }
 
 .inbox-panel > p {
   margin-top: 16px;
   color: var(--muted);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 12.5px;
   line-height: 1.5;
 }
@@ -2718,7 +2923,7 @@ kbd {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   color: var(--faint);
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -2743,7 +2948,7 @@ kbd {
   border: 0;
   color: var(--text);
   background: transparent;
-  font-size: 11px;
+  font-size: 14px;
   letter-spacing: 0;
   text-transform: none;
 }
@@ -2830,11 +3035,11 @@ kbd {
   z-index: 1;
   margin-top: 0;
   color: var(--text);
-  font-family: var(--display-font);
-  font-size: 19px;
-  font-weight: 570;
+  font-family: var(--editorial-font);
+  font-size: 23px;
+  font-weight: 400;
   letter-spacing: -0.018em;
-  line-height: 1.14;
+  line-height: 1.25;
 }
 
 .note-index-card > p {
@@ -2844,8 +3049,8 @@ kbd {
   margin-top: 8px;
   overflow: hidden;
   color: var(--muted);
-  font-family: var(--display-font);
-  font-size: 12px;
+  font-family: var(--ui-font);
+  font-size: 15px;
   line-height: 1.45;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
@@ -2863,7 +3068,7 @@ kbd {
   border-radius: 99px;
   color: var(--muted);
   background: var(--surface-0);
-  font-size: 8.5px;
+  font-size: 12px;
   line-height: 1.2;
 }
 
@@ -2876,7 +3081,7 @@ kbd {
 .note-card-bottom {
   margin-top: auto;
   padding-top: 15px;
-  font-size: 8.5px;
+  font-size: 12px;
 }
 
 .note-index-delete {
@@ -2927,7 +3132,7 @@ kbd {
   align-self: center;
   margin: 0;
   overflow: hidden;
-  font-size: 15px;
+  font-size: 19px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2974,7 +3179,7 @@ kbd {
   border-bottom: 1px solid var(--line);
   color: var(--faint);
   background: var(--surface-0);
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -2987,7 +3192,7 @@ kbd {
   padding: 8px 17px;
   color: var(--muted);
   background: transparent;
-  font-size: 10px;
+  font-size: 12px;
   text-align: left;
   transition: background 150ms ease;
 }
@@ -3056,13 +3261,13 @@ kbd {
 
 .source-title-cell strong {
   color: var(--text-soft);
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 620;
 }
 
 .source-title-cell small {
   color: var(--faint);
-  font-size: 8.5px;
+  font-size: 12px;
 }
 
 .source-table-row em {
@@ -3072,7 +3277,7 @@ kbd {
   color: var(--muted);
   background: var(--surface-0);
   font-family: var(--mono-font);
-  font-size: 8px;
+  font-size: 11px;
   font-style: normal;
   letter-spacing: 0.04em;
 }
@@ -3149,7 +3354,7 @@ kbd {
 
 .source-viewer__identity span:not(.source-viewer__icon) {
   color: var(--faint);
-  font-size: 7.5px;
+  font-size: 11px;
   font-weight: 740;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -3159,7 +3364,7 @@ kbd {
   margin: 3px 0 0;
   overflow: hidden;
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 24px;
   font-weight: 560;
   letter-spacing: -0.025em;
@@ -3178,7 +3383,7 @@ kbd {
   border-bottom: 1px solid var(--line);
   color: var(--faint);
   font-family: var(--mono-font);
-  font-size: 7.75px;
+  font-size: 11px;
 }
 
 .source-viewer__meta span + span::before {
@@ -3208,7 +3413,7 @@ kbd {
 .source-viewer__guidance span,
 .source-viewer__section-heading {
   color: var(--faint);
-  font-size: 7.5px;
+  font-size: 11px;
   font-weight: 740;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -3217,8 +3422,8 @@ kbd {
 .source-viewer__guidance p {
   margin: 5px 0 0;
   color: var(--muted);
-  font-family: var(--display-font);
-  font-size: 11px;
+  font-family: var(--ui-font);
+  font-size: 14px;
   line-height: 1.5;
 }
 
@@ -3258,8 +3463,8 @@ kbd {
   border-radius: 11px;
   color: var(--text-soft);
   background: var(--surface-1);
-  font-family: var(--display-font);
-  font-size: 13px;
+  font-family: var(--ui-font);
+  font-size: 16px;
   line-height: 1.68;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -3310,14 +3515,14 @@ kbd {
 
 .source-viewer__connections strong {
   color: var(--text-soft);
-  font-size: 9.5px;
+  font-size: 12px;
   font-weight: 640;
 }
 
 .source-viewer__connections small {
   color: var(--faint);
-  font-family: var(--display-font);
-  font-size: 8.5px;
+  font-family: var(--ui-font);
+  font-size: 12px;
 }
 
 .source-viewer__connections button > svg {
@@ -3505,7 +3710,7 @@ kbd {
   gap: 10px;
   margin-bottom: 14px;
   color: var(--text-soft);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 720;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -3532,7 +3737,7 @@ kbd {
   color: var(--faint);
   background: transparent;
   font-family: var(--ui-font);
-  font-size: 11.5px;
+  font-size: 14px;
   font-weight: 500;
   line-height: 1.4;
   text-align: left;
@@ -3544,7 +3749,7 @@ kbd {
 
 .note-outline__list button[data-level="3"] {
   padding-left: 22px;
-  font-size: 10.75px;
+  font-size: 14px;
 }
 
 .note-outline__list button::before {
@@ -3585,7 +3790,7 @@ kbd {
   align-items: center;
   gap: 7px;
   color: var(--faint);
-  font-size: 8.5px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -3607,6 +3812,7 @@ kbd {
 
 .note-title-line {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   gap: 18px;
   margin-top: 13px;
@@ -3615,13 +3821,13 @@ kbd {
 .note-title-line > h1,
 .note-title-input {
   min-width: 0;
-  flex: 1;
+  flex: 1 1 480px;
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--editorial-font);
   font-size: clamp(39px, 5vw, 57px);
-  font-weight: 510;
-  letter-spacing: -0.04em;
-  line-height: 1.03;
+  font-weight: 400;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
 }
 
 .note-title-input {
@@ -3644,6 +3850,7 @@ kbd {
 .note-actions {
   display: flex;
   flex: 0 0 auto;
+  margin-left: auto;
   align-items: center;
   gap: 5px;
   padding-top: 6px;
@@ -3676,7 +3883,7 @@ kbd {
   color: var(--muted);
   background: var(--surface-raised);
   box-shadow: 0 8px 24px rgba(1, 4, 12, 0.2);
-  font-size: 9px;
+  font-size: 12px;
   line-height: 1.35;
 }
 
@@ -3697,7 +3904,7 @@ kbd {
   gap: 4px;
   margin-right: 4px;
   color: var(--faint);
-  font-size: 8.5px;
+  font-size: 12px;
   transition:
     color 180ms ease,
     transform 180ms var(--ease);
@@ -3713,8 +3920,8 @@ kbd {
   width: min(100%, 650px);
   margin-top: 15px;
   color: var(--muted);
-  font-family: var(--display-font);
-  font-size: 15px;
+  font-family: var(--ui-font);
+  font-size: 17px;
   line-height: 1.52;
 }
 
@@ -3757,7 +3964,7 @@ kbd {
   border-radius: 8px;
   color: var(--muted);
   background: var(--surface-1);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 650;
   transition:
     width 200ms var(--ease),
@@ -3791,7 +3998,7 @@ kbd {
   align-items: center;
   gap: 13px;
   color: var(--faint);
-  font-size: 8.5px;
+  font-size: 12px;
 }
 
 .note-meta span {
@@ -3834,7 +4041,7 @@ kbd {
   color: var(--text-soft);
   background: transparent;
   font-family: var(--ui-font);
-  font-size: 11px;
+  font-size: 14px;
 }
 
 .note-find-bar input:focus {
@@ -3845,7 +4052,7 @@ kbd {
   min-width: 54px;
   color: var(--faint);
   font-family: var(--mono-font);
-  font-size: 8px;
+  font-size: 11px;
   text-align: right;
   white-space: nowrap;
 }
@@ -3879,21 +4086,27 @@ kbd {
   width: min(100%, 680px);
   margin: 34px auto 0;
   color: var(--text-soft);
-  font-family: var(--display-font);
-  font-size: 17px;
-  line-height: 1.78;
-  letter-spacing: 0.002em;
+  font-family: var(--note-font);
+  font-size: var(--note-text-size);
+  font-weight: var(--note-weight);
+  line-height: var(--note-leading);
+  letter-spacing: normal;
 }
 
 .note-prose > :first-child {
   margin-top: 0;
 }
 
+.note-prose strong,
+.chat-message__body strong {
+  font-weight: 700;
+}
+
 .note-prose h1,
 .note-prose h2,
 .note-prose h3 {
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--note-font);
   font-weight: 560;
   letter-spacing: -0.022em;
   line-height: 1.18;
@@ -4076,7 +4289,7 @@ kbd {
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   color: var(--text-soft);
   background: var(--gold-wash);
-  font-size: 15px;
+  font-size: 18px;
   font-style: italic;
 }
 
@@ -4133,7 +4346,7 @@ kbd {
   border: 1px solid var(--line);
   border-radius: 8px;
   font-family: var(--ui-font);
-  font-size: 10px;
+  font-size: 15px;
 }
 
 .note-prose th,
@@ -4443,6 +4656,17 @@ kbd {
   color: var(--faint);
   content: "⌄";
   font-size: 9px;
+}
+
+.editor-typeface-select {
+  flex: 0 0 auto;
+}
+
+.editor-typeface-select select {
+  min-width: 98px;
+  font-family: var(--ui-font);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .editor-style-select:hover select,
@@ -5232,7 +5456,7 @@ kbd {
 
 .source-citation-popover__head strong {
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 14px;
   font-weight: 600;
 }
@@ -5341,10 +5565,19 @@ button.source-citation-marker:focus-visible {
 .source-references h2 {
   margin: 0 0 14px;
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 17px;
   font-weight: 560;
   letter-spacing: -0.015em;
+}
+
+.source-references blockquote {
+  margin: 14px 0;
+  padding-left: 16px;
+  border-left: 2px solid var(--line);
+  color: var(--text-soft);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .source-references ol {
@@ -5507,7 +5740,7 @@ button.source-citation-marker:focus-visible {
   border: 0;
   color: var(--text);
   background: transparent;
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 15px;
 }
 
@@ -5538,6 +5771,23 @@ button.source-citation-marker:focus-visible {
 .rich-note-editor.is-naming-link .editor-prose {
   pointer-events: none;
   user-select: none;
+}
+
+.concept-link-title-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--text-soft);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.concept-link-title-toggle input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .concept-link-selection-context {
@@ -5980,7 +6230,7 @@ button.source-citation-marker:focus-visible {
 .slide-deck-card__copy h2 {
   margin: 0;
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: clamp(22px, 3.2vw, 34px);
   font-weight: 600;
   letter-spacing: -0.02em;
@@ -6044,7 +6294,7 @@ button.source-citation-marker:focus-visible {
   padding-top: 18px;
   border-top: 1px solid var(--line);
   color: var(--faint);
-  font-size: 8.5px;
+  font-size: 12px;
 }
 
 /* Context rail */
@@ -6136,7 +6386,7 @@ button.source-citation-marker:focus-visible {
   border-radius: 6px;
   color: var(--muted);
   background: transparent;
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 10.5px;
   text-align: left;
 }
@@ -6198,7 +6448,7 @@ button.source-citation-marker:focus-visible {
   margin-top: 5px;
   overflow: hidden;
   color: var(--faint);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 8.75px;
   line-height: 1.4;
   -webkit-box-orient: vertical;
@@ -6254,7 +6504,7 @@ button.source-citation-marker:focus-visible {
   display: -webkit-box;
   overflow: hidden;
   color: var(--faint);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 8.75px;
   line-height: 1.35;
   -webkit-box-orient: vertical;
@@ -6305,7 +6555,7 @@ button.source-citation-marker:focus-visible {
 .context-placeholder {
   padding: 10px 7px;
   color: var(--faint);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 10px;
   font-style: italic;
   line-height: 1.4;
@@ -6336,14 +6586,14 @@ button.source-citation-marker:focus-visible {
 
 .context-empty > strong {
   color: var(--text-soft);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 15px;
   font-weight: 570;
 }
 
 .context-empty > p {
   color: var(--faint);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 10.5px;
   line-height: 1.45;
 }
@@ -6415,7 +6665,7 @@ button.source-citation-marker:focus-visible {
   border-radius: 50%;
   color: var(--connection-accent);
   background: color-mix(in srgb, var(--connection-accent) 11%, var(--surface-1));
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 16px;
   font-weight: 650;
 }
@@ -6444,7 +6694,7 @@ button.source-citation-marker:focus-visible {
   margin-top: 2px;
   overflow: hidden;
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 25px;
   font-weight: 560;
   letter-spacing: -0.025em;
@@ -6478,7 +6728,7 @@ button.source-citation-marker:focus-visible {
 .connections-canvas__description {
   margin: 14px 1px 0;
   color: var(--muted);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 11.5px;
   line-height: 1.5;
 }
@@ -6544,7 +6794,7 @@ button.source-citation-marker:focus-visible {
 .connections-canvas__origin strong {
   overflow: hidden;
   color: var(--text-soft);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 12px;
   font-weight: 600;
   text-overflow: ellipsis;
@@ -6556,7 +6806,7 @@ button.source-citation-marker:focus-visible {
   margin-top: 3px;
   overflow: hidden;
   color: var(--muted);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 10px;
   font-style: normal;
   line-height: 1.35;
@@ -6653,7 +6903,7 @@ button.source-citation-marker:focus-visible {
   min-width: 0;
   overflow: hidden;
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 13.5px;
   font-weight: 600;
   text-overflow: ellipsis;
@@ -6689,7 +6939,7 @@ button.source-citation-marker:focus-visible {
   margin-top: 4px;
   overflow: hidden;
   color: var(--muted);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 10.5px;
   line-height: 1.35;
   -webkit-box-orient: vertical;
@@ -6701,7 +6951,7 @@ button.source-citation-marker:focus-visible {
   margin-top: 7px;
   overflow: hidden;
   color: var(--muted);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 10px;
   font-style: italic;
   line-height: 1.4;
@@ -6763,7 +7013,7 @@ button.source-citation-marker:focus-visible {
   gap: 7px;
   padding: 24px;
   color: var(--muted);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 10px;
   line-height: 1.4;
   text-align: center;
@@ -6825,7 +7075,7 @@ button.source-citation-marker:focus-visible {
   border: 1px solid transparent;
   border-radius: 8px;
   color: var(--muted);
-  font-size: 9.5px;
+  font-size: 14px;
   text-decoration: none;
   transition:
     color 140ms ease,
@@ -6878,7 +7128,7 @@ button.source-citation-marker:focus-visible {
 
 .settings-section-title h2 {
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 18px;
   font-weight: 580;
   letter-spacing: -0.015em;
@@ -6886,7 +7136,7 @@ button.source-citation-marker:focus-visible {
 
 .settings-section-title p {
   color: var(--faint);
-  font-size: 8.5px;
+  font-size: 13px;
 }
 
 .settings-icon {
@@ -6960,13 +7210,13 @@ button.source-citation-marker:focus-visible {
 
 .claude-connector-intro strong {
   color: var(--text);
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .claude-connector-intro small,
 .connector-install-option small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 12px;
   line-height: 1.55;
 }
 
@@ -6986,7 +7236,7 @@ button.source-citation-marker:focus-visible {
   border-radius: 99px;
   color: var(--text-soft);
   background: var(--surface-2);
-  font-size: 8.5px;
+  font-size: 12px;
 }
 
 .connector-install-options {
@@ -7015,7 +7265,7 @@ button.source-citation-marker:focus-visible {
 
 .connector-install-option strong {
   color: var(--text);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .connector-install-option .button {
@@ -7057,14 +7307,14 @@ button.source-citation-marker:focus-visible {
 .setting-row strong,
 .prompt-setting strong {
   color: var(--text-soft);
-  font-size: 10.5px;
+  font-size: 15px;
   font-weight: 640;
 }
 
 .setting-row small,
 .prompt-setting small {
   color: var(--faint);
-  font-size: 8.5px;
+  font-size: 13px;
   line-height: 1.4;
 }
 
@@ -7123,13 +7373,13 @@ button.source-citation-marker:focus-visible {
 
 .transcription-callout strong {
   color: var(--text-soft);
-  font-size: 10.5px;
+  font-size: 14px;
 }
 
 .transcription-callout small {
   max-width: 620px;
   color: var(--faint);
-  font-size: 8.5px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -7153,7 +7403,7 @@ button.source-citation-marker:focus-visible {
 
 .transcription-field > span {
   color: var(--muted);
-  font-size: 7.5px;
+  font-size: 11px;
   font-weight: 680;
   letter-spacing: 0.045em;
   text-transform: uppercase;
@@ -7170,13 +7420,13 @@ button.source-citation-marker:focus-visible {
   background:
     linear-gradient(120deg, rgba(110, 214, 174, 0.055), transparent 58%),
     var(--surface-0);
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 650;
 }
 
 .transcription-field-hint {
   color: var(--faint);
-  font-size: 7.4px;
+  font-size: 11px;
   line-height: 1.4;
 }
 
@@ -7188,7 +7438,7 @@ button.source-citation-marker:focus-visible {
   border-radius: 8px;
   color: var(--text-soft);
   background: var(--surface-0);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .transcription-field > input {
@@ -7210,7 +7460,7 @@ button.source-citation-marker:focus-visible {
   outline: 0;
   color: var(--text-soft);
   background: transparent;
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .transcription-field > input:focus,
@@ -7236,7 +7486,7 @@ button.source-citation-marker:focus-visible {
   align-items: center;
   gap: 7px;
   color: var(--faint);
-  font-size: 7.8px;
+  font-size: 11px;
   line-height: 1.4;
 }
 
@@ -7317,7 +7567,7 @@ button.source-citation-marker:focus-visible {
   border-top: 1px solid var(--line);
   color: var(--faint);
   background: var(--surface-0);
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .api-key-actions > span {
@@ -7334,7 +7584,7 @@ button.source-citation-marker:focus-visible {
   padding: 4px 5px;
   color: var(--periwinkle);
   background: transparent;
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .api-key-actions .danger-text {
@@ -7346,7 +7596,7 @@ button.source-citation-marker:focus-visible {
   border-top: 1px solid var(--line);
   color: var(--mint);
   background: var(--mint-wash);
-  font-size: 8.5px;
+  font-size: 12px;
 }
 
 .model-options {
@@ -7409,12 +7659,12 @@ button.source-citation-marker:focus-visible {
 
 .model-options strong {
   color: var(--text-soft);
-  font-size: 9.5px;
+  font-size: 12px;
 }
 
 .model-options small {
   color: var(--faint);
-  font-size: 7.75px;
+  font-size: 11px;
   line-height: 1.4;
 }
 
@@ -7423,7 +7673,7 @@ button.source-citation-marker:focus-visible {
   right: 8px;
   bottom: 7px;
   color: var(--periwinkle);
-  font-size: 6.5px;
+  font-size: 11px;
   font-style: normal;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -7437,7 +7687,7 @@ button.source-citation-marker:focus-visible {
   border-radius: 7px;
   color: var(--text-soft);
   background-color: var(--surface-0);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .prompt-setting {
@@ -7487,7 +7737,7 @@ button.source-citation-marker:focus-visible {
   min-width: 0;
   gap: 6px;
   color: var(--text-soft);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .saved-voice-editor input {
@@ -7509,7 +7759,7 @@ button.source-citation-marker:focus-visible {
   margin: 0;
   padding: 0 16px 14px;
   color: var(--faint);
-  font-size: 8.5px;
+  font-size: 12px;
   line-height: 1.4;
 }
 
@@ -7576,7 +7826,7 @@ button.source-citation-marker:focus-visible {
 .theme-mode-setting strong,
 .theme-tuning-row > span > strong {
   color: var(--text-soft);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 650;
   letter-spacing: 0.01em;
 }
@@ -7585,7 +7835,7 @@ button.source-citation-marker:focus-visible {
 .theme-mode-setting small,
 .theme-tuning-row > span > small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 12px;
   line-height: 1.45;
 }
 
@@ -7649,14 +7899,14 @@ button.source-citation-marker:focus-visible {
 
 .theme-preset-grid > button strong {
   color: inherit;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 650;
 }
 
 .theme-preset-grid > button small {
   overflow: hidden;
   color: var(--faint);
-  font-size: 8px;
+  font-size: 11px;
   line-height: 1.4;
   text-overflow: ellipsis;
 }
@@ -7770,7 +8020,7 @@ button.source-citation-marker:focus-visible {
 .theme-row > button > strong {
   padding-left: 1px;
   color: inherit;
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .theme-row > button > svg {
@@ -7861,7 +8111,8 @@ button.source-citation-marker:focus-visible {
 
 .theme-choice-group {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: 4px;
   min-width: 0;
   padding: 3px;
@@ -7890,6 +8141,33 @@ button.source-citation-marker:focus-visible {
   color: var(--text);
   background: var(--surface-raised);
   box-shadow: var(--shadow-sm);
+}
+
+.icon-colour-setting .setting-row {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+}
+
+.icon-colour-setting .setting-row > span:first-child {
+  flex: 1 1 320px;
+}
+
+.icon-colour-setting .theme-choice-group {
+  flex: 0 0 auto;
+}
+
+.icon-colour-setting .theme-choice-group > button {
+  padding: 7px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.icon-colour-setting .icon-colour-status {
+  margin-top: 5px;
+  color: var(--text-soft);
 }
 
 .theme-accent-options {
@@ -8748,12 +9026,12 @@ button.source-citation-marker:focus-visible {
 
 .privacy-callout strong {
   color: var(--text-soft);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .privacy-callout small {
   color: var(--muted);
-  font-size: 8.5px;
+  font-size: 12px;
   line-height: 1.45;
 }
 
@@ -8797,12 +9075,12 @@ button.source-citation-marker:focus-visible {
 
 .setting-action-row strong {
   color: var(--text-soft);
-  font-size: 9.5px;
+  font-size: 12px;
 }
 
 .setting-action-row small {
   color: var(--faint);
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .setting-action-row.danger-row > span > svg,
@@ -8872,7 +9150,7 @@ button.source-citation-marker:focus-visible {
 .export-dialog__header h2 {
   margin: 5px 0 0;
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 27px;
   font-weight: 560;
   letter-spacing: -0.03em;
@@ -8882,7 +9160,7 @@ button.source-citation-marker:focus-visible {
 .export-dialog__header p {
   margin: 7px 0 0;
   color: var(--muted);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 10.5px;
   line-height: 1.45;
 }
@@ -8991,7 +9269,7 @@ button.source-citation-marker:focus-visible {
 .export-scope-options small,
 .export-privacy-note small {
   color: var(--faint);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 8.5px;
   line-height: 1.42;
 }
@@ -9161,7 +9439,7 @@ button.source-citation-marker:focus-visible {
   border: 0;
   color: var(--text);
   background: transparent;
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 16px;
 }
 
@@ -9179,7 +9457,7 @@ button.source-citation-marker:focus-visible {
   display: block;
   padding: 6px 9px 8px;
   color: var(--faint);
-  font-size: 7.5px;
+  font-size: 11px;
   font-weight: 730;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -9241,14 +9519,14 @@ button.source-citation-marker:focus-visible {
 
 .command-results strong {
   color: var(--text-soft);
-  font-size: 10.5px;
+  font-size: 14px;
   font-weight: 620;
 }
 
 .command-results small {
   color: var(--faint);
-  font-family: var(--display-font);
-  font-size: 9.5px;
+  font-family: var(--ui-font);
+  font-size: 12px;
 }
 
 .command-results > button > svg {
@@ -9274,13 +9552,13 @@ button.source-citation-marker:focus-visible {
 
 .command-empty strong {
   color: var(--text-soft);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 16px;
   font-weight: 570;
 }
 
 .command-empty span {
-  font-size: 8.5px;
+  font-size: 12px;
 }
 
 .command-footer {
@@ -9292,7 +9570,7 @@ button.source-citation-marker:focus-visible {
   border-top: 1px solid var(--line);
   color: var(--faint);
   background: var(--surface-0);
-  font-size: 7.5px;
+  font-size: 11px;
 }
 
 .command-footer > span {
@@ -9304,7 +9582,7 @@ button.source-citation-marker:focus-visible {
 .command-footer kbd {
   min-width: 18px;
   padding: 1px 4px;
-  font-size: 7px;
+  font-size: 11px;
 }
 
 .command-brand {
@@ -9354,13 +9632,13 @@ button.source-citation-marker:focus-visible {
 
 .toast strong {
   color: var(--text);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .toast small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 8.5px;
+  font-size: 12px;
   line-height: 1.35;
   text-overflow: ellipsis;
 }
@@ -9386,7 +9664,7 @@ button.source-citation-marker:focus-visible {
   padding: 4px 7px;
   color: var(--periwinkle);
   background: var(--periwinkle-wash);
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -9406,7 +9684,7 @@ button.source-citation-marker:focus-visible {
   gap: 15px;
   color: var(--muted);
   background: var(--ink);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 12px;
   letter-spacing: 0.04em;
 }
@@ -9445,7 +9723,7 @@ button.source-citation-marker:focus-visible {
 
 .vault-error-card > strong {
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 25px;
   font-weight: 560;
   letter-spacing: -0.025em;
@@ -9455,7 +9733,7 @@ button.source-citation-marker:focus-visible {
   max-width: 380px;
   margin: 0;
   color: var(--muted);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 12px;
   letter-spacing: 0;
   line-height: 1.55;
@@ -9565,7 +9843,7 @@ button.source-citation-marker:focus-visible {
 .import-studio__brand h2 {
   margin-top: 3px;
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 21px;
   font-weight: 570;
   letter-spacing: -0.02em;
@@ -9585,7 +9863,7 @@ button.source-citation-marker:focus-visible {
   justify-self: end;
   max-width: 380px;
   color: var(--faint);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 10px;
   line-height: 1.45;
   text-align: right;
@@ -9726,7 +10004,7 @@ button.source-citation-marker:focus-visible {
 .import-studio__result-hero h3 {
   margin-top: 6px;
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 26px;
   font-weight: 550;
   letter-spacing: -0.027em;
@@ -9804,7 +10082,7 @@ button.source-citation-marker:focus-visible {
 
 .import-studio__dropzone > strong {
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 17px;
   font-weight: 570;
 }
@@ -9890,7 +10168,7 @@ button.source-citation-marker:focus-visible {
 .import-studio__field textarea {
   min-height: 96px;
   resize: vertical;
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   line-height: 1.45;
 }
 
@@ -10248,7 +10526,7 @@ button.source-citation-marker:focus-visible {
   display: -webkit-box;
   overflow: hidden;
   color: var(--faint);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 9px;
   line-height: 1.4;
   -webkit-box-orient: vertical;
@@ -10404,7 +10682,7 @@ button.source-citation-marker:focus-visible {
   border-radius: 8px;
   color: var(--text-soft);
   background: var(--surface-0);
-  font: 400 9.5px/1.5 var(--display-font);
+  font: 400 9.5px/1.5 var(--ui-font);
   caret-color: var(--periwinkle);
 }
 
@@ -10519,7 +10797,7 @@ button.source-citation-marker:focus-visible {
 .import-studio__stage--organizing > p {
   margin-top: 10px;
   color: var(--muted);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 11px;
 }
 
@@ -10646,7 +10924,7 @@ button.source-citation-marker:focus-visible {
 .import-studio__result-hero p {
   margin-top: 5px;
   color: var(--faint);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 9.5px;
 }
 
@@ -10686,7 +10964,7 @@ button.source-citation-marker:focus-visible {
 
 .import-studio__diagnostic-heading strong {
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 15px;
   font-weight: 560;
 }
@@ -10826,7 +11104,7 @@ button.source-citation-marker:focus-visible {
 
 .import-studio__result-stats strong {
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 18px;
   font-weight: 550;
   letter-spacing: 0;
@@ -10912,7 +11190,7 @@ button.source-citation-marker:focus-visible {
 .import-studio__result-title strong {
   overflow: hidden;
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 13px;
   font-weight: 590;
   text-overflow: ellipsis;
@@ -10933,7 +11211,7 @@ button.source-citation-marker:focus-visible {
 .import-studio__result-note p {
   margin-top: 4px;
   color: var(--muted);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 9px;
   line-height: 1.4;
 }
@@ -11039,7 +11317,7 @@ button.source-citation-marker:focus-visible {
 
 .import-studio__intake-copy > strong {
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 17px;
   font-weight: 580;
 }
@@ -11047,7 +11325,7 @@ button.source-citation-marker:focus-visible {
 .import-studio__intake-copy > p {
   max-width: 460px;
   color: var(--muted);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 9.5px;
   line-height: 1.5;
 }
@@ -11165,7 +11443,7 @@ button.source-citation-marker:focus-visible {
 .import-studio__nested-header h3 {
   margin-top: 4px;
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 21px;
   font-weight: 570;
   letter-spacing: -0.02em;
@@ -11298,8 +11576,8 @@ button.source-citation-marker:focus-visible {
   border-radius: var(--radius-md);
   color: var(--faint);
   background: var(--surface-1);
-  font-family: var(--display-font);
-  font-size: 11px;
+  font-family: var(--ui-font);
+  font-size: 14px;
   line-height: 1.45;
   text-align: center;
   grid-column: 1 / -1;
@@ -11372,7 +11650,7 @@ button.source-citation-marker:focus-visible {
   gap: 6px;
   margin-bottom: 6px;
   color: var(--periwinkle);
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 750;
   letter-spacing: 0.13em;
   text-transform: uppercase;
@@ -11381,7 +11659,7 @@ button.source-citation-marker:focus-visible {
 .studio-page-header h1 {
   margin: 0;
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: clamp(27px, 2.4vw, 35px);
   font-weight: 520;
   letter-spacing: -0.035em;
@@ -11390,7 +11668,7 @@ button.source-citation-marker:focus-visible {
 .studio-page-header p {
   margin: 5px 0 0;
   color: var(--muted);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 12px;
   font-style: italic;
 }
@@ -11611,7 +11889,7 @@ button.source-citation-marker:focus-visible {
 
 .studio-chat-welcome > strong {
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 20px;
   font-weight: 540;
 }
@@ -11641,7 +11919,7 @@ button.source-citation-marker:focus-visible {
   border-radius: 8px;
   color: var(--text-soft);
   background: color-mix(in srgb, var(--surface-2) 78%, transparent);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 10px;
   line-height: 1.35;
   text-align: left;
@@ -11734,7 +12012,7 @@ button.source-citation-marker:focus-visible {
   align-items: center;
   gap: 8px;
   color: var(--muted);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 9px;
   font-style: italic;
 }
@@ -12065,7 +12343,7 @@ button.source-citation-marker:focus-visible {
 .studio-card-section > header h2 {
   margin: 5px 0 3px;
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 20px;
   font-weight: 540;
   letter-spacing: -0.02em;
@@ -12075,7 +12353,7 @@ button.source-citation-marker:focus-visible {
 .dialectic-intro > p {
   margin: 0;
   color: var(--faint);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 9.5px;
   font-style: italic;
   line-height: 1.45;
@@ -12249,7 +12527,7 @@ button.source-citation-marker:focus-visible {
 .thinking-card h3 {
   margin: 14px 0 7px;
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 15px;
   font-weight: 580;
   line-height: 1.2;
@@ -12306,7 +12584,7 @@ button.source-citation-marker:focus-visible {
 
 .thinking-card > footer > span {
   color: var(--faint);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 7.5px;
   font-style: italic;
 }
@@ -12415,7 +12693,7 @@ button.source-citation-marker:focus-visible {
 .dialectic-lane > header small {
   overflow: hidden;
   color: var(--faint);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 7.5px;
   font-style: italic;
   text-overflow: ellipsis;
@@ -12452,7 +12730,7 @@ button.source-citation-marker:focus-visible {
   border: 1px dashed var(--line);
   border-radius: 9px;
   color: var(--faint);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 8px;
   font-style: italic;
 }
@@ -12491,7 +12769,7 @@ button.source-citation-marker:focus-visible {
 
 .studio-canvas-empty > strong {
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 22px;
   font-weight: 530;
 }
@@ -12511,7 +12789,7 @@ button.source-citation-marker:focus-visible {
 
 .studio-canvas-empty .button {
   min-height: 34px;
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .manual-card-composer {
@@ -12592,7 +12870,7 @@ button.source-citation-marker:focus-visible {
   height: 38px;
   margin-bottom: 8px;
   padding: 0 10px;
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 13px;
 }
 
@@ -12620,14 +12898,14 @@ button.source-citation-marker:focus-visible {
 
 .manual-card-composer > footer small {
   color: var(--faint);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: 8px;
   font-style: italic;
 }
 
 .manual-card-composer > footer .button {
   min-height: 32px;
-  font-size: 9px;
+  font-size: 12px;
 }
 
 @keyframes studio-arrive {
@@ -12713,7 +12991,7 @@ button.source-citation-marker:focus-visible {
   gap: 6px;
   margin-bottom: 7px;
   color: var(--periwinkle);
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 760;
   letter-spacing: 0.13em;
   text-transform: uppercase;
@@ -12722,7 +13000,7 @@ button.source-citation-marker:focus-visible {
 .chat-view__title h1 {
   margin: 0;
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: clamp(30px, 3vw, 40px);
   font-weight: 520;
   letter-spacing: -0.045em;
@@ -12731,8 +13009,8 @@ button.source-citation-marker:focus-visible {
 .chat-view__title p {
   margin: 5px 0 0;
   color: var(--muted);
-  font-family: var(--display-font);
-  font-size: 12px;
+  font-family: var(--ui-font);
+  font-size: 14px;
   font-style: italic;
 }
 
@@ -12766,7 +13044,7 @@ button.source-citation-marker:focus-visible {
   padding: 8px 11px 7px;
   border-left: 1px solid var(--line);
   color: var(--faint);
-  font-size: 7.5px;
+  font-size: 11px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
@@ -12778,7 +13056,7 @@ button.source-citation-marker:focus-visible {
 .chat-view__scope strong {
   color: var(--text-soft);
   font-family: var(--mono-font);
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 650;
 }
 
@@ -12792,7 +13070,7 @@ button.source-citation-marker:focus-visible {
   border-radius: 10px;
   color: var(--text-soft);
   background: color-mix(in srgb, var(--surface-1) 80%, transparent);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 650;
   box-shadow: var(--shadow-sm);
   backdrop-filter: blur(18px);
@@ -12868,7 +13146,7 @@ button.source-citation-marker:focus-visible {
 .chat-welcome h2 {
   margin: 1px 0 8px;
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-size: clamp(24px, 3vw, 34px);
   font-weight: 520;
   letter-spacing: -0.035em;
@@ -12878,7 +13156,7 @@ button.source-citation-marker:focus-visible {
   max-width: 500px;
   margin: 0 0 24px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 16px;
   line-height: 1.65;
 }
 
@@ -12900,8 +13178,8 @@ button.source-citation-marker:focus-visible {
   border-radius: 11px;
   color: var(--text-soft);
   background: color-mix(in srgb, var(--surface-1) 76%, transparent);
-  font-family: var(--display-font);
-  font-size: 10.5px;
+  font-family: var(--ui-font);
+  font-size: 14px;
   line-height: 1.35;
   text-align: left;
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.08);
@@ -12941,7 +13219,7 @@ button.source-citation-marker:focus-visible {
   border-radius: 10px;
   color: var(--periwinkle-strong);
   background: var(--periwinkle-wash);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 680;
 }
 
@@ -12984,7 +13262,7 @@ button.source-citation-marker:focus-visible {
   gap: 7px;
   margin-bottom: 8px;
   color: var(--faint);
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 760;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -13007,7 +13285,7 @@ button.source-citation-marker:focus-visible {
 
 .chat-message__body {
   color: var(--text-soft);
-  font-size: 12px;
+  font-size: 17px;
   line-height: 1.72;
 }
 
@@ -13034,7 +13312,7 @@ button.source-citation-marker:focus-visible {
 .chat-message__body h4 {
   margin: 20px 0 8px;
   color: var(--text);
-  font-family: var(--display-font);
+  font-family: var(--ui-font);
   font-weight: 560;
   letter-spacing: -0.015em;
 }
@@ -13049,7 +13327,7 @@ button.source-citation-marker:focus-visible {
 
 .chat-message__body h3,
 .chat-message__body h4 {
-  font-size: 15px;
+  font-size: 17px;
 }
 
 .chat-message__body ul,
@@ -13204,7 +13482,7 @@ button.source-citation-marker:focus-visible {
   border-radius: 8px;
   color: var(--text-soft);
   background: color-mix(in srgb, var(--surface-raised) 80%, transparent);
-  font-size: 10.5px;
+  font-size: 14px;
   font-weight: 650;
 }
 
@@ -13231,8 +13509,8 @@ button.source-citation-marker:focus-visible {
   align-items: center;
   gap: 9px;
   color: var(--muted);
-  font-family: var(--display-font);
-  font-size: 10px;
+  font-family: var(--ui-font);
+  font-size: 12px;
   font-style: italic;
 }
 
@@ -13270,7 +13548,7 @@ button.source-citation-marker:focus-visible {
   gap: 12px;
   margin: 0 4px 7px;
   color: var(--danger);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .chat-composer__error button {
@@ -13278,7 +13556,7 @@ button.source-citation-marker:focus-visible {
   border: 0;
   color: inherit;
   background: transparent;
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -13322,7 +13600,7 @@ button.source-citation-marker:focus-visible {
   color: var(--text);
   background: transparent;
   font-family: var(--ui-font);
-  font-size: 12px;
+  font-size: 16px;
   line-height: 1.55;
   outline: 0;
 }
@@ -13361,7 +13639,7 @@ button.source-citation-marker:focus-visible {
   gap: 16px;
   padding: 7px 7px 0;
   color: var(--faint);
-  font-size: 7.5px;
+  font-size: 11px;
 }
 
 .chat-composer__footer span {
@@ -13538,6 +13816,27 @@ button.source-citation-marker:focus-visible {
     width: 260px;
   }
 
+  .new-note-split {
+    width: 38px;
+    margin-inline: auto;
+    flex-direction: column;
+  }
+
+  .sidebar .new-note-split .new-note-button {
+    border-radius: 9px;
+  }
+
+  .sidebar .new-note-split:has(.new-note-generate-toggle) .new-note-button {
+    border-radius: 9px 9px 0 0;
+  }
+
+  .sidebar .new-note-generate-toggle {
+    width: 38px;
+    height: 28px;
+    border-left: 1px solid var(--line-strong);
+    border-radius: 0 0 9px 9px;
+  }
+
   .new-note-button {
     width: 38px;
     height: 38px;
@@ -13549,7 +13848,7 @@ button.source-citation-marker:focus-visible {
 
   .primary-nav {
     align-items: center;
-    border-bottom: 0;
+    border-bottom: 1px solid var(--line);
   }
 
   .sidebar-generation-queue {
@@ -13574,8 +13873,9 @@ button.source-citation-marker:focus-visible {
 
   .sidebar-footer {
     justify-content: center;
-    flex-direction: column;
+    flex-direction: column-reverse;
     padding-top: 10px;
+    border-top: 0;
   }
 
   .topbar {
@@ -13584,10 +13884,6 @@ button.source-citation-marker:focus-visible {
       auto
       minmax(220px, 350px)
       minmax(76px, 1fr);
-  }
-
-  .workspace-crumb small {
-    display: none;
   }
 
   .app-shell.with-context {
@@ -13600,6 +13896,20 @@ button.source-citation-marker:focus-visible {
 
   .home-lower-grid {
     grid-template-columns: 1fr;
+  }
+
+  .note-title-line {
+    flex-wrap: wrap;
+  }
+
+  .note-title-line > h1,
+  .note-title-input {
+    flex-basis: 100%;
+  }
+
+  .note-actions {
+    margin-left: auto;
+    padding-top: 0;
   }
 
   .source-table-head,
@@ -14081,7 +14391,7 @@ button.source-citation-marker:focus-visible {
 
   .studio-page-header .eyebrow {
     margin-bottom: 3px;
-    font-size: 7px;
+    font-size: 11px;
   }
 
   .studio-page-header h1 {
@@ -14170,7 +14480,7 @@ button.source-citation-marker:focus-visible {
 .generate-space-context input { width: auto; accent-color: var(--periwinkle); }
 .new-note-generate-composer .generate-context-hint {
   margin: 6px 0 10px;
-  font-size: 11px;
+  font-size: 14px;
   line-height: 1.5;
   color: var(--muted);
 }

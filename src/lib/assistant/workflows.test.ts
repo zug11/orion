@@ -91,11 +91,18 @@ describe("desktop workflow writes", () => {
   it("generates without exposing private notes when context is disabled", async () => {
     const space = fixture().spaces[0]; space.settings.includeExistingNotesInAIContext = false;
     space.notes[0].body = "PRIVATE_UNIQUE_CONTENT"; const deps = dependencies();
-    deps.chat = vi.fn(async (request) => { expect(JSON.stringify(request)).not.toContain("PRIVATE_UNIQUE_CONTENT"); return { reply: "A self-contained generated article." }; });
+    deps.chat = vi.fn(async (request) => { expect(JSON.stringify(request)).not.toContain("PRIVATE_UNIQUE_CONTENT"); return { reply: "# Lunar Phases\n\nA self-contained generated article." }; });
     const outcome = await executeAssistantWorkflow(space, { space_id: space.workspace.id, request_id: "generate", operation: "generate", input: { kind: "note", instruction: "Write about lunar phases" } }, deps);
     expect(outcome.snapshot?.notes).toHaveLength(3);
+    expect(outcome.snapshot?.notes[outcome.snapshot.notes.length - 1]).toMatchObject({ title: "Lunar Phases", slug: "lunar-phases", body: "A self-contained generated article." });
     expect(outcome.snapshot?.notes[outcome.snapshot.notes.length - 1]?.tags).not.toContain("orion-generate-pending");
     expect(outcome.snapshot?.studio).toEqual(space.studio);
+  });
+  it("preserves an explicitly supplied workflow title", async () => {
+    const space = fixture().spaces[0]; const deps = dependencies();
+    deps.chat = vi.fn(async () => ({ reply: "# Lunar Phases\n\nA self-contained article." }));
+    const outcome = await executeAssistantWorkflow(space, { space_id: space.workspace.id, request_id: "generate", operation: "generate", input: { kind: "note", title: "My Moon Journal", instruction: "Write about lunar phases" } }, deps);
+    expect(outcome.snapshot?.notes[outcome.snapshot.notes.length - 1]?.title).toBe("My Moon Journal");
   });
   it("rejects revoked write permission before reading an import file", async () => {
     const space = fixture().spaces[0]; space.settings.assistantAccess.allowWrites = false; const deps = dependencies();

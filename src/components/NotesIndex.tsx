@@ -2,6 +2,7 @@ import { BookOpen, Grid2X2, List, Search, Trash2 } from "../lib/icons";
 import { useMemo, useState, type CSSProperties } from "react";
 import type { Note } from "../types";
 import { visibleNoteTags } from "../lib/noteMetadata";
+import { searchLocalNotes } from "../lib/localSearch";
 import BorderGlow from "./BorderGlow";
 
 interface NotesIndexProps {
@@ -17,16 +18,7 @@ export function NotesIndex({
 }: NotesIndexProps) {
   const [query, setQuery] = useState("");
   const [layout, setLayout] = useState<"grid" | "list">("grid");
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase();
-    if (!needle) return notes;
-    return notes.filter((note) =>
-      [note.title, note.summary, ...note.tags, ...note.aliases]
-        .join(" ")
-        .toLocaleLowerCase()
-        .includes(needle),
-    );
-  }, [notes, query]);
+  const filtered = useMemo(() => searchLocalNotes(notes, query), [notes, query]);
 
   return (
     <div className="view index-view">
@@ -70,7 +62,7 @@ export function NotesIndex({
       </div>
 
       <div className={`notes-collection ${layout}`}>
-        {filtered.map((note) => (
+        {filtered.map(({ item: note, snippet }) => (
           <div className="note-index-card-shell" key={note.id}>
             <BorderGlow
               as="button"
@@ -85,7 +77,7 @@ export function NotesIndex({
               }
             >
               <strong>{note.title}</strong>
-              <p>{note.summary}</p>
+              <p>{query.trim() ? snippet : note.summary}</p>
               <div className="tag-row">
                 {visibleNoteTags(note).slice(0, 3).map((tag) => (
                   <span key={tag}>#{tag}</span>
@@ -118,7 +110,7 @@ export function NotesIndex({
             <strong>{query ? "No notes match that search" : "A clear sky"}</strong>
             <span>
               {query
-                ? "Try a title, alias, or tag."
+                ? "Try a title, alias, tag, or words inside a note."
                 : "Create a note or import material to begin your atlas."}
             </span>
           </div>

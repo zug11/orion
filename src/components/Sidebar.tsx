@@ -35,6 +35,7 @@ export type WorkspaceView =
   | "settings";
 
 interface SidebarProps {
+  brandMarkSrc?: string;
   view: WorkspaceView;
   notes: Note[];
   spaces: readonly AppSnapshot[];
@@ -110,6 +111,7 @@ function SidebarNoteRow({
 }
 
 export function Sidebar({
+  brandMarkSrc,
   view,
   notes,
   spaces,
@@ -138,6 +140,7 @@ export function Sidebar({
   const [generateUseSpaceNotes, setGenerateUseSpaceNotes] = useState(true);
   const [generateInstruction, setGenerateInstruction] = useState("");
   const generatePanelRef = useRef<HTMLDivElement>(null);
+  const generateToggleRef = useRef<HTMLButtonElement>(null);
   const favorites = notes.filter((note) => note.pinned);
   const visibleLinkedArticleJobs = [
     ...linkedArticleJobs.filter((job) => job.stage === "error"),
@@ -159,6 +162,7 @@ export function Sidebar({
       if (event.key === "Escape") {
         event.preventDefault();
         setGenerateOpen(false);
+        generateToggleRef.current?.focus();
       }
     };
     window.addEventListener("mousedown", onPointer);
@@ -173,6 +177,7 @@ export function Sidebar({
     <aside className={collapsed ? "sidebar is-collapsed" : "sidebar"}>
       <div className="sidebar-titlebar" data-tauri-drag-region aria-hidden="true" />
       <SpaceSwitcher
+        brandMarkSrc={brandMarkSrc}
         spaces={spaces}
         activeSpaceId={activeSpaceId}
         onCreateSpace={onCreateSpace}
@@ -193,6 +198,7 @@ export function Sidebar({
         </button>
         {generateEnabled && onGenerate ? (
           <button
+            ref={generateToggleRef}
             type="button"
             className={
               generateOpen
@@ -202,6 +208,7 @@ export function Sidebar({
             aria-label="Generate options"
             aria-expanded={generateOpen}
             aria-haspopup="dialog"
+            aria-controls={generateOpen ? "orion-generate-composer" : undefined}
             onClick={() => {
               if (!generateOpen) setGenerateUseSpaceNotes(
                 spaces.find((space) => space.workspace.id === activeSpaceId)?.settings.includeExistingNotesInAIContext ?? false,
@@ -212,13 +219,15 @@ export function Sidebar({
             <ChevronDown size={14} />
           </button>
         ) : null}
-        {generateOpen && onGenerate ? (
+        {generateOpen && generateEnabled && onGenerate ? (
           <form
+            id="orion-generate-composer"
             className="new-note-generate-composer"
             role="dialog"
             aria-label="Generate"
             onSubmit={(event) => {
               event.preventDefault();
+              if (!generateEnabled || (!generateUseSpaceNotes && !generateInstruction.trim())) return;
               onGenerate({
                 kind: generateKind,
                 instruction: truncateGenerateInstruction(generateInstruction),
@@ -265,7 +274,7 @@ export function Sidebar({
                 : "Space context is off. Only your instructions will be used; Orion cannot describe your saved project."}
             </p>
             <button type="submit" className="button primary compact"
-              disabled={!generateUseSpaceNotes && !generateInstruction.trim()}>
+              disabled={!generateEnabled || (!generateUseSpaceNotes && !generateInstruction.trim())}>
               Generate
             </button>
           </form>

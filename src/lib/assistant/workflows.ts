@@ -3,7 +3,7 @@ import type { AppSnapshot, Note, ParsedImport, Source } from "../../types";
 import type { ImportItem, ImportStudioApplyPayload, OrganizedSource } from "../../components/ImportStudio";
 import { isSelectedAIConfigured } from "../ai";
 import { reconcileConceptVocabulary, ensureCanonicalConceptPhrase } from "../concepts";
-import { createGeneratePlaceholderNote, GENERATE_PENDING_TAG } from "../generate";
+import { applyGeneratedNoteTitle, createGeneratePlaceholderNote, GENERATE_PENDING_TAG } from "../generate";
 import { generateFromSpace } from "../generatePipeline";
 import { applyLinkedArticleResult, buildLinkedArticleRequest } from "../linkedArticle";
 import { runAutomaticKnowledgeImport } from "../knowledgeOrchestration/automaticImport";
@@ -121,7 +121,8 @@ export async function executeAssistantWorkflow(snapshot: AppSnapshot, request: A
       const note = createGeneratePlaceholderNote({ id: `note_${nanoid(12)}`, title: request.input.title ?? request.input.instruction.slice(0, 80), kind: request.input.kind, now });
       const pending = { ...snapshot, notes: [...snapshot.notes, note] };
       await deps.progress("Generating from Space context");
-      let body = await generateFromSpace(pending, { originNoteId: note.id, ...request.input, useSpaceNotes: snapshot.settings.includeExistingNotesInAIContext }, deps.chat, { signal: deps.signal });
+      const generated = await generateFromSpace(pending, { originNoteId: note.id, ...request.input, useSpaceNotes: snapshot.settings.includeExistingNotesInAIContext }, deps.chat, { signal: deps.signal });
+      let body = generated.body;
       const warnings: string[] = [];
       if (request.input.kind.startsWith("slide-deck")) {
         if (snapshot.settings.apiKeyConfigured) {
@@ -130,7 +131,7 @@ export async function executeAssistantWorkflow(snapshot: AppSnapshot, request: A
         } else warnings.push("Slide text was generated. Add an OpenAI key in Orion for slide images.");
       }
       await deps.assertCurrent();
-      const finished: Note = { ...note, body, summary: "", tags: note.tags.filter((tag) => tag !== GENERATE_PENDING_TAG), updatedAt: timestamp() };
+      const finished: Note = { ...applyGeneratedNoteTitle(note, note.title, request.input.title ? undefined : generated.title), body, summary: "", tags: note.tags.filter((tag) => tag !== GENERATE_PENDING_TAG), updatedAt: timestamp() };
       const vocabulary = reconcileConceptVocabulary([...snapshot.notes, finished], snapshot.concepts);
       return savedResult(snapshot, markSpaceOverviewStale({ ...snapshot, ...vocabulary, updatedAt: timestamp() }), { kind: request.input.kind, warnings });
     }

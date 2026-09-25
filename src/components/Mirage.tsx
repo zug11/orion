@@ -35,7 +35,21 @@ void main() {
   vec3 energy = dye * (0.04 + mask * 0.09 + beam * (0.12 + mask * 0.4));
   energy += tint(phase * 0.45 + cap * 3.1 + 1.0) * afterimage * mask * 0.22;
   energy += mix(dye, uTertiary, 0.6) * (rim * 0.55 + reflection * mask * 0.5);
-  gl_FragColor = finishAtmosphere(uv, energy);
+  if (uLight > 0.5) {
+    float diffuse = max(dot(normal, light), 0.0);
+    // The broad night mask describes a glow, not the boundary of a glass lens.
+    // Give daylight a pixel-sized edge while preserving the same geometry.
+    float edgeWidth = 3.5 / uResolution.y;
+    float lensMask = 1.0 - smoothstep(0.49 - edgeWidth, 0.49 + edgeWidth, radius);
+    vec3 glassDye = mix(dye, tint(phase * 0.45 + cap * 3.1 + 1.0), afterimage * 0.3);
+    float lensLight = diffuse * (0.6 + beam * 0.4) - rim * 0.24;
+    float lensReflection = reflection * 0.85 + afterimage * 0.18
+      + rim * (0.18 + beam * 0.65);
+    gl_FragColor = finishDaylightSurface(uv, glassDye, lensLight,
+      lensReflection, lensMask * 0.94);
+  } else {
+    gl_FragColor = finishAtmosphere(uv, energy);
+  }
 }
 `;
 

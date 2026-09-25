@@ -20,6 +20,7 @@ import { extractNoteOutline } from "./noteOutline";
 import { visibleNoteTags } from "./noteMetadata";
 import { isSafeNoteImageUrl } from "./noteImages";
 import { canonicalizeSourceCitations } from "./sourceCitations";
+import { savedChatEvidence, savedChatEvidenceFromLink } from "./chatCitations";
 import {
   resolveThemePalette,
   type ResolvedThemeMode,
@@ -513,6 +514,7 @@ function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
     snapshot.concepts,
   );
   const citations = canonicalizeSourceCitations(expanded, snapshot.sources);
+  const retainedPassages = savedChatEvidence(citations.body);
   const outline = extractNoteOutline(citations.body);
   const headingByLine = new Map(outline.map((heading) => [heading.line, heading]));
   const sourceById = new Map(snapshot.sources.map((source) => [source.id, source]));
@@ -590,7 +592,17 @@ function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
         </h3>
       );
     },
-    a: ({ href, children }) => {
+    a: ({ href, title, children }) => {
+      if (href?.startsWith("#orion-passage-")) {
+        const passage = retainedPassages.find((item) => href === `#orion-passage-${item.id}`);
+        if (!passage) return <span>{children}</span>;
+        const anchor = `${noteAnchor(note)}--passage-${passage.id}`;
+        // Only the standalone metadata-bearing label owns the target. Raw
+        // hashes, ranges and encoded evidence never enter the exported HTML.
+        return savedChatEvidenceFromLink(href, title)
+          ? <span id={anchor}>{children}</span>
+          : <a href={`#${anchor}`}>{children}</a>;
+      }
       if (href?.startsWith("orion-note://")) {
         const targetId = href.slice("orion-note://".length);
         return (

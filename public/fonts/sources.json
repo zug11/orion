@@ -1,0 +1,36 @@
+{
+  "repository": "https://github.com/google/fonts",
+  "revision": "b5efa9c32e8f9b63005f5cdb1ad5527a77d2cd04",
+  "files": [
+    {
+      "file": "Lora-Variable.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/b5efa9c32e8f9b63005f5cdb1ad5527a77d2cd04/ofl/lora/Lora%5Bwght%5D.ttf",
+      "sha256": "822a6621ccbe8d97d20ac88c1c41f5615c9c2c202eaa75f272cd452aac6475a7"
+    },
+    {
+      "file": "Lora-Italic-Variable.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/b5efa9c32e8f9b63005f5cdb1ad5527a77d2cd04/ofl/lora/Lora-Italic%5Bwght%5D.ttf",
+      "sha256": "22d8d8854b53807aa664ca34f2031a9ed57a1d0dea296b8b96cdd3aad937a2b3"
+    },
+    {
+      "file": "Lora-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/b5efa9c32e8f9b63005f5cdb1ad5527a77d2cd04/ofl/lora/OFL.txt",
+      "sha256": "1d9a970809ac804b582a6ce7f0ebc4e7fefcbfd7ff6299cad35ee656a21be716"
+    },
+    {
+      "file": "HankenGrotesk-Variable.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/b5efa9c32e8f9b63005f5cdb1ad5527a77d2cd04/ofl/hankengrotesk/HankenGrotesk%5Bwght%5D.ttf",
+      "sha256": "813b3f8fa0965405669a89b38e51bbefd95eef6b8e20d1cb2d8c10cce062662f"
+    },
+    {
+      "file": "HankenGrotesk-Italic-Variable.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/b5efa9c32e8f9b63005f5cdb1ad5527a77d2cd04/ofl/hankengrotesk/HankenGrotesk-Italic%5Bwght%5D.ttf",
+      "sha256": "ae5731726ff75301a3cb63f2e98d1babc77d55ab09fb8e229ca75f5bd46fbe32"
+    },
+    {
+      "file": "HankenGrotesk-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/b5efa9c32e8f9b63005f5cdb1ad5527a77d2cd04/ofl/hankengrotesk/OFL.txt",
+      "sha256": "e02ccb89a86839b22feff7872ff5cc355cc0f58318d29eee20e2cf83a612f16d"
+    }
+  ]
+}

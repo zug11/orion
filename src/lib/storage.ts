@@ -17,10 +17,12 @@ import type {
   RecognizedDocumentText,
   Settings,
   TranscribedMedia,
+  MediaTranscriptionBatch,
   TranscriptionSetupStatus,
   WhisperConfig,
 } from "../types";
 import { truncateUnicode } from "./text";
+import { isWindowGlassSettings } from "./windowGlass";
 import {
   providerCallScheduler,
   type ProviderCallOptions,
@@ -208,19 +210,45 @@ export async function openCodexPlugin(): Promise<string> {
 export async function transcribeMediaFiles(
   config: WhisperConfig,
   browserFiles: readonly File[] = [],
-): Promise<TranscribedMedia[]> {
+  signal?: AbortSignal,
+): Promise<MediaTranscriptionBatch> {
   if (isTauriRuntime()) {
-    const value = await invokeTauri<unknown>("transcribe_media_files", {
-      config,
-    });
-    return parseTranscribedMediaList(value);
+    const value = await withMediaImportCancellation((requestId) =>
+      invokeTauri<unknown>("transcribe_media_files", { config, requestId }), signal);
+    if (Array.isArray(value)) return { transcripts: parseTranscribedMediaList(value), failures: [] };
+    if (!value || typeof value !== "object" || !("transcripts" in value) || !("failures" in value) ||
+        !Array.isArray(value.failures) || value.failures.length > 8 ||
+        value.failures.some((failure: unknown) => !failure || typeof failure !== "object" ||
+          !("fileName" in failure) || typeof failure.fileName !== "string" || failure.fileName.length > 1024 ||
+          !("error" in failure) || typeof failure.error !== "string" || failure.error.length > 2000)) {
+      throw new Error("Orion received an invalid media transcription result.");
+    }
+    return { transcripts: parseTranscribedMediaList(value.transcripts), failures: value.failures as MediaTranscriptionBatch["failures"] };
   }
   if (browserFiles.length === 0) {
-    return [];
+    return { transcripts: [], failures: [] };
   }
   throw new Error(
     "Offline transcription is available in the installed Orion desktop app.",
   );
+}
+
+/** Abort the owned native process; keep the listener until physical work settles. */
+export async function withMediaImportCancellation<T>(
+  run: (requestId: string) => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  signal?.throwIfAborted();
+  const requestId = `media_${crypto.randomUUID()}`;
+  const cancel = () => { void invokeTauri("cancel_media_import", { requestId }).catch(() => undefined); };
+  signal?.addEventListener("abort", cancel, { once: true });
+  try {
+    const value = await run(requestId);
+    signal?.throwIfAborted();
+    return value;
+  } finally {
+    signal?.removeEventListener("abort", cancel);
+  }
 }
 
 export async function transcribeVoiceMemo(
@@ -279,18 +307,20 @@ export async function finishVoiceMemoSession(sessionId: string): Promise<void> {
 export async function transcribeYouTube(
   url: string,
   config: WhisperConfig,
+  signal?: AbortSignal,
 ): Promise<TranscribedMedia> {
   if (!isTauriRuntime()) {
     throw new Error(
       "The YouTube download workflow is available in the Orion desktop app.",
     );
   }
-  const value = await invokeTauri<unknown>("transcribe_youtube", {
+  const value = await withMediaImportCancellation((requestId) => invokeTauri<unknown>("transcribe_youtube", {
+    requestId,
     request: {
       url,
       language: config.language,
     },
-  });
+  }), signal);
   return parseTranscribedMedia(value);
 }
 
@@ -2307,6 +2337,12 @@ function isSettings(value: unknown): boolean {
       isOneOf(value.themeTextWarmth, ["cool", "neutral", "warm"])) &&
     (value.themeContrast === undefined ||
       isOneOf(value.themeContrast, ["soft", "balanced", "high"])) &&
+    (value.noteTypeface === undefined ||
+      isOneOf(value.noteTypeface, ["sans", "serif"])) &&
+    isWindowGlassSettings(value.windowGlass) &&
+    (value.themeIcon === undefined || typeof value.themeIcon === "boolean") &&
+    (value.homeAtmosphereAppearance === undefined ||
+      isOneOf(value.homeAtmosphereAppearance, ["theme", "dark"])) &&
     (value.homeAtmosphere === undefined ||
       isOneOf(value.homeAtmosphere, [
         "antigravity",

@@ -70,6 +70,7 @@ export function ConceptLinkPopover({
     aiArticleWritingEnabled ? "ai" : "blank",
   );
   const [articleInstructions, setArticleInstructions] = useState("");
+  const [generateInlineTitle, setGenerateInlineTitle] = useState(false);
   const [generatingTitle, setGeneratingTitle] = useState(false);
   const [titleError, setTitleError] = useState("");
   const normalizedSelectedText = selectedText.trim().replace(/\s+/g, " ");
@@ -77,7 +78,9 @@ export function ConceptLinkPopover({
     selectedText.length > 520
       ? `${selectedText.slice(0, 520).trimEnd()}…`
       : selectedText;
-  const resolvedPhrase =
+  const namingInlineSelection = selectionMode === "inline" &&
+    generateInlineTitle && destinationIds.size === 0 && aiArticleWritingEnabled && Boolean(onGenerateTitle);
+  const resolvedPhrase = namingInlineSelection ? "" :
     phrase.trim() ||
     (selectionMode === "inline" ? normalizedSelectedText : "");
   const validPhrase = isLinkablePhrase(resolvedPhrase);
@@ -91,8 +94,7 @@ export function ConceptLinkPopover({
   const reusesWrittenArticle = Boolean(existingArticle &&
     !isLinkedArticlePlaceholder(existingArticle, existingArticle.title));
   const canGenerateTitle = Boolean(
-    selectionMode === "context" &&
-      !phrase.trim() &&
+    (namingInlineSelection || (selectionMode === "context" && !phrase.trim())) &&
       normalizedSelectedText &&
       destinationIds.size === 0 &&
       aiArticleWritingEnabled &&
@@ -321,7 +323,7 @@ export function ConceptLinkPopover({
           autoComplete="off"
           maxLength={120}
           aria-label="Page title"
-          disabled={generatingTitle}
+          disabled={generatingTitle || namingInlineSelection}
           aria-invalid={titleError ? true : undefined}
           aria-describedby={
             selectionMode === "context"
@@ -364,18 +366,33 @@ export function ConceptLinkPopover({
         ) : null}
       </label>
 
+      {selectionMode === "inline" && destinationIds.size === 0 && aiArticleWritingEnabled && onGenerateTitle ? (
+        <label className="concept-link-title-toggle">
+          <input
+            type="checkbox"
+            checked={generateInlineTitle}
+            disabled={generatingTitle}
+            onChange={(event) => {
+              setGenerateInlineTitle(event.target.checked);
+              setTitleError("");
+            }}
+          />
+          <span>Generate title with AI</span>
+        </label>
+      ) : null}
+
       {selectionMode !== "none" ? (
         <div className="concept-link-selection-context">
           <div>
             <span>Selected context</span>
             <em>
-              {selectionMode === "context"
+              {selectionMode === "context" || namingInlineSelection
                 ? "kept unchanged"
                 : "used as the title by default"}
             </em>
           </div>
           <p>{selectedTextPreview}</p>
-          {selectionMode === "context" ? (
+          {selectionMode === "context" || namingInlineSelection ? (
             <small>
               Orion adds the linked title immediately above this content. Code,
               formatting, and the selected words are not altered.

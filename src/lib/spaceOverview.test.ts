@@ -116,6 +116,29 @@ describe("Space overviews", () => {
     expect(overview.relatedNoteIds).toEqual(["note-story"]);
   });
 
+  it("summarizes a single brief note without treating starter copy as knowledge", () => {
+    const snapshot = createEmptySnapshot("Research", NOW);
+    const brief = { ...note("brief", "Database", "Use PostgreSQL."), summary: "A new thread in your atlas." };
+    const empty = { ...note("empty", "Untitled note", ""), summary: brief.summary };
+    snapshot.notes = [empty, brief];
+
+    expect(hasSubstantiveOverviewNote(brief)).toBe(true);
+    expect(hasSubstantiveOverviewNote(empty)).toBe(false);
+    expect(hasSubstantiveOverviewNote({ ...empty, summary: "SQL" })).toBe(true);
+    expect(hasSubstantiveOverviewNote({ ...empty, summary: "", body: "---\n<!-- empty -->" })).toBe(false);
+
+    const overview = buildLocalSpaceOverview(snapshot);
+    expect(overview.title).toBe("Database");
+    expect(overview.body).toContain("Use PostgreSQL.");
+    expect(overview.body).not.toContain(brief.summary);
+    expect(overview.relatedNoteIds).toEqual(["brief"]);
+    const request = buildSpaceOverviewRequest(snapshot);
+    expect(request.content).toContain("Use PostgreSQL.");
+    expect(request.content).not.toContain(brief.summary);
+    expect(request.taskInstructions).toContain("A single note is enough");
+    expect(request.taskInstructions).toContain("one sentence");
+  });
+
   it("includes finished reference articles but ignores unfinished and empty pages", () => {
     const reference = {
       ...note("note-sql", "SQL", "SQL organizes relational data into tables."),

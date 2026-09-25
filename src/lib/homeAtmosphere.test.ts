@@ -3,14 +3,41 @@ import { defaultSettings } from "../data/defaults";
 import {
   atmosphereToneOptions,
   resolveAtmospherePalette,
+  resolveAtmosphereTheme,
+  type AtmospherePalette,
 } from "./homeAtmosphere";
-import { contrastRatio, resolveThemePalette } from "./theme";
+import { contrastRatio, resolveThemePalette, type ThemePalette } from "./theme";
+
+function expectRoom(room: AtmospherePalette, theme: ThemePalette) {
+  if (theme.mode === "dark") {
+    expect(room.background).toBe(theme.canvasDeep);
+    expect(room.backgroundSecondary).toBe(theme.surface0);
+  } else {
+    // Daylight has a slightly deeper paper room, never inverted or near black.
+    for (const [actual, original] of [[room.background, theme.canvasDeep], [room.backgroundSecondary, theme.surface0]]) {
+      expect(contrastRatio(actual, "#000000")).toBeLessThan(contrastRatio(original, "#000000"));
+      expect(contrastRatio(actual, "#000000")).toBeGreaterThan(10);
+    }
+  }
+}
 
 describe("home atmosphere theme inheritance", () => {
   const atmospheres = [
     "line-waves", "signal-decay", "field", "quiet-loom", "nova", "flux",
     "tidal-glass", "prism-drift", "nebula", "emberwake", "gravity-silk", "mirage",
   ] as const;
+
+  it("can keep only the hero dark while retaining the selected theme and custom colours", () => {
+    const settings = { ...defaultSettings, themePreset: "ember" as const, theme: "light" as const,
+      homeAtmosphereAppearance: "dark" as const, themeAccentCustom: "#FF9977" };
+    const active = resolveThemePalette(settings, "light");
+    const room = resolveAtmosphereTheme(settings, active);
+    expect(room).toEqual(resolveThemePalette(settings, "dark"));
+    expect(active.mode).toBe("light");
+    expect(settings.theme).toBe("light");
+    expect(resolveAtmosphereTheme({ ...settings, homeAtmosphereAppearance: "theme" }, active)).toBe(active);
+    expect(resolveAtmosphereTheme(settings, room)).toBe(room);
+  });
 
   it("uses both chosen hues and their blend across every shader", () => {
     for (const atmosphere of atmospheres) {
@@ -30,8 +57,7 @@ describe("home atmosphere theme inheritance", () => {
         for (const [first, second] of [["#FF6699", "#66CFFF"], ["#000000", "#FFFFFF"], ["#00FF00", "#FF00FF"]]) {
           const pair = resolveAtmospherePalette(atmosphere, "signature", theme, first, second);
           expect(pair.primary).not.toBe(pair.secondary);
-          expect(pair.background).toBe(theme.canvasDeep);
-          expect(pair.backgroundSecondary).toBe(theme.surface0);
+          expectRoom(pair, theme);
           for (const colour of [pair.primary, pair.secondary, pair.tertiary]) {
             expect(contrastRatio(colour, theme.canvasDeep)).toBeGreaterThanOrEqual(3);
             expect(contrastRatio(colour, theme.surface0)).toBeGreaterThanOrEqual(3);
@@ -117,8 +143,7 @@ describe("home atmosphere theme inheritance", () => {
       );
 
       for (const room of rooms) {
-        expect(room.background).toBe(theme.canvasDeep);
-        expect(room.backgroundSecondary).toBe(theme.surface0);
+        expectRoom(room, theme);
         expect(room.background).not.toBe(theme.canvas);
       }
       expect(new Set(rooms.map((room) => room.background)).size).toBe(1);
@@ -184,7 +209,7 @@ describe("home atmosphere theme inheritance", () => {
       darkTheme,
     );
 
-    expect(light.background).toBe(lightTheme.canvasDeep);
+    expectRoom(light, lightTheme);
     expect(dark.background).toBe(darkTheme.canvasDeep);
     expect(light.background).not.toBe(dark.background);
     expect(light.isLight).toBe(true);

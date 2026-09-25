@@ -72,7 +72,6 @@ for required_path in \
   "$PLUGIN_SOURCE/skills/orion/SKILL.md" \
   "$PLUGIN_SOURCE/skills/orion/agents/openai.yaml" \
   "$PLUGIN_SOURCE/assets/icon.png" \
-  "$PLUGIN_SOURCE/assets/orion-mark.svg" \
   "$FIXTURE_VAULT"; do
   if [[ ! -f "$required_path" ]]; then
     echo "Required Codex plugin file is missing: $required_path" >&2

@@ -6,6 +6,22 @@ import type { Note } from "../types";
 import { NotesIndex } from "./NotesIndex";
 
 describe("NotesIndex", () => {
+  it("filters by body text and shows the matching passage", () => {
+    render(
+      <NotesIndex
+        notes={[makeNote({ body: `${"Earlier text. ".repeat(80)}An observable regularity settles the question.` })]}
+        onOpenNote={vi.fn()}
+        onDeleteNote={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "Filter notes" }), {
+      target: { value: "observable regularity" },
+    });
+    expect(screen.getByText("Positivism")).toBeVisible();
+    expect(screen.getByText(/An observable regularity settles the question/)).toBeVisible();
+    expect(screen.queryByText("A theory of knowledge.")).not.toBeInTheDocument();
+  });
+
   it("does not expose hidden note kind or status metadata", () => {
     const { container } = render(
       <NotesIndex

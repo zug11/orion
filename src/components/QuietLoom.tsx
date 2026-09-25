@@ -134,7 +134,9 @@ void main() {
       float light = (0.48 + diffuse * 0.6 + fill * 0.28) * shadow;
       vec3 silk = dye * (light * (0.64 + crossing * 0.64) + rim * 0.85);
       silk += mix(dye, vec3(1.0), 0.65) * (specular * 0.8 + shuttle * crossing * 0.32);
-      silk = mix(silk, dye * (0.42 + light * 0.36) + specular * 0.16, uLight * 0.6);
+      vec3 daylightSilk = mix(room, dye, 0.64) * (0.62 + diffuse * shadow * 0.28 + fill * 0.08);
+      daylightSilk = mix(daylightSilk, room, specular * 0.24 + shuttle * crossing * 0.04);
+      silk = mix(silk, daylightSilk, uLight);
       float mist = smoothstep(4.0, 5.2, travel) * 0.45;
       color = mix(silk, room, mist);
     }

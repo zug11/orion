@@ -23,6 +23,54 @@ afterEach(() => {
 });
 
 describe("SettingsView appearance", () => {
+  it("can restore original icons and keep the atmosphere dark independently of the app", () => {
+    const action = vi.fn(async () => undefined);
+    const testKey = vi.fn(async () => ({ valid: true, message: "Connected." }));
+    const onChange = vi.fn();
+    const props = { onChange, onSaveApiKey: action, onDeleteApiKey: action, onTestApiKey: testKey,
+      onSaveAnthropicApiKey: action, onDeleteAnthropicApiKey: action, onTestAnthropicApiKey: testKey,
+      onSaveElevenLabsApiKey: action, onDeleteElevenLabsApiKey: action, onTestElevenLabsApiKey: testKey,
+      onOpenDataLocation: vi.fn(), onEraseVault: vi.fn() };
+    const settings = { ...defaultSettings, theme: "light" as const, homeAtmosphere: "mirage" as const };
+    const { rerender } = render(<SettingsView {...props} settings={settings} />);
+    fireEvent.click(within(screen.getByRole("radiogroup", { name: "Icon colours" })).getByRole("radio", { name: "Original" }));
+    expect(onChange).toHaveBeenLastCalledWith({ ...settings, themeIcon: false });
+    fireEvent.click(screen.getByRole("radio", { name: "Always dark" }));
+    expect(onChange).toHaveBeenLastCalledWith({ ...settings, homeAtmosphereAppearance: "dark" });
+    const changed = { ...settings, homeAtmosphereAppearance: "dark" as const };
+    rerender(<SettingsView {...props} settings={changed} />);
+    const dark = resolveThemePalette(changed, "dark");
+    expect(document.querySelector<HTMLElement>(".atmosphere-preview.mirage")?.style.getPropertyValue("--atmosphere-background")).toBe(dark.canvasDeep);
+    expect(screen.getByRole("radio", { name: "Light" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByRole("radio", { name: "Match theme" }));
+    expect(onChange).toHaveBeenLastCalledWith(settings);
+  });
+
+  it("keeps note font selection out of Settings", () => {
+    const onChange = vi.fn();
+    const action = vi.fn(async () => undefined);
+    const testKey = vi.fn(async () => ({ valid: true, message: "Connected." }));
+    const props = {
+      onChange,
+      onSaveApiKey: action,
+      onDeleteApiKey: action,
+      onTestApiKey: testKey,
+      onSaveAnthropicApiKey: action,
+      onDeleteAnthropicApiKey: action,
+      onTestAnthropicApiKey: testKey,
+      onSaveElevenLabsApiKey: action,
+      onDeleteElevenLabsApiKey: action,
+      onTestElevenLabsApiKey: testKey,
+      onOpenDataLocation: vi.fn(),
+      onEraseVault: vi.fn(),
+    };
+    const settings = { ...defaultSettings, themePreset: "grove" as const };
+    render(<SettingsView {...props} settings={settings} />);
+    expect(screen.queryByRole("group", { name: "Note text" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Note font" })).not.toBeInTheDocument();
+
+  });
+
   it("selects GPT-6 Astra with a supported reasoning depth", () => {
     const onChange = vi.fn();
     const action = vi.fn(async () => undefined);

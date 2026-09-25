@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Settings } from "../types";
+import { useWindowGlass } from "./useWindowGlass";
+import type { WindowGlassStatus } from "./windowGlass";
 import {
   resolveThemeMode,
   resolveThemePalette,
@@ -38,7 +42,9 @@ export function applyResolvedTheme(
 export function useResolvedTheme(settings: Settings): {
   mode: ThemePalette["mode"];
   palette: ThemePalette;
+  glassStatus: WindowGlassStatus | null;
 } {
+  const glassStatus = useWindowGlass(settings.windowGlass);
   const [systemPrefersLight, setSystemPrefersLight] = useState(
     readSystemPrefersLight,
   );
@@ -66,5 +72,16 @@ export function useResolvedTheme(settings: Settings): {
     applyResolvedTheme(palette, settings.themePreset);
   }, [palette, settings.themePreset]);
 
-  return { mode, palette };
+  useEffect(() => {
+    if (!isTauri() || !/Macintosh|Mac OS X/.test(navigator.userAgent)) {
+      return undefined;
+    }
+    // Let macOS own System mode so forcing an appearance cannot stop subsequent
+    // system changes from reaching the WebView's prefers-color-scheme listener.
+    void getCurrentWindow()
+      .setTheme(settings.theme === "system" ? null : settings.theme)
+      .catch(() => console.warn("Orion could not update the native window appearance."));
+  }, [settings.theme]);
+
+  return { mode, palette, glassStatus };
 }

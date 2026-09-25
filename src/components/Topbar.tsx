@@ -54,9 +54,7 @@ export function Topbar({
       </div>
 
       <div className="workspace-crumb" data-tauri-drag-region>
-        <span className="workspace-pulse" data-tauri-drag-region />
         <span data-tauri-drag-region>{workspaceName}</span>
-        <small data-tauri-drag-region>Local</small>
       </div>
 
       <button

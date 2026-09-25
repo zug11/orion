@@ -8,6 +8,7 @@
     "core:window:allow-destroy",
     "core:window:allow-start-dragging",
     "core:window:allow-set-title",
+    "core:window:allow-set-theme",
     "deep-link:default",
     "opener:default",
     "dialog:allow-open"

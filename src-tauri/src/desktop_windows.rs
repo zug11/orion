@@ -175,12 +175,32 @@ pub fn may_exit(app: &AppHandle) -> bool {
     let state = app.state::<DesktopWindows>();
     let mut quit = state.quit.lock().unwrap_or_else(|e| e.into_inner());
     if quit.allowed || quit.ready.is_empty() {
-        return true;
+        drop(quit);
+        return media_ready_to_exit(app);
     }
     let attempt = quit.begin();
     drop(quit);
     if let Some(attempt) = attempt {
         let _ = app.emit("orion-quit-requested", attempt);
+    }
+    false
+}
+
+/// The existing renderer/vault save handshake finishes first. Keep the event
+/// loop alive while native cancellation reaps children and drops their media.
+/// There is no timeout that can force an exit with an owned child still alive.
+fn media_ready_to_exit(app: &AppHandle) -> bool {
+    let jobs = app.state::<crate::media_jobs::MediaJobs>().inner().clone();
+    let first = jobs.start_shutdown();
+    if jobs.is_drained() {
+        return true;
+    }
+    if first {
+        let app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            jobs.wait_until_drained();
+            app.exit(0);
+        });
     }
     false
 }

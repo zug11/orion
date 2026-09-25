@@ -105,6 +105,7 @@ import {
   type LinkedArticleJob,
 } from "./lib/linkedArticle";
 import {
+  applyGeneratedNoteTitle,
   createGeneratePlaceholderNote,
   GenerateRequestRegistry,
   insertImageForSlide,
@@ -183,6 +184,7 @@ import {
   buildSpaceRootRequest,
   pendingSpaceBlueprints,
   prepareSpaceKnowledgeIndex,
+  spaceKnowledgeIsCurrent,
 } from "./lib/spaceKnowledge";
 import {
   createNavigationEntry,
@@ -197,6 +199,8 @@ import {
   type ScrollPosition,
 } from "./lib/navigation";
 import { useResolvedTheme } from "./lib/useResolvedTheme";
+import { useThemeIcon } from "./lib/useThemeIcon";
+import { normalizeWindowGlass } from "./lib/windowGlass";
 import {
   buildWebExportDocument,
   notesForExportScope,
@@ -260,7 +264,7 @@ function App() {
     createEmptyVault(),
   );
   const snapshot = useMemo(() => activeSpace(vault), [vault]);
-  const { palette: resolvedThemePalette } = useResolvedTheme(
+  const { palette: resolvedThemePalette, glassStatus } = useResolvedTheme(
     snapshot.settings,
   );
   const setSnapshot = useCallback(
@@ -288,6 +292,7 @@ function App() {
   const [hydrated, setHydrated] = useState(false);
   const [closing, setClosing] = useState(false);
   const [persistenceEnabled, setPersistenceEnabled] = useState(false);
+  const { mark: brandMarkSrc, message: themeIconMessage } = useThemeIcon(resolvedThemePalette, snapshot.settings.themeIcon, hydrated && persistenceEnabled);
   const [vaultLoadError, setVaultLoadError] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -667,7 +672,8 @@ function App() {
 
   useEffect(() => {
     const localKnowledgeIsCurrent =
-      Boolean(snapshot.spaceKnowledge) && !snapshot.spaceKnowledge?.stale;
+      Boolean(snapshot.spaceKnowledge) && !snapshot.spaceKnowledge?.stale &&
+      spaceKnowledgeIsCurrent(snapshot);
     const providerKnowledgeIsCurrent =
       localKnowledgeIsCurrent &&
       Boolean(snapshot.spaceKnowledge?.blueprints.length) &&
@@ -854,6 +860,9 @@ function App() {
               themeContrast: normalizeThemeContrast(
                 base.settings.themeContrast,
               ),
+              windowGlass: normalizeWindowGlass(base.settings.windowGlass),
+              themeIcon: base.settings.themeIcon ?? defaultSettings.themeIcon,
+              homeAtmosphereAppearance: base.settings.homeAtmosphereAppearance === "dark" ? "dark" as const : "theme" as const,
               homeAtmosphere: normalizeHomeAtmosphere(
                 base.settings.homeAtmosphere,
               ),
@@ -1619,7 +1628,7 @@ function App() {
 
       void (async () => {
         try {
-          let body = await generateFromSpace(snapshotWithNote, {
+          const generated = await generateFromSpace(snapshotWithNote, {
             originNoteId: noteId, kind: input.kind, instruction,
             useSpaceNotes: job.useSpaceNotes,
           }, chatWithOrion, {
@@ -1628,6 +1637,7 @@ function App() {
               stage, progress: stage === "preparing" ? 16 : 28 + Math.round(30 * completed / Math.max(1, total)),
             }),
           });
+          let body = generated.body;
           if (!generateRequests.current.owns(requestKey, jobId)) return;
           if (snapshotRef.current.workspace.id !== job.workspaceId) return;
           const wantsPlates =
@@ -1687,31 +1697,34 @@ function App() {
           if (!generateRequests.current.owns(requestKey, jobId)) return;
           if (snapshotRef.current.workspace.id !== job.workspaceId) return;
           const finishedAt = new Date().toISOString();
-          setSnapshot((current) => ({
-            ...current,
-            notes: current.notes.map((candidate) =>
-              candidate.id === noteId
-                ? {
-                    ...candidate,
-                    body,
-                    summary: candidate.summary,
-                    tags: [
-                      ...new Set([
-                        ...candidate.tags.filter(
-                          (tag) => tag !== "orion-generate-pending",
-                        ),
-                        ...(input.kind === "slide-deck" ||
-                        input.kind === "slide-deck-narrated"
-                          ? [SLIDE_DECK_TAG]
-                          : []),
-                      ]),
-                    ],
-                    updatedAt: finishedAt,
-                  }
-                : candidate,
-            ),
-            updatedAt: finishedAt,
-          }));
+          setSnapshot((current) => {
+            if (current.workspace.id !== job.workspaceId) return current;
+            return reconcileSnapshotConceptVocabulary({
+              ...current,
+              notes: current.notes.map((candidate) =>
+                candidate.id === noteId
+                  ? {
+                      ...applyGeneratedNoteTitle(candidate, title, generated.title),
+                      body,
+                      summary: candidate.summary,
+                      tags: [
+                        ...new Set([
+                          ...candidate.tags.filter(
+                            (tag) => tag !== "orion-generate-pending",
+                          ),
+                          ...(input.kind === "slide-deck" ||
+                          input.kind === "slide-deck-narrated"
+                            ? [SLIDE_DECK_TAG]
+                            : []),
+                        ]),
+                      ],
+                      updatedAt: finishedAt,
+                    }
+                  : candidate,
+              ),
+              updatedAt: finishedAt,
+            });
+          });
           patchJob({ stage: "complete", progress: 100 });
           window.setTimeout(() => {
             setGenerateJobs((current) =>
@@ -3508,6 +3521,10 @@ function App() {
     if (screen === "note" && activeNote) {
       return (
         <NoteView
+          noteTypeface={snapshot.settings.noteTypeface}
+          onNoteTypefaceChange={(noteTypeface) =>
+            updateSettings({ ...snapshot.settings, noteTypeface })
+          }
           note={activeNote}
           notes={snapshot.notes}
           concepts={snapshot.concepts}
@@ -3587,6 +3604,8 @@ function App() {
     if (screen === "settings") {
       return (
         <SettingsView
+          themeIconMessage={themeIconMessage}
+          glassStatus={glassStatus}
           settings={snapshot.settings}
           spaces={vault.spaces.map((space) => space.workspace)}
           assistantJobs={assistantJobs}
@@ -3644,8 +3663,12 @@ function App() {
     .join(" ");
 
   return (
-    <div className={shellClassName}>
+    <div
+      className={shellClassName}
+      data-note-typeface={snapshot.settings.noteTypeface === "serif" ? "serif" : "sans"}
+    >
       <Sidebar
+        brandMarkSrc={brandMarkSrc}
         view={screen === "note" ? "notes" : screen}
         notes={snapshot.notes}
         spaces={vault.spaces}
@@ -3746,6 +3769,7 @@ function App() {
         snapshot={snapshot}
         onClose={() => setCommandOpen(false)}
         onOpenNote={openNote}
+        onOpenSource={setSelectedSourceId}
         onOpenView={openView}
         onOpenConcept={(conceptId) =>
           followConcept(
@@ -3818,13 +3842,13 @@ function App() {
 
       {!hydrated && (
         <div className="loading-veil">
-          <img src="/orion-mark.svg" alt="" />
+          <img src="/orion-mark.png" alt="" />
           <span>Opening your atlas</span>
         </div>
       )}
       {closing && (
         <div className="loading-veil closing-veil" role="status" aria-live="polite">
-          <img src="/orion-mark.svg" alt="" />
+          <img src="/orion-mark.png" alt="" />
           <span>Securing your atlas</span>
         </div>
       )}
@@ -3857,7 +3881,7 @@ function App() {
           }}
         >
           <div className="vault-error-card">
-            <img src="/orion-mark.svg" alt="" />
+            <img src="/orion-mark.png" alt="" />
             <span className="eyebrow neutral">Vault protected</span>
             <strong id="vault-error-title">Orion couldn’t open this atlas</strong>
             <p>{vaultLoadError}</p>

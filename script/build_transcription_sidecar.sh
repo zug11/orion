@@ -24,6 +24,8 @@ case "$WHISPER_MODEL_EDITION" in
     ;;
 esac
 YT_DLP="$TAURI_DIR/binaries/yt-dlp-macos"
+EXPECTED_YT_DLP_VERSION="2026.08.19"
+EXPECTED_YT_DLP_SHA256="0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202"
 DENO="$TAURI_DIR/binaries/deno"
 MODULE_CACHE="${ORION_SWIFT_MODULE_CACHE:-${TMPDIR:-/tmp}/orion-swift-module-cache}"
 
@@ -33,6 +35,17 @@ for required in "$SOURCE" "$FRAMEWORKS/whisper.framework" "$MODEL" "$YT_DLP" "$D
     exit 1
   fi
 done
+
+actual_yt_dlp_sha256="$(shasum -a 256 "$YT_DLP" | awk '{ print $1 }')"
+if [[ "$actual_yt_dlp_sha256" != "$EXPECTED_YT_DLP_SHA256" ]]; then
+  echo "bundled yt-dlp failed SHA-256 verification; restore the pinned upstream artifact" >&2
+  exit 1
+fi
+actual_yt_dlp_version="$("$YT_DLP" --version)"
+if [[ "$actual_yt_dlp_version" != "$EXPECTED_YT_DLP_VERSION" ]]; then
+  echo "bundled yt-dlp version does not match its verified release" >&2
+  exit 1
+fi
 
 actual_model_bytes="$(wc -c <"$MODEL" | tr -d '[:space:]')"
 actual_model_sha256="$(shasum -a 256 "$MODEL" | awk '{ print $1 }')"

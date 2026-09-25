@@ -23,6 +23,9 @@ mod assistant_bridge;
 #[path = "../shared/assistant_protocol.rs"]
 mod assistant_protocol;
 mod desktop_windows;
+mod media_jobs;
+mod theme_icon;
+mod window_glass;
 
 const KEYCHAIN_SERVICE: &str = "app.orion.knowledge";
 const KEYCHAIN_ACCOUNT: &str = "openai-api-key";
@@ -1081,6 +1084,20 @@ struct TranscribedMedia {
     #[serde(skip_serializing_if = "Option::is_none")]
     source_url: Option<String>,
     warnings: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MediaTranscriptionFailure {
+    file_name: String,
+    error: String,
+}
+
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct MediaTranscriptionBatch {
+    transcripts: Vec<TranscribedMedia>,
+    failures: Vec<MediaTranscriptionFailure>,
 }
 
 #[derive(Serialize)]
@@ -6266,6 +6283,26 @@ async fn transcribe_path(
     title_override: Option<String>,
     source_url: Option<String>,
 ) -> Result<TranscribedMedia, String> {
+    transcribe_path_controlled(
+        runtime,
+        config,
+        path,
+        title_override,
+        source_url,
+        &media_jobs::Control::default(),
+    )
+    .await
+}
+
+async fn transcribe_path_controlled(
+    runtime: &TranscriptionRuntime,
+    config: &WhisperConfig,
+    path: &Path,
+    title_override: Option<String>,
+    source_url: Option<String>,
+    control: &media_jobs::Control,
+) -> Result<TranscribedMedia, String> {
+    control.check()?;
     let extension = media_extension(path)
         .ok_or_else(|| "Choose FLAC, M4A, MP3, MP4, MPEG, OGG, WAV, or WebM media.".to_string())?;
     let metadata = fs::metadata(path)
@@ -6284,6 +6321,7 @@ async fn transcribe_path(
     let whisper = runtime.whisper.clone();
     let model = runtime.model.clone();
     let media = path.to_path_buf();
+    let process_control = control.clone();
     let output = tauri::async_runtime::spawn_blocking(move || {
         let run = |use_cpu: bool| {
             let mut command = Command::new(&whisper);
@@ -6298,7 +6336,7 @@ async fn transcribe_path(
             if let Some(language) = language.as_ref() {
                 command.arg("--language").arg(language);
             }
-            command.output()
+            process_control.run(&mut command, media_jobs::TRANSCRIPTION_TIMEOUT)
         };
         let first = run(false)?;
         let gpu_allocation_failed = !first.status.success()
@@ -6310,8 +6348,8 @@ async fn transcribe_path(
         }
     })
     .await
-    .map_err(|error| format!("The offline transcription task could not finish: {error}"))?
-    .map_err(|error| format!("Orion could not start its bundled Whisper engine: {error}"))?;
+    .map_err(|error| format!("The offline transcription task could not finish: {error}"))??;
+    control.check()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let detail = stderr
@@ -6388,8 +6426,13 @@ fn yt_dlp_title(stdout: &[u8]) -> Option<String> {
 #[tauri::command]
 async fn transcribe_media_files(
     app: AppHandle,
+    window: tauri::WebviewWindow,
+    jobs: State<'_, media_jobs::MediaJobs>,
+    request_id: String,
     config: WhisperConfig,
-) -> Result<Vec<TranscribedMedia>, String> {
+) -> Result<MediaTranscriptionBatch, String> {
+    let job = jobs.begin_picker(window.label(), &request_id)?;
+    normalize_transcription_language(config.clone())?;
     let selected = app
         .dialog()
         .file()
@@ -6397,7 +6440,7 @@ async fn transcribe_media_files(
         .add_filter("Audio and video", MEDIA_EXTENSIONS)
         .blocking_pick_files();
     let Some(selected) = selected else {
-        return Ok(Vec::new());
+        return Ok(MediaTranscriptionBatch::default());
     };
     if selected.len() > MAX_MEDIA_FILES {
         return Err(format!(
@@ -6405,13 +6448,67 @@ async fn transcribe_media_files(
         ));
     }
 
-    let runtime = bundled_transcription_runtime(&app)?;
-    let mut transcripts = Vec::with_capacity(selected.len());
-    for selected_path in selected {
-        let path = selected_local_path(selected_path)?;
-        transcripts.push(transcribe_path(&runtime, &config, &path, None, None).await?);
+    // Promote the exact pending control under the registry lock. Cancellation
+    // remains durable for the entire dialog lifetime, without blocking Quit on it.
+    jobs.promote_picker(&job)?;
+    if app.get_webview_window(window.label()).is_none() {
+        return Err("The media import window was closed.".into());
     }
-    Ok(transcripts)
+    let runtime = bundled_transcription_runtime(&app)?;
+    transcribe_media_paths(
+        &runtime,
+        &config,
+        selected.into_iter().map(selected_local_path).collect(),
+        &job.control,
+    )
+    .await
+}
+
+async fn transcribe_media_paths(
+    runtime: &TranscriptionRuntime,
+    config: &WhisperConfig,
+    selected: Vec<Result<PathBuf, String>>,
+    control: &media_jobs::Control,
+) -> Result<MediaTranscriptionBatch, String> {
+    let mut result = MediaTranscriptionBatch::default();
+    for selected_path in selected {
+        control.check_cancelled()?;
+        let path = match selected_path {
+            Ok(path) => path,
+            Err(error) => {
+                result.failures.push(MediaTranscriptionFailure {
+                    file_name: "Selected media".into(),
+                    error,
+                });
+                continue;
+            }
+        };
+        match transcribe_path_controlled(runtime, config, &path, None, None, control).await {
+            Ok(transcript) => result.transcripts.push(transcript),
+            Err(error) => {
+                control.check_cancelled()?;
+                result.failures.push(MediaTranscriptionFailure {
+                    file_name: path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    error,
+                });
+            }
+        }
+    }
+    control.check_cancelled()?;
+    Ok(result)
+}
+
+#[tauri::command]
+fn cancel_media_import(
+    window: tauri::WebviewWindow,
+    jobs: State<'_, media_jobs::MediaJobs>,
+    request_id: String,
+) -> Result<(), String> {
+    jobs.cancel(window.label(), &request_id)
 }
 
 #[tauri::command]
@@ -6533,16 +6630,30 @@ async fn transcribe_voice_memo(
 #[tauri::command]
 async fn transcribe_youtube(
     app: AppHandle,
+    window: tauri::WebviewWindow,
+    jobs: State<'_, media_jobs::MediaJobs>,
+    request_id: String,
     request: YouTubeTranscriptionRequest,
 ) -> Result<TranscribedMedia, String> {
+    let job = jobs.begin(window.label(), &request_id)?;
     let runtime = bundled_transcription_runtime(&app)?;
-    transcribe_youtube_with_runtime(&runtime, request).await
+    transcribe_youtube_controlled(&runtime, request, &job.control).await
 }
 
+#[cfg(test)]
 async fn transcribe_youtube_with_runtime(
     runtime: &TranscriptionRuntime,
     request: YouTubeTranscriptionRequest,
 ) -> Result<TranscribedMedia, String> {
+    transcribe_youtube_controlled(runtime, request, &media_jobs::Control::default()).await
+}
+
+async fn transcribe_youtube_controlled(
+    runtime: &TranscriptionRuntime,
+    request: YouTubeTranscriptionRequest,
+    control: &media_jobs::Control,
+) -> Result<TranscribedMedia, String> {
+    control.check()?;
     validate_whisper_runtime(runtime)?;
     validate_youtube_runtime(runtime)?;
     let config = WhisperConfig {
@@ -6560,38 +6671,40 @@ async fn transcribe_youtube_with_runtime(
     let executable_for_task = runtime.yt_dlp.clone();
     let deno_runtime = format!("deno:{}", runtime.deno.display());
     let youtube_url_for_task = youtube_url.clone();
+    let process_control = control.clone();
     let output = tauri::async_runtime::spawn_blocking(move || {
         let mut command = Command::new(executable_for_task);
-        command
-            .args([
-                "--ignore-config",
-                "--no-playlist",
-                "--no-simulate",
-                "--no-progress",
-                "--no-part",
-                "--restrict-filenames",
-                "--max-filesize",
-                "2G",
-                "--js-runtimes",
-                &deno_runtime,
-                "--format",
-                "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
-                "--output",
-                &output_template,
-                "--print",
-                "{\"title\":%(title)j}",
-                "--",
-                &youtube_url_for_task,
-            ])
-            .output()
+        media_jobs::limit_download_file_size(&mut command, MAX_MEDIA_BYTES);
+        command.args([
+            "--ignore-config",
+            "--no-playlist",
+            "--no-simulate",
+            "--no-progress",
+            "--no-part",
+            "--socket-timeout",
+            "30",
+            "--retries",
+            "2",
+            "--fragment-retries",
+            "2",
+            "--restrict-filenames",
+            "--max-filesize",
+            "2G",
+            "--js-runtimes",
+            &deno_runtime,
+            "--format",
+            "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
+            "--output",
+            &output_template,
+            "--print",
+            "{\"title\":%(title)j}",
+            "--",
+            &youtube_url_for_task,
+        ]);
+        process_control.run(&mut command, media_jobs::DOWNLOAD_TIMEOUT)
     })
     .await
-    .map_err(|error| format!("The yt-dlp download task could not finish: {error}"))?
-    .map_err(|error| {
-        format!(
-            "Orion could not start its bundled yt-dlp executable: {error}. Reinstall Orion if this continues."
-        )
-    })?;
+    .map_err(|error| format!("The yt-dlp download task could not finish: {error}"))??;
     if !output.status.success() {
         let detail: String = String::from_utf8_lossy(&output.stderr)
             .trim()
@@ -6607,7 +6720,15 @@ async fn transcribe_youtube_with_runtime(
 
     let path = downloaded_media(&temporary)?;
     let title = yt_dlp_title(&output.stdout).unwrap_or_else(|| media_title(&path));
-    transcribe_path(runtime, &config, &path, Some(title), Some(youtube_url)).await
+    transcribe_path_controlled(
+        runtime,
+        &config,
+        &path,
+        Some(title),
+        Some(youtube_url),
+        control,
+    )
+    .await
     // `temporary` is dropped here on success and on every error path, deleting the download.
 }
 
@@ -6784,6 +6905,8 @@ pub fn run() {
         .manage(VaultWriteLock::default())
         .manage(desktop_windows::DesktopWindows::default())
         .manage(VoiceMemoWorkers::default())
+        .manage(media_jobs::MediaJobs::default())
+        .manage(theme_icon::ThemeIconState::default())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = desktop_windows::preferred_window(app) {
                 let _ = window.show();
@@ -6807,6 +6930,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             load_vault,
+            window_glass::set_window_glass,
+            theme_icon::set_theme_icon,
             save_vault,
             assistant_bridge::assistant_poll,
             assistant_bridge::assistant_assert_job,
@@ -6843,6 +6968,7 @@ pub fn run() {
             knowledge_reading_cache_put,
             chat,
             transcribe_media_files,
+            cancel_media_import,
             start_voice_memo_session,
             transcribe_voice_memo,
             finish_voice_memo_session,
@@ -6882,6 +7008,9 @@ pub fn run() {
             event: tauri::WindowEvent::Destroyed,
             ..
         } => {
+            app_handle
+                .state::<media_jobs::MediaJobs>()
+                .cancel_owner(&label);
             desktop_windows::destroyed(app_handle, &label);
         }
         _ => {}
@@ -8927,6 +9056,77 @@ mod tests {
 
         assert_eq!(transcript.text, "A local offline transcript.");
         assert_eq!(transcript.file_name, "field-recording.mp3");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn media_batch_keeps_successful_siblings_when_a_file_fails() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = fake_transcription_runtime(
+            &directory,
+            "#!/bin/sh\nprintf 'A recovered transcript.\\n'\n",
+            "#!/bin/sh\nexit 0\n",
+        );
+        let good = directory.path().join("good.mp3");
+        let bad = directory.path().join("empty.mp3");
+        let later = directory.path().join("later.mp3");
+        fs::write(&good, b"audio").unwrap();
+        fs::write(&bad, b"").unwrap();
+        fs::write(&later, b"more audio").unwrap();
+        let batch = tauri::async_runtime::block_on(transcribe_media_paths(
+            &runtime,
+            &WhisperConfig { language: None },
+            vec![Ok(good), Ok(bad), Ok(later)],
+            &media_jobs::Control::default(),
+        ))
+        .unwrap();
+        assert_eq!(batch.transcripts.len(), 2);
+        assert_eq!(batch.transcripts[0].file_name, "good.mp3");
+        assert_eq!(batch.transcripts[1].file_name, "later.mp3");
+        assert_eq!(batch.failures.len(), 1);
+        assert_eq!(batch.failures[0].file_name, "empty.mp3");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn media_batch_retains_completed_files_after_its_overall_deadline() {
+        let directory = tempfile::tempdir().unwrap();
+        let second_started = directory.path().join("second-started");
+        let script = format!("#!/bin/sh\ncase \"$*\" in *slow.mp3*) touch '{}' ; sleep 10 ;; esac\nprintf 'Completed transcript.\\n'\n", second_started.display());
+        let runtime = fake_transcription_runtime(&directory, &script, "#!/bin/sh\nexit 0\n");
+        let paths: Vec<_> = ["good.mp3", "slow.mp3", "later.mp3"]
+            .iter()
+            .map(|name| {
+                let path = directory.path().join(name);
+                fs::write(&path, b"audio").unwrap();
+                Ok(path)
+            })
+            .collect();
+        let control = media_jobs::Control::default();
+        let clock = control.clone();
+        let expire = std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            while !second_started.exists() && started.elapsed() < Duration::from_secs(10) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert!(second_started.exists(), "The second recording never began");
+            clock.expire_for_test();
+        });
+        let batch = tauri::async_runtime::block_on(transcribe_media_paths(
+            &runtime,
+            &WhisperConfig { language: None },
+            paths,
+            &control,
+        ))
+        .unwrap();
+        expire.join().unwrap();
+        assert_eq!(batch.transcripts.len(), 1);
+        assert_eq!(batch.transcripts[0].file_name, "good.mp3");
+        assert_eq!(batch.failures.len(), 2);
+        assert!(batch
+            .failures
+            .iter()
+            .all(|failure| failure.error.contains("limit")));
     }
 
     #[cfg(unix)]

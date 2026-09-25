@@ -17,6 +17,7 @@ import {
 import type { AppSnapshot } from "../types";
 
 interface SpaceSwitcherProps {
+  brandMarkSrc?: string;
   spaces: readonly AppSnapshot[];
   activeSpaceId: string;
   onCreateSpace: (name: string) => void;
@@ -42,6 +43,7 @@ function spaceColor(spaceId: string): string {
 }
 
 export function SpaceSwitcher({
+  brandMarkSrc = "/orion-symbol.png",
   spaces,
   activeSpaceId,
   onCreateSpace,
@@ -143,13 +145,13 @@ export function SpaceSwitcher({
           className="space-switcher-mark"
           style={{ "--space-color": spaceColor(activeSpace.workspace.id) } as CSSProperties}
         >
-          <img src="/orion-mark.svg" alt="" />
+          <img src={brandMarkSrc} alt="" />
         </span>
         <span className="space-switcher-copy">
           <strong>{activeSpace.workspace.name}</strong>
           <small>
             {activeSpace.notes.length}{" "}
-            {activeSpace.notes.length === 1 ? "note" : "notes"} · Orion space
+            {activeSpace.notes.length === 1 ? "note" : "notes"}
           </small>
         </span>
         <ChevronDown

@@ -54,8 +54,10 @@ import {
   type SpeechPlaybackProgress,
 } from "../lib/speech";
 import { canonicalizeSourceCitations } from "../lib/sourceCitations";
+import { savedChatEvidence } from "../lib/chatCitations";
+import { CitedPassage } from "./CitedPassage";
 import { decorateAutoLinks } from "../lib/wiki";
-import type { Concept, Note, Source } from "../types";
+import type { Concept, Note, NoteTypeface, Source } from "../types";
 import { isGeneratePlaceholder } from "../lib/generate";
 import {
   buildDeckPlaybackCues,
@@ -79,6 +81,8 @@ const RichNoteEditor = lazy(() =>
 const EMPTY_SOURCES: readonly Source[] = [];
 
 interface NoteViewProps {
+  noteTypeface?: NoteTypeface;
+  onNoteTypefaceChange?: (typeface: NoteTypeface) => void;
   note: Note;
   notes: Note[];
   concepts: Concept[];
@@ -120,6 +124,7 @@ function safeUrl(url: string) {
     url.startsWith("orion-note://") ||
     url.startsWith("orion-concept://") ||
     url.startsWith("orion-source://") ||
+    /^#orion-passage-e[1-9]\d{0,3}$/.test(url) ||
     /^https?:\/\//i.test(url) ||
     /^mailto:/i.test(url)
   ) {
@@ -129,6 +134,8 @@ function safeUrl(url: string) {
 }
 
 export function NoteView({
+  noteTypeface = "sans",
+  onNoteTypefaceChange,
   note,
   notes,
   concepts,
@@ -174,6 +181,24 @@ export function NoteView({
   const findInputRef = useRef<HTMLInputElement>(null);
   const findScopeRef = useRef<HTMLElement>(null);
   const dirtyEditingRef = useRef(false);
+  const [selectedPassageId, setSelectedPassageId] = useState<string | null>(null);
+  const passageTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const restorePassageFocusRef = useRef<string | null>(null);
+  const retainedPassages = useMemo(() => savedChatEvidence(note.body), [note.body]);
+  const selectedPassage = retainedPassages.find((item) => item.id === selectedPassageId);
+  const passagePanelId = `note-evidence-${note.id}`;
+  useEffect(() => setSelectedPassageId(null), [note.id]);
+  useLayoutEffect(() => {
+    const id = restorePassageFocusRef.current;
+    if (!id || selectedPassageId !== null) return;
+    restorePassageFocusRef.current = null;
+    findScopeRef.current?.querySelector<HTMLButtonElement>(`[data-saved-passage="${id}"]`)?.focus({ preventScroll: true });
+  }, [selectedPassageId]);
+  const closePassage = () => {
+    restorePassageFocusRef.current = selectedPassageId;
+    setSelectedPassageId(null);
+    passageTriggerRef.current?.focus({ preventScroll: true });
+  };
   const savedPulseTimerRef = useRef<number | null>(null);
   const markdown = useMemo(
     () => {
@@ -867,6 +892,16 @@ export function NoteView({
       </blockquote>
     ),
     a: ({ href, children }: { href?: string; children?: ReactNode }) => {
+      if (href?.startsWith("#orion-passage-")) {
+        const passage = retainedPassages.find((item) => href === `#orion-passage-${item.id}`);
+        if (!passage) return <span>{children}</span>;
+        return <button type="button" className="chat-citation" data-saved-passage={passage.id} aria-label={`Read citation: ${passage.title}`}
+          aria-expanded={selectedPassageId === passage.id} aria-controls={passagePanelId}
+          onClick={(event) => {
+            passageTriggerRef.current = event.currentTarget;
+            setSelectedPassageId(selectedPassageId === passage.id ? null : passage.id);
+          }}>{children}</button>;
+      }
       if (href?.startsWith("orion-note://")) {
         const noteId = href.slice("orion-note://".length);
         return (
@@ -1160,6 +1195,8 @@ export function NoteView({
             }
           >
             <RichNoteEditor
+              noteTypeface={noteTypeface}
+              onNoteTypefaceChange={onNoteTypefaceChange}
               key={note.id}
               noteId={note.id}
               markdown={markdown}
@@ -1207,6 +1244,8 @@ export function NoteView({
             >
               {visibleMarkdown}
             </ReactMarkdown>
+            {selectedPassage && <CitedPassage evidence={selectedPassage} notes={notes} sources={sources}
+              panelId={passagePanelId} savedWith="note" onClose={closePassage} onOpenNote={onOpenNote} onOpenSource={onOpenSource} />}
             <SourceReferences
               references={citationDocument.references}
               onOpenSource={onOpenSource}

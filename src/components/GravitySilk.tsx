@@ -35,7 +35,9 @@ void main() {
   vec3 energy = dye * (0.07 + diffuse * 0.32 + rim * 1.25
     + threads * threadDetail * (0.04 + sheen * 0.12));
   energy += mix(dye, uTertiary, 0.4) * sheen * 0.85;
-  gl_FragColor = finishAtmosphere(uv, energy);
+  gl_FragColor = uLight > 0.5
+    ? finishDaylightSurface(uv, dye, diffuse * (0.96 + threads * threadDetail * 0.04), sheen + rim * 0.1, 0.94)
+    : finishAtmosphere(uv, energy);
 }
 `;
 

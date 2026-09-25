@@ -826,10 +826,13 @@ pub fn assistant_cancel(
 #[tauri::command]
 pub async fn assistant_read_input(
     app: AppHandle,
+    window: tauri::WebviewWindow,
+    media_jobs: State<'_, crate::media_jobs::MediaJobs>,
     bridge: State<'_, AssistantBridge>,
     job_id: String,
     session_id: String,
     index: usize,
+    media_request_id: Option<String>,
 ) -> Result<Value, String> {
     use base64::Engine as _;
     let request = bridge.assert_running(&job_id, &session_id)?;
@@ -847,6 +850,9 @@ pub async fn assistant_read_input(
         return Err("Choose a nonempty regular file.".into());
     }
     if crate::media_extension(&path).is_some() {
+        let media_request_id =
+            media_request_id.ok_or("The media import request identifier is missing.")?;
+        let media_job = media_jobs.begin(window.label(), &media_request_id)?;
         let vault = read_vault(&bridge.path)?;
         let config = crate::WhisperConfig {
             language: space(&vault, &request.space_id)?["settings"]["whisperLanguage"]
@@ -854,7 +860,15 @@ pub async fn assistant_read_input(
                 .map(str::to_owned),
         };
         let runtime = crate::bundled_transcription_runtime(&app)?;
-        let transcript = crate::transcribe_path(&runtime, &config, &path, None, None).await?;
+        let transcript = crate::transcribe_path_controlled(
+            &runtime,
+            &config,
+            &path,
+            None,
+            None,
+            &media_job.control,
+        )
+        .await?;
         bridge.assert_running(&job_id, &session_id)?;
         return Ok(json!({"kind":"transcript","transcript":transcript}));
     }

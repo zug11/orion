@@ -18,13 +18,16 @@ import {
   type KeyboardEvent,
 } from "react";
 import type { AppSnapshot } from "../types";
+import { searchLocalSpace } from "../lib/localSearch";
 import type { WorkspaceView } from "./Sidebar";
+import "./LocalSearch.css";
 
 interface CommandPaletteProps {
   open: boolean;
   snapshot: AppSnapshot;
   onClose: () => void;
   onOpenNote: (noteId: string) => void;
+  onOpenSource: (sourceId: string) => void;
   onOpenView: (view: WorkspaceView) => void;
   onOpenConcept: (conceptId: string) => void;
   onNewNote: () => void;
@@ -80,6 +83,7 @@ export function CommandPalette({
   snapshot,
   onClose,
   onOpenNote,
+  onOpenSource,
   onOpenView,
   onOpenConcept,
   onNewNote,
@@ -91,6 +95,7 @@ export function CommandPalette({
   const dialogRef = useRef<HTMLDivElement>(null);
 
   const results = useMemo<PaletteResult[]>(() => {
+    if (!open) return [];
     const actions: PaletteResult[] = [
       {
         id: "action-new",
@@ -124,52 +129,31 @@ export function CommandPalette({
     const needle = query.trim().toLocaleLowerCase();
     if (!needle) return actions;
 
-    const notes: PaletteResult[] = snapshot.notes
-      .filter((note) =>
-        [note.title, note.summary, ...note.tags, ...note.aliases]
-          .join(" ")
-          .toLocaleLowerCase()
-          .includes(needle),
-      )
-      .map((note) => ({
-        id: note.id,
-        title: note.title,
-        subtitle: note.summary,
-        type: "note",
-        action: () => onOpenNote(note.id),
-      }));
-    const concepts: PaletteResult[] = snapshot.concepts
-      .filter((concept) =>
-        `${concept.label} ${concept.aliases.join(" ")} ${concept.description}`
-          .toLocaleLowerCase()
-          .includes(needle),
-      )
-      .map((concept) => ({
-        id: concept.id,
-        title: concept.label,
-        subtitle: `${concept.noteIds.length} linked notes · ${concept.description}`,
-        type: "concept",
-        action: () => onOpenConcept(concept.id),
-      }));
-    const sources: PaletteResult[] = snapshot.sources
-      .filter((source) =>
-        source.title.toLocaleLowerCase().includes(needle),
-      )
-      .map((source) => ({
-        id: source.id,
-        title: source.title,
-        subtitle: `${source.kind.toUpperCase()} · ${source.noteIds.length} connected notes`,
-        type: "source",
-        action: () => onOpenView("sources"),
-      }));
-    return [...notes, ...concepts, ...sources, ...actions.filter((action) =>
+    const knowledge: PaletteResult[] = searchLocalSpace(snapshot, query).map((match) => ({
+      id: match.item.id,
+      title: match.type === "concept" ? match.item.label : match.item.title,
+      subtitle: match.type === "source"
+        ? `${match.item.kind.toUpperCase()} · ${match.snippet}`
+        : match.type === "concept"
+          ? `${match.item.noteIds.length} linked notes · ${match.snippet}`
+          : match.snippet,
+      type: match.type,
+      action: () => {
+        if (match.type === "source") onOpenSource(match.item.id);
+        else if (match.type === "concept") onOpenConcept(match.item.id);
+        else onOpenNote(match.item.id);
+      },
+    }));
+    return [...knowledge, ...actions.filter((action) =>
       `${action.title} ${action.subtitle}`.toLocaleLowerCase().includes(needle),
     )].slice(0, 12);
   }, [
+    open,
     onImport,
     onNewNote,
     onOpenConcept,
     onOpenNote,
+    onOpenSource,
     onOpenView,
     query,
     snapshot.concepts,
@@ -274,7 +258,9 @@ export function CommandPalette({
                 </i>
                 <span>
                   <strong>{result.title}</strong>
-                  <small>{result.subtitle}</small>
+                  <small className={result.type !== "action" ? "local-search-excerpt" : undefined}>
+                    {result.subtitle}
+                  </small>
                 </span>
                 {selected === index && <CornerDownLeft size={14} />}
               </button>
@@ -284,7 +270,7 @@ export function CommandPalette({
             <div className="command-empty">
               <Search size={22} />
               <strong>No star in that direction</strong>
-              <span>Try a title, alias, tag, or source name.</span>
+              <span>Try a title, alias, tag, or words inside a note or source.</span>
             </div>
           )}
         </div>

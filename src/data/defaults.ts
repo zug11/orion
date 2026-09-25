@@ -15,6 +15,7 @@ import type {
   ThemeTextWarmth,
 } from "../types";
 import { createEmptyStudio } from "../lib/studio";
+import { defaultWindowGlass } from "../lib/windowGlass";
 
 export const defaultSettings: Settings = {
   assistantAccess: { enabled: false, allowAI: false, allowWrites: false, spaceIds: [] },
@@ -44,6 +45,10 @@ export const defaultSettings: Settings = {
   themeSurfaceCustom: "",
   themeTextWarmth: "neutral",
   themeContrast: "balanced",
+  noteTypeface: "sans",
+  windowGlass: { ...defaultWindowGlass },
+  themeIcon: true,
+  homeAtmosphereAppearance: "theme",
   homeAtmosphere: "field",
   homeAtmosphereTone: "signature",
   homeAtmosphereCustomColor: "",

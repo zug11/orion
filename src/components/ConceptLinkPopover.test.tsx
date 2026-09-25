@@ -127,6 +127,33 @@ describe("ConceptLinkPopover", () => {
     expect(onGenerateTitle).not.toHaveBeenCalled();
   });
 
+  it("optionally names a short selection even when it already fills the title field", async () => {
+    const onSubmit = vi.fn();
+    const onGenerateTitle = vi.fn().mockResolvedValue("Deleuze and Becoming");
+    render(<ConceptLinkPopover initialPhrase="becoming" selectedText="becoming" selectionMode="inline"
+      initialDestinationIds={[]} currentNoteId="note-current" notes={[makeNote("note-current", "Project notes")]}
+      aiArticleWritingEnabled onGenerateTitle={onGenerateTitle} onCancel={vi.fn()} onSubmit={onSubmit} />);
+    const toggle = screen.getByRole("checkbox", { name: "Generate title with AI" });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    expect(screen.getByLabelText("Page title")).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Name & generate article" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("Deleuze and Becoming", [], { articleMode: "ai" }));
+    expect(onGenerateTitle).toHaveBeenCalledWith("becoming", expect.any(AbortSignal));
+  });
+
+  it("keeps the user's title when AI naming is unchecked again", () => {
+    const onSubmit = vi.fn(); const onGenerateTitle = vi.fn();
+    render(<ConceptLinkPopover initialPhrase="Becoming" selectedText="becoming" selectionMode="inline"
+      initialDestinationIds={[]} currentNoteId="note-current" notes={[makeNote("note-current", "Project notes")]}
+      aiArticleWritingEnabled onGenerateTitle={onGenerateTitle} onCancel={vi.fn()} onSubmit={onSubmit} />);
+    const toggle = screen.getByRole("checkbox", { name: "Generate title with AI" });
+    fireEvent.click(toggle); fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole("button", { name: "Generate article" }));
+    expect(onGenerateTitle).not.toHaveBeenCalled();
+    expect(onSubmit).toHaveBeenCalledWith("Becoming", [], { articleMode: "ai" });
+  });
+
   it("lets AI name a large selection before creating its article", async () => {
     const onSubmit = vi.fn();
     const onGenerateTitle = vi.fn().mockResolvedValue("Permission model");

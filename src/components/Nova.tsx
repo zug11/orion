@@ -109,8 +109,9 @@ void main() {
   float rayGlow = exp(-abs(flare.y) * 24.0) * exp(-abs(flare.x) * 1.7);
   energy += spectrum(t * 0.12) * rayGlow * (0.18 + pulse * 0.1);
   vec3 radiance = 1.0 - exp(-energy * 1.6);
-  float ink = 1.0 - exp(-length(energy) * 0.65);
-  vec3 lightRoom = mix(room, spectrum(r - t * 0.12), ink * 0.84);
+  float ink = 1.0 - exp(-length(energy) * 1.35);
+  vec3 pigment = mix(room * 0.7, spectrum(r - t * 0.12), 0.65);
+  vec3 lightRoom = mix(room, pigment, ink * 0.9);
   vec3 color = mix(room + radiance, lightRoom, uLight);
   float edge = smoothstep(0.0, 0.12, uv.x)
     * (1.0 - smoothstep(0.93, 1.0, uv.x))

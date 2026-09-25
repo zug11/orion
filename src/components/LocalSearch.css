@@ -1,0 +1,8 @@
+.command-results small.local-search-excerpt,
+.source-title-cell small.local-search-excerpt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

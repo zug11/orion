@@ -6,7 +6,7 @@ import type {
   SpaceOverview,
 } from "../types";
 import { decorateAutoLinks, resolveConceptDestination } from "./wiki";
-import { stableKnowledgeHash } from "./spaceKnowledge";
+import { isKnowledgeNote, spaceNoteSummary, SPACE_OVERVIEW_WRITING_GUIDANCE, stableKnowledgeHash } from "./spaceKnowledge";
 
 const MAX_NOTES = 64;
 const MAX_SOURCES = 24;
@@ -22,16 +22,7 @@ const MAX_OVERVIEW_CONTEXT_NOTES = 8;
 export function hasSubstantiveOverviewNote(
   note: AppSnapshot["notes"][number],
 ): boolean {
-  if (
-    note.status === "archived" ||
-    note.tags.includes("orion-link-pending") ||
-    note.tags.includes("orion-link-draft") ||
-    /<!--\s*orion-link-(?:pending|draft)\s*-->/i.test(note.body)
-  ) {
-    return false;
-  }
-  const content = `${note.summary.trim()} ${plainText(note.body)}`.trim();
-  return content.length >= 24;
+  return isKnowledgeNote(note);
 }
 
 export function markSpaceOverviewStale(snapshot: AppSnapshot): AppSnapshot {
@@ -114,8 +105,8 @@ export function buildSpaceOverviewRequest(
       const body = plainText(note.body).slice(0, MAX_NOTE_BODY_CHARS);
       return [
         `## ${note.title}`,
-        note.summary.trim(),
-        body && body !== note.summary.trim() ? body : "",
+        spaceNoteSummary(note),
+        body && body !== spaceNoteSummary(note) ? body : "",
       ]
         .filter(Boolean)
         .join("\n");
@@ -161,7 +152,7 @@ export function buildSpaceOverviewRequest(
     effort: snapshot.settings.reasoningEffort,
     timeoutMs: 90_000,
     taskInstructions:
-      "Space-overview task: return exactly one entry in notes and return empty wikiArticles, concepts, and suggestedConnections arrays. Write it as a compact note in its own right. The note title must be a concise, editorial headline that captures the Space's live intellectual centre, not a generic label such as ‘Space summary’; it may be long enough to wrap naturally across two or three lines. The body must be a cohesive orientation of roughly five to eight compact paragraphs (usually 450–700 words): explain the central material, the most meaningful relationships, tensions or open questions, and the direction of current work. It is an overview, not a source inventory or change log. Never use headings named ‘Context from’, never invent facts, and never use [[wiki-link]] brackets. Preserve a worthwhile prior title unless the Space's centre has genuinely shifted.",
+      `Space-overview task: return exactly one entry in notes and return empty wikiArticles, concepts, and suggestedConnections arrays. Write it as a compact note in its own right. The note title must be a concise, editorial headline that captures the Space's live intellectual centre, not a generic label such as ‘Space summary’; it may be long enough to wrap naturally across two or three lines. Explain the central material and any supported relationships, tensions, open questions, or direction of work. ${SPACE_OVERVIEW_WRITING_GUIDANCE} It is an overview, not a source inventory or change log. Never use headings named ‘Context from’, never invent facts, and never use [[wiki-link]] brackets. Preserve a worthwhile prior title unless the Space's centre has genuinely shifted.`,
     organizationInstructions:
       snapshot.settings.organizationInstructions,
   };
@@ -206,7 +197,7 @@ export function buildLocalSpaceOverview(snapshot: AppSnapshot): SpaceOverview {
   const noteNames = recent.map((note) => note.title);
   const noteOrientations = recent
     .map((note) => {
-      const summary = plainText(note.summary);
+      const summary = spaceNoteSummary(note);
       const body = plainText(note.body);
       const bodyAddsContext =
         body && (!summary || !normalize(body).includes(normalize(summary)));

@@ -5,7 +5,7 @@ import {
 } from "./markdown";
 
 const SOURCE_LINK_PATTERN =
-  /\[((?:\\.|[^\]\\])*)\]\(orion-source:\/\/([^) \t\r\n]+)\)/g;
+  /\[((?:\\.|[^\[\]\\\r\n])*)\]\(orion-source:\/\/([^) \t\r\n]+)\)/g;
 const REFERENCE_HEADING_PATTERN = /^ {0,3}##[ \t]+References[ \t]*\r?$/gm;
 const REFERENCE_ITEM_PATTERN =
   /^\s*\d+\.\s+\[((?:\\.|[^\]\\])*)\]\(orion-source:\/\/([^) \t\r\n]+)\)\s*$/;

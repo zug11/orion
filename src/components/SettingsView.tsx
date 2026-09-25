@@ -20,6 +20,8 @@ import {
 } from "../lib/icons";
 import { useEffect, useState, type CSSProperties } from "react";
 import { SavedVoicesSetting } from "./SavedVoicesSetting";
+import { WindowGlassSetting } from "./WindowGlassSetting";
+import type { WindowGlassStatus } from "../lib/windowGlass";
 import { AssistantConnections } from "./AssistantConnections";
 import type { AssistantJob } from "../lib/assistant/types";
 import type { WorkspaceInfo } from "../types";
@@ -28,6 +30,7 @@ import {
   atmosphereMotionOptions,
   atmosphereToneOptions,
   resolveAtmospherePalette,
+  resolveAtmosphereTheme,
 } from "../lib/homeAtmosphere";
 import {
   resolveThemeMode,
@@ -126,7 +129,9 @@ function ThemeColorOverride({
 }
 
 interface SettingsViewProps {
+  themeIconMessage?: string | null;
   settings: Settings;
+  glassStatus?: WindowGlassStatus | null;
   spaces?: WorkspaceInfo[];
   assistantJobs?: AssistantJob[];
   onCancelAssistantJob?: (job: AssistantJob) => Promise<void>;
@@ -265,7 +270,9 @@ const atmosphereOptions: Array<{
 ];
 
 export function SettingsView({
+  themeIconMessage,
   settings,
+  glassStatus,
   spaces = [],
   assistantJobs = [],
   onCancelAssistantJob,
@@ -328,10 +335,11 @@ export function SettingsView({
   );
   const activeThemePalette =
     themePalette ?? resolveThemePalette(settings, previewMode);
+  const atmosphereTheme = resolveAtmosphereTheme(settings, activeThemePalette);
   const activeAtmospherePalette = resolveAtmospherePalette(
     settings.homeAtmosphere,
     settings.homeAtmosphereTone,
-    activeThemePalette,
+    atmosphereTheme,
     settings.homeAtmosphereCustomColor,
     settings.homeAtmosphereCustomSecondaryColor,
   );
@@ -1571,6 +1579,22 @@ export function SettingsView({
                 </div>
               </div>
             </div>
+            <WindowGlassSetting value={settings.windowGlass} status={glassStatus} onChange={(windowGlass) => patch({ windowGlass })} />
+            <div className="setting-card icon-colour-setting">
+              <div className="setting-row">
+                <span>
+                  <strong>Icon colours</strong>
+                  <small>Match the O, Dock, and Finder icon to your theme. Original restores Orion’s colours.</small>
+                  {themeIconMessage && <small className="icon-colour-status" role="status">{themeIconMessage}</small>}
+                </span>
+                <ThemeChoiceGroup
+                  label="Icon colours"
+                  options={[{ id: "original", name: "Original" }, { id: "theme", name: "Theme" }]}
+                  value={settings.themeIcon ? "theme" : "original"}
+                  onSelect={(value) => patch({ themeIcon: value === "theme" })}
+                />
+              </div>
+            </div>
             <div className="setting-card atmosphere-setting">
               <div className="setting-row vertical">
                 <span>
@@ -1588,7 +1612,7 @@ export function SettingsView({
                     const previewPalette = resolveAtmospherePalette(
                       option.id,
                       settings.homeAtmosphereTone,
-                      activeThemePalette,
+                      atmosphereTheme,
                       settings.homeAtmosphereCustomColor,
                       settings.homeAtmosphereCustomSecondaryColor,
                     );
@@ -1645,6 +1669,18 @@ export function SettingsView({
                   className="atmosphere-tuner"
                   aria-label="Atmosphere tuning"
                 >
+                  <div className="atmosphere-tuner-row">
+                    <span>
+                      <strong>Appearance</strong>
+                      <small>Daylight colours or a dark backdrop in every mode</small>
+                    </span>
+                    <ThemeChoiceGroup
+                      label="Atmosphere appearance"
+                      options={[{ id: "theme", name: "Match theme" }, { id: "dark", name: "Always dark" }]}
+                      value={settings.homeAtmosphereAppearance ?? "theme"}
+                      onSelect={(homeAtmosphereAppearance) => patch({ homeAtmosphereAppearance })}
+                    />
+                  </div>
                   <div className="atmosphere-tuner-row atmosphere-tuner-row--accent">
                     <span>
                       <strong>Colours</strong>
@@ -1659,7 +1695,7 @@ export function SettingsView({
                           const color = resolveAtmospherePalette(
                             settings.homeAtmosphere,
                             option.id,
-                            activeThemePalette,
+                            atmosphereTheme,
                           ).primary;
                           return (
                             <button

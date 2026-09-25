@@ -12,6 +12,7 @@ import { reconcileConceptVocabulary } from "./concepts";
 import { normalizeStudio } from "./studio";
 import { truncateUnicode } from "./text";
 import { portableChatEvidence } from "./chatCitations";
+import { normalizeSourceEvidenceVersions } from "./evidenceVersions";
 import { isChatCoverage, isChatEvidence, MAX_CHAT_EVIDENCE } from "./chatReadingProtocol";
 
 export const MAX_CHAT_NOTE_ACTIONS = 3;
@@ -114,14 +115,14 @@ export function applyChatResult(
   noteIdFactory: () => string = messageIdFactory,
 ): AppSnapshot {
   const studio = normalizeStudio(snapshot.studio);
-  const evidence = (result.evidence ?? []).filter(isChatEvidence).filter((item) =>
+  const evidence = normalizeSourceEvidenceVersions((result.evidence ?? []).filter(isChatEvidence).filter((item) =>
     (item.kind === "note" ? snapshot.notes : snapshot.sources).some((entity) => entity.id === item.entityId),
-  ).slice(0, MAX_CHAT_EVIDENCE);
+  ).slice(0, MAX_CHAT_EVIDENCE), snapshot.sources);
   const noteActions = chatPromptAllowsNoteCreation(prompt)
     ? normalizeChatNoteActions(result.noteActions)
     : [];
   const createdNotes = noteActions.map((action) =>
-    attachChatSourceIds(chatNoteFromAction(action, now, noteIdFactory()), evidence, snapshot),
+    attachChatSourceIds(chatNoteFromAction({ ...action, body: portableChatEvidence(action.body, evidence) }, now, noteIdFactory()), evidence, snapshot),
   );
   const createdNoteIds = createdNotes.map((note) => note.id);
   const messages: StudioMessage[] = [
@@ -184,8 +185,9 @@ export function saveChatReplyAsNote(
   }
 
   const action = chatActionFromReply(message.content);
-  action.body = portableChatEvidence(action.body, message.evidence ?? []);
-  const note = attachChatSourceIds(chatNoteFromAction(action, now, noteId), message.evidence ?? [], snapshot);
+  const evidence = normalizeSourceEvidenceVersions((message.evidence ?? []).filter(isChatEvidence).slice(0, MAX_CHAT_EVIDENCE), snapshot.sources);
+  action.body = portableChatEvidence(action.body, evidence);
+  const note = attachChatSourceIds(chatNoteFromAction(action, now, noteId), evidence, snapshot);
   const vocabulary = reconcileConceptVocabulary(
     [note, ...snapshot.notes],
     snapshot.concepts,
@@ -199,7 +201,7 @@ export function saveChatReplyAsNote(
       ...studio,
       messages: studio.messages.map((candidate) =>
         candidate.id === messageId
-          ? { ...candidate, createdNoteIds: [noteId] }
+          ? { ...candidate, ...(evidence.length ? { evidence } : {}), createdNoteIds: [noteId] }
           : candidate,
       ),
     },

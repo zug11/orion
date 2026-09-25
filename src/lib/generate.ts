@@ -1,4 +1,6 @@
 import { nanoid } from "nanoid";
+import { slugifyTitle } from "../data/defaults";
+import { normalizeAIWritingReply } from "./aiWriting";
 import type { AppSnapshot, ChatRequest, Note } from "../types";
 import { SLIDE_DECK_TAG } from "./slideDeck";
 import { buildGenerationContext, generationNoteEvidence } from "./generationContext";
@@ -152,7 +154,7 @@ export function writingPromptForGenerateKind(
   if (kind === "note") {
     return [
       ...shared,
-      "Write a durable, editorial article with a clear title heading omitted (the note already has a title). Use short sections only when they help.",
+      "Begin with exactly one # title heading, followed by the complete Markdown article. Choose a concise editorial title of at most 120 characters that names the subject. For example, ‘write an article about Deleuze’ should produce a title such as ‘Gilles Deleuze: Difference and Becoming’, never the instruction itself. The placeholder title is not a final title. Orion will use this first heading as the note title and remove it from the body. Use short sections only when they help.",
     ].join("\n\n");
   }
   if (kind === "podcast") {
@@ -210,6 +212,27 @@ export function buildGenerateWritingRequest(
     model: snapshot.settings.model,
     effort: snapshot.settings.reasoningEffort,
   };
+}
+
+export interface GeneratedContent {
+  body: string;
+  title?: string;
+}
+
+export function parseGeneratedNote(reply: string): GeneratedContent & { title: string } {
+  const markdown = normalizeAIWritingReply(reply);
+  const match = markdown.match(/^# ([^\n]+)\n+([\s\S]+)$/);
+  const title = match?.[1].replace(/\s+#+\s*$/, "").trim() ?? "";
+  if (!title || [...title].length > 120) {
+    throw new Error("Orion did not return a usable article title. Retry generation.");
+  }
+  return { title, body: normalizeAIWritingReply(match![2]) };
+}
+
+/** Keep a title the user edited while the writing request was running. */
+export function applyGeneratedNoteTitle(note: Note, originalTitle: string, title?: string): Note {
+  if (!title || note.title !== originalTitle) return note;
+  return { ...note, title, slug: slugifyTitle(title) || note.slug };
 }
 
 export function extractSlideHeadings(markdown: string): string[] {

@@ -7,6 +7,37 @@ import { resolveThemePalette } from "../lib/theme";
 import { HomeView } from "./HomeView";
 
 describe("HomeView atmosphere", () => {
+  it("shows a local summary for one short note with or without AI configured", () => {
+    const snapshot = createEmptySnapshot("Research");
+    snapshot.notes = [{
+      id: "brief", title: "Database", slug: "database", body: "Use PostgreSQL.", summary: "",
+      aliases: [], tags: [], kind: "article", status: "ready", conceptIds: [], sourceIds: [],
+      createdAt: snapshot.updatedAt, updatedAt: snapshot.updatedAt,
+    }];
+    const props = { onOpenNote: vi.fn(), onOpenConcept: vi.fn(), onNewNote: vi.fn(), onImport: vi.fn(),
+      onOpenNotes: vi.fn(), onToggleTask: vi.fn(), onRefreshOverview: vi.fn() };
+    const { rerender } = render(<HomeView {...props} snapshot={snapshot} />);
+    expect(document.querySelector(".space-overview-body")).toHaveTextContent("Use PostgreSQL.");
+    expect(screen.getByText("Based on your notes · Updated locally")).toBeVisible();
+    rerender(<HomeView {...props} snapshot={{ ...snapshot, settings: { ...snapshot.settings, apiKeyConfigured: true } }} overviewBusy />);
+    expect(document.querySelector(".space-overview-body")).toHaveTextContent("Use PostgreSQL.");
+    expect(screen.getByText("Revising with the latest context…")).toBeVisible();
+  });
+
+  it("keeps hero copy readable when a light app has an always-dark atmosphere", () => {
+    const snapshot = createEmptySnapshot();
+    snapshot.settings = { ...snapshot.settings, theme: "light", homeAtmosphereAppearance: "dark" };
+    const light = resolveThemePalette(snapshot.settings, "light");
+    const dark = resolveThemePalette(snapshot.settings, "dark");
+    render(<HomeView snapshot={snapshot} themePalette={light} onOpenNote={vi.fn()} onOpenConcept={vi.fn()}
+      onNewNote={vi.fn()} onImport={vi.fn()} onOpenNotes={vi.fn()} onToggleTask={vi.fn()} onRefreshOverview={vi.fn()} />);
+    const hero = document.querySelector<HTMLElement>(".home-hero")!;
+    expect(hero.dataset.atmosphereMode).toBe("dark");
+    expect(hero.style.getPropertyValue("--text")).toBe(dark.text);
+    expect(hero.style.getPropertyValue("--surface-1")).toBe(dark.surface1);
+    expect(document.querySelector<HTMLElement>(".home-view")?.style.getPropertyValue("--text")).toBe("");
+  });
+
   it("keeps the hero actions semantic while rendering the selected atmosphere and glow surfaces", () => {
     const onImport = vi.fn();
     const onNewNote = vi.fn();
