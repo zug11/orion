@@ -136,7 +136,9 @@ src/lib/linkedArticle.ts            selected-text article request and AI merge
 src/lib/wikiEnrichment.ts           new-note wiki refresh requests and safe merge
 src/lib/wiki.ts                     link resolution, references, and backlinks
 src/lib/chat.ts                     bounded Chat context and message updates
-src/lib/aiImages.ts                 selected-passage image prompt and context gate
+src/lib/aiImages.ts                 Space-aware illustration planning and context gate
+src/lib/aiImagePlanningProtocol.json shared read-only image planning instructions/schema
+src-tauri/src/image_planning.rs     cancellable provider transport for illustration plans
 src/lib/studio.ts                   dormant Studio-state normalization
 src/lib/storage.ts                  validated IPC and browser-preview fallbacks
 src/lib/transcription.ts            transcript-to-source normalization
@@ -663,6 +665,9 @@ must not call a provider, and must never treat a stale editable summary as the
 whole note. A changed content fingerprint invalidates the old digest and every
 ancestor blueprint that includes it. Missing or weak digests may force a later
 exact read, but cannot silently masquerade as complete semantic knowledge.
+The digest content fingerprint includes its synthesis-contract version and
+derived summary, so fixing digest construction also invalidates cached provider
+blueprints without editing user notes or their timestamps.
 
 ### Cluster and root blueprints
 
@@ -681,6 +686,15 @@ blueprint IDs/fingerprints. The visible **Across this Space** card is an
 editorial projection of this validated root. It may link to a small set of
 representative notes, but those links are navigation/routing hints rather than
 evidence that every linked body has been opened.
+
+A Space that fits one leaf cluster skips the separate cluster provider call.
+Its root request must receive every current typed note digest, including each
+whole-body sketch, rather than a clipped local blueprint or the previous root
+copied into that leaf. The new root also replaces that leaf's orientation.
+Larger Spaces merge completed provider children. Do not silently truncate a
+root packet or call an unfinished local blueprint validated provider synthesis.
+Do not carry an obsolete overview into a rebuilt root as evidence; cached
+editorial context is usable only while that root remains current.
 
 Never maintain this hierarchy as a growing conversation transcript. Each call
 receives fresh typed child artifacts with exact fingerprints, and every merge
@@ -1989,7 +2003,7 @@ copy writers with a shared thesis and ordered section titles. Outline planning
 caps high/xhigh effort at medium; writers retain the selected effort. Validate
 exact Space-local note IDs and unique headings, and reject partial copy on
 failure. Assemble accepted copy locally with no final model rewrite. Each
-slide is then a complete `gpt-image-2` 16:9 image
+slide is then a complete `gpt-image-2.5-sunburst` 16:9 image
 that letters the title and bullets in distinctive fonts, in same-kind waves
 of at most six, never mixed with copy. The slideshow shows that image only:
 no HTML type overlay even as a fallback, and speaker notes stay off-screen
@@ -2099,23 +2113,50 @@ appear richer.
 
 **Generate image** opens the same compact composer pattern with one optional
 **Image direction** field. Submitting it blank asks Orion for its best visual
-interpretation of the exact highlighted passage; typed guidance is scoped to
-that one image. It is a separate OpenAI-only capability and always uses
-`gpt-image-2` through the one-shot Image API, even when Anthropic is the active
-writing provider. Do not offer it without a configured OpenAI key, and do not
-reuse the Chat, inline-writing, or knowledge-orchestration request schemas.
+interpretation of the highlighted passage in its Space; typed guidance is scoped
+to that one image. Planning uses the Space's selected Intelligence model and
+reasoning effort, with that provider's configured key. Rendering always uses
+`gpt-image-2.5-sunburst` through the one-shot OpenAI Image API, including when
+Anthropic plans the illustration. Do not offer it without an OpenAI key or
+silently substitute a planning model. Keep its dedicated `plan_note_image`
+transport and shared `aiImagePlanningProtocol.json` separate from Chat,
+inline-writing and knowledge-writing request schemas; no note actions are legal.
 
-Image context is deliberately narrow. The prompt contains the active note title,
-the exact selected Markdown/text, optional image direction, and—only when
-`includeExistingNotesInAIContext` is enabled—the saved **Across this Space**
-orientation (or its local Home fallback) plus excerpts from at most six
-host-resolved notes visibly linked or mentioned there. It never crawls the
-Space, opens arbitrary full notes, adds source bodies, or treats note-derived
-prose as trusted instructions. When existing context is disabled, no overview
-or other-note material leaves the device.
+With `includeExistingNotesInAIContext` enabled, two bounded planning calls first
+select relevant context, then interpret exact evidence into a visual brief. The
+initial packet includes the exact selection, captured live editor surroundings,
+an origin-note excerpt, an optional non-stale overview used only for orientation,
+and a directory of up to 16 other notes and 12 sources. The planner may choose
+four discovered note IDs, four discovered source IDs and three local queries.
+The host rejects invented or cross-Space IDs, searches beyond that initial
+directory, and resolves excerpts from up to six other notes and four preserved
+original sources. Search scans at most 2,000 records / 8 million UTF-16 units,
+with a 2-million-unit per-record ceiling, and reports partial coverage. Excerpts
+retain exact text and UTF-16 offsets, with omission flags. Selection context is
+bounded to 1,200 characters on each side; origin/other-note/source excerpt budgets
+are 3,000/1,800/2,400 UTF-16 units. A serialized planning packet cannot exceed
+256,000 UTF-8 bytes. No arbitrary file or URL reads are allowed.
 
-Request one `1536x1024`, medium-quality JPEG with output compression 88. The
-returned base64 bytes are transient proposal state, bounded to Orion's existing
+The composition pass returns a bounded visual brief, descriptive alt text and
+IDs of exact evidence actually used; reject references that were not read. The
+image prompt combines that interpretation with the exact selection and artistic
+direction. Note/source/overview prose is always untrusted subject data, never
+authority. With context disabled, skip retrieval and send only the selection,
+active note title and direction to one composition pass. No surrounding prose,
+directory, overview or source material leaves the device. Planning is transient
+and read-only; it never changes the vault or Chat. Check Space/content/settings
+versions and cancellation between stages and after rendering. Planner failures,
+invalid output or stale context must not start a Sunburst request. Both provider
+transports use the shared scheduler, strict stage schemas, the selected model,
+and a cancellable 90-second ceiling per planning call; OpenAI uses `store: false`.
+
+Request one `1536x1024`, medium-quality JPEG with output compression 88.
+The Image API has no documented Fast mode or `service_tier` parameter as of
+2026-09-25; do not send the Responses/Chat-only setting or silently substitute
+Flare. Keep the native request and renderer's `AI_IMAGE_MODEL` in sync. See
+[OpenAI's Image API](https://developers.openai.com/api/reference/resources/images/methods/generate)
+and [Fast mode guide](https://developers.openai.com/api/docs/guides/fast-mode).
+Returned base64 bytes are transient proposal state, bounded to Orion's existing
 12-MiB note-image limit, and must pass both the renderer and Rust JPEG boundary.
 They do not enter the vault or private image directory until the user presses
 the tick. The preview appears immediately after the selected top-level passage

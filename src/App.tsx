@@ -68,6 +68,7 @@ import {
   exportMarkdown,
   exportWebPage,
   generateNoteImage,
+  planNoteImage,
   saveNoteImage,
   clearBrowserSnapshot,
   isTauriRuntime,
@@ -145,7 +146,7 @@ import {
   type AIWritingRequestInput,
 } from "./lib/aiWriting";
 import {
-  buildAIImagePrompt,
+  generateContextualNoteImage,
   type AIImageRequestInput,
 } from "./lib/aiImages";
 import {
@@ -2812,18 +2813,12 @@ function App() {
       signal: AbortSignal,
     ) => {
       const currentSnapshot = snapshotRef.current;
-      const workspaceId = currentSnapshot.workspace.id;
-      const request = buildAIImagePrompt(currentSnapshot, {
+      return generateContextualNoteImage(currentSnapshot, {
         ...input,
         originNoteId,
+      }, { plan: planNoteImage, render: generateNoteImage }, {
+        signal, currentSnapshot: () => snapshotRef.current,
       });
-      const image = await generateNoteImage(request.prompt, signal);
-      if (snapshotRef.current.workspace.id !== workspaceId) {
-        throw new Error(
-          "The active Space changed while Orion was creating the image. Try again in the current Space.",
-        );
-      }
-      return { ...image, alt: request.alt };
     },
     [],
   );

@@ -23,6 +23,7 @@ mod assistant_bridge;
 #[path = "../shared/assistant_protocol.rs"]
 mod assistant_protocol;
 mod desktop_windows;
+mod image_planning;
 mod media_jobs;
 mod theme_icon;
 mod window_glass;
@@ -1660,7 +1661,7 @@ async fn run_generate_note_image(
         return Err("Add an OpenAI API key in Settings before generating an image.".to_string());
     };
     let body = json!({
-        "model": "gpt-image-2",
+        "model": "gpt-image-2.5-sunburst",
         "prompt": request.prompt.trim(),
         "n": 1,
         "size": "1536x1024",
@@ -6944,6 +6945,7 @@ pub fn run() {
             assistant_bridge::assistant_commit_vault,
             save_note_image,
             generate_note_image,
+            image_planning::plan_note_image,
             cancel_note_image_generation,
             open_data_directory,
             open_claude_connector,

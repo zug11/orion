@@ -22,6 +22,11 @@ import type {
   WhisperConfig,
 } from "../types";
 import { truncateUnicode } from "./text";
+import { AI_IMAGE_MODEL } from "./aiImages";
+import {
+  IMAGE_PLANNING_INSTRUCTIONS, imagePlanningSchema, parseImagePlanningContext,
+  parseImagePlanningResult, type ImagePlanningRequest, type ImagePlanningResult,
+} from "./aiImagePlanning";
 import { isWindowGlassSettings } from "./windowGlass";
 import {
   providerCallScheduler,
@@ -409,6 +414,58 @@ export async function saveNoteImage(
   };
 }
 
+export async function planNoteImage(request: ImagePlanningRequest, signal?: AbortSignal): Promise<ImagePlanningResult> {
+  const context = parseImagePlanningContext(request);
+  if (signal?.aborted) throw signal.reason ?? new Error("Image planning was cancelled.");
+  const requestId = `image:plan:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 12)}`;
+  if (isTauriRuntime()) {
+    const value = await invokeTauri<unknown>("plan_note_image", { request: { ...request, requestId } }, {
+      queueKey: "images", signal,
+      cancelActive: () => { void invokeTauri("cancel_note_image_generation", { requestId }).catch(() => undefined); },
+    });
+    return parseImagePlanningResult(value, request.stage);
+  }
+  const provider = aiProviderForModel(request.model);
+  return runBrowserProviderCall(provider, async () => {
+    const controller = new AbortController();
+    const abort = () => controller.abort(signal?.reason);
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    const timer = globalThis.setTimeout(() => controller.abort(new Error("The illustration planner did not finish within 90 seconds.")), 90_000);
+    try {
+      const schema = imagePlanningSchema(request.stage);
+      const payload = JSON.stringify({ stage: request.stage, context });
+      const effort = request.effort === "none" ? undefined : request.effort;
+      const anthropic = provider === "anthropic";
+      const body = anthropic ? {
+        model: request.model, max_tokens: 6_000, system: IMAGE_PLANNING_INSTRUCTIONS,
+        messages: [{ role: "user", content: payload }],
+        output_config: { format: { type: "json_schema", schema: anthropicCompatibleSchema(schema) }, ...(effort ? { effort } : {}) },
+      } : {
+        model: request.model, store: false, max_output_tokens: 6_000, instructions: IMAGE_PLANNING_INSTRUCTIONS, input: payload,
+        text: { format: { type: "json_schema", name: "orion_image_plan", strict: true, schema } },
+        ...(effort ? { reasoning: { effort } } : {}),
+      };
+      const response = await fetch(anthropic ? ANTHROPIC_MESSAGES_URL : OPENAI_RESPONSES_URL, {
+        method: "POST", signal: controller.signal,
+        headers: anthropic ? { "x-api-key": requireBrowserAnthropicApiKey(), "anthropic-version": "2023-06-01", "Content-Type": "application/json" }
+          : { Authorization: `Bearer ${requireBrowserApiKey()}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) throw new Error(await readProviderApiError(response, anthropic ? "Anthropic" : "OpenAI"));
+      const data = await response.json();
+      const text = anthropic ? extractAnthropicOutputText(data, "plan this illustration") : extractBrowserOutputText(data, "plan this illustration");
+      return parseImagePlanningResult(JSON.parse(text), request.stage);
+    } catch (error) {
+      if (controller.signal.aborted) throw controller.signal.reason ?? new Error("Image planning was cancelled.");
+      throw error;
+    } finally {
+      globalThis.clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+    }
+  }, { queueKey: "images", signal });
+}
+
 export async function generateNoteImage(
   prompt: string,
   signal?: AbortSignal,
@@ -452,7 +509,7 @@ export async function generateNoteImage(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-image-2",
+        model: AI_IMAGE_MODEL,
         prompt: normalized,
         n: 1,
         size: "1536x1024",
@@ -1433,6 +1490,7 @@ const PROVIDER_COMMANDS = new Set([
   "organize_content",
   "chat",
   "generate_note_image",
+  "plan_note_image",
   "generate_speech",
   "test_openai_key",
   "test_anthropic_key",

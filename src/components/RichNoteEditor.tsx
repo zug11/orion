@@ -885,6 +885,9 @@ export function RichNoteEditor({
           instruction: input.instruction,
           selectedMarkdown: input.capture.selectedMarkdown,
           selectedText: input.capture.selectedText,
+          documentMarkdown: input.capture.documentMarkdown,
+          beforeMarkdown: input.capture.beforeMarkdown,
+          afterMarkdown: input.capture.afterMarkdown,
         },
         controller.signal,
       );
