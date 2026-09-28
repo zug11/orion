@@ -621,8 +621,18 @@ impl AssistantBridge {
             while let Some(jobs) = weak.upgrade() {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
-                        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-                        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+                        // macOS inherits the listener's nonblocking mode. Wait for
+                        // the complete request instead of closing between writes.
+                        if stream.set_nonblocking(false).is_err()
+                            || stream
+                                .set_read_timeout(Some(Duration::from_secs(2)))
+                                .is_err()
+                            || stream
+                                .set_write_timeout(Some(Duration::from_secs(2)))
+                                .is_err()
+                        {
+                            continue;
+                        }
                         let bridge = AssistantBridge {
                             path: path.clone(),
                             jobs,
@@ -1317,6 +1327,53 @@ mod tests {
             bridge.handle("get_job", json!({"space_id":"a","job_id":id}))["result"]["freshness"],
             "stale"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_waits_for_delayed_and_fragmented_request() {
+        use std::os::unix::net::UnixStream;
+        let (_dir, bridge) = broker();
+        bridge.poll("renderer").unwrap();
+        bridge.start().unwrap();
+        let descriptor: BridgeDescriptor = serde_json::from_reader(
+            File::open(
+                bridge
+                    .path
+                    .parent()
+                    .unwrap()
+                    .join(protocol::BRIDGE_DESCRIPTOR),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut stream = UnixStream::connect(&descriptor.socket_path).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut request = serde_json::to_vec(&json!({
+            "version": protocol::BRIDGE_VERSION,
+            "token": descriptor.token,
+            "method": "capabilities",
+            "arguments": {}
+        }))
+        .unwrap();
+        request.push(b'\n');
+        let split = request.len() / 2;
+        // Each delay exceeds the listener's polling interval but stays safely
+        // within the bounded stream timeout, like a descheduled real client.
+        std::thread::sleep(Duration::from_millis(120));
+        stream.write_all(&request[..split]).unwrap();
+        std::thread::sleep(Duration::from_millis(120));
+        stream.write_all(&request[split..]).unwrap();
+        let mut line = String::new();
+        BufReader::new(stream).read_line(&mut line).unwrap();
+        let response: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["result"]["available"], true);
     }
 
     #[cfg(unix)]
