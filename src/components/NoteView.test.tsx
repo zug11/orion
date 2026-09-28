@@ -1063,7 +1063,7 @@ Image: glass planes
     expect(playhead).toHaveAttribute("aria-label", "Playback playhead");
     expect(screen.getByText("0:12")).toBeVisible();
     expect(screen.getByText("0:40")).toBeVisible();
-    expect(screen.getByRole("progressbar", { name: "Playback progress" })).toHaveAttribute(
+    expect(screen.getByRole("slider", { name: "Playback progress" })).toHaveAttribute(
       "aria-valuenow",
       "30",
     );

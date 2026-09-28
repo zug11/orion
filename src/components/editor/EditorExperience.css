@@ -1,0 +1,72 @@
+/* Shared interaction surfaces for the editor preview. */
+.editor-toolbar-contextual { min-height: 36px; }
+.rich-note-editor .editor-toolbar-shell { overflow: visible; }
+.editor-toolbar-overflow { display: flex; align-items: center; flex: 0 0 auto; margin-left: 2px; }
+.editor-toolbar-contextual .editor-toolbar-main { overflow: visible; gap: 3px; }
+.editor-toolbar-contextual [hidden] { display: none; }
+.editor-toolbar-contextual .editor-style-select select { font-size: 12px; }
+.editor-toolbar-contextual .editor-style-select select { max-width: 110px; }
+.editor-heading-picker,.editor-more { position: relative; flex: 0 0 auto; }
+.editor-toolbar button.editor-heading-trigger { width: 104px; justify-content: space-between; padding-inline: 8px; font-size: 12px; }
+.editor-floating-menu { border: 1px solid var(--line-strong); border-radius: 12px; padding: 5px; background: var(--surface-raised); box-shadow: 0 14px 40px rgb(0 0 0 / .20); color: var(--text); font-family: var(--ui-font); }
+.editor-heading-menu,.editor-more-menu { position: absolute; top: calc(100% + 12px); z-index: 60; min-width: 224px; }
+.editor-heading-menu { left: 0; overflow-y: auto; overscroll-behavior: contain; }
+.editor-more-menu { right: 0; max-height: min(460px, 65vh); overflow-y: auto; }
+.editor-toolbar .editor-floating-menu button { width: 100%; height: auto; min-height: 36px; justify-content: flex-start; padding: 7px 9px; gap: 10px; font-size: 13px; }
+.editor-toolbar .editor-more-menu button { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; text-align: left; white-space: nowrap; }
+.editor-menu-icon { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; line-height: 1; }
+.editor-menu-icon svg { display: block; flex: none; margin: 0; }
+.editor-menu-icon > span { flex: none; }
+.editor-toolbar .editor-heading-menu button { justify-content: space-between; min-height: 40px; }
+.editor-floating-menu button:hover,.editor-floating-menu button[aria-selected="true"],.editor-floating-menu button[aria-checked="true"] { background: var(--periwinkle-wash); color: var(--text); }
+.editor-heading-menu small { font: 11px var(--ui-font); color: var(--faint); }
+.heading-choice-0 { font-size: 14px; font-weight: 400; }
+.heading-choice-1 { font-size: 23px; font-weight: 650; }
+.heading-choice-2 { font-size: 21px; font-weight: 620; }
+.heading-choice-3 { font-size: 19px; font-weight: 600; }
+.heading-choice-4 { font-size: 17px; font-weight: 650; }
+.heading-choice-5 { font-size: 16px; font-weight: 600; }
+.heading-choice-6 { font-size: 16px; font-weight: 500; font-style: italic; }
+.editor-slash-menu { position: fixed; z-index: 150; width: 280px; max-width: calc(100vw - 24px); max-height: min(430px, calc(100vh - 32px)); display: flex; flex-direction: column; }
+.editor-slash-menu [role="listbox"] { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.editor-prose .ProseMirror[data-slash-open="true"] { padding-bottom: 260px; }
+.editor-slash-menu .editor-menu-eyebrow,.editor-slash-menu .editor-menu-hint { flex: 0 0 auto; }
+.editor-slash-menu button { display: flex; align-items: center; width: 100%; min-height: 35px; gap: 12px; border-radius: 7px; background: transparent; text-align: left; color: var(--text-soft); padding: 7px 10px; font: 400 14px var(--ui-font); }
+.editor-slash-menu button svg { flex-shrink: 0; color: var(--muted); }
+.editor-slash-menu button span { flex: 1; }
+.editor-slash-menu button.slash-heading { min-height: 42px; }
+.editor-slash-menu .heading-choice-1 { font-size: 23px; }
+.editor-slash-menu .heading-choice-2 { font-size: 21px; }
+.editor-slash-menu .heading-choice-3 { font-size: 19px; }
+.editor-slash-menu .heading-choice-4 { font-size: 17px; }
+.editor-slash-menu .heading-choice-5,.editor-slash-menu .heading-choice-6 { font-size: 16px; }
+.editor-menu-eyebrow { padding: 7px 10px; font-size: 11px; color: var(--faint); }
+.editor-menu-hint { margin-top: 4px; padding: 8px 10px 5px; border-top: 1px solid var(--line); color: var(--faint); font-size: 11px; line-height: 1.4; }
+.editor-menu-empty { padding: 12px; color: var(--muted); font-size: 13px; }
+.note-prose h4,.note-prose h5,.note-prose h6 { clear: both; color: var(--text); line-height: 1.45; font-family: var(--note-font, var(--ui-font)); scroll-margin-top: 100px; }
+.note-prose h4 { margin: 1.8em 0 .65em; font-size: 1.08em; font-weight: 650; }
+.note-prose h5 { margin: 1.6em 0 .6em; font-size: 1em; font-weight: 650; }
+.note-prose h6 { margin: 1.45em 0 .55em; font-size: 1em; font-weight: 500; font-style: italic; }
+.note-outline__list button[data-level="4"] { padding-left: 28px; }
+.note-outline__list button[data-level="5"] { padding-left: 36px; }
+.note-outline__list button[data-level="6"] { padding-left: 44px; }
+.editor-insert-panel { position: absolute; z-index: 70; top: 50px; right: 0; }
+@container (max-width: 520px) {
+  .editor-toolbar-contextual { gap: 1px; }
+  .editor-toolbar-contextual .editor-toolbar-main { gap: 0; }
+  .editor-toolbar-contextual .editor-toolbar-separator { margin-inline: 1px; }
+  .editor-toolbar-contextual button { width: 27px; }
+  .editor-toolbar button.editor-heading-trigger { width: 85px; font-size: 11px; }
+  .editor-toolbar-contextual .editor-toolbar-history,.editor-toolbar-contextual .editor-toolbar-ai,.editor-toolbar-contextual .editor-toolbar-dictation { padding-left: 2px; }
+}
+@media (prefers-reduced-motion: reduce) { .editor-floating-menu { animation: none; } }
+.note-prose .note-image-reading > img,.note-prose .note-image-reading > .note-image-free-content > img { width: 100%; margin: 0; height: auto; }
+.note-image-caption-reading { display: block; margin-top: 9px; font: 400 13px/1.5 var(--ui-font); color: var(--muted); text-align: center; }
+.note-prose:after,.editor-prose .ProseMirror:after { content: ""; display: table; clear: both; }
+.editor-insert-layer { position: fixed; z-index: 155; }
+.editor-insert-layer .orion-table-picker { position: relative; max-height: calc(100vh - 24px); overflow-y: auto; }
+.note-prose .note-table-reading { clear: both; max-width: 100%; margin: 26px 0; overflow-x: auto; }
+.note-prose .note-table-reading table { display: table; table-layout: fixed; width: 100%; margin: 0; }
+.note-table-reading[data-banded="false"] tr { background: transparent; }
+.note-table-reading[data-banded="true"][data-header="true"] tbody tr:nth-child(even),
+.note-table-reading[data-banded="true"][data-header="false"] tbody tr:nth-child(odd) { background: color-mix(in srgb, var(--text) 3%, transparent); }

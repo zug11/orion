@@ -1,3 +1,7 @@
+import { parseNoteExcerptTitle } from "../lib/noteExcerpts";
+import { requestNoteExcerptNavigation, consumeNoteExcerptNavigation, revealNoteExcerptPassage, clearNoteExcerptHighlight } from "../lib/noteExcerptNavigation";
+import { noteTableHeaderInfo, noteTableLayoutAtLine, remarkNoteTableMetadata } from "../lib/noteTables";
+import "./editor/excerpt.css";
 import {
   ArrowUp,
   Check,
@@ -28,8 +32,11 @@ import {
   type ReactNode,
 } from "react";
 import ReactMarkdown from "react-markdown";
+import type { Element as MarkdownElement } from "hast";
 import remarkGfm from "remark-gfm";
 import { isSafeNoteImageUrl } from "../lib/noteImages";
+import { parseNoteImageTitle, noteImageLayoutStyle, noteImageContentStyle } from "../lib/noteImageLayout";
+import "./editor/EditorExperience.css";
 import type { RegisterWikiLinkInput } from "../lib/concepts";
 import type { AIWritingRequestInput } from "../lib/aiWriting";
 import type { AIImageProposal, AIImageRequestInput } from "../lib/aiImages";
@@ -50,9 +57,11 @@ import {
 import {
   dwellSpeech,
   formatSpeechClock,
-  speakableNoteText,
   type SpeechPlaybackProgress,
+  type SpeechPlaybackOptions,
 } from "../lib/speech";
+import { buildNarrationDocument, clearNarrationHighlight, highlightNarration, narrationCharacterAtPoint, narrationWordAt, type NarrationDocument } from "../lib/noteNarration";
+import "./NoteNarration.css";
 import { canonicalizeSourceCitations } from "../lib/sourceCitations";
 import { savedChatEvidence } from "../lib/chatCitations";
 import { CitedPassage } from "./CitedPassage";
@@ -107,6 +116,7 @@ interface NoteViewProps {
     text: string,
     signal?: AbortSignal,
     onProgress?: (progress: SpeechPlaybackProgress) => void,
+    options?: SpeechPlaybackOptions,
   ) => Promise<void>;
   onPrepareSpeech?: (text: string, signal?: AbortSignal) => Promise<void>;
   onPrepareVoiceMemoSession?: (sessionId: string) => Promise<void>;
@@ -172,6 +182,13 @@ export function NoteView({
   const [listenError, setListenError] = useState<string | null>(null);
   const [listenProgress, setListenProgress] =
     useState<SpeechPlaybackProgress | null>(null);
+  const [narrationActive, setNarrationActive] = useState(false);
+  const [followNarration, setFollowNarration] = useState(true);
+  const narrationRef = useRef<NarrationDocument | null>(null);
+  const narrationPreparationRef = useRef<AbortController | null>(null);
+  const narrationSourceRef = useRef<Pick<Note, "id" | "title" | "summary" | "body"> | null>(null);
+  const narrationPositionRef = useRef({ charIndex: 0, charLength: 0 });
+  const progressPaintRef = useRef(0);
   const [deckIndex, setDeckIndex] = useState(0);
   const listenAbortRef = useRef<AbortController | null>(null);
   const playGenerationRef = useRef(0);
@@ -180,6 +197,8 @@ export function NoteView({
   const findButtonRef = useRef<HTMLButtonElement>(null);
   const findInputRef = useRef<HTMLInputElement>(null);
   const findScopeRef = useRef<HTMLElement>(null);
+  const currentNoteRef = useRef(note);
+  currentNoteRef.current = note;
   const dirtyEditingRef = useRef(false);
   const [selectedPassageId, setSelectedPassageId] = useState<string | null>(null);
   const passageTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -241,7 +260,7 @@ export function NoteView({
     isSlideDeckNote(note) &&
     !isGeneratePlaceholder(note) &&
     deckSlides.length > 0;
-  const showPlayhead = listening || (showSlideshow && Boolean(onSpeakNote));
+  const showPlayhead = listening || narrationActive || (showSlideshow && Boolean(onSpeakNote));
   const idleDeckProgress = useMemo((): SpeechPlaybackProgress | null => {
     if (!showSlideshow || listening) return null;
     const durationSeconds = deckPlaybackDuration(deckCues);
@@ -253,7 +272,7 @@ export function NoteView({
       loading: false,
     };
   }, [deckCues, deckIndex, listening, showSlideshow]);
-  const playheadProgress = listening ? listenProgress : idleDeckProgress;
+  const playheadProgress = listening || narrationActive ? listenProgress : idleDeckProgress;
   const showOutline =
     !editing && !showSlideshow && outlineHeadings.length > 0;
   const headingIdByLine = useMemo(
@@ -310,6 +329,22 @@ export function NoteView({
     setFindResultCount(0);
     setActiveFindIndex(0);
     setActiveHeadingId(null);
+  }, [note.id]);
+
+  useEffect(() => {
+    // Consume only after StrictMode's setup/cleanup replay. Consuming during
+    // setup loses the one-shot request when that first animation frame is cancelled.
+    let frame = window.requestAnimationFrame(() => {
+      const request = consumeNoteExcerptNavigation(note.id);
+      if (request) {
+        setEditing(false);
+        frame = window.requestAnimationFrame(() => {
+          const prose = findScopeRef.current?.querySelector<HTMLElement>(".note-prose");
+          if (prose) revealNoteExcerptPassage(prose, currentNoteRef.current, request);
+        });
+      }
+    });
+    return () => { window.cancelAnimationFrame(frame); clearNoteExcerptHighlight(); };
   }, [note.id]);
 
   const openFind = useCallback(() => {
@@ -382,7 +417,9 @@ export function NoteView({
       }
       playGenerationRef.current += 1;
       listenAbortRef.current?.abort();
+      narrationPreparationRef.current?.abort();
       globalThis.speechSynthesis?.cancel();
+      clearNarrationHighlight();
     },
     [],
   );
@@ -391,12 +428,24 @@ export function NoteView({
     playGenerationRef.current += 1;
     listenAbortRef.current?.abort();
     listenAbortRef.current = null;
+    narrationPreparationRef.current?.abort();
+    narrationPreparationRef.current = null;
     globalThis.speechSynthesis?.cancel();
     setListening(false);
     setListenProgress(null);
     setListenError(null);
     setDeckIndex(0);
+    narrationRef.current = null;
+    setNarrationActive(false);
+    clearNarrationHighlight();
   }, [note.id]);
+
+  useEffect(() => {
+    // Recorded offsets belong to this exact displayed wording, never a later edit.
+    const source = narrationSourceRef.current;
+    if (narrationRef.current && (editing || !source || source.id !== note.id || source.body !== note.body
+      || source.title !== note.title || source.summary !== note.summary)) stopPlayback();
+  }, [note.body, note.title, note.summary, editing]);
 
   function stopPlayback(options?: { keepProgress?: boolean }) {
     playGenerationRef.current += 1;
@@ -405,7 +454,13 @@ export function NoteView({
     globalThis.speechSynthesis?.cancel();
     setListening(false);
     if (!options?.keepProgress) {
+      narrationPreparationRef.current?.abort();
+      narrationPreparationRef.current = null;
       setListenProgress(null);
+      narrationRef.current = null;
+      setNarrationActive(false);
+      narrationPositionRef.current = { charIndex: 0, charLength: 0 };
+      clearNarrationHighlight();
     }
   }
 
@@ -526,7 +581,7 @@ export function NoteView({
 
   async function togglePlayback() {
     if (listening) {
-      stopPlayback({ keepProgress: showSlideshow });
+      stopPlayback({ keepProgress: true });
       return;
     }
     if (!onSpeakNote) return;
@@ -537,12 +592,33 @@ export function NoteView({
       startDeckPlayback(atEnd ? 0 : deckIndex);
       return;
     }
-    const spoken = speakableNoteText(note);
-    if (!spoken) {
+    if (editing) {
+      flushDirtyEditing();
+      setEditing(false);
+      const noteId = note.id;
+      window.requestAnimationFrame(() => {
+        if (currentNoteRef.current.id === noteId) void startNotePlayback(0);
+      });
+      return;
+    }
+    await startNotePlayback(narrationRef.current ? narrationPositionRef.current.charIndex : 0);
+  }
+
+  async function startNotePlayback(requestedCharacter: number) {
+    if (!onSpeakNote || !findScopeRef.current) return;
+    const script = buildNarrationDocument(findScopeRef.current);
+    if (!script.text) {
       setListenError("This note has nothing to play.");
       return;
     }
-    stopPlayback();
+    const start = narrationWordAt(script, requestedCharacter)?.from ?? 0;
+    stopPlayback({ keepProgress: true });
+    narrationRef.current = script;
+    narrationPreparationRef.current ??= new AbortController();
+    const preparationSignal = narrationPreparationRef.current.signal;
+    narrationSourceRef.current = note;
+    narrationPositionRef.current = { charIndex: start, charLength: 0 };
+    setNarrationActive(true);
     const generation = playGenerationRef.current;
     const controller = new AbortController();
     listenAbortRef.current = controller;
@@ -551,11 +627,25 @@ export function NoteView({
     setListenProgress({
       elapsedSeconds: 0,
       durationSeconds: 0,
-      ratio: 0,
+      ratio: start / Math.max(1, script.text.length),
       loading: true,
+      charIndex: start,
+      charLength: 0,
     });
     try {
-      await onSpeakNote(spoken, controller.signal, setListenProgress);
+      await onSpeakNote(script.text, controller.signal, (progress) => {
+        if (controller.signal.aborted || playGenerationRef.current !== generation) return;
+        const previous = narrationPositionRef.current;
+        const position = typeof progress.charIndex === "number"
+          ? { charIndex: progress.charIndex, charLength: progress.charLength ?? 0 }
+          : previous;
+        narrationPositionRef.current = position;
+        const now = performance.now();
+        if (now - progressPaintRef.current >= 80 || position.charIndex !== previous.charIndex || progress.loading || progress.ratio >= 1) {
+          progressPaintRef.current = now;
+          setListenProgress(progress);
+        }
+      }, { startCharIndex: start, trackWords: true, preparationSignal });
     } catch (error) {
       if (!controller.signal.aborted) {
         setListenError(
@@ -570,6 +660,11 @@ export function NoteView({
         listenAbortRef.current = null;
         setListening(false);
         setListenProgress(null);
+        narrationPreparationRef.current?.abort();
+        narrationPreparationRef.current = null;
+        narrationRef.current = null;
+        setNarrationActive(false);
+        clearNarrationHighlight();
       }
     }
   }
@@ -817,6 +912,35 @@ export function NoteView({
   }
 
   const markdownComponents = {
+    table: ({ children, node }: { children?: ReactNode; node?: MarkdownElement }) => {
+      const layout = noteTableLayoutAtLine(visibleMarkdown, node?.position?.start.line ?? 0);
+      const header = noteTableHeaderInfo(node);
+      const syntheticHeader = layout?.header === false && header.empty;
+      const columns = header.columns || layout?.columns.length || 1;
+      const minWidth = Array.from({ length: columns }, (_, index) => layout?.columns[index] ?? 96).reduce((sum, width) => sum + width, 0);
+      const content = syntheticHeader ? Children.toArray(children).filter((child) => !isValidElement(child) || child.type !== "thead") : children;
+      return (
+        <div className="note-table-reading" data-header={!syntheticHeader} data-banded={layout?.banded !== false} style={{ width: `${layout?.width ?? 100}%` }}>
+          <table style={{ minWidth }}>
+            {layout?.columns.length ? <colgroup>{layout.columns.map((width, index) => <col key={index} style={width ? { width: `${width}px` } : undefined}/>)}</colgroup> : null}
+            {content}
+          </table>
+        </div>
+      );
+    },
+
+    img: ({src,alt,title}:{src?:string;alt?:string;title?:string}) => {
+      if(!src || !isSafeNoteImageUrl(src)) return <span>{alt || "Image unavailable"}</span>;
+      const parsed=parseNoteImageTitle(title);
+      const content = <>
+        <img src={src} alt={alt??""} title={parsed.title??undefined}/>
+        {parsed.layout.showCaption && parsed.layout.caption && <span className="note-image-caption-reading">{parsed.layout.caption}</span>}
+      </>;
+      return <span className="note-image-reading" style={noteImageLayoutStyle(parsed.layout)}>
+        {parsed.layout.xPercent === null ? content : <span className="note-image-free-content" style={noteImageContentStyle(parsed.layout)}>{content}</span>}
+      </span>;
+    },
+
     p: ({ children }: { children?: ReactNode }) => (
       <p>{renderLinkedChildren(children)}</p>
     ),
@@ -860,30 +984,23 @@ export function NoteView({
         </li>
       );
     },
-    h1: ({ children }: { children?: ReactNode }) => (
-      <h1>{renderLinkedChildren(children)}</h1>
+    h1: ({ children, node }: {children?:ReactNode;node?:{position?:{start?:{line?:number}}}}) => (
+      <h1 id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>{renderLinkedChildren(children)}</h1>
     ),
-    h2: ({
-      children,
-      node,
-    }: {
-      children?: ReactNode;
-      node?: { position?: { start?: { line?: number } } };
-    }) => (
-      <h2 id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>
-        {renderLinkedChildren(children)}
-      </h2>
+    h2: ({ children, node }: {children?:ReactNode;node?:{position?:{start?:{line?:number}}}}) => (
+      <h2 id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>{renderLinkedChildren(children)}</h2>
     ),
-    h3: ({
-      children,
-      node,
-    }: {
-      children?: ReactNode;
-      node?: { position?: { start?: { line?: number } } };
-    }) => (
-      <h3 id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>
-        {renderLinkedChildren(children)}
-      </h3>
+    h3: ({ children, node }: {children?:ReactNode;node?:{position?:{start?:{line?:number}}}}) => (
+      <h3 id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>{renderLinkedChildren(children)}</h3>
+    ),
+    h4: ({ children, node }: {children?:ReactNode;node?:{position?:{start?:{line?:number}}}}) => (
+      <h4 id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>{renderLinkedChildren(children)}</h4>
+    ),
+    h5: ({ children, node }: {children?:ReactNode;node?:{position?:{start?:{line?:number}}}}) => (
+      <h5 id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>{renderLinkedChildren(children)}</h5>
+    ),
+    h6: ({ children, node }: {children?:ReactNode;node?:{position?:{start?:{line?:number}}}}) => (
+      <h6 id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>{renderLinkedChildren(children)}</h6>
     ),
     blockquote: ({ children }: { children?: ReactNode }) => (
       <blockquote>
@@ -891,7 +1008,7 @@ export function NoteView({
         {renderLinkedChildren(children)}
       </blockquote>
     ),
-    a: ({ href, children }: { href?: string; children?: ReactNode }) => {
+    a: ({ href, title, children }: { href?: string; title?:string; children?: ReactNode }) => {
       if (href?.startsWith("#orion-passage-")) {
         const passage = retainedPassages.find((item) => href === `#orion-passage-${item.id}`);
         if (!passage) return <span>{children}</span>;
@@ -904,11 +1021,16 @@ export function NoteView({
       }
       if (href?.startsWith("orion-note://")) {
         const noteId = href.slice("orion-note://".length);
+        const excerpt=parseNoteExcerptTitle(title,href);
+        if(!notes.some(candidate=>candidate.id===noteId))return <span>{children}</span>;
         return (
           <button
             type="button"
-            className="wiki-link explicit"
-            onClick={() => onOpenNote(noteId)}
+            className={`wiki-link explicit${excerpt?" note-excerpt-source-link":""}`}
+            onClick={() => {
+              if(excerpt)requestNoteExcerptNavigation(noteId,excerpt.passages);
+              onOpenNote(noteId);
+            }}
           >
             {renderFindChildren(children, `note-link-${noteId}`)}
           </button>
@@ -969,10 +1091,44 @@ export function NoteView({
     },
   };
 
+  // Playback ticks must not remount the reading text: its native ranges also
+  // anchor Find, selection, excerpts and narration highlighting.
+  const renderedMarkdown = useMemo(() => (
+    <ReactMarkdown remarkPlugins={[remarkGfm, remarkNoteTableMetadata]} components={markdownComponents} urlTransform={safeUrl}>
+      {visibleMarkdown}
+    </ReactMarkdown>
+  ), [visibleMarkdown, note, notes, concepts, sources, findQuery, selectedPassageId,
+    onOpenNote, onOpenConcept, onOpenSource, onUpdateNote]);
+
+  useLayoutEffect(() => {
+    const active = narrationRef.current;
+    if (!narrationActive || !active || !findScopeRef.current) { clearNarrationHighlight(); return; }
+    const current = buildNarrationDocument(findScopeRef.current);
+    if (current.text !== active.text) { stopPlayback(); return; }
+    narrationRef.current = current;
+    if (followNarration) highlightNarration(current, narrationPositionRef.current.charIndex, narrationPositionRef.current.charLength);
+  }, [narrationActive, renderedMarkdown, note.title, note.summary]);
+
+  useLayoutEffect(() => {
+    if (!narrationActive || !followNarration || !narrationRef.current) { clearNarrationHighlight(); return; }
+    highlightNarration(narrationRef.current, narrationPositionRef.current.charIndex, narrationPositionRef.current.charLength);
+  }, [narrationActive, followNarration, listenProgress?.charIndex, listenProgress?.charLength]);
+
+
   return (
     <article
       ref={findScopeRef}
-      className={`note-view${editing ? " is-editing" : ""}${showOutline ? " has-outline" : ""}${findOpen ? " has-find" : ""}${showPlayhead ? " is-listening" : ""}`}
+      className={`note-view${editing ? " is-editing" : ""}${showOutline ? " has-outline" : ""}${findOpen ? " has-find" : ""}${showPlayhead ? " is-listening" : ""}${narrationActive ? " has-narration" : ""}`}
+      onClickCapture={(event) => {
+        if (!narrationActive || !narrationRef.current || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.detail === 0) return;
+        const target = event.target as HTMLElement;
+        if (!target.closest("[data-narration-text]") || target.closest("input,textarea,.source-citation-marker,.chat-citation")) return;
+        if (window.getSelection()?.isCollapsed === false) return;
+        const index = narrationCharacterAtPoint(narrationRef.current, event.clientX, event.clientY);
+        if (index === null) return;
+        event.preventDefault(); event.stopPropagation();
+        void startNotePlayback(index);
+      }}
     >
       {showOutline && (
         <NoteOutline
@@ -992,7 +1148,7 @@ export function NoteView({
               aria-label="Note title"
             />
           ) : (
-            <h1>{highlightFindText(note.title, "note-title")}</h1>
+            <h1 data-narration-text="title">{highlightFindText(note.title, "note-title")}</h1>
           )}
           <div className="note-actions">
             <span
@@ -1059,6 +1215,7 @@ export function NoteView({
                     editButtonRef.current?.focus(),
                   );
                 } else {
+                  stopPlayback();
                   dirtyEditingRef.current = false;
                   setEditing(true);
                 }
@@ -1095,7 +1252,7 @@ export function NoteView({
             aria-label="Note summary"
           />
         ) : (
-          <p className="note-summary">
+          <p className="note-summary" data-narration-text="summary">
             {highlightFindText(note.summary, "note-summary")}
           </p>
         )}
@@ -1209,6 +1366,7 @@ export function NoteView({
                 onAttachSource?.(note.id, sourceId)
               }
               onOpenSource={onOpenSource}
+              onOpenNote={onOpenNote}
               onRegisterConcept={onRegisterConcept}
               onGenerateLinkTitle={onGenerateLinkTitle}
               onGenerateAIWriting={onGenerateAIWriting}
@@ -1236,14 +1394,8 @@ export function NoteView({
             onTogglePlay={onSpeakNote ? () => void togglePlayback() : undefined}
           />
         ) : (
-          <div className="note-prose">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={markdownComponents}
-              urlTransform={safeUrl}
-            >
-              {visibleMarkdown}
-            </ReactMarkdown>
+          <div className="note-prose" data-narration-text="body">
+            {renderedMarkdown}
             {selectedPassage && <CitedPassage evidence={selectedPassage} notes={notes} sources={sources}
               panelId={passagePanelId} savedWith="note" onClose={closePassage} onOpenNote={onOpenNote} onOpenSource={onOpenSource} />}
             <SourceReferences
@@ -1273,8 +1425,7 @@ export function NoteView({
       {showPlayhead ? (
         <div
           className="note-listen-playhead"
-          role="status"
-          aria-live="polite"
+          role="region"
           aria-label="Playback playhead"
           data-testid="note-listen-playhead"
         >
@@ -1294,13 +1445,23 @@ export function NoteView({
           </span>
           <div
             className="note-listen-playhead__track"
-            role="progressbar"
+            role={narrationActive ? "slider" : "progressbar"}
             aria-label="Playback progress"
+            tabIndex={narrationActive ? 0 : undefined}
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={Math.round((playheadProgress?.ratio ?? 0) * 100)}
             data-loading={playheadProgress?.loading ? "true" : "false"}
-            data-seekable={showSlideshow ? "true" : "false"}
+            data-seekable={showSlideshow || narrationActive ? "true" : "false"}
+            aria-valuetext={narrationActive && narrationRef.current ? narrationRef.current.text.slice(narrationPositionRef.current.charIndex, narrationPositionRef.current.charIndex + Math.max(1, narrationPositionRef.current.charLength)) : undefined}
+            onKeyDown={(event) => {
+              if (!narrationActive || !narrationRef.current || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+              event.preventDefault();
+              const words = narrationRef.current.words;
+              const current = Math.max(0, words.findIndex((word) => word.to > narrationPositionRef.current.charIndex));
+              const next = event.key === "Home" ? 0 : event.key === "End" ? words.length - 1 : current + (event.key === "ArrowRight" ? 1 : -1);
+              void startNotePlayback(words[Math.max(0, Math.min(words.length - 1, next))]?.from ?? 0);
+            }}
             onClick={
               showSlideshow
                 ? (event) => {
@@ -1310,7 +1471,11 @@ export function NoteView({
                       (event.clientX - rect.left) / rect.width,
                     );
                   }
-                : undefined
+                : narrationActive ? (event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  if (rect.width > 0 && narrationRef.current) void startNotePlayback(
+                    Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) * narrationRef.current.text.length);
+                } : undefined
             }
           >
             <i
@@ -1344,6 +1509,11 @@ export function NoteView({
               ? "…"
               : formatSpeechClock(playheadProgress?.durationSeconds ?? 0)}
           </span>
+          {narrationActive && <>
+            <label className="note-listen-playhead__follow"><input type="checkbox" checked={followNarration} onChange={(event) => setFollowNarration(event.target.checked)} />Follow text</label>
+            <span className="note-listen-playhead__hint">{listenProgress?.timingGranularity === "chunk" ? "Passage timing" : "Click text to jump"}</span>
+            <button type="button" className="icon-button" aria-label="Stop narration" title="Stop narration" onClick={() => stopPlayback()}><X size={14}/></button>
+          </>}
         </div>
       ) : null}
     </article>

@@ -51,6 +51,7 @@ import {
   transcribeYouTube,
 } from "../lib/storage";
 import { partitionImportSourcesForSynthesis } from "../lib/importBatching";
+import { stripMarkdownComments } from "../lib/markdown";
 import {
   buildCompactOrganizerContext,
   mergeGeneratedOrganizerArticles,
@@ -665,8 +666,9 @@ function uniqueSlug(title: string, reserved: Set<string>): string {
 }
 
 function cleanPlainText(text: string): string {
-  return text
+  return stripMarkdownComments(text)
     .replace(/```[\s\S]*?```/g, " ")
+    .replace(/!?\[((?:\\.|[^\]\\])*)\]\([^)]*\)/g, "$1")
     .replace(/[#>*_`~[\]()|]/g, " ")
     .replace(/\s+/g, " ")
     .trim();

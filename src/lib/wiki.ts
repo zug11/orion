@@ -9,7 +9,7 @@ import type {
   SearchResult,
   WikiLinkResolution,
 } from "../types";
-import { splitMarkdownFrontmatter } from "./markdown";
+import { splitMarkdownFrontmatter, stripMarkdownComments } from "./markdown";
 import { visibleNoteTags } from "./noteMetadata";
 
 export interface AutoLinkOptions {
@@ -539,7 +539,7 @@ export function makeExcerpt(
 }
 
 export function markdownToPlainText(markdown: string): string {
-  return markdown
+  return stripMarkdownComments(markdown)
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/`([^`]*)`/g, "$1")
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")

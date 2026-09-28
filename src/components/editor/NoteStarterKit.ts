@@ -9,7 +9,8 @@ export const NoteStarterKit = StarterKit.extend({
       return extension.extend({
         renderHTML({ HTMLAttributes, mark }) {
           const attributes = { ...HTMLAttributes };
-          if (String(attributes.title ?? "").startsWith("orion-passage:v1:")) delete attributes.title;
+          if (String(mark.attrs.title ?? "").startsWith("orion-excerpt:v1:")) attributes["data-note-excerpt-source"] = "true";
+          if (/^orion-(?:passage|excerpt):v1:/.test(String(attributes.title ?? ""))) delete attributes.title;
           return this.parent!({ HTMLAttributes: attributes, mark });
         },
       });

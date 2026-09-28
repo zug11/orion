@@ -1,0 +1,32 @@
+.space-option-rename {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--faint);
+  background: transparent;
+  opacity: .65;
+}
+
+.space-option-row:hover .space-option-rename,
+.space-option-rename:focus-visible,
+.space-option-rename[aria-expanded="true"] {
+  opacity: 1;
+}
+
+.space-option-rename:hover,
+.space-option-rename[aria-expanded="true"] {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--line);
+}
+
+.space-creator.space-renamer {
+  border-color: var(--line-strong);
+  background: var(--surface-1);
+}
+
+.space-renamer .space-creator-footer small { min-width: 0; }

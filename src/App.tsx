@@ -1,3 +1,4 @@
+import { playTrackedSpeech } from "./lib/trackedSpeech";
 import { generateFromSpace } from "./lib/generatePipeline";
 import { flushSync } from "react-dom";
 import { invoke as invokeAssistantHost } from "@tauri-apps/api/core";
@@ -135,6 +136,7 @@ import {
   speakWithSystemVoice,
   type GeneratedSpeech,
   type SpeechPlaybackProgress,
+  type SpeechPlaybackOptions,
 } from "./lib/speech";
 import {
   generateLinkTitleWithDeduplication,
@@ -166,6 +168,7 @@ import {
 } from "./lib/wiki";
 import { deleteNoteFromSnapshot } from "./lib/noteDeletion";
 import { deleteSpaceFromVault } from "./lib/spaceDeletion";
+import { renameSpaceInVault } from "./lib/spaceNames";
 import {
   attachSourceToNoteInSnapshot,
   deleteSourceFromSnapshot,
@@ -1247,6 +1250,20 @@ function App() {
       );
     },
     [resetSpaceNavigation, showToast],
+  );
+
+  const renameSpace = useCallback(
+    (spaceId: string, name: string, expectedName: string): boolean => {
+      const now = new Date().toISOString();
+      const result = renameSpaceInVault(vaultRef.current, spaceId, name, now, expectedName);
+      if (result.error) {
+        showToast("Space not renamed", result.error);
+        return false;
+      }
+      setVault((current) => renameSpaceInVault(current, spaceId, name, now, expectedName).vault);
+      return true;
+    },
+    [showToast],
   );
 
   const deleteSpace = useCallback(
@@ -3410,6 +3427,7 @@ function App() {
     text: string,
     signal?: AbortSignal,
     onProgress?: (progress: SpeechPlaybackProgress) => void,
+    options: SpeechPlaybackOptions = {},
   ): Promise<void> {
     const engine = resolveSpeechEngine(snapshot.settings);
     if (engine === "elevenlabs" && !snapshot.settings.elevenLabsApiKeyConfigured) {
@@ -3423,7 +3441,15 @@ function App() {
       );
     }
     if (engine === "system") {
-      await speakWithSystemVoice(text, signal, onProgress);
+      await speakWithSystemVoice(text, signal, onProgress, options);
+      return;
+    }
+    if (options.trackWords) {
+      await playTrackedSpeech({
+        text, engine, signal, onProgress, options,
+        voiceId: engine === "elevenlabs" ? resolveElevenLabsVoiceId(snapshot.settings) : undefined,
+        cache: preparedSpeech.current, context: acquireSpeechPlaybackContext(), generate: generateSpeech,
+      });
       return;
     }
     const alreadyQueued = preparedSpeech.current.has(
@@ -3684,6 +3710,7 @@ function App() {
         onDeleteNote={deleteNote}
         onNewNote={createNote}
         onCreateSpace={createSpace}
+        onRenameSpace={renameSpace}
         onDeleteSpace={deleteSpace}
         onSwitchSpace={switchSpace}
         onRestartLinkedArticle={restartLinkedArticle}

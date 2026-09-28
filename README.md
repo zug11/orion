@@ -13,9 +13,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.4.5-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.4.6-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
   ·
-  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.4.5.m-Apple-Silicon.dmg">Whisper Medium edition</a>
+  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.4.6.m-Apple-Silicon.dmg">Whisper Medium edition</a>
   ·
   <a href="#the-orchestration-topology">How it works</a>
   ·
@@ -24,7 +24,7 @@
   <a href="#local-first-by-construction">Privacy</a>
 </p>
 
-> Orion 0.4.5 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
+> Orion 0.4.6 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
 
 ## Knowledge work should produce knowledge, not another inbox
 
@@ -82,6 +82,43 @@ decoded audio; longer material can be split into separate files.
 **Settings → Intelligence** includes **GPT-6 Astra** for complex research and
 synthesis through your OpenAI connection, with Low through Extra high reasoning.
 
+## Writing and narration in 0.4.6
+
+Orion 0.4.6 includes a compact slash menu, precise linked excerpts, Word-style
+table insertion with Pages-style document controls, freely movable images with
+live text wrapping, a contextual toolbar, and Heading 1–6. Both the Small and
+Medium editions include these features.
+
+Written-note Play adds **Follow text**: upcoming words dim,
+the current word is highlighted, and clicking text jumps to that passage. Pause
+and resume retain your place; the playback slider supports arrow keys, Home and
+End. System voices use their word-boundary events, ElevenLabs supplies timing
+with its audio, and OpenAI audio is aligned locally using bundled Whisper.
+If a voice or alignment cannot provide word timing, playback remains available
+with a visible **Passage timing** fallback. Cloud passages are prepared as needed
+and cached for seeking; local alignment adds preparation time to OpenAI playback.
+No original dictation recordings are retained by this feature.
+
+The Space switcher now has a pencil action to rename a Space. Import knowledge
+uses larger supporting text, and the editor has a clearer standalone sparkle
+icon for **AI tools**, covering writing, rewriting and image generation. Its
+accessible name and tooltip explain the action without adding toolbar text.
+
+The toolbar keeps its original width, with contextual More at the far right and
+lower-priority tools moving into that menu as space narrows. Slash choices stay
+below the caret in a scrollable menu. Tables use edge count controls with
+chevrons and protect nonempty content when reducing rows or columns. Excerpts
+share a quiet left rule and small bottom-right attribution in reading/editing.
+
+Images can be dragged continuously within the writing column, staying at their
+displayed size without a separate destination box or position label. Captions
+move with the image, and the surrounding text wraps live. An internal paragraph
+anchor and bounded free offsets preserve placement; Wrap text uses the roomier
+side, and Above & below reserves the full line across the image's height.
+Excerpts preserve editable quoted words and do
+not synchronise subsequent source edits. See [the editor and narration guide](docs/editor-preview.md)
+for interactions, persistence, limitations and historical preview validation.
+
 ## What Orion feels like
 
 ### One calm reading and writing surface
@@ -90,7 +127,7 @@ There is no Markdown mode and no read/write split. Click **Edit**, write with a 
 
 While editing a note, the microphone in the sticky writing toolbar records dictation and inserts the transcript at the preserved text cursor. The control remains available as the note scrolls. Recording and transcription stay on-device; the temporary M4A is deleted when bundled Whisper finishes.
 
-The ordinary `0.4.5` download bundles Whisper Small and processes two-minute segments. The `0.4.5.m` download bundles Whisper Medium, loads it once per dictation, and transcribes overlapping 30-second windows in the background. Both keep all generated text hidden until you press Stop, and neither imposes a fixed recording-duration cap.
+The ordinary `0.4.6` download bundles Whisper Small and processes two-minute segments. The `0.4.6.m` download bundles Whisper Medium, loads it once per dictation, and transcribes overlapping 30-second windows in the background. Both keep all generated text hidden until you press Stop, and neither imposes a fixed recording-duration cap.
 
 Inline AI writing is deliberately non-destructive. Continue at the caret or select a passage to Rewrite, Clarify, Tighten, Simplify, Expand, or Enrich from the active Space. A proposal is never saved until you accept it, and acceptance is one ordinary Undo step. An OpenAI key also enables selected-passage image generation with `gpt-image-2.5-sunburst`; image bytes remain transient until accepted.
 
@@ -380,9 +417,9 @@ See [all 20 tools and their contracts](docs/mcp-library-tools.md).
 
 ## Download
 
-[**Download Orion 0.4.5 for Apple Silicon**](https://github.com/zug11/orion/releases/latest/download/Orion-0.4.5-Apple-Silicon.dmg)
+[**Download Orion 0.4.6 for Apple Silicon**](https://github.com/zug11/orion/releases/latest/download/Orion-0.4.6-Apple-Silicon.dmg)
 
-[**Download Orion 0.4.5 with Whisper Medium**](https://github.com/zug11/orion/releases/latest/download/Orion-0.4.5.m-Apple-Silicon.dmg)
+[**Download Orion 0.4.6 with Whisper Medium**](https://github.com/zug11/orion/releases/latest/download/Orion-0.4.6.m-Apple-Silicon.dmg)
 
 The standard installer includes Whisper Small. The larger Medium edition includes Whisper Medium and its persistent dictation worker. Both contain the same app features, two-tone shader picker, Claude connector, and Codex plugin.
 
@@ -451,7 +488,7 @@ Browser preview is a renderer-development convenience, not Orion's desktop secur
 | `cargo test --manifest-path src-tauri/Cargo.toml` | Run Rust host tests |
 | `cargo test --manifest-path src-tauri/mcp-server/Cargo.toml` | Run MCP server tests |
 
-Native bundles are written below `src-tauri/target/release/bundle/`. Public release packaging additionally requires Developer ID signing and notarization. Use `./script/package_release.sh 0.4.5` for Small and `ORION_WHISPER_MODEL=medium ./script/package_release.sh 0.4.5.m` for Medium rather than treating a local ad-hoc build as a distributable release.
+Native bundles are written below `src-tauri/target/release/bundle/`. Public release packaging additionally requires Developer ID signing and notarization. Use `./script/package_release.sh 0.4.6` for Small and `ORION_WHISPER_MODEL=medium ./script/package_release.sh 0.4.6.m` for Medium rather than treating a local ad-hoc build as a distributable release.
 
 ## Architecture
 

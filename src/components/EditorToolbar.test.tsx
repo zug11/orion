@@ -4,8 +4,12 @@ import { Editor } from "@tiptap/core";
 import { Markdown } from "@tiptap/markdown";
 import { TableKit } from "@tiptap/extension-table";
 import StarterKit from "@tiptap/starter-kit";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { NoteTable, insertNoteTable } from "./editor/NoteTable";
+import { TablePicker } from "./editor/TablePicker";
+import { NoteImage } from "./editor/NoteImage";
+import { useState } from "react";
 import { EditorToolbar } from "./EditorToolbar";
 
 const editors: Editor[] = [];
@@ -14,9 +18,7 @@ function createEditor(content = "Alpha beta") {
   const editor = new Editor({
     extensions: [
       StarterKit,
-      TableKit.configure({
-        table: { resizable: false, renderWrapper: true },
-      }),
+      TableKit.configure({table:false}), NoteTable, NoteImage,
       Markdown.configure({ markedOptions: { gfm: true } }),
     ],
     content,
@@ -26,18 +28,16 @@ function createEditor(content = "Alpha beta") {
   return editor;
 }
 
-function renderToolbar(editor: Editor) {
-  return render(
-    <EditorToolbar
-      editor={editor}
-      concepts={[]}
-      onOpenLink={vi.fn()}
-      onUnlink={vi.fn()}
-      citationAvailable={false}
-      onOpenCitation={vi.fn()}
-      onAnnounce={vi.fn()}
-    />,
-  );
+function ToolbarHarness({editor}:{editor:Editor}) {
+  const [table,setTable]=useState(false);
+  return <><EditorToolbar editor={editor} concepts={[]} onOpenLink={vi.fn()} onUnlink={vi.fn()}
+    citationAvailable={false} onOpenCitation={vi.fn()} onAnnounce={vi.fn()} onOpenTable={()=>setTable(true)}/>
+    {table&&<TablePicker editor={editor} onClose={()=>setTable(false)}/>}</>;
+}
+function renderToolbar(editor:Editor) {return render(<ToolbarHarness editor={editor}/>);}
+function moreAction(name:string) {
+  fireEvent.click(screen.getByRole("button",{name:"More formatting"}));
+  fireEvent.click(screen.getByRole("menuitem",{name}));
 }
 
 function tableGeometry(editor: Editor) {
@@ -88,34 +88,28 @@ describe("EditorToolbar", () => {
     const inline = createEditor();
     inline.commands.setTextSelection({ from: 1, to: 6 });
     const inlineToolbar = renderToolbar(inline);
-    fireEvent.click(
-      inlineToolbar.getByRole("button", { name: "Inline code" }),
-    );
+    moreAction("Inline code");
     expect(inline.getMarkdown()).toBe("`Alpha` beta");
     inlineToolbar.unmount();
 
     const strike = createEditor();
     strike.commands.setTextSelection({ from: 1, to: 6 });
     const strikeToolbar = renderToolbar(strike);
-    fireEvent.click(
-      strikeToolbar.getByRole("button", { name: "Strikethrough" }),
-    );
+    moreAction("Strikethrough");
     expect(strike.getMarkdown()).toBe("~~Alpha~~ beta");
     strikeToolbar.unmount();
 
     const block = createEditor("const answer = 42;");
     block.commands.setTextSelection({ from: 1, to: 19 });
     const blockToolbar = renderToolbar(block);
-    fireEvent.click(blockToolbar.getByRole("button", { name: "Code block" }));
+    moreAction("Code block");
     expect(block.getMarkdown()).toContain("```\nconst answer = 42;\n```");
     blockToolbar.unmount();
 
     const divider = createEditor("Above");
     divider.commands.setTextSelection(divider.state.doc.content.size);
-    const dividerToolbar = renderToolbar(divider);
-    fireEvent.click(
-      dividerToolbar.getByRole("button", { name: "Insert divider" }),
-    );
+    renderToolbar(divider);
+    moreAction("Insert divider");
     expect(divider.getMarkdown()).toContain("---");
   });
 
@@ -124,16 +118,16 @@ describe("EditorToolbar", () => {
     renderToolbar(editor);
 
     fireEvent.click(screen.getByRole("button", { name: "Insert table" }));
+    fireEvent.click(screen.getByRole("button", { name: "3 columns, 3 rows" }));
     expect(tableGeometry(editor)).toEqual({ rows: 3, columns: 3 });
 
-    const actions = await screen.findByRole("combobox", {
-      name: "Table actions",
-    });
-    fireEvent.change(actions, { target: { value: "add-row-after" } });
+    fireEvent.click(await screen.findByRole("button", { name: "More table options" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add row below" }));
     await waitFor(() =>
       expect(tableGeometry(editor)).toEqual({ rows: 4, columns: 3 }),
     );
-    fireEvent.change(actions, { target: { value: "add-column-after" } });
+    fireEvent.click(screen.getByRole("button", { name: "More table options" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add column right" }));
     await waitFor(() =>
       expect(tableGeometry(editor)).toEqual({ rows: 4, columns: 4 }),
     );
@@ -142,6 +136,28 @@ describe("EditorToolbar", () => {
     expect(markdown).toContain("| --- | --- | --- | --- |");
     const reopened = createEditor(markdown);
     expect(tableGeometry(reopened)).toEqual({ rows: 4, columns: 4 });
+  });
+
+  it("offers all six heading levels and keeps them on Markdown reopen", () => {
+    const editor=createEditor("Deep section");renderToolbar(editor);
+    fireEvent.click(screen.getByRole("button",{name:"Text style"}));
+    expect(screen.getAllByRole("menuitemradio")).toHaveLength(7);
+    fireEvent.click(screen.getByRole("menuitemradio",{name:/Heading 6/}));
+    expect(editor.getMarkdown().trim()).toBe("###### Deep section");
+    expect(createEditor(editor.getMarkdown()).getJSON().content?.[0].attrs?.level).toBe(6);
+  });
+  it("replaces writing controls with object controls and restores them on text selection", async () => {
+    const editor=createEditor("Opening paragraph.");const view=renderToolbar(editor);
+    act(()=>{insertNoteTable(editor,{rows:2,cols:2});});
+    expect(await screen.findByRole("toolbar",{name:"Table formatting"})).toBeVisible();
+    expect(screen.queryByRole("button",{name:"Bold"})).not.toBeInTheDocument();
+    act(()=>{editor.commands.setTextSelection(editor.state.doc.content.size-1);});
+    expect(await screen.findByRole("button",{name:"Bold"})).toBeVisible();
+    view.unmount();
+    const image=createEditor('![A](data:image/png;base64,aGVsbG8=)');renderToolbar(image);
+    act(()=>image.commands.setNodeSelection(0));
+    expect(await screen.findByRole("toolbar",{name:"Image formatting"})).toBeVisible();
+    expect(screen.queryByRole("button",{name:"Bold"})).not.toBeInTheDocument();
   });
 
   it("keeps undo and redo together in the trailing history group", async () => {
@@ -155,7 +171,7 @@ describe("EditorToolbar", () => {
     expect(history).toContainElement(undo);
     expect(history).toContainElement(redo);
 
-    fireEvent.click(screen.getByRole("button", { name: "Insert divider" }));
+    moreAction("Insert divider");
     await waitFor(() => expect(undo).toBeEnabled());
     fireEvent.click(undo);
     await waitFor(() => expect(redo).toBeEnabled());
@@ -208,7 +224,12 @@ describe("EditorToolbar", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Turn on AI writing" }));
+    const toggle = screen.getByRole("button", { name: "Turn on AI tools" });
+    expect(toggle).toHaveTextContent(/^$/);
+    expect(toggle).toHaveAttribute("title", "AI tools: write, rewrite and generate images");
+    expect(toggle.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    fireEvent.mouseDown(toggle);
+    fireEvent.click(toggle);
 
     expect(onToggleAIWriting).toHaveBeenCalledOnce();
     expect(editor.state.selection.toJSON()).toEqual(beforeSelection);

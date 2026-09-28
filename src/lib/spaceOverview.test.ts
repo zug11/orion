@@ -116,6 +116,31 @@ describe("Space overviews", () => {
     expect(overview.relatedNoteIds).toEqual(["note-story"]);
   });
 
+  it("keeps excerpt metadata and link destinations out of local summaries and overview context", () => {
+    const snapshot = createEmptySnapshot("Writing", NOW);
+    const quote = '> Exact words from the source.\n>\n> [Original note](orion-note://original "orion-excerpt:v1:encoded-passage-data")';
+    snapshot.notes = [{ ...note("draft", "A draft", quote), summary: "" }];
+    const local = buildLocalSpaceOverview(snapshot);
+    const request = buildSpaceOverviewRequest(snapshot);
+    for (const text of [local.body, request.content]) {
+      expect(text).toContain("Exact words from the source.");
+      expect(text).toContain("Original note");
+      expect(text).not.toContain("orion-excerpt");
+      expect(text).not.toContain("encoded-passage-data");
+      expect(text).not.toContain("orion-note://");
+    }
+  });
+
+  it("summarizes table contents without exposing layout comments", () => {
+    const snapshot = createEmptySnapshot("Tables", NOW);
+    snapshot.notes = [{ ...note("table", "A table", '<!-- orion-table:v1 {"width":65,"header":true} -->\n| Material | Finding |\n| --- | --- |\n| Glass | Clear |'), summary: "" }];
+    for (const text of [buildLocalSpaceOverview(snapshot).body, buildSpaceOverviewRequest(snapshot).content]) {
+      expect(text).toContain("Glass");
+      expect(text).not.toContain("orion-table");
+      expect(text).not.toContain('"width"');
+    }
+  });
+
   it("summarizes a single brief note without treating starter copy as knowledge", () => {
     const snapshot = createEmptySnapshot("Research", NOW);
     const brief = { ...note("brief", "Database", "Use PostgreSQL."), summary: "A new thread in your atlas." };

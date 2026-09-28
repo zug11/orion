@@ -1,4 +1,4 @@
-import type { Note, Settings, SpeechVoice } from "../types";
+import type { Note, Settings, SpeechVoice, SpeechWordTiming } from "../types";
 import {
   normalizeElevenLabsVoiceId,
   normalizeSpeechVoice,
@@ -20,14 +20,18 @@ export type CloudSpeechEngine = "openai" | "elevenlabs";
 export interface GeneratedSpeech {
   mimeType: string;
   base64Data: string;
+  wordTimings?: SpeechWordTiming[];
+  timingSource?: "elevenlabs" | "whisper";
+  timingText?: string;
 }
 
 export function cloudSpeechCacheKey(
   engine: CloudSpeechEngine,
   text: string,
   voiceId = "",
+  trackWords = false,
 ): string {
-  return `${engine}\u0000${voiceId}\u0000${text}`;
+  return `${engine}\u0000${voiceId}\u0000${trackWords ? "words" : "audio"}\u0000${text}`;
 }
 
 /**
@@ -104,25 +108,109 @@ export function speechChunkLimit(engine: CloudSpeechEngine): number {
 }
 
 export function chunkSpeechText(text: string, maxChars: number): string[] {
+  return chunkSpeechTextWithOffsets(text, maxChars).map((chunk) => chunk.text);
+}
+
+/** Offsets refer to the canonical whitespace-normalized text, never Markdown. */
+export function chunkSpeechTextWithOffsets(
+  text: string,
+  maxChars: number,
+): { text: string; startChar: number; endChar: number }[] {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (!normalized) return [];
-  if (maxChars <= 0) return [normalized];
-  const chunks: string[] = [];
-  let remaining = normalized;
-  while (remaining.length > maxChars) {
-    const window = remaining.slice(0, maxChars);
+  if (!Number.isFinite(maxChars) || maxChars <= 0) {
+    return [{ text: normalized, startChar: 0, endChar: normalized.length }];
+  }
+  const limit = Math.max(2, Math.floor(maxChars));
+  const chunks: { text: string; startChar: number; endChar: number }[] = [];
+  let startChar = 0;
+  while (startChar < normalized.length) {
+    const window = normalized.slice(startChar, startChar + limit);
     const splitAt = Math.max(
       window.lastIndexOf(". "),
       window.lastIndexOf("? "),
       window.lastIndexOf("! "),
       window.lastIndexOf(" "),
     );
-    const take = splitAt >= Math.floor(maxChars * 0.4) ? splitAt + 1 : maxChars;
-    chunks.push(remaining.slice(0, take).trim());
-    remaining = remaining.slice(take).trim();
+    let endChar = Math.min(normalized.length, startChar + limit);
+    if (endChar < normalized.length) {
+      if (splitAt >= Math.floor(limit * 0.4)) endChar = startChar + splitAt + 1;
+      // Do not split a UTF-16 surrogate pair at a provider chunk boundary.
+      const previous = normalized.charCodeAt(endChar - 1);
+      if (previous >= 0xd800 && previous <= 0xdbff) endChar -= 1;
+    }
+    while (endChar > startChar && normalized[endChar - 1] === " ") endChar -= 1;
+    chunks.push({ text: normalized.slice(startChar, endChar), startChar, endChar });
+    startChar = endChar;
+    while (normalized[startChar] === " ") startChar += 1;
   }
-  if (remaining) chunks.push(remaining);
   return chunks;
+}
+
+export function speechWordAtTime(
+  timings: readonly SpeechWordTiming[] | undefined,
+  seconds: number,
+): SpeechWordTiming | undefined {
+  if (!Number.isFinite(seconds)) return undefined;
+  return timings?.find((word) => seconds >= word.startSeconds && seconds < word.endSeconds);
+}
+
+export function speechWordAtCharacter(
+  timings: readonly SpeechWordTiming[] | undefined,
+  charIndex: number,
+): SpeechWordTiming | undefined {
+  if (!timings?.length || !Number.isFinite(charIndex)) return undefined;
+  let preceding = timings[0];
+  for (const word of timings) {
+    if (charIndex < word.startChar) break;
+    preceding = word;
+    if (charIndex < word.endChar) break;
+  }
+  return preceding;
+}
+
+/** Original-text character alignment from ElevenLabs, not normalized_alignment. */
+export function speechWordsFromCharacterAlignment(
+  text: string,
+  alignment: unknown,
+): SpeechWordTiming[] | undefined {
+  if (!alignment || typeof alignment !== "object" || text.length > 8192) return undefined;
+  const value = alignment as Record<string, unknown>;
+  const characters = value.characters;
+  const starts = value.character_start_times_seconds;
+  const ends = value.character_end_times_seconds;
+  if (!Array.isArray(characters) || !Array.isArray(starts) || !Array.isArray(ends)
+    || characters.length === 0 || characters.length > 8192
+    || starts.length !== characters.length || ends.length !== characters.length) return undefined;
+  let joined = "";
+  let previousStart = 0;
+  let previousEnd = 0;
+  const spans: { startChar: number; endChar: number; startSeconds: number; endSeconds: number }[] = [];
+  for (let index = 0; index < characters.length; index += 1) {
+    const character: unknown = characters[index];
+    const start: unknown = starts[index];
+    const end: unknown = ends[index];
+    if (typeof character !== "string" || character.length < 1 || character.length > 8
+      || typeof start !== "number" || typeof end !== "number"
+      || !Number.isFinite(start) || !Number.isFinite(end)
+      || start < previousStart || end < previousEnd || end < start || end > 600) return undefined;
+    spans.push({ startChar: joined.length, endChar: joined.length + character.length, startSeconds: start, endSeconds: end });
+    joined += character;
+    previousStart = start;
+    previousEnd = end;
+  }
+  if (joined !== text) return undefined;
+  const words: SpeechWordTiming[] = [];
+  for (const match of text.matchAll(/\S+/gu)) {
+    const startChar = match.index;
+    const endChar = startChar + match[0].length;
+    const first = spans.find((span) => span.endChar > startChar);
+    const last = [...spans].reverse().find((span) => span.startChar < endChar);
+    if (first && last && last.endSeconds > first.startSeconds) {
+      words.push({ startChar, endChar, startSeconds: first.startSeconds, endSeconds: last.endSeconds });
+    }
+  }
+  return words.length ? words : undefined;
 }
 
 export function speakableNoteText(
@@ -168,6 +256,16 @@ export interface SpeechPlaybackProgress {
   durationSeconds: number;
   ratio: number;
   loading: boolean;
+  charIndex?: number;
+  charLength?: number;
+  timingGranularity?: "word" | "chunk";
+}
+
+export interface SpeechPlaybackOptions {
+  startCharIndex?: number;
+  trackWords?: boolean;
+  /** Survives seek/pause; cancels only local preparation on Stop/navigation. */
+  preparationSignal?: AbortSignal;
 }
 
 export function formatSpeechClock(seconds: number): string {
@@ -182,6 +280,7 @@ export async function playDecodedSpeech(
   data: ArrayBuffer,
   signal?: AbortSignal,
   onProgress?: (elapsedSeconds: number, durationSeconds: number) => void,
+  startOffsetSeconds = 0,
 ): Promise<void> {
   throwIfAborted(signal);
   if (context.state === "suspended") {
@@ -190,13 +289,20 @@ export async function playDecodedSpeech(
   const buffer = await context.decodeAudioData(data.slice(0));
   throwIfAborted(signal);
   const source = context.createBufferSource();
+  const offset = Number.isFinite(startOffsetSeconds)
+    ? Math.max(0, Math.min(buffer.duration, startOffsetSeconds)) : 0;
   source.buffer = buffer;
   source.connect(context.destination);
   await new Promise<void>((resolve, reject) => {
     let frame = 0;
+    let settled = false;
     const startedAt = context.currentTime;
     const stop = () => {
+      if (settled) return;
+      settled = true;
       window.cancelAnimationFrame(frame);
+      signal?.removeEventListener("abort", stop);
+      source.onended = null;
       try {
         source.stop();
       } catch {
@@ -205,9 +311,10 @@ export async function playDecodedSpeech(
       reject(signal?.reason ?? new Error("Reading was cancelled."));
     };
     const tick = () => {
+      if (settled) return;
       const elapsed = Math.min(
         buffer.duration,
-        Math.max(0, context.currentTime - startedAt),
+        offset + Math.max(0, context.currentTime - startedAt),
       );
       onProgress?.(elapsed, buffer.duration);
       if (elapsed < buffer.duration && !signal?.aborted) {
@@ -220,13 +327,15 @@ export async function playDecodedSpeech(
     }
     signal?.addEventListener("abort", stop, { once: true });
     source.onended = () => {
+      if (settled) return;
+      settled = true;
       window.cancelAnimationFrame(frame);
       signal?.removeEventListener("abort", stop);
       onProgress?.(buffer.duration, buffer.duration);
       resolve();
     };
-    source.start();
-    onProgress?.(0, buffer.duration);
+    source.start(0, offset);
+    onProgress?.(offset, buffer.duration);
     frame = window.requestAnimationFrame(tick);
   });
 }
@@ -281,8 +390,13 @@ export function speakWithSystemVoice(
   text: string,
   signal?: AbortSignal,
   onProgress?: (progress: SpeechPlaybackProgress) => void,
+  options: SpeechPlaybackOptions = {},
 ): Promise<void> {
-  const spoken = text.trim();
+  const requested = Number.isFinite(options.startCharIndex) ? Math.floor(options.startCharIndex!) : 0;
+  let startChar = Math.max(0, Math.min(text.length, requested));
+  if (startChar > 0 && /[\uDC00-\uDFFF]/.test(text[startChar] ?? "")) startChar -= 1;
+  while (/\s/u.test(text[startChar] ?? "") && startChar < text.length) startChar += 1;
+  const spoken = text.slice(startChar).trimEnd();
   if (!spoken) {
     return Promise.reject(new Error("This note has nothing to read aloud."));
   }
@@ -298,55 +412,81 @@ export function speakWithSystemVoice(
     utterance.rate = 0.96;
     const startedAt = Date.now();
     let timer = 0;
-    const stop = () => {
+    let settled = false;
+    let boundary: Pick<SpeechPlaybackProgress, "charIndex" | "charLength" | "timingGranularity"> = options.trackWords
+      ? { charIndex: startChar, charLength: 0, timingGranularity: "chunk" } : {};
+    const cleanup = () => {
       window.clearInterval(timer);
-      synthesis.cancel();
+      signal?.removeEventListener("abort", onAbort);
+      utterance.onboundary = null;
+      utterance.onend = null;
+      utterance.onerror = null;
     };
     const tick = () => {
+      if (settled) return;
       const elapsed = (Date.now() - startedAt) / 1000;
       onProgress?.({
         elapsedSeconds: Math.min(elapsed, estimated),
         durationSeconds: estimated,
-        ratio: Math.min(1, elapsed / estimated),
+        ratio: options.trackWords
+          ? Math.min(1, (startChar + spoken.length * Math.min(1, elapsed / estimated)) / text.length)
+          : Math.min(1, elapsed / estimated),
         loading: false,
+        ...boundary,
       });
     };
-    if (signal?.aborted) {
-      stop();
-      reject(signal.reason ?? new Error("Reading was cancelled."));
-      return;
-    }
     const onAbort = () => {
-      stop();
+      if (settled) return;
+      settled = true;
+      cleanup();
+      synthesis.cancel();
       reject(signal?.reason ?? new Error("Reading was cancelled."));
     };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
     signal?.addEventListener("abort", onAbort, { once: true });
+    utterance.onboundary = (event) => {
+      if (settled || signal?.aborted || !options.trackWords || event.name !== "word"
+        || !Number.isInteger(event.charIndex) || event.charIndex < 0 || event.charIndex >= spoken.length) return;
+      const index = event.charIndex;
+      // charLength may be zero on supported engines; the boundary still supplies
+      // an actual spoken position. Use its containing written word, not a clock estimate.
+      const before = spoken.slice(0, index).match(/\S*$/u)?.[0].length ?? 0;
+      const after = spoken.slice(index).match(/^\S*/u)?.[0].length ?? 0;
+      const wordStart = index - before;
+      const explicitLength = Number.isInteger(event.charLength) && event.charLength > 0
+        ? Math.min(event.charLength, spoken.length - index) : 0;
+      const length = explicitLength || before + after;
+      if (length === 0) return;
+      const absolute = startChar + (explicitLength ? index : wordStart);
+      if (boundary.charIndex !== undefined && absolute < boundary.charIndex) return;
+      boundary = { charIndex: absolute, charLength: length, timingGranularity: "word" };
+      tick();
+    };
     utterance.onend = () => {
-      window.clearInterval(timer);
-      signal?.removeEventListener("abort", onAbort);
+      if (settled) return;
+      settled = true;
+      cleanup();
       onProgress?.({
         elapsedSeconds: estimated,
         durationSeconds: estimated,
         ratio: 1,
         loading: false,
+        ...boundary,
       });
       resolve();
     };
     utterance.onerror = () => {
-      window.clearInterval(timer);
-      signal?.removeEventListener("abort", onAbort);
+      if (settled) return;
+      settled = true;
+      cleanup();
       reject(new Error("System speech could not finish this note."));
     };
-    if (synthesis.speaking || synthesis.pending) {
-      synthesis.cancel();
-    }
-    synthesis.speak(utterance);
-    onProgress?.({
-      elapsedSeconds: 0,
-      durationSeconds: estimated,
-      ratio: 0,
-      loading: false,
-    });
+    if (synthesis.speaking || synthesis.pending) synthesis.cancel();
+    tick();
     timer = window.setInterval(tick, 120);
+    synthesis.speak(utterance);
   });
 }

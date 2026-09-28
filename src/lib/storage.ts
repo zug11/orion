@@ -788,6 +788,7 @@ export async function generateSpeech(
   engine: "openai" | "elevenlabs",
   text: string,
   voiceId?: string,
+  options: { trackWords?: boolean; signal?: AbortSignal } = {},
 ): Promise<GeneratedSpeech> {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -797,13 +798,27 @@ export async function generateSpeech(
     throw new Error("That speech request is too long for one chunk.");
   }
   if (isTauriRuntime()) {
-    return invokeTauri<GeneratedSpeech>("generate_speech", {
-      request: {
+    const tracksLocalAudio = engine === "openai" && options.trackWords === true;
+    const requestId = tracksLocalAudio ? `speech-align:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 12)}` : undefined;
+    const request = {
         engine,
         text: normalized,
         voiceId: voiceId?.trim() || undefined,
-      },
-    });
+        trackWords: options.trackWords === true && (!tracksLocalAudio || !options.signal?.aborted),
+        ...(requestId ? { requestId } : {}),
+    };
+    const cancelAlignment = () => {
+      // A queued provider call observes this flag when it actually dispatches.
+      // An active call keeps its paid audio and cancels only its local worker.
+      request.trackWords = false;
+      void invokeTauri("cancel_media_import", { requestId }).catch(() => undefined);
+    };
+    if (tracksLocalAudio) options.signal?.addEventListener("abort", cancelAlignment, { once: true });
+    try {
+      return await invokeTauri<GeneratedSpeech>("generate_speech", { request });
+    } finally {
+      options.signal?.removeEventListener("abort", cancelAlignment);
+    }
   }
   if (engine === "openai") {
     return runBrowserProviderCall(
@@ -813,7 +828,7 @@ export async function generateSpeech(
     );
   }
   return providerCallScheduler.run(
-    () => generateSpeechInBrowserWithElevenLabs(normalized, voiceId),
+    () => generateSpeechInBrowserWithElevenLabs(normalized, voiceId, options.trackWords === true),
     { queueKey: "speech" },
   );
 }
@@ -2678,26 +2693,27 @@ async function generateSpeechInBrowserWithOpenAI(
   if (!response.ok) {
     throw new Error(await readProviderApiError(response, "OpenAI"));
   }
-  const buffer = await response.arrayBuffer();
+  const buffer = await readBoundedSpeechResponse(response, 12 * 1024 * 1024);
   return speechFromArrayBuffer(buffer);
 }
 
 async function generateSpeechInBrowserWithElevenLabs(
   text: string,
   voiceId?: string,
+  trackWords = false,
 ): Promise<GeneratedSpeech> {
   const apiKey = requireBrowserElevenLabsApiKey();
-  const { resolveElevenLabsVoiceId } = await import("./speech");
+  const { resolveElevenLabsVoiceId, speechWordsFromCharacterAlignment } = await import("./speech");
   const voice = resolveElevenLabsVoiceId({
     elevenLabsVoiceId: voiceId ?? "",
   });
   const response = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${voice}`,
+    `https://api.elevenlabs.io/v1/text-to-speech/${voice}${trackWords ? "/with-timestamps" : ""}`,
     {
       method: "POST",
       headers: {
         "xi-api-key": apiKey,
-        Accept: "audio/mpeg",
+        Accept: trackWords ? "application/json" : "audio/mpeg",
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -2709,8 +2725,52 @@ async function generateSpeechInBrowserWithElevenLabs(
   if (!response.ok) {
     throw new Error(await readProviderApiError(response, "ElevenLabs"));
   }
-  const buffer = await response.arrayBuffer();
+  if (trackWords) {
+    const encoded = await readBoundedSpeechResponse(response, 18 * 1024 * 1024);
+    const result: unknown = JSON.parse(new TextDecoder().decode(encoded));
+    if (!result || typeof result !== "object") throw new Error("The speech provider returned invalid audio.");
+    const payload = result as Record<string, unknown>;
+    if (typeof payload.audio_base64 !== "string" || payload.audio_base64.length > 16 * 1024 * 1024) {
+      throw new Error("The speech provider returned invalid audio.");
+    }
+    let bytes: Uint8Array;
+    try {
+      bytes = Uint8Array.from(atob(payload.audio_base64), (character) => character.charCodeAt(0));
+    } catch {
+      throw new Error("The speech provider returned invalid audio.");
+    }
+    const speech = speechFromArrayBuffer(bytes.buffer as ArrayBuffer);
+    const wordTimings = speechWordsFromCharacterAlignment(text, payload.alignment);
+    return wordTimings ? { ...speech, wordTimings, timingSource: "elevenlabs", timingText: text } : speech;
+  }
+  const buffer = await readBoundedSpeechResponse(response, 12 * 1024 * 1024);
   return speechFromArrayBuffer(buffer);
+}
+
+async function readBoundedSpeechResponse(response: Response, limit: number): Promise<ArrayBuffer> {
+  if (Number(response.headers.get("content-length")) > limit) throw new Error("That spoken audio is too large to play.");
+  const reader = response.body?.getReader();
+  if (!reader) return new ArrayBuffer(0);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > limit) {
+        await reader.cancel();
+        throw new Error("That spoken audio is too large to play.");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let cursor = 0;
+  for (const chunk of chunks) { bytes.set(chunk, cursor); cursor += chunk.byteLength; }
+  return bytes.buffer;
 }
 
 function speechFromArrayBuffer(buffer: ArrayBuffer): GeneratedSpeech {

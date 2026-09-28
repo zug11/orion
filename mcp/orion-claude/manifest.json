@@ -3,7 +3,7 @@
   "manifest_version": "0.4",
   "name": "orion-knowledge-atlas",
   "display_name": "Orion",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "Search, edit, research, import, and generate in your local Orion Spaces.",
   "long_description": "Connect Claude Desktop to Orion's local library and optional native AI workflows. Read and edit notes without an API key, or enable scoped research, source import/reprocessing, generation, concept development, enrichment, and overview refresh while Orion is open. The app retains credentials, provider settings, and atomic writes. Jobs report evidence, coverage, freshness, and cancellation. Includes exact source passages, note sections, concept and link-path navigation, provenance, tasks, guarded text edits, atomic metadata batches, duplicate detection, and integrity checks. All 29 local library tools work while Orion is closed.",
   "author": {

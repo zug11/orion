@@ -25,6 +25,7 @@ mod assistant_protocol;
 mod desktop_windows;
 mod image_planning;
 mod media_jobs;
+mod speech_timing;
 mod theme_icon;
 mod window_glass;
 
@@ -1003,6 +1004,9 @@ struct GenerateSpeechRequest {
     engine: String,
     text: String,
     voice_id: Option<String>,
+    #[serde(default)]
+    track_words: bool,
+    request_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1011,6 +1015,12 @@ struct GeneratedSpeech {
     mime_type: String,
     byte_size: usize,
     base64_data: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    word_timings: Option<Vec<speech_timing::SpeechWordTiming>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timing_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timing_text: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2172,11 +2182,25 @@ async fn test_elevenlabs_key(client: State<'_, OpenAiClient>) -> Result<KeyTestR
 
 #[tauri::command]
 async fn generate_speech(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    jobs: State<'_, media_jobs::MediaJobs>,
     client: State<'_, OpenAiClient>,
     request: GenerateSpeechRequest,
 ) -> Result<GeneratedSpeech, String> {
     let (engine, text) = validate_speech_request(&request.engine, &request.text)?;
     let voice_id = request.voice_id;
+    // Reserve cancellation ownership while the paid request is pending, without
+    // holding a process slot or making Quit wait for a network-only operation.
+    let alignment_job = if request.track_words && engine == "openai" {
+        request
+            .request_id
+            .as_deref()
+            .and_then(|id| jobs.begin_picker(window.label(), id).ok())
+    } else {
+        None
+    };
+    let mut word_timings = None;
     let bytes = if engine == "openai" {
         let Some(api_key) = stored_api_key().await? else {
             return Err(
@@ -2201,10 +2225,7 @@ async fn generate_speech(
         if !response.status().is_success() {
             return Err(openai_error(response, "speak this note").await);
         }
-        response
-            .bytes()
-            .await
-            .map_err(|error| format!("Orion could not read OpenAI speech audio: {error}"))?
+        read_speech_response(response, speech_timing::MAX_AUDIO_BYTES).await?
     } else {
         let Some(api_key) = stored_elevenlabs_api_key().await? else {
             return Err(
@@ -2212,12 +2233,24 @@ async fn generate_speech(
             );
         };
         let voice = validate_elevenlabs_voice_id(voice_id.as_deref())?;
-        let url = format!("{ELEVENLABS_TTS_URL_PREFIX}{voice}");
+        let suffix = if request.track_words {
+            "/with-timestamps"
+        } else {
+            ""
+        };
+        let url = format!("{ELEVENLABS_TTS_URL_PREFIX}{voice}{suffix}");
         let response = client
             .0
             .post(&url)
             .header("xi-api-key", api_key.as_str())
-            .header(reqwest::header::ACCEPT, "audio/mpeg")
+            .header(
+                reqwest::header::ACCEPT,
+                if request.track_words {
+                    "application/json"
+                } else {
+                    "audio/mpeg"
+                },
+            )
             .json(&json!({
                 "text": text,
                 "model_id": "eleven_multilingual_v2"
@@ -2234,22 +2267,129 @@ async fn generate_speech(
                 detail.chars().take(240).collect::<String>()
             ));
         }
-        response
-            .bytes()
-            .await
-            .map_err(|error| format!("Orion could not read ElevenLabs audio: {error}"))?
+        if request.track_words {
+            let body = read_speech_response(response, 18 * 1024 * 1024).await?;
+            let payload: Value = serde_json::from_slice(&body)
+                .map_err(|_| "The speech provider returned invalid audio.".to_string())?;
+            let encoded = payload
+                .get("audio_base64")
+                .and_then(Value::as_str)
+                .filter(|value| value.len() <= speech_timing::MAX_AUDIO_BYTES.div_ceil(3) * 4)
+                .ok_or_else(|| "The speech provider returned invalid audio.".to_string())?;
+            let audio = BASE64_STANDARD
+                .decode(encoded)
+                .map_err(|_| "The speech provider returned invalid audio.".to_string())?;
+            word_timings = payload
+                .get("alignment")
+                .cloned()
+                .and_then(|alignment| speech_timing::from_character_alignment(&text, alignment));
+            audio
+        } else {
+            read_speech_response(response, speech_timing::MAX_AUDIO_BYTES).await?
+        }
     };
     if bytes.is_empty() {
         return Err("The speech provider returned an empty audio file.".to_string());
     }
-    if bytes.len() > 12 * 1024 * 1024 {
+    if bytes.len() > speech_timing::MAX_AUDIO_BYTES {
         return Err("That spoken audio is too large to play.".to_string());
     }
+    if request.track_words && engine == "openai" {
+        if let Some(job) = alignment_job {
+            if window.is_visible().is_ok() && jobs.promote_picker(&job).is_ok() {
+                word_timings = align_generated_speech(&app, job, &text, &bytes).await;
+            }
+        }
+    }
+    let timing_source = word_timings.as_ref().map(|_| {
+        if engine == "openai" {
+            "whisper"
+        } else {
+            "elevenlabs"
+        }
+        .to_string()
+    });
+    let timing_text = word_timings.as_ref().map(|_| text);
     Ok(GeneratedSpeech {
         mime_type: "audio/mpeg".to_string(),
         byte_size: bytes.len(),
         base64_data: BASE64_STANDARD.encode(&bytes),
+        word_timings,
+        timing_source,
+        timing_text,
     })
+}
+
+async fn read_speech_response(mut response: Response, limit: usize) -> Result<Vec<u8>, String> {
+    if response
+        .content_length()
+        .is_some_and(|bytes| bytes > limit as u64)
+    {
+        return Err("That spoken audio is too large to play.".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "Orion could not finish reading speech audio.".to_string())?
+    {
+        if bytes.len().saturating_add(chunk.len()) > limit {
+            return Err("That spoken audio is too large to play.".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+/// Timing failure must not discard already-generated speech or retry a paid call.
+async fn align_generated_speech(
+    app: &AppHandle,
+    job: media_jobs::Job,
+    text: &str,
+    bytes: &[u8],
+) -> Option<Vec<speech_timing::SpeechWordTiming>> {
+    let runtime = bundled_transcription_runtime(app).ok()?;
+    validate_whisper_runtime(&runtime).ok()?;
+    let audio = bytes.to_vec();
+    let text = text.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        job.control.check().ok()?;
+        // tempfile creates a private mode-0600 file; Drop removes it on every path.
+        let mut file = tempfile::Builder::new()
+            .prefix("orion-speech-")
+            .suffix(".mp3")
+            .tempfile()
+            .ok()?;
+        file.write_all(&audio).ok()?;
+        file.flush().ok()?;
+        let run = |cpu: bool| {
+            let mut command = Command::new(&runtime.whisper);
+            command
+                .arg("--align")
+                .arg("--model")
+                .arg(&runtime.model)
+                .arg("--input")
+                .arg(file.path());
+            if cpu {
+                command.arg("--cpu");
+            }
+            job.control.run(&mut command, Duration::from_secs(120)).ok()
+        };
+        let mut output = run(false)?;
+        if !output.status.success()
+            && String::from_utf8_lossy(&output.stderr).contains("ggml_metal_buffer_init: error")
+        {
+            output = run(true)?;
+        }
+        job.control.check().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        speech_timing::from_acoustic_json(&text, &output.stdout)
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 #[tauri::command]
