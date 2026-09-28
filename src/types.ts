@@ -724,8 +724,19 @@ export interface GeneratedNoteImage {
   base64Data: string;
 }
 
+/** UTF-16 ranges in timingText; times come from the generated audio. */
+export interface SpeechWordTiming {
+  startChar: number;
+  endChar: number;
+  startSeconds: number;
+  endSeconds: number;
+}
+
 export interface GeneratedSpeech {
   mimeType: "audio/mpeg";
   byteSize: number;
   base64Data: string;
+  wordTimings?: SpeechWordTiming[];
+  timingSource?: "elevenlabs" | "whisper";
+  timingText?: string;
 }

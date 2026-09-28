@@ -16,6 +16,11 @@ import {
 const NOW = "2026-07-29T02:00:00.000Z";
 
 describe("automatic wiki enrichment", () => {
+  it("does not count hidden excerpt metadata as substantive note text", () => {
+    const note = makeNote({ title: "Brief", summary: "", body: '> One word.\n>\n> [Source](orion-note://source "orion-excerpt:v1:some-long-hidden-metadata-payload-that-is-not-visible-prose")' });
+    expect(hasSubstantiveKnowledgeNote(note)).toBe(false);
+  });
+
   it("asks for every relevant existing wiki and no duplicate project note", () => {
     const snapshot = createEmptySnapshot("Sociology", NOW, "space-soc");
     const origin = makeNote({

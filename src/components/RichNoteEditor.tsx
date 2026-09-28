@@ -1,8 +1,19 @@
 import type { Editor, EditorEvents } from "@tiptap/core";
 import { Markdown } from "@tiptap/markdown";
-import Image from "@tiptap/extension-image";
+import { NoteImage } from "./editor/NoteImage";
 import Placeholder from "@tiptap/extension-placeholder";
 import { TableKit } from "@tiptap/extension-table";
+import { NoteTable } from "./editor/NoteTable";
+import { TablePicker } from "./editor/TablePicker";
+import { EditorInsertLayer } from "./editor/EditorInsertLayer";
+import { SlashMenu } from "./editor/SlashMenu";
+import type { SlashCommand } from "./editor/slashCommands";
+import { ExcerptPicker } from "./editor/ExcerptPicker";
+import { NoteExcerpt } from "./editor/NoteExcerpt";
+import { requestNoteExcerptNavigation } from "../lib/noteExcerptNavigation";
+import { buildNoteExcerptContent, parseNoteExcerptTitle } from "../lib/noteExcerpts";
+import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
+import type { JSONContent } from "@tiptap/core";
 import TaskItem from "@tiptap/extension-task-item";
 import TaskList from "@tiptap/extension-task-list";
 import { EditorContent, useEditor } from "@tiptap/react";
@@ -37,6 +48,7 @@ import {
 import {
   imageFilesFromTransfer,
   noteImageAlt,
+  NOTE_IMAGE_ACCEPT,
 } from "../lib/noteImages";
 import { persistGeneratedNoteImage, saveNoteImage } from "../lib/storage";
 import {
@@ -89,6 +101,7 @@ interface RichNoteEditorProps {
   onChange: (markdown: string) => void;
   onAttachSource: (sourceId: EntityId) => void;
   onOpenSource?: (sourceId: EntityId) => void;
+  onOpenNote?: (noteId: EntityId) => void;
   onRegisterConcept: (input: RegisterWikiLinkInput) => EntityId;
   onGenerateLinkTitle?: (selectedContext: string, signal?: AbortSignal) => Promise<string>;
   onGenerateAIWriting?: (
@@ -180,6 +193,7 @@ export function RichNoteEditor({
   onChange,
   onAttachSource,
   onOpenSource,
+  onOpenNote,
   onRegisterConcept,
   onGenerateLinkTitle,
   onGenerateAIWriting,
@@ -206,8 +220,10 @@ export function RichNoteEditor({
     };
   });
   const conceptsRef = useRef(concepts);
+  const notesRef = useRef(notes);
   const sourcesRef = useRef(sources);
   const onChangeRef = useRef(onChange);
+  const onOpenNoteRef = useRef(onOpenNote);
   const frontmatterRef = useRef(initialDocument.prefix);
   const savedPassagesRef = useRef(initialDocument.passages.footer);
   const [savedPassages, setSavedPassages] = useState(initialDocument.passages.evidence);
@@ -227,6 +243,8 @@ export function RichNoteEditor({
   const aiOperationRef = useRef<AIOperation | null>(null);
   const aiImageAbortRef = useRef<AbortController | null>(null);
   const aiSelectionRef = useRef({ from: 0, to: 0, empty: true });
+  const slashImageInputRef = useRef<HTMLInputElement>(null);
+  const [pendingInsert, setPendingInsert] = useState<{kind:"table"|"excerpt"|"link"|"image";range:{from:number;to:number};document:ProseMirrorNode}|null>(null);
   const [linkDraft, setLinkDraft] = useState<LinkDraft | null>(null);
   const [linkTitleBusy, setLinkTitleBusy] = useState(false);
   const [citationDraft, setCitationDraft] = useState<CitationDraft | null>(null);
@@ -246,8 +264,10 @@ export function RichNoteEditor({
     "Editing note. Formatting tools are available.",
   );
   conceptsRef.current = concepts;
+  notesRef.current = notes;
   sourcesRef.current = sources;
   onChangeRef.current = onChange;
+  onOpenNoteRef.current = onOpenNote;
   findQueryRef.current = findQuery;
   onFindDecorationsChangedRef.current = onFindDecorationsChanged;
   aiOperationRef.current = aiOperation;
@@ -255,7 +275,7 @@ export function RichNoteEditor({
   const extensions = useMemo(
     () => [
       NoteStarterKit.configure({
-        heading: { levels: [1, 2, 3] },
+        heading: { levels: [1, 2, 3, 4, 5, 6] },
         link: {
           autolink: true,
           openOnClick: false,
@@ -268,19 +288,16 @@ export function RichNoteEditor({
           },
         },
       }),
-      TableKit.configure({
-        table: {
-          resizable: false,
-          renderWrapper: true,
-        },
-      }),
+      TableKit.configure({ table: false }),
+      NoteTable,
+      NoteExcerpt,
       TaskList,
       TaskItem.configure({ nested: true }),
       Placeholder.configure({
         placeholder: "Start writing…",
         emptyEditorClass: "is-editor-empty",
       }),
-      Image.configure({
+      NoteImage.configure({
         allowBase64: true,
         HTMLAttributes: {
           class: "note-embedded-image",
@@ -312,6 +329,21 @@ export function RichNoteEditor({
           "aria-label": "Note body",
           "aria-multiline": "true",
           spellcheck: "true",
+        },
+        handleClick: (view, _pos, event) => {
+          const anchor=(event.target as HTMLElement).closest<HTMLAnchorElement>('a[data-note-excerpt-source]');
+          const href=anchor?.getAttribute("href");
+          const id=href?.startsWith("orion-note://") ? href.slice("orion-note://".length) : undefined;
+          const openNote=onOpenNoteRef.current;
+          if (!anchor || !id || !notesRef.current.some(candidate=>candidate.id===id) || !openNote) return false;
+          try {
+            const position=view.posAtDOM(anchor,0);
+            const node=view.state.doc.nodeAt(position);
+            const mark=node?.marks.find(mark=>mark.type.name==="link");
+            const passage=parseNoteExcerptTitle(mark?.attrs.title,href??undefined);
+            if(passage)requestNoteExcerptNavigation(id,passage.passages);
+          } catch { /* A changed source still opens through its stable note ID. */ }
+          event.preventDefault();openNote(id);return true;
         },
         handlePaste: (_view, event) => {
           const files = imageFilesFromTransfer(event.clipboardData?.files ?? []);
@@ -355,6 +387,13 @@ export function RichNoteEditor({
     [noteId],
   );
   editorRef.current = editor;
+
+  useEffect(() => {
+    const input=slashImageInputRef.current;
+    const cancel=()=>{setPendingInsert(null);editor?.commands.focus();};
+    input?.addEventListener("cancel",cancel);
+    return ()=>input?.removeEventListener("cancel",cancel);
+  },[editor]);
 
   useEffect(() => () => clearVoiceMemoInsertion(), [noteId]);
 
@@ -558,6 +597,47 @@ export function RichNoteEditor({
     return null;
   }
 
+  function beginInsert(kind:"table"|"excerpt"|"link"|"image", range={from:editor!.state.selection.from,to:editor!.state.selection.to}) {
+    if (!editor || !editor.isEditable) return;
+    setPendingInsert({kind,range,document:editor.state.doc});
+    if (kind === "image") slashImageInputRef.current?.click();
+  }
+
+  function cancelInsert() {
+    setPendingInsert(null);
+    editor?.commands.focus();
+  }
+
+  function insertPickerContent(content:JSONContent[]) {
+    if (!editor || !pendingInsert) return;
+    if (!editor.state.doc.eq(pendingInsert.document)) {
+      setPendingInsert(null);
+      setAnnouncement("This note changed while the picker was open. Open the picker again at your cursor.");
+      return;
+    }
+    editor.chain().focus().insertContentAt(pendingInsert.range,content).run();
+    setPendingInsert(null);
+  }
+
+  function runSlashCommand(command:SlashCommand, range:{from:number;to:number}) {
+    if (!editor?.isEditable) return;
+    if (["table","excerpt","link","image"].includes(command)) {
+      beginInsert(command as "table"|"excerpt"|"link"|"image",range);return;
+    }
+    const chain=editor.chain().focus().deleteRange(range);
+    if (/^h[1-6]$/.test(command)) chain.setHeading({level:Number(command[1]) as 1|2|3|4|5|6}).run();
+    else switch(command) {
+      case "todo":chain.toggleTaskList().run();break;
+      case "bullet":chain.toggleBulletList().run();break;
+      case "numbered":chain.toggleOrderedList().run();break;
+      case "divider":chain.setHorizontalRule().run();break;
+      case "code":chain.setCodeBlock().run();break;
+      case "delete-row":chain.deleteRow().run();break;
+      case "delete-column":chain.deleteColumn().run();break;
+      case "delete-table":chain.deleteTable().run();break;
+    }
+  }
+
   function setCurrentAIOperation(operation: AIOperation | null) {
     aiOperationRef.current = operation;
     setAIOperation(operation);
@@ -566,6 +646,7 @@ export function RichNoteEditor({
   async function insertNoteImages(
     files: readonly File[],
     requestedPosition?: number,
+    replacementRange?: { from: number; to: number },
   ) {
     const currentEditor = editorRef.current;
     if (
@@ -577,6 +658,17 @@ export function RichNoteEditor({
       return;
     }
     const selected = files.slice(0, 8);
+    const insertion = replacementRange ? { ...replacementRange } : {
+      from: requestedPosition ?? currentEditor.state.selection.to,
+      to: requestedPosition ?? currentEditor.state.selection.to,
+    };
+    const replacedText = currentEditor.state.doc.textBetween(insertion.from, insertion.to);
+    const trackInsertion = ({ transaction }: EditorEvents["transaction"]) => {
+      const collapsed = insertion.from === insertion.to;
+      insertion.from = transaction.mapping.map(insertion.from, 1);
+      insertion.to = collapsed ? insertion.from : transaction.mapping.map(insertion.to, -1);
+    };
+    currentEditor.on("transaction", trackInsertion);
     imageUploadActiveRef.current = true;
     setImageBusy(true);
     setAnnouncement(
@@ -607,15 +699,15 @@ export function RichNoteEditor({
           : [],
       );
       if (images.length > 0) {
-        const position = Math.min(
-          requestedPosition ?? currentEditor.state.selection.to,
-          currentEditor.state.doc.content.size,
-        );
+        if (replacementRange && (insertion.to < insertion.from ||
+          currentEditor.state.doc.textBetween(insertion.from, insertion.to) !== replacedText)) {
+          setAnnouncement("The image insertion text changed. Insert the image again at your cursor.");
+          return;
+        }
         currentEditor
           .chain()
           .focus()
-          .setTextSelection(position)
-          .insertContent(images)
+          .insertContentAt(insertion, images)
           .run();
       }
       const failures = results.filter((result) => result.status === "rejected");
@@ -632,6 +724,7 @@ export function RichNoteEditor({
         );
       }
     } finally {
+      currentEditor.off("transaction", trackInsertion);
       imageUploadActiveRef.current = false;
       setImageBusy(false);
     }
@@ -708,7 +801,7 @@ export function RichNoteEditor({
     const imageAvailable = aiImageGenerationEnabled && Boolean(onGenerateAIImage);
     if (!writingAvailable && !imageAvailable) {
       setAnnouncement(
-        `Add an ${aiProviderName ?? "AI provider"} key in Settings to use AI writing.`,
+        `Add an ${aiProviderName ?? "AI provider"} key in Settings to use AI tools.`,
       );
       return;
     }
@@ -717,7 +810,7 @@ export function RichNoteEditor({
       setAIWritingActive(false);
       setAISelectionPosition(HIDDEN_AI_CONTROL);
       setAIDockPosition(HIDDEN_AI_CONTROL);
-      setAnnouncement("AI writing mode off.");
+      setAnnouncement("AI mode off.");
       return;
     }
     setLinkDraft(null);
@@ -729,11 +822,13 @@ export function RichNoteEditor({
     setAnnouncement(
       empty
         ? writingAvailable
-          ? "AI writing mode on. Continue is available at the bottom of the note."
+          ? "AI mode on. Continue is available at the bottom of the note."
           : "AI mode on. Select a passage to generate an image."
         : imageAvailable
-          ? "AI mode on. Rewrite and image generation are available for the selection."
-          : "AI writing mode on. Rewrite is available for the selected text.",
+          ? writingAvailable
+            ? "AI mode on. Rewrite and image generation are available for the selection."
+            : "AI mode on. Generate image is available for the selected text."
+          : "AI mode on. Rewrite is available for the selected text.",
     );
     window.requestAnimationFrame(updateAIControlPositions);
   }
@@ -885,6 +980,9 @@ export function RichNoteEditor({
           instruction: input.instruction,
           selectedMarkdown: input.capture.selectedMarkdown,
           selectedText: input.capture.selectedText,
+          documentMarkdown: input.capture.documentMarkdown,
+          beforeMarkdown: input.capture.beforeMarkdown,
+          afterMarkdown: input.capture.afterMarkdown,
         },
         controller.signal,
       );
@@ -1268,6 +1366,8 @@ export function RichNoteEditor({
           editor={editor}
           concepts={concepts}
           onOpenLink={openLinkComposer}
+          onOpenExcerpt={() => beginInsert("excerpt")}
+          onOpenTable={() => beginInsert("table")}
           onUnlink={unlinkSelection}
           citationAvailable={sources.length > 0}
           onOpenCitation={openCitationPicker}
@@ -1300,6 +1400,14 @@ export function RichNoteEditor({
           onAnnounce={setAnnouncement}
         />
       </div>
+      <SlashMenu editor={editor} suspended={Boolean(pendingInsert || linkDraft || citationDraft || aiOperation || imageBusy)} onCommand={runSlashCommand}/>
+      <input ref={slashImageInputRef} type="file" className="sr-only" accept={NOTE_IMAGE_ACCEPT} multiple tabIndex={-1} aria-hidden="true"
+        onChange={(event) => {
+          const files=Array.from(event.currentTarget.files??[]);event.currentTarget.value="";
+          if (!files.length || !pendingInsert || !editor.state.doc.eq(pendingInsert.document)) {cancelInsert();return;}
+          const range = pendingInsert.range;
+          setPendingInsert(null);void insertNoteImages(files, undefined, range);
+        }}/>
       <EditorContent
         editor={editor}
         className="note-prose editor-prose"
@@ -1335,7 +1443,7 @@ export function RichNoteEditor({
       />
       <AIWritingControls
         active={aiWritingActive}
-        suspended={Boolean(linkDraft || citationDraft || linkTitleBusy)}
+        suspended={Boolean(pendingInsert || linkDraft || citationDraft || linkTitleBusy || editor.isActive("image") || editor.isActive("table"))}
         phase={aiOperation?.phase ?? "idle"}
         hasSelection={!aiSelectionEmpty}
         selectionPosition={aiSelectionPosition}
@@ -1354,6 +1462,21 @@ export function RichNoteEditor({
         onRetry={retryAIWriting}
         onDiscard={() => discardAIWriting(true)}
       />
+      {pendingInsert?.kind === "table" && <EditorInsertLayer editor={editor} position={pendingInsert.range.from}>
+        <TablePicker editor={editor} range={pendingInsert.range} onClose={cancelInsert}
+          canInsert={() => editor.state.doc.eq(pendingInsert.document)}
+          onInsert={() => setAnnouncement("Table inserted. Tab moves between cells.")}/>
+
+      </EditorInsertLayer>}
+      {(pendingInsert?.kind === "excerpt" || pendingInsert?.kind === "link") && <ExcerptPicker
+        notes={notes} currentNoteId={noteId} mode={pendingInsert.kind} portalTarget={editor.view.dom.closest(".app-shell")??undefined}
+        onClose={cancelInsert}
+        onInsertExcerpt={(selection) => insertPickerContent(buildNoteExcerptContent(selection))}
+        onInsertLink={(target) => {
+          if(!notes.some(candidate=>candidate.id===target.id))return;
+          insertPickerContent([{type:"text",text:target.title,marks:[{type:"link",attrs:{href:`orion-note://${target.id}`}}]}]);
+        }}/>
+      }
       {linkDraft && (
         <ConceptLinkPopover
           initialPhrase={linkDraft.initialPhrase}

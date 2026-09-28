@@ -261,6 +261,8 @@ export function AIWritingControls({
           }${selectionPanel ? " is-open" : ""}`}
           style={selectionStyle}
           data-testid="ai-writing-selection-control"
+          role="group"
+          aria-label="AI tools for selected text"
         >
           {selectionPanel === "rewrite" ? (
             <form
@@ -436,7 +438,7 @@ export function AIWritingControls({
                   type="button"
                   className="ai-writing-image-button"
                   aria-label="Generate image from selected text"
-                  title="Generate image"
+                  title="Generate an image from this passage and its Space context"
                   onMouseDown={preserveEditorSelection}
                   onClick={() => setSelectionPanel("image")}
                 >

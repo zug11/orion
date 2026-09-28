@@ -1,3 +1,6 @@
+import { noteTableHeaderInfo, noteTableLayoutAtLine, remarkNoteTableMetadata } from "./noteTables";
+import { getNoteExcerptText, parseNoteExcerptTitle } from "./noteExcerpts";
+import { parseNoteImageTitle, noteImageLayoutStyle, noteImageContentStyle } from "./noteImageLayout";
 import {
   Children,
   cloneElement,
@@ -54,7 +57,7 @@ interface ExportNoteProps {
 type ExportThemePreferences = ThemePreferences & { theme: ThemeMode };
 
 const ORION_LINK_PATTERN =
-  /\[[^\]\n]*\]\(orion-(note|concept):\/\/([^) \t\r\n]+)\)/g;
+  /\[[^\]\n]*\]\(orion-(note|concept):\/\/([^) \t\r\n]+)(?:[ \t]+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'))?\)/g;
 
 const EXPORT_STYLES = String.raw`
 :root {
@@ -198,13 +201,16 @@ a { color: inherit; }
 .export-note-meta { display: flex; flex-wrap: wrap; gap: 7px 13px; margin-top: 18px; color: var(--faint); font-size: 9px; }
 .export-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 15px; }
 .export-tags span { padding: 4px 7px; border-radius: 999px; color: var(--muted); background: var(--accent-soft); font-size: 8px; }
-.export-prose { padding-top: 35px; color: var(--text-soft); font-family: var(--serif); font-size: 17px; line-height: 1.78; }
+.export-prose { display: flow-root; padding-top: 35px; color: var(--text-soft); font-family: var(--serif); font-size: 17px; line-height: 1.78; }
 .export-prose > :first-child { margin-top: 0; }
 .export-prose p, .export-prose ul, .export-prose ol, .export-prose blockquote, .export-prose table, .export-prose pre { margin: 0 0 1.25em; }
-.export-prose h1, .export-prose h2, .export-prose h3 { color: var(--text); scroll-margin-top: 24px; }
+.export-prose h1, .export-prose h2, .export-prose h3, .export-prose h4, .export-prose h5, .export-prose h6 { color: var(--text); scroll-margin-top: 24px; }
 .export-prose h1 { margin: 1.25em 0 .5em; font-size: 34px; line-height: 1.15; }
 .export-prose h2 { margin: 2em 0 .58em; font-size: 26px; font-weight: 570; letter-spacing: -.02em; line-height: 1.2; }
 .export-prose h3 { margin: 1.65em 0 .48em; font-size: 20px; font-weight: 590; line-height: 1.3; }
+.export-prose h4 { margin: 1.5em 0 .45em; font-size: 1.12em; font-weight: 600; line-height: 1.4; }
+.export-prose h5 { margin: 1.4em 0 .4em; font-size: 1em; font-weight: 650; line-height: 1.5; }
+.export-prose h6 { margin: 1.4em 0 .4em; font-size: 1em; font-weight: 550; font-style: italic; line-height: 1.5; }
 .export-prose ul, .export-prose ol { padding-left: 1.35em; }
 .export-prose li { padding-left: .2em; }
 .export-prose li + li { margin-top: .32em; }
@@ -217,8 +223,12 @@ a { color: inherit; }
 .export-prose pre { padding: 17px 18px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--code); font-size: 13px; line-height: 1.55; }
 .export-prose pre code { padding: 0; background: transparent; font-size: inherit; }
 .export-prose hr { height: 1px; margin: 2.3em 0; border: 0; background: var(--line-strong); }
-.export-prose table { display: block; width: 100%; overflow-x: auto; border-collapse: collapse; font-family: var(--sans); font-size: 12px; line-height: 1.5; }
-.export-prose th, .export-prose td { min-width: 110px; padding: 9px 11px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+.export-prose .note-table-reading { clear: both; overflow-x: auto; max-width: 100%; margin: 1.5em 0; }
+.export-prose .note-table-reading table { display: table; width: 100%; margin: 0; border-collapse: collapse; table-layout: fixed; font-family: var(--sans); font-size: 12px; line-height: 1.5; }
+.export-prose .note-table-reading[data-banded="true"][data-header="true"] tbody tr:nth-child(even),
+.export-prose .note-table-reading[data-banded="true"][data-header="false"] tbody tr:nth-child(odd) { background: var(--surface-2); }
+.export-prose .note-excerpt-source-link { display: block; text-align: right; font-size: .85em; font-style: normal; }
+.export-prose th, .export-prose td { min-width: 110px; padding: 9px 11px; border: 1px solid var(--line); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
 .export-prose th { color: var(--text); background: var(--accent-soft); font-weight: 680; }
 .export-prose a, .orion-link { color: var(--accent-strong); text-decoration-color: color-mix(in srgb, var(--accent) 42%, transparent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
 .export-prose a:hover, .orion-link:hover { text-decoration-color: currentColor; }
@@ -230,7 +240,11 @@ a { color: inherit; }
 .export-outline { position: sticky; top: 38px; align-self: start; padding-top: 2px; }
 .export-outline strong { display: block; margin-bottom: 11px; color: var(--faint); font-size: 8px; letter-spacing: .12em; text-transform: uppercase; }
 .export-outline a { display: block; padding: 4px 0; color: var(--muted); font-size: 10px; line-height: 1.4; text-decoration: none; }
-.export-outline a[data-depth="3"] { padding-left: 10px; color: var(--faint); }
+.export-outline a[data-depth="2"] { padding-left: 6px; }
+.export-outline a[data-depth="3"] { padding-left: 12px; color: var(--faint); }
+.export-outline a[data-depth="4"] { padding-left: 18px; color: var(--faint); }
+.export-outline a[data-depth="5"] { padding-left: 24px; color: var(--faint); }
+.export-outline a[data-depth="6"] { padding-left: 30px; color: var(--faint); }
 .export-outline a:hover { color: var(--text); }
 .export-references, .export-connected { margin-top: 52px; padding-top: 23px; border-top: 1px solid var(--line); }
 .export-references h2, .export-connected h2 { margin: 0 0 16px; color: var(--text); font-family: var(--serif); font-size: 22px; font-weight: 570; }
@@ -571,26 +585,51 @@ function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
   }
 
   const components: Components = {
+    table: ({ children, node }) => {
+      const layout = noteTableLayoutAtLine(citations.body, node?.position?.start.line ?? 0);
+      const header = noteTableHeaderInfo(node);
+      const syntheticHeader = layout?.header === false && header.empty;
+      const columns = header.columns || layout?.columns.length || 1;
+      const minWidth = Array.from({ length: columns }, (_, index) => layout?.columns[index] ?? 96).reduce((sum, width) => sum + width, 0);
+      // Metadata may hide only GFM's synthetic empty header, never authored cells.
+      const content = syntheticHeader ? Children.toArray(children).filter((child) => !isValidElement(child) || child.type !== "thead") : children;
+      return (
+        <div className="note-table-reading" data-header={!syntheticHeader} data-banded={layout?.banded !== false} style={{ width: `${layout?.width ?? 100}%` }}>
+          <table style={{ minWidth }}>
+            {layout?.columns.length ? <colgroup>{layout.columns.map((width, index) => <col key={index} style={width ? { width: `${width}px` } : undefined}/>)}</colgroup> : null}
+            {content}
+          </table>
+        </div>
+      );
+    },
+
     p: ({ children }) => <p>{renderLinkedChildren(children)}</p>,
     li: ({ children, className }) => (
       <li className={className}>{renderLinkedChildren(children)}</li>
     ),
-    h1: ({ children }) => <h1>{renderLinkedChildren(children)}</h1>,
-    h2: ({ children, node }) => {
-      const heading = headingByLine.get(node?.position?.start.line ?? -1);
-      return (
-        <h2 id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>
-          {renderLinkedChildren(children)}
-        </h2>
-      );
+    h1: ({children,node}) => {
+      const heading=headingByLine.get(node?.position?.start.line ?? -1);
+      return <h1 id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>{renderLinkedChildren(children)}</h1>;
     },
-    h3: ({ children, node }) => {
-      const heading = headingByLine.get(node?.position?.start.line ?? -1);
-      return (
-        <h3 id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>
-          {renderLinkedChildren(children)}
-        </h3>
-      );
+    h2: ({children,node}) => {
+      const heading=headingByLine.get(node?.position?.start.line ?? -1);
+      return <h2 id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>{renderLinkedChildren(children)}</h2>;
+    },
+    h3: ({children,node}) => {
+      const heading=headingByLine.get(node?.position?.start.line ?? -1);
+      return <h3 id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>{renderLinkedChildren(children)}</h3>;
+    },
+    h4: ({children,node}) => {
+      const heading=headingByLine.get(node?.position?.start.line ?? -1);
+      return <h4 id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>{renderLinkedChildren(children)}</h4>;
+    },
+    h5: ({children,node}) => {
+      const heading=headingByLine.get(node?.position?.start.line ?? -1);
+      return <h5 id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>{renderLinkedChildren(children)}</h5>;
+    },
+    h6: ({children,node}) => {
+      const heading=headingByLine.get(node?.position?.start.line ?? -1);
+      return <h6 id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>{renderLinkedChildren(children)}</h6>;
     },
     a: ({ href, title, children }) => {
       if (href?.startsWith("#orion-passage-")) {
@@ -606,12 +645,12 @@ function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
       if (href?.startsWith("orion-note://")) {
         const targetId = href.slice("orion-note://".length);
         return (
-          <ExportLink
+          <span className={parseNoteExcerptTitle(title,href)?"note-excerpt-source-link":undefined}><ExportLink
             noteIds={includedNoteIds.has(targetId) ? [targetId] : []}
             notes={includedNotes}
           >
             {children}
-          </ExportLink>
+          </ExportLink></span>
         );
       }
       if (href?.startsWith("orion-concept://")) {
@@ -651,14 +690,17 @@ function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
         <span>{children}</span>
       );
     },
-    img: ({ alt, src }) =>
-      src && isSafeNoteImageUrl(src) ? (
-        <img src={src} alt={alt ?? ""} />
-      ) : (
-        <span className="export-image-alt">
-          {alt ? `Image: ${alt}` : "Image omitted from offline export"}
-        </span>
-      ),
+    img: ({alt,src,title}) => {
+      if(!src || !isSafeNoteImageUrl(src)) return <span className="export-image-alt">{alt ? `Image: ${alt}` : "Image omitted from offline export"}</span>;
+      const parsed=parseNoteImageTitle(title);
+      const content = <>
+        <img src={src} alt={alt??""} title={parsed.title??undefined} style={{width:"100%",height:"auto",margin:0}}/>
+        {parsed.layout.showCaption && parsed.layout.caption && <span style={{display:"block",fontSize:".8em",textAlign:"center",marginTop:8}}>{parsed.layout.caption}</span>}
+      </>;
+      return <span className="note-image-reading" style={noteImageLayoutStyle(parsed.layout)}>
+        {parsed.layout.xPercent === null ? content : <span className="note-image-free-content" style={noteImageContentStyle(parsed.layout)}>{content}</span>}
+      </span>;
+    },
     input: ({ checked, ...props }) => (
       <input {...props} type="checkbox" checked={Boolean(checked)} readOnly />
     ),
@@ -689,7 +731,7 @@ function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
             {note.summary.trim() ? <p className="export-note-summary">{note.summary}</p> : null}
             <div className="export-note-meta">
               <span>Updated {updated}</span>
-              <span>{wordCount(citations.body).toLocaleString()} words</span>
+              <span>{wordCount(getNoteExcerptText(note)).toLocaleString()} words</span>
             </div>
             {tags.length > 0 ? (
               <div className="export-tags">
@@ -701,7 +743,7 @@ function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
           <div className="export-prose">
             {citations.body.trim() ? (
               <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
+                remarkPlugins={[remarkGfm, remarkNoteTableMetadata]}
                 components={components}
                 skipHtml
                 urlTransform={(url) => url}
@@ -800,7 +842,7 @@ function ExportCover({ snapshot, notes }: { snapshot: AppSnapshot; notes: readon
           {notes.map((note) => (
             <a className="export-card" href={`#${noteAnchor(note)}`} key={note.id}>
               <strong>{note.title.trim() || "Untitled note"}</strong>
-              <span>{note.summary.trim() || firstReadableSentence(note.body)}</span>
+              <span>{note.summary.trim() || firstReadableSentence(note)}</span>
             </a>
           ))}
         </div>
@@ -882,13 +924,8 @@ function wordCount(markdown: string): number {
     .match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu)?.length ?? 0;
 }
 
-function firstReadableSentence(markdown: string): string {
-  const readable = splitMarkdownFrontmatter(stripOrionNoteMarkers(markdown)).content
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/!?\[([^\]]*)\]\([^)]+\)/g, "$1")
-    .replace(/[#>*_`~|\[\]-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+function firstReadableSentence(note: Note): string {
+  const readable = getNoteExcerptText(note).replace(/\s+/g, " ").trim();
   if (!readable) return "A page from this knowledge space.";
   return readable.length > 150 ? `${readable.slice(0, 147).trimEnd()}…` : readable;
 }

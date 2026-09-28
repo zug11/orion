@@ -4,7 +4,7 @@ interface AIWritingMarkProps extends SVGProps<SVGSVGElement> {
   size?: number | string;
 }
 
-/** A single restrained four-point mark for Orion's opt-in writing mode. */
+/** A clear four-point sparkle for Orion's opt-in AI tools. */
 export function AIWritingMark({
   size = 24,
   ...props
@@ -17,14 +17,18 @@ export function AIWritingMark({
       viewBox="0 0 24 24"
       width={size}
       height={size}
-      fill="currentColor"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      strokeLinejoin="round"
       focusable="false"
       data-orion-icon="ai-writing"
       aria-hidden={labelled ? undefined : true}
       role={labelled ? (props.role ?? "img") : props.role}
       {...props}
     >
-      <path d="M12 2.35c.46 5.08 2.57 7.19 7.65 7.65-5.08.46-7.19 2.57-7.65 7.65-.46-5.08-2.57-7.19-7.65-7.65 5.08-.46 7.19-2.57 7.65-7.65Z" />
+      <path d="M12 2.5 14.7 9.3 21.5 12 14.7 14.7 12 21.5 9.3 14.7 2.5 12 9.3 9.3Z" />
     </svg>
   );
 }

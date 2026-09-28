@@ -11,6 +11,7 @@ import {
   pendingSpaceBlueprints,
   prepareSpaceKnowledgeIndex,
   spaceKnowledgeIsCurrent,
+  stableKnowledgeHash,
 } from "./spaceKnowledge";
 
 const NOW = "2026-08-13T10:00:00.000Z";
@@ -52,6 +53,119 @@ function result(title: string, body: string): OrganizeContentResult {
 }
 
 describe("persistent Space knowledge topology", () => {
+  it("reads current body sketches on a one-cluster refresh instead of recycling its old overview", () => {
+    const snapshot = createEmptySnapshot("Discussion", NOW);
+    snapshot.notes = [{
+      ...note("transcript", "The discussion questions whether compliance costs favour large AI companies over new builders.", "Untitled note"),
+      summary: "A brief introduction.",
+    }];
+    const originalNote = structuredClone(snapshot.notes[0]);
+    const cached = applySpaceRootResult(
+      prepareSpaceKnowledgeIndex(snapshot, NOW),
+      result("An undeveloped thread", "No subject has been established."),
+      NOW,
+    );
+    snapshot.spaceKnowledge = cached;
+    const index = prepareSpaceKnowledgeIndex(snapshot, NOW);
+
+    expect(pendingSpaceBlueprints(index)).toEqual([]);
+    const request = buildSpaceRootRequest(snapshot, index);
+    expect(request.content).toContain(snapshot.notes[0].body);
+    expect(request.content).not.toContain("No subject has been established.");
+    const packets = JSON.parse(request.content.split("Current note digests:\n")[1]);
+    expect(packets).toHaveLength(1);
+    expect(packets[0]).toMatchObject({ noteId: "transcript", wholeBodySketch: snapshot.notes[0].body });
+
+    const refreshed = applySpaceRootResult(index, result("Regulation and new builders", "The discussion weighs compliance costs and market entry."), NOW);
+    expect(refreshed.blueprints.every(({ body }) => body === "The discussion weighs compliance costs and market entry.")).toBe(true);
+    expect(snapshot.notes[0]).toEqual(originalNote);
+  });
+
+  it("sends every digest and body sketch in a full single cluster", () => {
+    const snapshot = createEmptySnapshot("Full cluster", NOW);
+    snapshot.notes = Array.from({ length: 32 }, (_, position) => ({
+      ...note(`n-${String(position).padStart(2, "0")}`, `Distinct material ${position}. `.repeat(100)),
+      summary: "An older introductory summary.",
+    }));
+    const index = prepareSpaceKnowledgeIndex(snapshot, NOW);
+    const request = buildSpaceRootRequest(snapshot, index);
+    const packets = JSON.parse(request.content.split("Current note digests:\n")[1]);
+
+    expect(packets.map(({ noteId }: { noteId: string }) => noteId)).toEqual(snapshot.notes.map(({ id }) => id));
+    for (let position = 0; position < packets.length; position += 1) {
+      expect(packets[position].wholeBodySketch).toContain(`Distinct material ${position}`);
+    }
+    expect(request.content.length).toBeLessThanOrEqual(90_000);
+  });
+
+  it("invalidates legacy cached placeholders even when note content and timestamps are unchanged", () => {
+    const snapshot = createEmptySnapshot("Discussion", NOW);
+    snapshot.notes = [{ ...note("transcript", "A discussion about regulation and early-stage builders."), summary: "A new thread in your atlas." }];
+    const legacy = prepareSpaceKnowledgeIndex(snapshot, NOW);
+    const digest = legacy.digests[0];
+    // The old persisted fingerprint omitted the derived summary and its contract
+    // version, so removing starter copy did not invalidate provider blueprints.
+    digest.contentFingerprint = stableKnowledgeHash(JSON.stringify({
+      noteVersion: digest.noteVersion,
+      headings: digest.headings,
+      wholeBodySketch: digest.wholeBodySketch,
+      concepts: digest.conceptLabels,
+      relationships: digest.relationshipHints,
+    }));
+    const leaf = legacy.blueprints.find(({ level }) => level === 0)!;
+    leaf.fingerprint = stableKnowledgeHash(JSON.stringify([[digest.noteId, digest.contentFingerprint]]));
+    const root = getSpaceKnowledgeRoot(legacy)!;
+    root.fingerprint = stableKnowledgeHash(JSON.stringify({
+      workspace: [snapshot.workspace.name, snapshot.workspace.description],
+      children: [[leaf.id, leaf.fingerprint]],
+    }));
+    legacy.snapshotFingerprint = stableKnowledgeHash(JSON.stringify({
+      workspace: [snapshot.workspace.name, snapshot.workspace.description],
+      digests: [[digest.noteId, digest.contentFingerprint]],
+    }));
+    legacy.blueprints.forEach((blueprint) => {
+      blueprint.title = "A New Thread in the Atlas";
+      blueprint.body = "No subject has been established.";
+      blueprint.origin = "provider";
+    });
+    legacy.stale = false;
+    snapshot.spaceKnowledge = legacy;
+    snapshot.spaceOverview = { title: root.title, body: root.body, relatedNoteIds: [digest.noteId], generatedAt: NOW, stale: false };
+
+    expect(spaceKnowledgeIsCurrent(snapshot)).toBe(false);
+    const rebuilt = prepareSpaceKnowledgeIndex(snapshot, NOW);
+    expect(rebuilt.blueprints.every(({ origin }) => origin === "local")).toBe(true);
+    const request = buildSpaceRootRequest(snapshot, rebuilt);
+    expect(request.content).toContain(snapshot.notes[0].body);
+    expect(request.content).not.toContain("A New Thread in the Atlas");
+    expect(request.content).not.toContain("No subject has been established.");
+    snapshot.spaceKnowledge = applySpaceRootResult(rebuilt, result("Regulation and builders", "The discussion concerns regulation and market entry."), NOW);
+    expect(spaceKnowledgeIsCurrent(snapshot)).toBe(true);
+    expect(prepareSpaceKnowledgeIndex(snapshot, NOW).blueprints).toEqual(snapshot.spaceKnowledge.blueprints);
+  });
+
+  it("requires completed child synthesis for larger Spaces and retains the hierarchy path", () => {
+    const snapshot = createEmptySnapshot("Several clusters", NOW);
+    snapshot.notes = Array.from({ length: 64 }, (_, position) => note(`n-${position}`, `Private note body ${position}.`));
+    let index = prepareSpaceKnowledgeIndex(snapshot, NOW);
+    expect(() => buildSpaceRootRequest(snapshot, index)).toThrow("clusters must be summarized");
+    for (const blueprint of pendingSpaceBlueprints(index)) {
+      index = applySpaceBlueprintResult(index, blueprint.id, result("Cluster topic", "A synthesized account of the cluster."), NOW);
+    }
+    const request = buildSpaceRootRequest(snapshot, index);
+    expect(request.content).toContain("Validated child blueprints:");
+    expect(request.content).toContain("A synthesized account of the cluster.");
+    expect(request.content).not.toContain("Private note body");
+  });
+
+  it("fails a context overflow without clipping the digest directory", () => {
+    const snapshot = createEmptySnapshot("Large metadata", NOW);
+    snapshot.notes = [{ ...note("n1", "Substantive text."), aliases: ["x".repeat(90_000)] }];
+    const index = prepareSpaceKnowledgeIndex(snapshot, NOW);
+    expect(() => buildSpaceRootRequest(snapshot, index)).toThrow("safe request limit");
+    expect(index.digests[0].aliases[0]).toHaveLength(90_000);
+  });
+
   it("builds a root from brief notes and invalidates an index that previously skipped them", () => {
     const snapshot = createEmptySnapshot("Database", NOW);
     snapshot.spaceKnowledge = { ...prepareSpaceKnowledgeIndex(snapshot, NOW), stale: false };

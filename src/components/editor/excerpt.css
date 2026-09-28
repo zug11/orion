@@ -1,0 +1,113 @@
+.excerpt-picker-backdrop { position: fixed; z-index: 150; inset: 0; display: grid; place-items: center; padding: 24px; background: rgb(0 0 0 / 35%); backdrop-filter: blur(5px); }
+.excerpt-picker { width: min(650px, 100%); max-height: min(780px, calc(100dvh - 48px)); display: flex; flex-direction: column; overflow: hidden; color: var(--text); background: var(--surface-1); border: 1px solid var(--line, rgb(128 128 128 / 22%)); border-radius: 18px; box-shadow: 0 24px 80px rgb(0 0 0 / 24%); font-family: var(--ui-font); }
+.excerpt-picker-reading { height: min(780px, calc(100dvh - 48px)); width: min(770px, 100%); }
+.excerpt-picker-header { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; padding: 15px 19px; border-bottom: 1px solid var(--line, rgb(128 128 128 / 18%)); }
+.excerpt-picker-heading { display: flex; align-items: center; gap: 10px; }
+.excerpt-picker-heading h2 { margin: 0; font-size: 15px; font-weight: 550; }
+.excerpt-icon-button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; background: transparent; color: var(--text-soft); border-radius: 7px; cursor: pointer; }
+.excerpt-icon-button:hover { background: var(--surface-3); color: var(--text); }
+.excerpt-search-field { display: flex; flex-shrink: 0; align-items: center; gap: 10px; padding: 13px 15px; margin: 19px 20px 0; border: 1px solid var(--line, rgb(128 128 128 / 24%)); border-radius: 10px; color: var(--muted); }
+.excerpt-search-field:focus-within { border-color: var(--periwinkle); }
+.excerpt-search-field input { width: 100%; min-width: 0; border: 0; outline: 0; padding: 0; background: transparent; color: var(--text); font: inherit; font-size: 15px; }
+.excerpt-picker-help { margin: 11px 21px 13px; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.excerpt-search-results { min-height: 180px; overflow: auto; padding: 0 10px 12px; }
+.excerpt-result { display: block; width: 100%; padding: 14px 12px; text-align: left; border: 0; border-radius: 9px; color: var(--text); background: transparent; cursor: pointer; }
+.excerpt-result:hover, .excerpt-result:focus-visible { background: var(--surface-2); }
+.excerpt-result-title { display: flex; align-items: baseline; gap: 10px; font-size: 16px; font-family: 'Lora', Georgia, serif; }
+.excerpt-result-title > svg { flex-shrink: 0; margin-left: auto; color: var(--muted); }
+.excerpt-result p { margin: 7px 0 0; font-size: 13px; line-height: 1.55; color: var(--text-soft); }
+.excerpt-search-highlight { color: inherit; background: color-mix(in srgb, var(--periwinkle) 25%, transparent); border-radius: 2px; }
+.excerpt-saved-highlight { color: inherit; background: color-mix(in srgb, var(--periwinkle) 22%, transparent); text-decoration: underline; text-decoration-color: var(--periwinkle); text-underline-offset: 3px; }
+.excerpt-source-heading { padding: 21px 30px 16px; flex-shrink: 0; }
+.excerpt-source-heading h3 { margin: 0 0 8px; font-family: 'Lora', Georgia, serif; font-size: 25px; font-weight: 400; line-height: 1.35; overflow-wrap: anywhere; }
+.excerpt-source-heading p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.excerpt-reader-scroll { overflow: auto; overscroll-behavior: contain; min-height: 120px; flex: 1; padding: 6px 32px 30px; }
+.excerpt-reader-article { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 17px; line-height: 1.8; color: var(--text-soft); user-select: text; cursor: text; }
+.excerpt-reader-article::selection, .excerpt-reader-article ::selection { background: color-mix(in srgb, var(--periwinkle) 34%, transparent); }
+.excerpt-article-heading { color: var(--text); font-family: 'Lora', Georgia, serif; font-size: 21px; line-height: 1.5; font-weight: 500; }
+.excerpt-article-code { font-family: ui-monospace, monospace; font-size: .85em; }
+.excerpt-article-quote { font-style: italic; }
+.excerpt-selection-preview { flex-shrink: 0; padding: 14px 22px; border-top: 1px solid var(--line, rgb(128 128 128 / 18%)); background: var(--surface-2); }
+.excerpt-preview-label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; margin-bottom: 5px; }
+.excerpt-selection-preview p { max-height: 94px; overflow: auto; margin: 0; white-space: pre-wrap; font-size: 13px; line-height: 1.6; color: var(--text-soft); }
+.excerpt-selection-preview .excerpt-preview-empty { color: var(--muted); }
+.excerpt-picker-footer { display: flex; flex-shrink: 0; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 20px; }
+.excerpt-secondary-button, .excerpt-primary-button { display: inline-flex; justify-content: center; align-items: center; gap: 7px; border-radius: 8px; padding: 9px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+.excerpt-secondary-button { background: transparent; color: var(--text-soft); border: 1px solid var(--line, rgb(128 128 128 / 24%)); }
+.excerpt-primary-button { background: var(--periwinkle); color: var(--accent-ink, #080b12); border: 1px solid transparent; font-weight: 600; }
+.excerpt-picker button:disabled { opacity: .4; cursor: default; }
+.excerpt-empty { padding: 25px 14px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+/* Excerpts share one quiet treatment in the editor and reading surface. The
+   specificity deliberately beats the ordinary quote/link rules in App.css,
+   including when Vite combines the production stylesheet in a different order. */
+.note-prose blockquote.note-excerpt,
+.note-prose blockquote:has(> p > .note-excerpt-source-link) {
+  margin: 24px 0;
+  padding: 1px 0 1px 18px;
+  border: 0;
+  border-left: 2px solid var(--line-strong);
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--text-soft);
+  font-family: var(--note-font);
+  font-size: var(--note-text-size);
+  font-weight: var(--note-weight);
+  font-style: normal;
+  line-height: var(--note-leading);
+  overflow-wrap: anywhere;
+}
+.note-prose blockquote.note-excerpt > svg,
+.note-prose blockquote:has(> p > .note-excerpt-source-link) > svg {
+  display: none;
+}
+.note-prose blockquote.note-excerpt > p,
+.note-prose blockquote:has(> p > .note-excerpt-source-link) > p {
+  margin: 0;
+}
+.note-prose blockquote.note-excerpt > p + p,
+.note-prose blockquote:has(> p > .note-excerpt-source-link) > p + p {
+  margin-top: 14px;
+}
+.note-prose blockquote.note-excerpt > p.note-excerpt-source,
+.note-prose blockquote:has(> p > .note-excerpt-source-link) > p:has(> .note-excerpt-source-link) {
+  margin: 9px 0 0;
+  text-align: right;
+  font-family: var(--ui-font);
+  font-size: 12px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.5;
+}
+.note-prose blockquote.note-excerpt .note-excerpt-source a,
+.note-prose blockquote .note-excerpt-source-link {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--periwinkle);
+  font-family: var(--ui-font);
+  font-size: 12px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.5;
+  text-decoration: none;
+  cursor: pointer;
+}
+.note-prose blockquote.note-excerpt .note-excerpt-source a:hover,
+.note-prose blockquote .note-excerpt-source-link:hover {
+  color: var(--periwinkle-strong);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.note-prose .note-excerpt-source a::after,
+.note-prose .note-excerpt-source-link::after {
+  content: '↗';
+  font-size: 12px;
+}
+::highlight(orion-excerpt-target) { background: color-mix(in srgb, var(--periwinkle, #9baaff) 36%, transparent); color: inherit; }
+@media (max-width: 600px) { .excerpt-picker-backdrop { padding: 10px; } .excerpt-picker, .excerpt-picker-reading { max-height: calc(100dvh - 20px); } .excerpt-picker-reading { height: calc(100dvh - 20px); } .excerpt-reader-scroll { padding: 6px 20px 25px; } .excerpt-source-heading { padding: 17px 20px 13px; } .excerpt-picker-footer { padding: 12px; gap: 8px; } .excerpt-secondary-button, .excerpt-primary-button { font-size: 12px; padding: 9px; } }

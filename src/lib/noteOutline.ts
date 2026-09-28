@@ -1,7 +1,7 @@
 export interface NoteOutlineHeading {
   id: string;
   text: string;
-  level: 2 | 3;
+  level: 1 | 2 | 3 | 4 | 5 | 6;
   line: number;
 }
 
@@ -10,7 +10,7 @@ export interface NoteOutlinePosition {
   top: number;
 }
 
-const ATX_HEADING = /^ {0,3}(#{2,3})[\t ]+(.+?)[\t ]*#*[\t ]*$/;
+const ATX_HEADING = /^ {0,3}(#{1,6})[\t ]+(.+?)[\t ]*#*[\t ]*$/;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 
 function headingText(markdown: string): string {
@@ -61,7 +61,7 @@ export function extractNoteOutline(markdown: string): NoteOutlineHeading[] {
     headings.push({
       id: `heading-${base}${occurrence > 1 ? `-${occurrence}` : ""}`,
       text,
-      level: match[1].length as 2 | 3,
+      level: match[1].length as 1 | 2 | 3 | 4 | 5 | 6,
       line: index + 1,
     });
   });

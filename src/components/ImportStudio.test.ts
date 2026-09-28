@@ -136,6 +136,31 @@ describe("buildImportPayload", () => {
     expect(payload.notes[0].tags).not.toContain("ai-draft");
   });
 
+  it("keeps portable excerpt metadata out of an imported note summary while preserving its body", () => {
+    const snapshot = createEmptySnapshot("Manual Space", TEST_NOW);
+    const text = '> Exact quoted words.\n>\n> [Original note](orion-note://original "orion-excerpt:v1:encoded-passage-data")';
+    const payload = buildImportPayload([
+      makeOrganizedSource("excerpt-import", makeParsedImport("Excerpt draft", "excerpt.md", text)),
+    ], snapshot);
+    expect(payload.notes[0].summary).toBe("Exact quoted words. Original note");
+    expect(payload.notes[0].body).toContain(text);
+    expect(payload.sources[0].text).toBe(text);
+  });
+
+  it("keeps table layout comments out of import summaries without changing source or table data", () => {
+    const snapshot = createEmptySnapshot("Manual Space", TEST_NOW);
+    const text = '<!-- orion-table:v1 {"width":65,"header":true,"banded":false} -->\n| Material | Finding |\n| --- | --- |\n| Glass | Clear |';
+    const payload = buildImportPayload([
+      makeOrganizedSource("table-import", makeParsedImport("Table draft", "table.md", text)),
+    ], snapshot);
+    expect(payload.notes[0].summary).toContain("Material");
+    expect(payload.notes[0].summary).toContain("Glass");
+    expect(payload.notes[0].summary).not.toContain("orion-table");
+    expect(payload.notes[0].summary).not.toContain("banded");
+    expect(payload.notes[0].body).toContain(text);
+    expect(payload.sources[0].text).toBe(text);
+  });
+
   it("keeps the complete source record when the editable note is a bounded preview", () => {
     const snapshot = createEmptySnapshot("Manual Space", TEST_NOW);
     const text = `${"A".repeat(200_000)}SOURCE_TAIL`;

@@ -1,6 +1,7 @@
 import {
   Check,
   ChevronDown,
+  Edit3,
   Layers3,
   Plus,
   Trash2,
@@ -8,6 +9,7 @@ import {
 } from "../lib/icons";
 import {
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -15,12 +17,15 @@ import {
   type FormEvent,
 } from "react";
 import type { AppSnapshot } from "../types";
+import { MAX_SPACE_NAME_LENGTH, normalizeSpaceName, spaceNameError } from "../lib/spaceNames";
+import "./SpaceSwitcher.css";
 
 interface SpaceSwitcherProps {
   brandMarkSrc?: string;
   spaces: readonly AppSnapshot[];
   activeSpaceId: string;
   onCreateSpace: (name: string) => void;
+  onRenameSpace?: (spaceId: string, name: string, expectedName: string) => boolean;
   onDeleteSpace: (spaceId: string) => boolean;
   onSwitchSpace: (spaceId: string) => void;
 }
@@ -47,28 +52,41 @@ export function SpaceSwitcher({
   spaces,
   activeSpaceId,
   onCreateSpace,
+  onRenameSpace,
   onDeleteSpace,
   onSwitchSpace,
 }: SpaceSwitcherProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const renameTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const helpId = useId();
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [renaming, setRenaming] = useState<{ id: string; originalName: string } | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const activeSpace =
     spaces.find((space) => space.workspace.id === activeSpaceId) ??
     spaces[0];
-  const normalizedName = name.trim().replace(/\s+/g, " ");
+  const normalizedName = normalizeSpaceName(name);
   const duplicateName = useMemo(
     () =>
       spaces.some(
         (space) =>
+          space.workspace.id !== renaming?.id &&
           space.workspace.name.toLocaleLowerCase() ===
           normalizedName.toLocaleLowerCase(),
       ),
-    [normalizedName, spaces],
+    [normalizedName, spaces, renaming?.id],
   );
+  const renameTarget = renaming ? spaces.find((space) => space.workspace.id === renaming.id) : null;
+  const renameValidation = renaming
+    ? !renameTarget ? "This Space is no longer available."
+      : renameTarget.workspace.name !== renaming.originalName
+        ? "This Space was renamed elsewhere. Reopen Rename to use its current name."
+        : spaceNameError(name, spaces, renaming.id)
+    : null;
 
   useEffect(() => {
     if (!open) {
@@ -85,16 +103,28 @@ export function SpaceSwitcher({
   }, [open]);
 
   useEffect(() => {
-    if (!creating) {
+    if (!creating && !renaming) {
       return;
     }
-    const frame = window.requestAnimationFrame(() => inputRef.current?.focus());
+    const frame = window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      if (renaming) inputRef.current?.select();
+    });
     return () => window.cancelAnimationFrame(frame);
-  }, [creating]);
+  }, [creating, renaming]);
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (!normalizedName || duplicateName) {
+    if (renaming) {
+      if (renameValidation || !onRenameSpace) return;
+      if (!onRenameSpace(renaming.id, normalizedName, renaming.originalName)) {
+        setRenameError("The name could not be saved. Reopen Rename to try again.");
+        return;
+      }
+      closePopover(true);
+      return;
+    }
+    if (spaceNameError(name, spaces)) {
       return;
     }
     onCreateSpace(normalizedName);
@@ -103,6 +133,8 @@ export function SpaceSwitcher({
 
   function closeCreator() {
     setCreating(false);
+    setRenaming(null);
+    setRenameError(null);
     setName("");
   }
 
@@ -120,7 +152,13 @@ export function SpaceSwitcher({
       ref={rootRef}
       onKeyDown={(event) => {
         if (event.key === "Escape" && open) {
+          event.preventDefault();
           event.stopPropagation();
+          if (renaming) {
+            closeCreator();
+            renameTriggerRef.current?.focus();
+            return;
+          }
           closePopover(true);
         }
       }}
@@ -223,6 +261,24 @@ export function SpaceSwitcher({
                     </span>
                     {active && <Check size={14} aria-hidden="true" />}
                   </button>
+                  {onRenameSpace && (
+                    <button
+                      type="button"
+                      className="space-option-rename"
+                      aria-label={`Rename ${space.workspace.name} space`}
+                      title={`Rename ${space.workspace.name}`}
+                      aria-expanded={renaming?.id === space.workspace.id}
+                      onClick={(event) => {
+                        renameTriggerRef.current = event.currentTarget;
+                        setCreating(false);
+                        setRenaming({ id: space.workspace.id, originalName: space.workspace.name });
+                        setRenameError(null);
+                        setName(space.workspace.name);
+                      }}
+                    >
+                      <Edit3 size={13} aria-hidden="true" />
+                    </button>
+                  )}
                   {spaces.length > 1 ? (
                     <button
                       type="button"
@@ -242,14 +298,17 @@ export function SpaceSwitcher({
             })}
           </div>
 
-          {creating ? (
-            <form className="space-creator" onSubmit={submit}>
+          {creating || renaming ? (
+            <form className={`space-creator${renaming ? " space-renamer" : ""}`} aria-label={renaming ? "Rename space" : "New space"} onSubmit={submit}>
               <div className="space-creator-title">
-                <span>New blank space</span>
+                <span>{renaming ? "Rename space" : "New blank space"}</span>
                 <button
                   type="button"
-                  onClick={closeCreator}
-                  aria-label="Cancel new space"
+                  onClick={() => {
+                    closeCreator();
+                    if (renaming) renameTriggerRef.current?.focus();
+                  }}
+                  aria-label={renaming ? "Cancel rename" : "Cancel new space"}
                 >
                   <X size={13} />
                 </button>
@@ -259,23 +318,24 @@ export function SpaceSwitcher({
                 <input
                   ref={inputRef}
                   value={name}
-                  maxLength={60}
-                  onChange={(event) => setName(event.target.value)}
+                  maxLength={MAX_SPACE_NAME_LENGTH}
+                  onChange={(event) => { setName(event.target.value); setRenameError(null); }}
                   placeholder="Project or area name…"
-                  aria-invalid={duplicateName}
+                  aria-invalid={renaming ? Boolean(renameValidation || renameError) : duplicateName}
+                  aria-describedby={helpId}
                 />
               </label>
               <div className="space-creator-footer">
-                <small>
-                  {duplicateName
+                <small id={helpId} aria-live="polite">
+                  {renaming ? renameError ?? renameValidation ?? "Change this Space’s name." : duplicateName
                     ? "That name is already in use."
                     : "Starts completely empty."}
                 </small>
                 <button
                   type="submit"
-                  disabled={!normalizedName || duplicateName}
+                  disabled={renaming ? Boolean(renameValidation) || normalizedName === renaming.originalName : Boolean(spaceNameError(name, spaces))}
                 >
-                  Create
+                  {renaming ? "Save" : "Create"}
                 </button>
               </div>
             </form>

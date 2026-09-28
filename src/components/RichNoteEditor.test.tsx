@@ -168,6 +168,30 @@ describe("RichNoteEditor images", () => {
 });
 
 describe("RichNoteEditor AI writing", () => {
+  it("keeps AI discoverable without a key and leaves the note untouched", () => {
+    const onChange = vi.fn();
+    const onGenerateAIWriting = vi.fn();
+    render(<RichNoteEditor
+      noteId="note-no-ai-key" markdown="My own words."
+      notes={[]} concepts={[]} sources={[]} attachedSourceIds={[]}
+      onChange={onChange} onAttachSource={vi.fn()} onRegisterConcept={vi.fn()}
+      onDisableConceptAutoLink={vi.fn()} onGenerateAIWriting={onGenerateAIWriting}
+      aiProviderName="OpenAI"
+    />);
+
+    const toggle = screen.getByRole("button", { name: "Turn on AI tools" });
+    expect(toggle).toHaveTextContent("AI");
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    expect(toggle).toHaveAttribute("title", "Add an OpenAI key in Settings to use AI tools");
+    fireEvent.click(toggle);
+    expect(screen.getByText("Add an OpenAI key in Settings to use AI tools."))
+      .toHaveAttribute("aria-live", "polite");
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onGenerateAIWriting).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Continue" })).not.toBeInTheDocument();
+  });
+
   it("keeps generation out of the document, accepts once, and undoes once", async () => {
     const geometry = installEditorGeometry();
     const onChange = vi.fn();
@@ -196,8 +220,9 @@ describe("RichNoteEditor AI writing", () => {
       );
 
       fireEvent.click(
-        screen.getByRole("button", { name: "Turn on AI writing" }),
+        screen.getByRole("button", { name: "Turn on AI tools" }),
       );
+      expect(onGenerateAIWriting).not.toHaveBeenCalled();
       fireEvent.click(
         await screen.findByRole("button", { name: "Continue" }),
       );
@@ -268,7 +293,7 @@ describe("RichNoteEditor AI writing", () => {
       );
 
       fireEvent.click(
-        screen.getByRole("button", { name: "Turn on AI writing" }),
+        screen.getByRole("button", { name: "Turn on AI tools" }),
       );
       fireEvent.click(
         await screen.findByRole("button", { name: "Continue" }),

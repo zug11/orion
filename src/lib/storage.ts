@@ -22,6 +22,11 @@ import type {
   WhisperConfig,
 } from "../types";
 import { truncateUnicode } from "./text";
+import { AI_IMAGE_MODEL } from "./aiImages";
+import {
+  IMAGE_PLANNING_INSTRUCTIONS, imagePlanningSchema, parseImagePlanningContext,
+  parseImagePlanningResult, type ImagePlanningRequest, type ImagePlanningResult,
+} from "./aiImagePlanning";
 import { isWindowGlassSettings } from "./windowGlass";
 import {
   providerCallScheduler,
@@ -409,6 +414,58 @@ export async function saveNoteImage(
   };
 }
 
+export async function planNoteImage(request: ImagePlanningRequest, signal?: AbortSignal): Promise<ImagePlanningResult> {
+  const context = parseImagePlanningContext(request);
+  if (signal?.aborted) throw signal.reason ?? new Error("Image planning was cancelled.");
+  const requestId = `image:plan:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 12)}`;
+  if (isTauriRuntime()) {
+    const value = await invokeTauri<unknown>("plan_note_image", { request: { ...request, requestId } }, {
+      queueKey: "images", signal,
+      cancelActive: () => { void invokeTauri("cancel_note_image_generation", { requestId }).catch(() => undefined); },
+    });
+    return parseImagePlanningResult(value, request.stage);
+  }
+  const provider = aiProviderForModel(request.model);
+  return runBrowserProviderCall(provider, async () => {
+    const controller = new AbortController();
+    const abort = () => controller.abort(signal?.reason);
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    const timer = globalThis.setTimeout(() => controller.abort(new Error("The illustration planner did not finish within 90 seconds.")), 90_000);
+    try {
+      const schema = imagePlanningSchema(request.stage);
+      const payload = JSON.stringify({ stage: request.stage, context });
+      const effort = request.effort === "none" ? undefined : request.effort;
+      const anthropic = provider === "anthropic";
+      const body = anthropic ? {
+        model: request.model, max_tokens: 6_000, system: IMAGE_PLANNING_INSTRUCTIONS,
+        messages: [{ role: "user", content: payload }],
+        output_config: { format: { type: "json_schema", schema: anthropicCompatibleSchema(schema) }, ...(effort ? { effort } : {}) },
+      } : {
+        model: request.model, store: false, max_output_tokens: 6_000, instructions: IMAGE_PLANNING_INSTRUCTIONS, input: payload,
+        text: { format: { type: "json_schema", name: "orion_image_plan", strict: true, schema } },
+        ...(effort ? { reasoning: { effort } } : {}),
+      };
+      const response = await fetch(anthropic ? ANTHROPIC_MESSAGES_URL : OPENAI_RESPONSES_URL, {
+        method: "POST", signal: controller.signal,
+        headers: anthropic ? { "x-api-key": requireBrowserAnthropicApiKey(), "anthropic-version": "2023-06-01", "Content-Type": "application/json" }
+          : { Authorization: `Bearer ${requireBrowserApiKey()}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) throw new Error(await readProviderApiError(response, anthropic ? "Anthropic" : "OpenAI"));
+      const data = await response.json();
+      const text = anthropic ? extractAnthropicOutputText(data, "plan this illustration") : extractBrowserOutputText(data, "plan this illustration");
+      return parseImagePlanningResult(JSON.parse(text), request.stage);
+    } catch (error) {
+      if (controller.signal.aborted) throw controller.signal.reason ?? new Error("Image planning was cancelled.");
+      throw error;
+    } finally {
+      globalThis.clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+    }
+  }, { queueKey: "images", signal });
+}
+
 export async function generateNoteImage(
   prompt: string,
   signal?: AbortSignal,
@@ -452,7 +509,7 @@ export async function generateNoteImage(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-image-2",
+        model: AI_IMAGE_MODEL,
         prompt: normalized,
         n: 1,
         size: "1536x1024",
@@ -731,6 +788,7 @@ export async function generateSpeech(
   engine: "openai" | "elevenlabs",
   text: string,
   voiceId?: string,
+  options: { trackWords?: boolean; signal?: AbortSignal } = {},
 ): Promise<GeneratedSpeech> {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -740,13 +798,27 @@ export async function generateSpeech(
     throw new Error("That speech request is too long for one chunk.");
   }
   if (isTauriRuntime()) {
-    return invokeTauri<GeneratedSpeech>("generate_speech", {
-      request: {
+    const tracksLocalAudio = engine === "openai" && options.trackWords === true;
+    const requestId = tracksLocalAudio ? `speech-align:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 12)}` : undefined;
+    const request = {
         engine,
         text: normalized,
         voiceId: voiceId?.trim() || undefined,
-      },
-    });
+        trackWords: options.trackWords === true && (!tracksLocalAudio || !options.signal?.aborted),
+        ...(requestId ? { requestId } : {}),
+    };
+    const cancelAlignment = () => {
+      // A queued provider call observes this flag when it actually dispatches.
+      // An active call keeps its paid audio and cancels only its local worker.
+      request.trackWords = false;
+      void invokeTauri("cancel_media_import", { requestId }).catch(() => undefined);
+    };
+    if (tracksLocalAudio) options.signal?.addEventListener("abort", cancelAlignment, { once: true });
+    try {
+      return await invokeTauri<GeneratedSpeech>("generate_speech", { request });
+    } finally {
+      options.signal?.removeEventListener("abort", cancelAlignment);
+    }
   }
   if (engine === "openai") {
     return runBrowserProviderCall(
@@ -756,7 +828,7 @@ export async function generateSpeech(
     );
   }
   return providerCallScheduler.run(
-    () => generateSpeechInBrowserWithElevenLabs(normalized, voiceId),
+    () => generateSpeechInBrowserWithElevenLabs(normalized, voiceId, options.trackWords === true),
     { queueKey: "speech" },
   );
 }
@@ -1433,6 +1505,7 @@ const PROVIDER_COMMANDS = new Set([
   "organize_content",
   "chat",
   "generate_note_image",
+  "plan_note_image",
   "generate_speech",
   "test_openai_key",
   "test_anthropic_key",
@@ -2620,26 +2693,27 @@ async function generateSpeechInBrowserWithOpenAI(
   if (!response.ok) {
     throw new Error(await readProviderApiError(response, "OpenAI"));
   }
-  const buffer = await response.arrayBuffer();
+  const buffer = await readBoundedSpeechResponse(response, 12 * 1024 * 1024);
   return speechFromArrayBuffer(buffer);
 }
 
 async function generateSpeechInBrowserWithElevenLabs(
   text: string,
   voiceId?: string,
+  trackWords = false,
 ): Promise<GeneratedSpeech> {
   const apiKey = requireBrowserElevenLabsApiKey();
-  const { resolveElevenLabsVoiceId } = await import("./speech");
+  const { resolveElevenLabsVoiceId, speechWordsFromCharacterAlignment } = await import("./speech");
   const voice = resolveElevenLabsVoiceId({
     elevenLabsVoiceId: voiceId ?? "",
   });
   const response = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${voice}`,
+    `https://api.elevenlabs.io/v1/text-to-speech/${voice}${trackWords ? "/with-timestamps" : ""}`,
     {
       method: "POST",
       headers: {
         "xi-api-key": apiKey,
-        Accept: "audio/mpeg",
+        Accept: trackWords ? "application/json" : "audio/mpeg",
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -2651,8 +2725,52 @@ async function generateSpeechInBrowserWithElevenLabs(
   if (!response.ok) {
     throw new Error(await readProviderApiError(response, "ElevenLabs"));
   }
-  const buffer = await response.arrayBuffer();
+  if (trackWords) {
+    const encoded = await readBoundedSpeechResponse(response, 18 * 1024 * 1024);
+    const result: unknown = JSON.parse(new TextDecoder().decode(encoded));
+    if (!result || typeof result !== "object") throw new Error("The speech provider returned invalid audio.");
+    const payload = result as Record<string, unknown>;
+    if (typeof payload.audio_base64 !== "string" || payload.audio_base64.length > 16 * 1024 * 1024) {
+      throw new Error("The speech provider returned invalid audio.");
+    }
+    let bytes: Uint8Array;
+    try {
+      bytes = Uint8Array.from(atob(payload.audio_base64), (character) => character.charCodeAt(0));
+    } catch {
+      throw new Error("The speech provider returned invalid audio.");
+    }
+    const speech = speechFromArrayBuffer(bytes.buffer as ArrayBuffer);
+    const wordTimings = speechWordsFromCharacterAlignment(text, payload.alignment);
+    return wordTimings ? { ...speech, wordTimings, timingSource: "elevenlabs", timingText: text } : speech;
+  }
+  const buffer = await readBoundedSpeechResponse(response, 12 * 1024 * 1024);
   return speechFromArrayBuffer(buffer);
+}
+
+async function readBoundedSpeechResponse(response: Response, limit: number): Promise<ArrayBuffer> {
+  if (Number(response.headers.get("content-length")) > limit) throw new Error("That spoken audio is too large to play.");
+  const reader = response.body?.getReader();
+  if (!reader) return new ArrayBuffer(0);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > limit) {
+        await reader.cancel();
+        throw new Error("That spoken audio is too large to play.");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let cursor = 0;
+  for (const chunk of chunks) { bytes.set(chunk, cursor); cursor += chunk.byteLength; }
+  return bytes.buffer;
 }
 
 function speechFromArrayBuffer(buffer: ArrayBuffer): GeneratedSpeech {

@@ -170,6 +170,11 @@ describe("AIWritingControls", () => {
       imageGenerationAvailable: true,
     });
 
+    expect(screen.getByRole("group", { name: "AI tools for selected text" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Generate image from selected text" }))
+      .toHaveAttribute("title", "Generate an image from this passage and its Space context");
+    expect(onRequestImage).not.toHaveBeenCalled();
+
     fireEvent.click(
       screen.getByRole("button", { name: "Generate image from selected text" }),
     );

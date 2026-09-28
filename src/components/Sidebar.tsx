@@ -52,6 +52,7 @@ interface SidebarProps {
   onRestartGenerate?: (job: GenerateJob) => void;
   onDeleteGenerate?: (job: GenerateJob) => void;
   onCreateSpace: (name: string) => void;
+  onRenameSpace?: (spaceId: string, name: string, expectedName: string) => boolean;
   onDeleteSpace: (spaceId: string) => boolean;
   onSwitchSpace: (spaceId: string) => void;
   onRestartLinkedArticle: (job: LinkedArticleJob) => void;
@@ -128,6 +129,7 @@ export function Sidebar({
   onRestartGenerate,
   onDeleteGenerate,
   onCreateSpace,
+  onRenameSpace,
   onDeleteSpace,
   onSwitchSpace,
   onRestartLinkedArticle,
@@ -181,6 +183,7 @@ export function Sidebar({
         spaces={spaces}
         activeSpaceId={activeSpaceId}
         onCreateSpace={onCreateSpace}
+        onRenameSpace={onRenameSpace}
         onDeleteSpace={onDeleteSpace}
         onSwitchSpace={onSwitchSpace}
       />

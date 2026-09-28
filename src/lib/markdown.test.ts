@@ -10,10 +10,21 @@ import {
   splitMarkdownFrontmatter,
   stripOrionLinksToTargets,
   stripOrionNoteMarkers,
+  stripMarkdownComments,
 } from "./markdown";
 import type { Concept, Note } from "../types";
 
 const TEST_NOW = "2026-07-27T10:00:00.000Z";
+
+it("strips hidden comments while preserving inline and fenced code examples", () => {
+  const comment = '<!-- orion-table:v1 {"width":65} -->';
+  const body = `${comment}\nLiteral: \`${comment}\`\n\n\`\`\`md\n${comment}\n\`\`\`\n\n${comment}\nActual words.`;
+  const visible = stripMarkdownComments(body);
+  expect(visible.match(/orion-table:v1/g)).toHaveLength(2);
+  expect(visible).toContain(`\`${comment}\``);
+  expect(visible).toContain(`\`\`\`md\n${comment}\n\`\`\``);
+  expect(visible).toContain("Actual words.");
+});
 
 describe("Markdown frontmatter preservation", () => {
   it("keeps imported metadata byte-for-byte outside the visual editor", () => {
@@ -204,6 +215,13 @@ describe("visual wiki links", () => {
       }),
     ).toBe(
       "Positivism, its article, and Lecture 4 remain readable beside [Comte](orion-note://note-comte).",
+    );
+  });
+
+  it("removes a deleted excerpt source link and its metadata while keeping the quote and label", () => {
+    const markdown = '> Exact quoted words stay unchanged.\n>\n> [Original note](orion-note://deleted "orion-excerpt:v1:payload")\n\n[Surviving note](orion-note://surviving "An ordinary title")';
+    expect(stripOrionLinksToTargets(markdown, { noteIds: ["deleted"] })).toBe(
+      '> Exact quoted words stay unchanged.\n>\n> Original note\n\n[Surviving note](orion-note://surviving "An ordinary title")',
     );
   });
 });

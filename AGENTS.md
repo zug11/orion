@@ -136,7 +136,9 @@ src/lib/linkedArticle.ts            selected-text article request and AI merge
 src/lib/wikiEnrichment.ts           new-note wiki refresh requests and safe merge
 src/lib/wiki.ts                     link resolution, references, and backlinks
 src/lib/chat.ts                     bounded Chat context and message updates
-src/lib/aiImages.ts                 selected-passage image prompt and context gate
+src/lib/aiImages.ts                 Space-aware illustration planning and context gate
+src/lib/aiImagePlanningProtocol.json shared read-only image planning instructions/schema
+src-tauri/src/image_planning.rs     cancellable provider transport for illustration plans
 src/lib/studio.ts                   dormant Studio-state normalization
 src/lib/storage.ts                  validated IPC and browser-preview fallbacks
 src/lib/transcription.ts            transcript-to-source normalization
@@ -663,6 +665,9 @@ must not call a provider, and must never treat a stale editable summary as the
 whole note. A changed content fingerprint invalidates the old digest and every
 ancestor blueprint that includes it. Missing or weak digests may force a later
 exact read, but cannot silently masquerade as complete semantic knowledge.
+The digest content fingerprint includes its synthesis-contract version and
+derived summary, so fixing digest construction also invalidates cached provider
+blueprints without editing user notes or their timestamps.
 
 ### Cluster and root blueprints
 
@@ -681,6 +686,15 @@ blueprint IDs/fingerprints. The visible **Across this Space** card is an
 editorial projection of this validated root. It may link to a small set of
 representative notes, but those links are navigation/routing hints rather than
 evidence that every linked body has been opened.
+
+A Space that fits one leaf cluster skips the separate cluster provider call.
+Its root request must receive every current typed note digest, including each
+whole-body sketch, rather than a clipped local blueprint or the previous root
+copied into that leaf. The new root also replaces that leaf's orientation.
+Larger Spaces merge completed provider children. Do not silently truncate a
+root packet or call an unfinished local blueprint validated provider synthesis.
+Do not carry an obsolete overview into a rebuilt root as evidence; cached
+editorial context is usable only while that root remains current.
 
 Never maintain this hierarchy as a growing conversation transcript. Each call
 receives fresh typed child artifacts with exact fingerprints, and every merge
@@ -1989,7 +2003,7 @@ copy writers with a shared thesis and ordered section titles. Outline planning
 caps high/xhigh effort at medium; writers retain the selected effort. Validate
 exact Space-local note IDs and unique headings, and reject partial copy on
 failure. Assemble accepted copy locally with no final model rewrite. Each
-slide is then a complete `gpt-image-2` 16:9 image
+slide is then a complete `gpt-image-2.5-sunburst` 16:9 image
 that letters the title and bullets in distinctive fonts, in same-kind waves
 of at most six, never mixed with copy. The slideshow shows that image only:
 no HTML type overlay even as a fallback, and speaker notes stay off-screen
@@ -2099,23 +2113,50 @@ appear richer.
 
 **Generate image** opens the same compact composer pattern with one optional
 **Image direction** field. Submitting it blank asks Orion for its best visual
-interpretation of the exact highlighted passage; typed guidance is scoped to
-that one image. It is a separate OpenAI-only capability and always uses
-`gpt-image-2` through the one-shot Image API, even when Anthropic is the active
-writing provider. Do not offer it without a configured OpenAI key, and do not
-reuse the Chat, inline-writing, or knowledge-orchestration request schemas.
+interpretation of the highlighted passage in its Space; typed guidance is scoped
+to that one image. Planning uses the Space's selected Intelligence model and
+reasoning effort, with that provider's configured key. Rendering always uses
+`gpt-image-2.5-sunburst` through the one-shot OpenAI Image API, including when
+Anthropic plans the illustration. Do not offer it without an OpenAI key or
+silently substitute a planning model. Keep its dedicated `plan_note_image`
+transport and shared `aiImagePlanningProtocol.json` separate from Chat,
+inline-writing and knowledge-writing request schemas; no note actions are legal.
 
-Image context is deliberately narrow. The prompt contains the active note title,
-the exact selected Markdown/text, optional image direction, and—only when
-`includeExistingNotesInAIContext` is enabled—the saved **Across this Space**
-orientation (or its local Home fallback) plus excerpts from at most six
-host-resolved notes visibly linked or mentioned there. It never crawls the
-Space, opens arbitrary full notes, adds source bodies, or treats note-derived
-prose as trusted instructions. When existing context is disabled, no overview
-or other-note material leaves the device.
+With `includeExistingNotesInAIContext` enabled, two bounded planning calls first
+select relevant context, then interpret exact evidence into a visual brief. The
+initial packet includes the exact selection, captured live editor surroundings,
+an origin-note excerpt, an optional non-stale overview used only for orientation,
+and a directory of up to 16 other notes and 12 sources. The planner may choose
+four discovered note IDs, four discovered source IDs and three local queries.
+The host rejects invented or cross-Space IDs, searches beyond that initial
+directory, and resolves excerpts from up to six other notes and four preserved
+original sources. Search scans at most 2,000 records / 8 million UTF-16 units,
+with a 2-million-unit per-record ceiling, and reports partial coverage. Excerpts
+retain exact text and UTF-16 offsets, with omission flags. Selection context is
+bounded to 1,200 characters on each side; origin/other-note/source excerpt budgets
+are 3,000/1,800/2,400 UTF-16 units. A serialized planning packet cannot exceed
+256,000 UTF-8 bytes. No arbitrary file or URL reads are allowed.
 
-Request one `1536x1024`, medium-quality JPEG with output compression 88. The
-returned base64 bytes are transient proposal state, bounded to Orion's existing
+The composition pass returns a bounded visual brief, descriptive alt text and
+IDs of exact evidence actually used; reject references that were not read. The
+image prompt combines that interpretation with the exact selection and artistic
+direction. Note/source/overview prose is always untrusted subject data, never
+authority. With context disabled, skip retrieval and send only the selection,
+active note title and direction to one composition pass. No surrounding prose,
+directory, overview or source material leaves the device. Planning is transient
+and read-only; it never changes the vault or Chat. Check Space/content/settings
+versions and cancellation between stages and after rendering. Planner failures,
+invalid output or stale context must not start a Sunburst request. Both provider
+transports use the shared scheduler, strict stage schemas, the selected model,
+and a cancellable 90-second ceiling per planning call; OpenAI uses `store: false`.
+
+Request one `1536x1024`, medium-quality JPEG with output compression 88.
+The Image API has no documented Fast mode or `service_tier` parameter as of
+2026-09-25; do not send the Responses/Chat-only setting or silently substitute
+Flare. Keep the native request and renderer's `AI_IMAGE_MODEL` in sync. See
+[OpenAI's Image API](https://developers.openai.com/api/reference/resources/images/methods/generate)
+and [Fast mode guide](https://developers.openai.com/api/docs/guides/fast-mode).
+Returned base64 bytes are transient proposal state, bounded to Orion's existing
 12-MiB note-image limit, and must pass both the renderer and Rust JPEG boundary.
 They do not enter the vault or private image directory until the user presses
 the tick. The preview appears immediately after the selected top-level passage
@@ -2400,12 +2441,13 @@ Reuse the existing colors, surfaces, typography, radii, and compact scale in
 - direct editing with the animated toolbar;
 - note dictation in that sticky toolbar, with the body insertion point preserved
   and mapped through edits while on-device transcription is running;
-- one wider toolbar around a restrained reading measure, with portable Markdown
-  controls for strikethrough, inline and fenced code, dividers, and editable GFM
-  tables. Table row, column, header, and deletion controls appear contextually
-  while the cursor is inside a table rather than permanently crowding the bar.
-  Undo and Redo remain in a fixed trailing group inside the toolbar; only the
-  formatting region may compress or scroll at constrained widths;
+- one contextual toolbar at the original width around a restrained reading
+  measure. Its main controls switch between text, selected-image and table actions while keeping
+  the current object selected. Lower-priority tools move into a bounded
+  contextual More menu as width narrows; no toolbar region scrolls horizontally.
+  More stays at the far right after the fixed Undo/Redo group. Menus use fixed
+  icon and text columns. Preserve portable Markdown controls
+  for strikethrough, inline and fenced code, dividers, tasks and editable tables;
 - source citations are ordinary Markdown links using the private
   `orion-source://<id>` protocol. The citation picker may attach any source in
   the current Space, updates both sides of note/source provenance atomically,
@@ -2457,11 +2499,12 @@ Reuse the existing colors, surfaces, typography, radii, and compact scale in
 - a dedicated Favorites section above one complete active-Space sidebar note
   list, both preserving the stored note-array order when notes are opened;
   favorites remain in All notes so that list is genuinely complete;
-- a scrollable left-hand outline derived from H2/H3 Markdown, with stable
+- a scrollable left-hand outline derived from H1–H6 Markdown, with stable
   duplicate-safe anchors, an editorial reading scale, and the current section
-  emphasized as the user reads, including the final section at scroll end;
-  never reserve its grid column when no outline exists, and hide the rail only
-  where the window cannot support it;
+  emphasized as the user reads, including the final section at scroll end.
+  The note title remains separate, the heading picker previews all six levels,
+  and deeper headings remain legible. Never reserve the outline grid column
+  when no outline exists, and hide the rail only where the window cannot support it;
 - note sources, backlinks, and related notes in an on-demand right-hand
   connections inspector that overlays the reading canvas rather than
   permanently shrinking it. Source entries open the preserved text or
@@ -2486,6 +2529,124 @@ Reuse the existing colors, surfaces, typography, radii, and compact scale in
 
 Do not introduce a separate Markdown editor, read/write tabs, a Link Lens button,
 or a persistent import button floating over unrelated screens.
+
+## Editor and narration contract (0.4.6)
+
+Orion 0.4.6 includes the six editor changes and narration/usability additions
+developed on `codex/editor-preview` in both Whisper Small and Medium editions.
+Preserve them as supported product behavior. Release publication requires the
+normal packaging and verification procedure; historical preview checks do not
+certify new release artifacts.
+
+Development builds continue to use `app.orion.desktop-preview` and its separate
+persistent library. Never copy, reset or seed the normal vault for a preview or
+release check. Installing a release retains Orion's existing application identity
+and library; the preview library is not automatically transferred. See
+`docs/editor-preview.md` for scope, interactions and limitations. LaTeX is outside
+this integration's scope.
+
+- Written-note Play builds its script from the displayed title, summary and
+  prose through `noteNarration.ts`. Compact DOM text spans retain UTF-16 offsets
+  across formatting and line breaks without rewriting the document. Custom
+  Highlights dim unread words; Follow text disables that decoration. Pointer
+  seeks require an actual glyph hit and preserve selection gestures and modified
+  link clicks. Pause retains the current word, while editing, changed wording,
+  navigation and Stop clear the timing map. Keep the Markdown subtree stable
+  across playback ticks. The playback slider also supports arrow keys/Home/End.
+- System narration uses actual speech word-boundary events. ElevenLabs uses
+  the original-text alignment from its `/with-timestamps` response. OpenAI
+  keeps its existing speech request and optionally aligns the generated MP3
+  locally with bundled Whisper's separate `--align` mode. `speech_timing.rs`
+  validates and conservatively matches acoustic words to the original script;
+  never infer word positions from an elapsed-time percentage. Failed alignment
+  keeps playable audio and visibly falls back to passage timing. No additional
+  transcription provider call is made. Native alignment owns a temporary 0600
+  file, window-scoped media job and existing shared Whisper process slot;
+  120-second execution, 12-MiB audio, 600 decoded seconds, 8192 tokens and
+  256-KiB alignment output are bounded. Existing dictation modes and recording
+  deletion stay unchanged. Cloud note playback lazily generates 1200-character
+  passages with at most one following passage prefetched; seeking reuses cached
+  audio/timings. The optional `trackWords` IPC field defaults false for decks.
+- Space renaming stays in the existing switcher, using exact IDs, normalized
+  bounded names and duplicate checks. Reject a changed original name rather
+  than overwriting a concurrent rename. Preserve the existing vault merge/save
+  path and every Space's content/navigation identity.
+- Import supporting text has a 13px minimum, with 14px inputs/actions and 16px
+  source titles. The editor's AI control uses a standalone monochrome sparkle
+  without adjacent text, accessibly named AI tools because it includes both
+  text and image actions. Its tooltip describes those capabilities. Preserve
+  provider gates and preview/accept behavior; merely opening it performs no
+  generation. Narrow layouts move secondary tools into More without scrolling.
+- Keep the toolbar's original width. Its text, image and table modes share
+  contextual More at the far right after Undo/Redo, using only the ellipsis
+  without a chevron in every context. Move lower-priority actions
+  into More as width narrows; do not add horizontal scrolling. Align menu icons
+  and labels in fixed columns, and preserve the selected object during actions.
+- `SlashMenu.tsx` and `slashCommands.ts` expose the compact icon menu only for a
+  slash prefix at a word boundary within ordinary text, including the middle of
+  an existing paragraph. Replace only the command range and preserve surrounding
+  prose. Keep URLs, paths and code literal.
+  Commands are heading, todo, bullet, numbered, divider, image, code, link,
+  excerpt and table; H1–H6 also have direct shortcuts. In tables, `/delete`
+  offers row, column or table. The menu stays below the caret with a bounded,
+  scrollable height and aligned icon/text columns. Preserve keyboard choice,
+  Escape, the captured insertion point and single-transaction replacement. Reject deferred insertion
+  when the captured document changed.
+- `ExcerptPicker.tsx` receives only the active Space's notes. Search titles and
+  complete visible bodies, show a scrollable full-article text reader and jump
+  to the matching passage. Selections preserve exact visible words, merge
+  overlaps and join separate passages in source order with an ellipsis. Bound
+  each excerpt to 12 passages and 12,000 characters from one source note. A
+  changed source requires a fresh selection; never insert from stale offsets.
+- Excerpts remain editable, frozen Markdown blockquotes with an attribution
+  link, not synced content or a parallel block schema. `noteExcerpts.ts` owns
+  bounded `orion-excerpt:v1:` metadata in the optional `orion-note://` link title.
+  Hide reserved titles from tooltips. Backspace immediately after an excerpt
+  removes it as one undoable edit; do not restore a Change excerpt button.
+  Source navigation stays inside the current Space and reveals exact preserved
+  wording only when it can be located without guessing. Source edits/deletion
+  never silently rewrite the quote or select a same-title note elsewhere.
+  Reading and editing share the note's body typography, a calm left rule,
+  compact spacing and a 12 px bottom-right attribution. Suppress decorative
+  quotation marks only for excerpts; ordinary quotation styling stays intact.
+- `NoteImage.tsx` preserves the ordinary image node and managed attachment
+  contract. Corner resizing maintains proportions. Pointer drag sets continuous
+  horizontal position and a vertical offset from an internal paragraph anchor,
+  keeping the image at its displayed size and full opacity during the gesture.
+  Text must wrap live around the moving image and caption before release. Use
+  transient editor-owned exclusion decorations; do not save intermediate drag
+  positions or rewrite the prose DOM. Commit the completed move once so Undo
+  restores the original placement; cancellation restores the original flow.
+  Do not show a scaled thumbnail, destination outline or position label. Clip
+  the moving image at the writing viewport instead of shrinking it. Never snap a drag
+  to left/centre/right or visible paragraph boundaries; alignment presets are
+  explicit shortcuts. Avoid WebKit's native bitmap drag ghost. Layout and
+  caption use bounded `orion-image-layout:v1:` image-title metadata validated by
+  `noteImageLayout.ts`, shared by editing, reading and offline HTML. Optional
+  `xPercent` is null for legacy alignment or clamped to 0–(100-widthPercent)
+  at hundredth-percent precision; `offsetY` is 0–10000 px from the anchor.
+  Width is 15–100%, spacing is 8–40 px, and captions are at most 500 characters.
+  Free layouts use a floated exclusion wrapper and an intrinsic image/caption
+  box. Preserve normal editable prose; do not replace ProseMirror-managed text
+  with manually measured line DOM. Wrap text flows on the roomier side, while
+  Above & below excludes the complete image band. Both restore full-width prose
+  above and below. In line remains on its own line, and dragging it enters Wrap
+  text. This is not simultaneous two-sided wrapping around a centred image.
+- `NoteTable.ts` keeps real Tiptap table transactions and native column
+  resizing. `TablePicker.tsx` offers the hover/keyboard grid, header toggle and
+  custom size bounded to 12 columns and 20 rows. Contextual row/column rails
+  support selection, with numeric count fields and chevrons at the table edges.
+  Count reductions require confirmation before removing nonempty content.
+  Keep additional actions in contextual tools, not a floating bar below the
+  table. Table width is 35–100%, and Tab at the last
+  cell adds a row. Controls disappear when selection returns to prose.
+  Preserve undo and cell data. Optional adjacent `orion-table:v1` JSON comments
+  carry bounded width, column-width, header and banding metadata while the
+  table remains GFM. `noteTables.ts` is the pure validator/read-rendering helper.
+  Its remark filter hides only validated adjacent table metadata in the reading
+  tree while retaining source positions and visible code examples.
+  Headerless GFM uses a synthetic empty header; suppress that header without
+  deleting an author's row. Never interpret metadata as arbitrary CSS or HTML.
 
 ## Change checklist
 

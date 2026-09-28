@@ -20,6 +20,7 @@ import {
   exportWebPage,
   extractBrowserOutputText,
   generateNoteImage,
+  planNoteImage,
   loadSnapshot,
   organizeContent,
   parseChatResult,
@@ -238,7 +239,7 @@ describe("voice memo transcription boundary", () => {
 
     try {
       await expect(
-        transcribeVoiceMemo(audio, { language: "en" }),
+        transcribeVoiceMemo(audio, { language: "en" }, "voice-memo-test-session"),
       ).resolves.toMatchObject({ text: "A transcribed thought." });
       expect(invokeTauriMock).toHaveBeenCalledWith("transcribe_voice_memo", {
         request: {
@@ -247,9 +248,13 @@ describe("voice memo transcription boundary", () => {
           base64Data: "AAAADGZ0eXBNNEEg",
         },
         config: { language: "en" },
+        ...(import.meta.env.VITE_ORION_WHISPER_MODEL === "medium"
+          ? { sessionId: "voice-memo-test-session" }
+          : {}),
       });
     } finally {
       Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+      invokeTauriMock.mockReset();
     }
   });
 
@@ -307,7 +312,7 @@ describe("note image storage boundary", () => {
 });
 
 describe("generated note image boundary", () => {
-  it("uses the one-shot gpt-image-2 endpoint and validates the returned JPEG", async () => {
+  it("requests Sunburst through the Image API and validates the returned JPEG", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({ data: [{ b64_json: "/9j/2Q==" }] }),
@@ -332,7 +337,7 @@ describe("generated note image boundary", () => {
             Authorization: "Bearer sk-browser-image-test",
           }),
           body: JSON.stringify({
-            model: "gpt-image-2",
+            model: "gpt-image-2.5-sunburst",
             prompt: "An editorial systems map",
             n: 1,
             size: "1536x1024",
@@ -416,6 +421,60 @@ describe("generated note image boundary", () => {
         ),
       );
       finishNative({});
+    } finally {
+      Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+      invokeTauriMock.mockReset();
+    }
+  });
+});
+
+describe("image planning transport", () => {
+  const request = { stage: "compose" as const, context: JSON.stringify({
+    selectedPassage: "A branching idea", activeNoteTitle: "Networks", visualDirection: "",
+    contextEnabled: false, evidence: [],
+  }), model: "gpt-6-astra", effort: "high" as const };
+  const result = { visualBrief: "A branching tree", alt: "A tree", evidenceIds: [] };
+
+  it("uses the selected model and dedicated strict read-only schema for both providers", async () => {
+    const fetchMock = vi.fn(async (url: string) => new Response(JSON.stringify(url.includes("anthropic")
+      ? { content: [{ type: "text", text: JSON.stringify(result) }], stop_reason: "end_turn" }
+      : { status: "completed", output_text: JSON.stringify(result) }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await saveApiKey("sk-image-plan-fixture");
+    await saveAnthropicApiKey("sk-ant-image-plan-fixture");
+    try {
+      await expect(planNoteImage(request)).resolves.toEqual(result);
+      await expect(planNoteImage({ ...request, model: "claude-sonnet-5" })).resolves.toEqual(result);
+      const openai = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
+      const anthropic = JSON.parse((fetchMock.mock.calls[1] as unknown as [string, RequestInit])[1].body as string);
+      expect(openai).toMatchObject({ model: "gpt-6-astra", store: false, reasoning: { effort: "high" }, text: { format: { name: "orion_image_plan", strict: true } } });
+      expect(openai.text.format.schema.properties).not.toHaveProperty("noteActions");
+      expect(JSON.parse(openai.input)).toEqual({ stage: "compose", context: JSON.parse(request.context) });
+      expect(anthropic).toMatchObject({ model: "claude-sonnet-5", system: openai.instructions, output_config: { effort: "high" } });
+      expect(anthropic.output_config.format.schema.properties).not.toHaveProperty("noteActions");
+    } finally {
+      await deleteApiKey();
+      await deleteAnthropicApiKey();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("cancels the exact native planning request through the shared image cancellation boundary", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
+    let finish!: (value: unknown) => void;
+    invokeTauriMock.mockImplementation((command: string) => command === "cancel_note_image_generation"
+      ? Promise.resolve(true) : new Promise((resolve) => { finish = resolve; }));
+    const controller = new AbortController();
+    try {
+      const outcome = planNoteImage(request, controller.signal);
+      await vi.waitFor(() => expect(invokeTauriMock).toHaveBeenCalledWith("plan_note_image", expect.any(Object)));
+      const sent = invokeTauriMock.mock.calls.find(([command]) => command === "plan_note_image")![1].request;
+      expect(sent).toMatchObject(request);
+      expect(sent.requestId).toMatch(/^image:plan:/);
+      controller.abort(new Error("User cancelled planning"));
+      await expect(outcome).rejects.toThrow("User cancelled planning");
+      await vi.waitFor(() => expect(invokeTauriMock).toHaveBeenCalledWith("cancel_note_image_generation", { requestId: sent.requestId }));
+      finish(result);
     } finally {
       Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
       invokeTauriMock.mockReset();

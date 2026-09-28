@@ -337,6 +337,17 @@ describe("wiki discovery helpers", () => {
     ).toBe("Vector clocks keep ordering explicit.");
   });
 
+  it("hides table layout comments from connection excerpts and wiki search", () => {
+    const metadata = '<!-- orion-table:v1 {"width":65,"header":true} -->';
+    const body = `${metadata}\n| Material | Finding |\n| --- | --- |\n| Glass | Clear |`;
+    const snapshot = createEmptySnapshot("Tables", TEST_NOW);
+    snapshot.notes = [makeNote({ id: "note-table", title: "Table", body })];
+    expect(markdownToPlainText(body)).not.toContain("orion-table");
+    expect(makeExcerpt(body)).toContain("Material");
+    expect(searchWiki("orion-table", snapshot)).toEqual([]);
+    expect(markdownToPlainText(`Literal example: \`${metadata}\``)).toContain("orion-table:v1");
+  });
+
   it("removes raw and editor-escaped wiki brackets from visible excerpts", () => {
     expect(
       markdownToPlainText(

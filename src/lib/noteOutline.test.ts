@@ -5,7 +5,7 @@ import {
 } from "./noteOutline";
 
 describe("extractNoteOutline", () => {
-  it("extracts second- and third-level headings with stable duplicate anchors", () => {
+  it("extracts all heading levels with stable duplicate anchors", () => {
     expect(
       extractNoteOutline(
         [
@@ -16,6 +16,7 @@ describe("extractNoteOutline", () => {
         ].join("\n"),
       ),
     ).toEqual([
+      {id:"heading-document-title",text:"Document title",level:1,line:1},
       {
         id: "heading-first-section",
         text: "First section",
@@ -35,6 +36,10 @@ describe("extractNoteOutline", () => {
         line: 4,
       },
     ]);
+  });
+
+  it("keeps deep headings visible and ignores unsupported levels", () => {
+    expect(extractNoteOutline("#### Four\n##### Five\n###### Six\n####### Not a heading").map(({level})=>level)).toEqual([4,5,6]);
   });
 
   it("ignores headings inside fenced code blocks", () => {

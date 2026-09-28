@@ -27,6 +27,17 @@ export function restoreMarkdownFrontmatter(
   return prefix ? `${prefix}${content}` : content;
 }
 
+/** Comments are invisible prose; literal code examples retain their wording. */
+export function stripMarkdownComments(markdown: string): string {
+  const ranges = markdownCodeRanges(markdown);
+  let rangeIndex = 0;
+  return markdown.replace(/<!--[\s\S]*?-->/g, (comment, offset: number) => {
+    while (rangeIndex < ranges.length && ranges[rangeIndex].end <= offset) rangeIndex += 1;
+    const range = ranges[rangeIndex];
+    return range && offset >= range.start && offset < range.end ? comment : " ";
+  });
+}
+
 export function stripOrionNoteMarkers(markdown: string): string {
   const stripped = markdown.replace(
     /^[ \t]*(?:\\?<!--|&lt;!--)[ \t]*orion-note:[^ \t\r\n>]+:(?:start|end)[ \t]*(?:-->|--&gt;)[ \t]*(?:\r?\n)?/gim,
@@ -57,7 +68,7 @@ export function stripOrionLinksToTargets(
   }
 
   return markdown.replace(
-    /\[((?:\\.|[^\]\\])*)\]\(orion-(note|concept|source):\/\/([^) \t\r\n]+)\)/g,
+    /\[((?:\\.|[^\]\\])*)\]\(orion-(note|concept|source):\/\/([^) \t\r\n]+)(?:[ \t]+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'))?\)/g,
     (link, label: string, kind: string, id: string) => {
       const remove =
         kind === "note"

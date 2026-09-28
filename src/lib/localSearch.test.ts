@@ -38,6 +38,12 @@ describe("local full-text search", () => {
     expect(searchLocalNotes([note], "fenced-body-probe &amp; literal")).toHaveLength(1);
   });
 
+  it("searches table contents without indexing layout comments", () => {
+    const note = makeNote({ body: '<!-- orion-table:v1 {"width":65,"header":true} -->\n| Material | Finding |\n| --- | --- |\n| Glass | Clear |' });
+    expect(searchLocalNotes([note], "orion-table")).toHaveLength(0);
+    expect(searchLocalNotes([note], "Glass")[0].snippet).toBe("Material Finding Glass Clear");
+  });
+
   it("keeps source matching literal instead of interpreting its Markdown or character references", () => {
     const source = makeSource({ text: '**Preserved** &amp; [label](https://example.com/raw "original-metadata")' });
     expect(searchLocalSources([source], "**Preserved** &amp;")).toHaveLength(1);
