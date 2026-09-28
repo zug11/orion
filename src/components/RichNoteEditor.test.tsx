@@ -180,7 +180,7 @@ describe("RichNoteEditor AI writing", () => {
     />);
 
     const toggle = screen.getByRole("button", { name: "Turn on AI tools" });
-    expect(toggle).toHaveTextContent("AI");
+    expect(toggle.textContent).toBe("");
     expect(toggle).toHaveAttribute("aria-disabled", "true");
     expect(toggle).toHaveAttribute("title", "Add an OpenAI key in Settings to use AI tools");
     fireEvent.click(toggle);
