@@ -4,13 +4,14 @@ use super::*;
 use std::collections::{hash_map::DefaultHasher, VecDeque};
 use std::hash::{Hash, Hasher};
 
+mod editor;
 mod read;
 #[cfg(test)]
 mod tests;
 mod text;
 mod write;
 
-pub const NAMES: [&str; 20] = [
+pub const NAMES: [&str; 21] = [
     "orion_list_sources",
     "orion_search_sources",
     "orion_get_source_passage",
@@ -31,12 +32,14 @@ pub const NAMES: [&str; 20] = [
     "orion_check_space_integrity",
     "orion_get_recent_changes",
     "orion_get_link_path",
+    "orion_apply_note_command",
 ];
-const WRITES: [&str; 4] = [
+const WRITES: [&str; 5] = [
     "orion_set_task_completion",
     "orion_edit_note_text",
     "orion_append_to_note",
     "orion_batch_update_metadata",
+    "orion_apply_note_command",
 ];
 const MAX_SCAN_NOTES: usize = 2_000;
 const MAX_SCAN_BYTES: usize = 8 * 1024 * 1024;
@@ -205,6 +208,7 @@ pub fn definitions() -> Vec<Value> {
         (NAMES[17], "Audit Space-local references, duplicate IDs, missing canonical targets, and broken explicit Orion links. Reports bounded diagnostics without changing knowledge.", json!({}), vec![], true),
         (NAMES[18], "List current notes changed since an RFC3339 timestamp, sorted chronologically. This is current-state metadata, not a historical audit log; deletions and prior bodies are unavailable.", json!({"since":string(80)}), vec!["since"], true),
         (NAMES[19], "Find one shortest directed connection path between two exact notes using existing Orion links and persisted relationships. Search has explicit node, edge, text, and hop bounds; returns cited steps and no graph UI.", json!({"from_note_id":id,"to_note_id":id,"max_hops":integer(4,1,8)}), vec!["from_note_id","to_note_id"], false),
+        (NAMES[20], "Apply a bounded local note formatting command, using the same portable Markdown as editor blocks and slash commands. Requires an exact Space and current destination note version. This does not execute slash text, editor UI, shell commands, pickers, or AI. Block accepts Markdown; other text/labels/cells are literal. Supports text, block, heading/h1-h6, todo, bullet, numbered, divider, quote, code, table, link, excerpt, and image. Link/excerpt targets must exist in this Space; excerpt also requires current target_expected_version and unique exact text from that note body. Image reuses a managed image URL already referenced in this Space. For table row/column/table deletion, read the exact table then use orion_edit_note_text with its current version. Placement inserts separated blocks; link replacement is inline. Stale retries cannot duplicate content.", editor::input_fields(), vec!["note_id","expected_version","command"], false),
     ];
     specs.into_iter().map(|(name, description, mut fields, mut required, paged)| {
         let writes = WRITES.contains(&name);

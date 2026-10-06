@@ -1,0 +1,40 @@
+{
+  "release": "v0.4.7",
+  "teamId": "NX592DPNHM",
+  "editions": [
+    {
+      "edition": "Small",
+      "file": "Orion-0.4.7-Apple-Silicon.dmg",
+      "submissionId": "f45b7ada-8580-448c-883c-d9569ebfa0c5",
+      "status": "Accepted",
+      "issues": null,
+      "submittedArchiveSha256": "9aa61378e74e0bf17cadb1fe9be328e3774d3a1110f9c9f4691aad1b245835b2",
+      "stapledDmgSha256": "3db734cb63ad51efec869e3289b556d03d95294f3a5894f2106295614c1eaa7e",
+      "bytes": 535826678,
+      "ticketStapled": true,
+      "gatekeeper": {
+        "diskImage": "accepted",
+        "copiedApplication": "accepted"
+      },
+      "sourceFingerprint": "d1b50a171e4cfed991f9c4475a2fb10eff4463c149f69d5798a99a3be0374915",
+      "rendererFingerprint": "93bb35338ebcef7d0d6cfbb4de4745fc31b88f1a2b136e4bc1eec42429eb52ff"
+    },
+    {
+      "edition": "Medium",
+      "file": "Orion-0.4.7.m-Apple-Silicon.dmg",
+      "submissionId": "93ad791b-6de2-4419-9703-ebe0c18579f4",
+      "status": "Accepted",
+      "issues": null,
+      "submittedArchiveSha256": "7d94dd6749802c085fa2fbbd5a4a3b069bcc0c024e403470f7567d75d6e92d8c",
+      "stapledDmgSha256": "d1d45891b8ec4a9a05d4d146d85b69084dccd37fa338b73de9364b728ca45215",
+      "bytes": 1503781398,
+      "ticketStapled": true,
+      "gatekeeper": {
+        "diskImage": "accepted",
+        "copiedApplication": "accepted"
+      },
+      "sourceFingerprint": "9d8c1d99e6fb35cf188ea62dee82913d6e8f1d029dbdf9ffdb8d06cf20567836",
+      "rendererFingerprint": "6e0cf819e716fa7f4a22628ed9831b3735a9ef60d2bbfa420a928ade6a3e0ab5"
+    }
+  ]
+}

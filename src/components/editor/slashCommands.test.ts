@@ -11,6 +11,8 @@ describe("slash command discovery", () => {
     expect(matchingSlashItems({ from: 1, to: 8, query: "delete", inTable: true }).map(item => item.id)).toEqual(["delete-row", "delete-column", "delete-table"]);
     expect(matchingSlashItems({ from: 1, to: 8, query: "delete", inTable: false })).toEqual([]);
     expect(matchingSlashItems({ from: 1, to: 8, query: "table", inTable: true })).toEqual([]);
+    expect(matchingSlashItems({ from: 1, to: 7, query: "block", inTable: false }).map(item => item.id)).toEqual(["block"]);
+    expect(matchingSlashItems({ from: 1, to: 7, query: "block", inTable: true })).toEqual([]);
   });
 
   it("leaves slash characters inside URLs, paths and code untouched", () => {

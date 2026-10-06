@@ -1,15 +1,16 @@
 import type { Note } from "../types";
-import { getNoteExcerptText, type ExcerptPassage } from "./noteExcerpts";
+import { getNoteExcerptText, type ExcerptLocator } from "./noteExcerpts";
 
 export interface NoteExcerptNavigation {
   noteId: string;
-  passages: ExcerptPassage[];
+  passages: ExcerptLocator[];
   requestedAt: number;
 }
 
 let pending: NoteExcerptNavigation | undefined;
 let highlightTimer: ReturnType<typeof setTimeout> | undefined;
 const HIGHLIGHT_NAME = "orion-excerpt-target";
+export const NOTE_PASSAGE_NAVIGATION_EVENT = "orion-note-passage-navigation";
 
 type HighlightRegistry = { set: (name: string, highlight: unknown) => void; delete: (name: string) => void };
 function registry(): HighlightRegistry | undefined {
@@ -17,8 +18,9 @@ function registry(): HighlightRegistry | undefined {
 }
 
 /** A one-shot in-window navigation intent; it never reads or chooses another Space. */
-export function requestNoteExcerptNavigation(noteId: string, passages: readonly ExcerptPassage[]): void {
+export function requestNoteExcerptNavigation(noteId: string, passages: readonly ExcerptLocator[]): void {
   pending = { noteId, passages: passages.map((passage) => ({ ...passage })), requestedAt: Date.now() };
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(NOTE_PASSAGE_NAVIGATION_EVENT, { detail: { noteId } }));
 }
 
 export function consumeNoteExcerptNavigation(noteId: string): NoteExcerptNavigation | undefined {
@@ -85,13 +87,16 @@ export function revealNoteExcerptPassage(root: HTMLElement, note: Note, request:
   const passage = request.passages[0];
   if (!passage?.text.trim()) return false;
   const source = getNoteExcerptText(note);
-  let sourceIndex = passage.from;
-  if (source.slice(passage.from, passage.to) !== passage.text) sourceIndex = uniqueIndex(source, passage.text);
+  const textOnly = "locator" in passage;
+  let sourceIndex = textOnly ? uniqueIndex(source, passage.text) : passage.from;
+  if (!textOnly && source.slice(passage.from, passage.to) !== passage.text) sourceIndex = uniqueIndex(source, passage.text);
   if (sourceIndex < 0) return false;
   const wanted = normalize(passage.text);
   const body = readingText(root);
   let position = uniqueIndex(body.text, wanted);
   if (position < 0) {
+    // A text-only locator has no captured occurrence to disambiguate repetitions.
+    if (textOnly) return false;
     // A repeated quotation is safe to locate by occurrence only when the complete
     // rendered text agrees with the canonical current note representation.
     const canonical = normalize(source);

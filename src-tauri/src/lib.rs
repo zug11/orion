@@ -25,9 +25,12 @@ mod assistant_protocol;
 mod desktop_windows;
 mod image_planning;
 mod media_jobs;
+mod narration_export;
+mod ruler_glass;
 mod speech_timing;
 mod theme_icon;
 mod window_glass;
+mod word_export;
 
 const KEYCHAIN_SERVICE: &str = "app.orion.knowledge";
 const KEYCHAIN_ACCOUNT: &str = "openai-api-key";
@@ -987,6 +990,25 @@ struct NoteImageAttachment {
 struct GenerateNoteImageRequest {
     request_id: String,
     prompt: String,
+    #[serde(default)]
+    quality: NoteImageQuality,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum NoteImageQuality {
+    Fast,
+    #[default]
+    Detailed,
+}
+
+impl NoteImageQuality {
+    fn model(&self) -> &'static str {
+        match self {
+            Self::Fast => "gpt-image-2.5-flare",
+            Self::Detailed => "gpt-image-2.5-sunburst",
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -1671,7 +1693,7 @@ async fn run_generate_note_image(
         return Err("Add an OpenAI API key in Settings before generating an image.".to_string());
     };
     let body = json!({
-        "model": "gpt-image-2.5-sunburst",
+        "model": request.quality.model(),
         "prompt": request.prompt.trim(),
         "n": 1,
         "size": "1536x1024",
@@ -7059,6 +7081,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             desktop_windows::install_menu(app.handle())?;
+            desktop_windows::install_citation_routing(app.handle());
             let bridge = assistant_bridge::AssistantBridge::new(vault_path(app.handle())?);
             if let Err(error) = bridge.start() {
                 eprintln!("Orion desktop workflows are unavailable: {error}");
@@ -7072,6 +7095,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_vault,
             window_glass::set_window_glass,
+            ruler_glass::set_ruler_glass,
+            ruler_glass::move_ruler_glass,
             theme_icon::set_theme_icon,
             save_vault,
             assistant_bridge::assistant_poll,
@@ -7103,6 +7128,7 @@ pub fn run() {
             delete_elevenlabs_api_key,
             test_elevenlabs_key,
             generate_speech,
+            narration_export::export_narration,
             organize_content,
             knowledge_assignment,
             cancel_knowledge_assignment,
@@ -7120,7 +7146,12 @@ pub fn run() {
             transcription_setup_status,
             export_markdown,
             export_web_page,
+            word_export::export_word_document,
+            word_export::read_word_export_image,
             desktop_windows::new_orion_window,
+            desktop_windows::open_writing_window,
+            desktop_windows::show_note_in_library,
+            desktop_windows::set_library_navigation_ready,
             desktop_windows::close_orion_window,
             desktop_windows::is_citation_window,
             desktop_windows::claim_space_overview,
@@ -7355,10 +7386,30 @@ mod tests {
     }
 
     #[test]
+    fn image_quality_defaults_to_detailed_and_rejects_unknown_options() {
+        let base = json!({"requestId":"image:test", "prompt":"A scene"});
+        let detailed: GenerateNoteImageRequest = serde_json::from_value(base.clone()).unwrap();
+        assert_eq!(detailed.quality.model(), "gpt-image-2.5-sunburst");
+        let mut fast = base.clone();
+        fast["quality"] = json!("fast");
+        assert_eq!(
+            serde_json::from_value::<GenerateNoteImageRequest>(fast)
+                .unwrap()
+                .quality
+                .model(),
+            "gpt-image-2.5-flare"
+        );
+        let mut invalid = base;
+        invalid["quality"] = json!("turbo");
+        assert!(serde_json::from_value::<GenerateNoteImageRequest>(invalid).is_err());
+    }
+
+    #[test]
     fn validates_generated_note_image_request_and_jpeg_response() {
         let valid = GenerateNoteImageRequest {
             request_id: "image:request-123".to_string(),
             prompt: "A quiet editorial illustration".to_string(),
+            quality: NoteImageQuality::Detailed,
         };
         validate_note_image_generation_request(&valid).unwrap();
 
@@ -7366,6 +7417,7 @@ mod tests {
             validate_note_image_generation_request(&GenerateNoteImageRequest {
                 request_id: "knowledge:request-123".to_string(),
                 prompt: valid.prompt.clone(),
+                quality: NoteImageQuality::Detailed,
             })
             .is_err()
         );
@@ -7373,6 +7425,7 @@ mod tests {
             validate_note_image_generation_request(&GenerateNoteImageRequest {
                 request_id: valid.request_id.clone(),
                 prompt: " \n ".to_string(),
+                quality: NoteImageQuality::Detailed,
             })
             .is_err()
         );

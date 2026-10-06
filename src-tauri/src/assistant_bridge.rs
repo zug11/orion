@@ -150,6 +150,7 @@ fn policy(vault: &Value, request: &StartRequest) -> Result<Value, String> {
     if matches!(
         request.operation,
         Operation::Research
+            | Operation::Search
             | Operation::EnrichKnowledge
             | Operation::DevelopConcept
             | Operation::RefreshOverview
@@ -241,7 +242,7 @@ impl AssistantBridge {
                         "reasoningEffort": settings.get("reasoningEffort"),
                         "existingNoteContextEnabled": settings.get("includeExistingNotesInAIContext"),
                         "limits": {"queuedJobs":MAX_QUEUED,"retainedJobs":MAX_JOBS,"sourceInputs":12,"providerCalls":6},
-                        "operations":["context","research","import","reprocess","generate","develop_concept","enrich_knowledge","refresh_overview"],
+                        "operations":["context","research","search","export","import","reprocess","generate","develop_concept","enrich_knowledge","refresh_overview"],
                         "notice":"Orion executes workflows while open. AI uses Orion's configured provider account. Context/results returned here are also shared with the calling assistant."
                     }))
                 }
@@ -528,6 +529,62 @@ impl AssistantBridge {
             return Err("The Space changed while Orion was working. Start a new request against current knowledge.".into());
         }
         Ok(job.request.clone())
+    }
+
+    /// The native exporter owns this short atomic-save boundary. Once entered,
+    /// cancellation cannot relabel an already written file as cancelled.
+    pub fn begin_export_commit(&self, id: &str, session_id: &str) -> Result<(), String> {
+        let request = self.assert_running(id, session_id)?;
+        if request.operation != Operation::Export {
+            return Err("This job is not a Word export.".into());
+        }
+        let vault = read_vault(&self.path)?;
+        let current_policy = policy(&vault, &request)?;
+        let mut jobs = self.lock()?;
+        let job = jobs
+            .entries
+            .get_mut(id)
+            .filter(|job| {
+                job.view.state == "running" && job.session_id.as_deref() == Some(session_id)
+            })
+            .ok_or("The export stopped before saving.")?;
+        if job.policy != current_policy
+            || job.base_content.as_ref()
+                != Some(&knowledge_content(space(&vault, &request.space_id)?))
+        {
+            return Err("The Space or its settings changed before exporting.".into());
+        }
+        job.view.state = "committing".into();
+        job.view.stage = "Saving Word document".into();
+        job.view.updated_at = now();
+        Ok(())
+    }
+
+    pub fn finish_export_commit(
+        &self,
+        id: &str,
+        session_id: &str,
+        outcome: Result<String, String>,
+    ) -> Result<(), String> {
+        let mut jobs = self.lock()?;
+        let job = jobs
+            .entries
+            .get_mut(id)
+            .filter(|job| {
+                job.view.state == "committing"
+                    && job.session_id.as_deref() == Some(session_id)
+                    && job.request.operation == Operation::Export
+            })
+            .ok_or("This export has not entered its atomic save.")?;
+        match outcome {
+            Ok(path) => {
+                let result = json!({"spaceId":job.request.space_id,"format":"word","scope":job.request.input["scope"],
+                    "noteId":job.request.input.get("note_id"),"path":path,"cancelled":false,"providerCalls":0});
+                Self::end_job(job, "succeeded", Some(result), None);
+            }
+            Err(error) => Self::end_job(job, "failed", None, Some(error)),
+        }
+        Ok(())
     }
 
     fn finish(
@@ -1152,6 +1209,51 @@ mod tests {
             "cancelled"
         );
         assert!(bridge.assert_running(id, "renderer").is_err());
+    }
+
+    #[test]
+    fn export_atomic_boundary_preserves_result_across_cancellation_and_later_edits() {
+        let (_dir, bridge) = broker();
+        bridge.poll("renderer").unwrap();
+        let started=bridge.handle("start",json!({"space_id":"a","request_id":"word","operation":"export","input":{"scope":"space"}}));
+        let id = started["result"]["id"].as_str().unwrap();
+        bridge.poll("renderer").unwrap();
+        bridge
+            .lock()
+            .unwrap()
+            .entries
+            .get_mut(id)
+            .unwrap()
+            .base_content = Some(knowledge_content(space(&fixture(), "a").unwrap()));
+        bridge.begin_export_commit(id, "renderer").unwrap();
+        assert_eq!(
+            bridge.handle("cancel_job", json!({"space_id":"a","job_id":id}))["ok"],
+            false
+        );
+        let mut edited = fixture();
+        edited["spaces"][0]["notes"][0]["body"] = json!("later edit");
+        crate::write_vault_file(&bridge.path, &edited).unwrap();
+        bridge
+            .finish_export_commit(id, "renderer", Ok("/user/chosen/document.docx".into()))
+            .unwrap();
+        let result = bridge.handle("get_job", json!({"space_id":"a","job_id":id}));
+        assert_eq!(result["result"]["state"], "succeeded");
+        assert_eq!(
+            result["result"]["result"]["path"],
+            "/user/chosen/document.docx"
+        );
+        assert_eq!(result["result"]["freshness"], "stale");
+    }
+
+    #[test]
+    fn cancelled_export_cannot_enter_the_atomic_boundary() {
+        let (_dir, bridge) = broker();
+        bridge.poll("renderer").unwrap();
+        let started=bridge.handle("start",json!({"space_id":"a","request_id":"word","operation":"export","input":{"scope":"space"}}));
+        let id = started["result"]["id"].as_str().unwrap();
+        bridge.poll("renderer").unwrap();
+        bridge.handle("cancel_job", json!({"space_id":"a","job_id":id}));
+        assert!(bridge.begin_export_commit(id, "renderer").is_err());
     }
 
     #[test]

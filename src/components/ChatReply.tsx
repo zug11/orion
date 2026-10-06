@@ -7,6 +7,7 @@ import { CitedPassage } from "./CitedPassage";
 interface ChatReplyProps {
   snapshot: AppSnapshot;
   message: StudioMessage;
+  context?: "chat" | "search";
   onOpenNote: (id: string) => void;
   onOpenSource?: (id: string) => void;
 }
@@ -29,7 +30,7 @@ const ChatLink: NonNullable<Components["a"]> = ({ href, children }) => {
 };
 const CHAT_COMPONENTS: Components = { a: ChatLink };
 
-export const ChatReply = memo(function ChatReply({ snapshot, message, onOpenNote, onOpenSource }: ChatReplyProps) {
+export const ChatReply = memo(function ChatReply({ snapshot, message, context = "chat", onOpenNote, onOpenSource }: ChatReplyProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const citationTrigger = useRef<HTMLButtonElement | null>(null);
   const evidence = message.evidence ?? [];
@@ -40,6 +41,10 @@ export const ChatReply = memo(function ChatReply({ snapshot, message, onOpenNote
     citationTrigger.current?.focus({ preventScroll: true });
   };
   const coverage = message.coverage;
+  const searchCoverage = coverage ? [
+    coverage.openedNotes > 0 ? `${coverage.openedNotes} ${coverage.openedNotes === 1 ? "note" : "notes"}` : "",
+    coverage.openedSources > 0 ? `${coverage.openedSources} ${coverage.openedSources === 1 ? "source" : "sources"}` : "",
+  ].filter(Boolean).join(" and ") : "";
   return <>
     <div className="chat-message__body">
       <CitationContext.Provider value={{ evidence, selectedId, panelId, select: (id, trigger) => {
@@ -50,9 +55,11 @@ export const ChatReply = memo(function ChatReply({ snapshot, message, onOpenNote
       </CitationContext.Provider>
     </div>
     {selected && <CitedPassage evidence={selected} notes={snapshot.notes} sources={snapshot.sources}
-      panelId={panelId} savedWith="reply" onClose={closeEvidence} onOpenNote={onOpenNote} onOpenSource={onOpenSource} />}
+      panelId={panelId} savedWith={context === "search" ? "answer" : "reply"} onClose={closeEvidence} onOpenNote={onOpenNote} onOpenSource={onOpenSource} />}
     {coverage && (coverage.availableNotes > 0 || coverage.availableSources > 0) &&
-      <p className="chat-message__coverage">Read {coverage.openedNotes} {coverage.openedNotes === 1 ? "note" : "notes"} and {coverage.openedSources} {coverage.openedSources === 1 ? "source" : "sources"}
+      <p className="chat-message__coverage">{context === "search"
+        ? `Read ${searchCoverage || "no notes or sources"}`
+        : `Read ${coverage.openedNotes} ${coverage.openedNotes === 1 ? "note" : "notes"} and ${coverage.openedSources} ${coverage.openedSources === 1 ? "source" : "sources"}`}
         {coverage.limited ? " · Partial Space coverage" : ""}</p>}
   </>;
 });

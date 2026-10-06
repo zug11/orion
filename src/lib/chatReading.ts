@@ -39,6 +39,8 @@ export interface ChatReadingOptions {
   onProgress?: (message: string) => void;
   /** Resolves the captured Space, independent of the window's navigation. */
   currentSnapshot?: () => AppSnapshot | undefined;
+  /** Search is transient, grounded and read-only, with no conversation history. */
+  purpose?: "chat" | "search";
 }
 
 type ChatDriver = (request: ChatRequest, signal?: AbortSignal) => Promise<ChatResult>;
@@ -340,6 +342,8 @@ export async function runChatReading(
   snapshot: AppSnapshot, prompt: string, driver: ChatDriver, options: ChatReadingOptions = {},
 ): Promise<ChatResult> {
   const frozen = structuredClone(snapshot);
+  const searching = options.purpose === "search";
+  if (searching) frozen.studio.messages = [];
   const version = stableSnapshotVersion(frozen);
   const assertCurrent = () => {
     if (controller.signal.aborted) throw abortReason(controller.signal);
@@ -358,8 +362,13 @@ export async function runChatReading(
   try {
     assertCurrent();
     const request = buildChatRequest(frozen, prompt);
+    if (searching) {
+      request.allowNoteActions = false;
+      request.history = [];
+      request.prompt += "\n\nAnswer this search question from this Space only. Read exact passages before answering, cite every substantive finding, and distinguish inference and gaps. Do not create notes or carry out actions. If the wording is vague, search related terms before concluding that support was not found. Keep the answer concise.";
+    }
     const previousQuestion = frozen.studio.messages.filter((message) => message.role === "user").slice(-1)[0]?.content ?? "";
-    const query = truncateUnicode(`${request.prompt}\n${previousQuestion.slice(0, 400)}`, 600);
+    const query = truncateUnicode(searching ? prompt : `${request.prompt}\n${previousQuestion.slice(0, 400)}`, 600);
     const session = new ChatReadingSession(frozen, query);
     options.onProgress?.("Finding relevant material");
     await session.search(query, 0, controller.signal);
@@ -382,7 +391,12 @@ export async function runChatReading(
           continue;
         }
         if (!result.reply.trim()) throw new Error("Chat returned no answer. Answer with the available evidence or explain the gap.");
-        return session.finish({ ...result, noteActions: request.allowNoteActions ? result.noteActions : undefined }, finalizing);
+        const finished = session.finish({ ...result, noteActions: request.allowNoteActions ? result.noteActions : undefined }, finalizing);
+        if (searching && !finished.evidence?.length) {
+          if (!finalizing) throw new Error("Search answers require exact supporting passages and citations. Read relevant evidence, then cite it. If no support exists, finish with the evidence gap.");
+          return { reply: "I could not establish an answer from supporting passages in this Space. Try a more specific question or inspect the local search results.", evidence: [], coverage: finished.coverage };
+        }
+        return finished;
       } catch (error) {
         if (controller.signal.aborted || finalizing) throw error;
         correction = error instanceof Error ? error.message : "The response was invalid. Use the supplied reading and citation contract.";

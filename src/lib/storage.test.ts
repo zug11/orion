@@ -39,6 +39,7 @@ import {
   KnowledgeProviderTimeoutError,
   type KnowledgeAssignmentExecutionRequest,
 } from "./knowledgeOrchestration/service";
+import { defaultThemePreferences } from "./savedThemePalettes";
 import { prepareSpaceKnowledgeIndex } from "./spaceKnowledge";
 import { isTransientProviderFailure } from "./providerHealth";
 
@@ -353,6 +354,18 @@ describe("generated note image boundary", () => {
     }
   });
 
+  it("uses Flare only when Fast is explicitly chosen", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [{ b64_json: "/9j/2Q==" }] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await saveApiKey("sk-image-fast-fixture");
+    try {
+      await generateNoteImage("An editorial diagram", undefined, "fast");
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ model: "gpt-image-2.5-flare", quality: "medium", output_format: "jpeg" });
+      await expect(generateNoteImage("An image", undefined, "unexpected" as "fast")).rejects.toThrow(/Fast or Detailed/);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally { await deleteApiKey(); vi.unstubAllGlobals(); }
+  });
+
   it("persists only a validated generated JPEG after acceptance", async () => {
     const generated = parseGeneratedNoteImage({
       fileName: "orion-generated-image.jpg",
@@ -457,6 +470,57 @@ describe("image planning transport", () => {
       await deleteAnthropicApiKey();
       vi.unstubAllGlobals();
     }
+  });
+
+  it("sends explicit None, stage schemas and adequate high-reasoning output allowance", async () => {
+    const finding = { summary: "The evidence is qualified.", evidenceIds: ["note:a"], queries: [], complete: true };
+    const fetchMock = vi.fn().mockImplementation(async (_url, options: RequestInit) => {
+      const stage = JSON.parse(JSON.parse(options.body as string).input).stage;
+      return new Response(JSON.stringify({ status: "completed", output_text: JSON.stringify(stage === "read" ? finding : result) }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await saveApiKey("sk-image-effort-fixture");
+    try {
+      await planNoteImage({ ...request, model: "gpt-5.6-sol", effort: "none" });
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ reasoning: { effort: "none" }, max_output_tokens: 12000 });
+      await planNoteImage(request);
+      expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({ max_output_tokens: 24000 });
+      await planNoteImage({ ...request, stage: "read", effort: "low", context: JSON.stringify({ selectedPassage: "A claim", contextEnabled: true, evidence: [{ id: "note:a" }] }) });
+      expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toMatchObject({ max_output_tokens: 6000, text: { format: { schema: { properties: { summary: { maxLength: 3200 } } } } } });
+      await expect(planNoteImage({ ...request, effort: "none" })).rejects.toThrow(/at least Low/);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally { await deleteApiKey(); vi.unstubAllGlobals(); }
+  });
+
+  it("aborts an unfinished browser stage at its supplied deadline with a specific error", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((_url, options: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      options.signal!.addEventListener("abort", () => reject(options.signal!.reason), { once: true });
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    await saveApiKey("sk-image-timeout-fixture");
+    try {
+      const outcome = planNoteImage({ ...request, stage: "search", effort: "low", timeoutMs: 1000,
+        context: JSON.stringify({ selectedPassage: "A claim", contextEnabled: true, evidence: [] }) });
+      const assertion = expect(outcome).rejects.toThrow("Context search did not finish within 1 second");
+      await vi.advanceTimersByTimeAsync(1000);
+      await assertion;
+      expect(fetchMock.mock.calls[0][1].signal?.aborted).toBe(true);
+    } finally { await deleteApiKey(); vi.useRealTimers(); vi.unstubAllGlobals(); }
+  });
+
+  it("bounds the provider response before parsing potentially large output", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(" ".repeat(2 * 1024 * 1024 + 1), { status: 200 })));
+    await saveApiKey("sk-image-response-bound-fixture");
+    try { await expect(planNoteImage(request)).rejects.toThrow("Image brief preparation response exceeded its limit"); }
+    finally { await deleteApiKey(); vi.unstubAllGlobals(); }
+  });
+
+  it("identifies incomplete provider output as brief preparation without exposing payloads", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "incomplete", incomplete_details: { reason: "max_output_tokens" } }), { status: 200 })));
+    await saveApiKey("sk-image-incomplete-fixture");
+    try { await expect(planNoteImage(request)).rejects.toThrow("Image brief preparation did not return a complete plan"); }
+    finally { await deleteApiKey(); vi.unstubAllGlobals(); }
   });
 
   it("cancels the exact native planning request through the shared image cancellation boundary", async () => {
@@ -1312,6 +1376,8 @@ describe("browser persistence fallback", () => {
     delete legacy.settings.themeSurfaceCustom;
     delete legacy.settings.themeTextWarmth;
     delete legacy.settings.themeContrast;
+    delete legacy.settings.themeSavedPalettes;
+    delete legacy.settings.themeActivePaletteId;
     delete legacy.settings.noteTypeface;
     delete legacy.settings.windowGlass;
     delete legacy.settings.themeIcon;
@@ -1327,6 +1393,42 @@ describe("browser persistence fallback", () => {
       schemaVersion: 2,
       spaces: [{ workspace: { id: "workspace-test-vault" } }],
     });
+  });
+
+  it("round-trips saved palettes and current tuning without altering notes or mode", async () => {
+    const vault = createEmptyVault("Personal palettes", TEST_NOW);
+    vault.spaces[0] = createPopulatedSnapshot();
+    vault.activeSpaceId = vault.spaces[0].workspace.id;
+    const settings = vault.spaces[0].settings;
+    settings.themeSavedPalettes = [{ ...defaultThemePreferences("grove"), id: "palette-forest",
+      name: "Forest room", themeCanvasCustom: "#142B28", themeSurfaceCustom: "#28443D",
+      themeCanvasTone: "deep", themeSurfaceLift: "lifted" }];
+    settings.themeActivePaletteId = "palette-forest";
+    settings.theme = "system";
+    await saveSnapshot(vault);
+    const loaded = await loadSnapshot();
+    expect(loaded?.spaces[0].settings).toEqual(settings);
+    expect(loaded?.spaces[0].notes).toEqual(vault.spaces[0].notes);
+  });
+
+  it.each([
+    ["not a list"], [[null]], [[{ ...defaultThemePreferences("orion"), id: "palette-test", name: "" }]],
+    [[{ ...defaultThemePreferences("orion"), id: "../file", name: "Room" }]],
+    [[{ ...defaultThemePreferences("orion"), id: "palette-test", name: "Room", themeCanvasCustom: "#abc;" }]],
+    [[{ ...defaultThemePreferences("orion"), id: "palette-test", name: "Room", themeSurfaceLift: "extreme" }]],
+    [[{ ...defaultThemePreferences("orion"), id: "palette-test", name: "Room" },
+      { ...defaultThemePreferences("tide"), id: "palette-test", name: "Duplicate" }]],
+    [Array.from({ length: 25 }, (_, index) => ({ ...defaultThemePreferences("orion"), id: `palette-${index}`, name: "Room" }))],
+  ])("rejects malformed saved palettes without clearing the vault (%j)", async (palettes) => {
+    const snapshot = mutablePopulatedSnapshot();
+    snapshot.settings.themeSavedPalettes = palettes;
+    await expectInvalidBrowserVault(snapshot);
+  });
+
+  it("rejects an unsafe saved palette selection without clearing the vault", async () => {
+    const snapshot = mutablePopulatedSnapshot();
+    snapshot.settings.themeActivePaletteId = "javascript:alert(1)";
+    await expectInvalidBrowserVault(snapshot);
   });
 
   it.each(["sans", "serif"] as const)("persists the %s note typeface without changing note text", async (noteTypeface) => {
@@ -1349,7 +1451,7 @@ describe("browser persistence fallback", () => {
 
   it.each([
     "quiet-loom", "nova", "flux", "tidal-glass", "prism-drift", "nebula",
-    "emberwake", "gravity-silk", "mirage",
+    "emberwake", "gravity-silk", "mirage", "opal", "ripple-glass",
   ] as const)("round-trips %s and its tuning without losing vault content", async (atmosphere) => {
     const vault = createEmptyVault("Loom project", TEST_NOW);
     vault.spaces[0] = createPopulatedSnapshot();

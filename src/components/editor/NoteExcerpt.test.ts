@@ -5,6 +5,7 @@ import { buildNoteExcerptContent, createNoteExcerptSelection, getNoteExcerptText
 import type { Note } from "../../types";
 import { NoteStarterKit } from "./NoteStarterKit";
 import { deleteNoteExcerptBeforeCaret, isNoteExcerptNode, NoteExcerpt } from "./NoteExcerpt";
+import { parseTextImport } from "../../lib/files";
 
 const editors: Editor[] = [];
 function excerptNote(id: string, title: string, body: string): Note {
@@ -49,6 +50,30 @@ describe("portable excerpt editor behaviour", () => {
     expect(editor.getMarkdown().trim()).toBe("Before.");
     editor.commands.undo();
     expect(editor.getMarkdown()).toBe(before);
+  });
+
+  it("imports and reserializes MCP v2 excerpts with native styling and one-step deletion", () => {
+    // Exact percent-encoded JSON format emitted by the independent Rust MCP server.
+    const title = "orion-excerpt:v2:%7B%22noteId%22%3A%22source%22%2C%22passages%22%3A%5B%7B%22text%22%3A%22Exact%20caf%C3%A9%20%F0%9F%AA%B6%20words.%22%7D%5D%7D";
+    const markdown = `Before.\n\n> Exact café 🪶 words.\n>\n> [Source \\[notes\\]](orion-note://source "${title}")\n\nAfter.`;
+    const imported = parseTextImport("excerpt.md", "text/markdown", markdown);
+    expect(imported.text).toBe(markdown);
+    const editor = create(imported.text);
+    const reopened = create(editor.getMarkdown());
+    const quote = reopened.state.doc.child(1);
+    expect(isNoteExcerptNode(quote)).toBe(true);
+    expect(quote.firstChild?.textContent).toBe("Exact café 🪶 words.");
+    expect(reopened.view.dom.querySelector(".note-excerpt-source")?.textContent).toBe("Source [notes]");
+    const anchor = reopened.view.dom.querySelector("a[data-note-excerpt-source]");
+    expect(anchor?.getAttribute("href")).toBe("orion-note://source");
+    expect(anchor?.hasAttribute("title")).toBe(false);
+    expect(reopened.getMarkdown()).toContain(title);
+    reopened.commands.setTextSelection(reopened.state.doc.child(0).nodeSize + quote.nodeSize + 1);
+    const before = reopened.getMarkdown();
+    expect(deleteNoteExcerptBeforeCaret(reopened)).toBe(true);
+    expect(reopened.getMarkdown()).toBe("Before.\n\nAfter.");
+    reopened.commands.undo();
+    expect(reopened.getMarkdown()).toBe(before);
   });
 
   it("preserves regular blockquotes and normal text deletion", () => {

@@ -13,6 +13,8 @@ fn operation(name: &str) -> Option<Operation> {
     Some(match name {
         "orion_get_context" => Operation::Context,
         "orion_research" => Operation::Research,
+        "orion_search_space" => Operation::Search,
+        "orion_export_word" => Operation::Export,
         "orion_import" => Operation::Import,
         "orion_reprocess_sources" => Operation::Reprocess,
         "orion_generate" => Operation::Generate,
@@ -231,6 +233,8 @@ pub fn definitions() -> Vec<Value> {
             "inputSchema":{"type":"object","properties":{},"additionalProperties":false},"outputSchema":{"type":"object"},
             "annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}),
         tool("orion_get_context","Build a bounded, versioned context packet using Orion's Space hierarchy and exact note/source excerpts. Runs locally without an AI API call; coverage is explicitly partial.",context,&["query"],false,false),
+        tool("orion_search_space", "Ask an explicit natural-language question across one Space. Orion adaptively searches and reads relevant notes and preserved sources, returning an AI answer with exact versioned passages, citations, and coverage. Never changes notes, settings, or Chat.", json!({"query":string(600)}), &["query"], false, true),
+        tool("orion_export_word", "Export an exact note, its linked notes, or the whole Space as one editable Word document. Opens Orion's native save dialog; the user chooses the destination. No caller-supplied filesystem paths, no AI use, and no vault changes. Requires desktop workflows; cancellation before saving prevents the export.", json!({"scope":{"enum":["note","linked","space"]}, "note_id":string(200)}), &["scope"], true, false),
         tool("orion_research","Ask Orion AI to answer, compare supplied material, find gaps, review an argument, or prepare a brief grounded in the selected Space. Returns evidence references, uncertainty, and coverage. Does not save notes or alter Chat.",research,&["question"],false,true),
         tool("orion_import","Process text, an absolute local document/image/media path, or a public HTTPS webpage/YouTube URL through Orion's import flow. Preserves original extracted sources. AI mode synthesizes ideas and can revise matching canonical notes; local mode preserves source notes without provider use. Successful notes are saved atomically.",
             json!({"inputs":{"type":"array","minItems":1,"maxItems":12,"items":{"oneOf":[
@@ -264,7 +268,7 @@ mod tests {
     #[test]
     fn every_workflow_is_scoped_and_has_a_structured_result() {
         let tools = definitions();
-        assert_eq!(tools.len(), 12);
+        assert_eq!(tools.len(), 14);
         for tool in &tools {
             assert!(recognizes(tool["name"].as_str().unwrap()));
             assert!(tool["outputSchema"].is_object());

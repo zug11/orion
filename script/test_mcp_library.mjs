@@ -14,7 +14,7 @@ const timestamp = "2026-09-05T00:00:00Z";
 const makeNote = (id, title, body) => ({ id, title, body, slug: id, summary: "", kind: "article", status: "ready", aliases: [], tags: ["mcp-contract"], conceptIds: [], sourceIds: [], pinned: false, createdAt: timestamp, updatedAt: timestamp });
 const a = makeNote("knowledge-a", "Contract Alpha", "# Overview\né😀 evidence\n## Actions\n- [ ] Read beta\n[Beta](orion-note://knowledge-b)\n");
 a.aliases = ["Contract First"]; a.sourceIds = ["knowledge-source"]; a.conceptIds = ["knowledge-concept"];
-const b = makeNote("knowledge-b", "Contract Beta", "# Beta\n[Gamma](orion-note://knowledge-c)\n");
+const b = makeNote("knowledge-b", "Contract Beta", "# Beta\n[Gamma](orion-note://knowledge-c)\n\nA focused search view keeps the answer readable and the evidence close.\n");
 b.sourceIds = ["knowledge-source"];
 space.notes.push(a, b, makeNote("knowledge-c", "Contract Gamma", "Same substantive body."), makeNote("knowledge-d", "Contract Duplicate", "Same substantive body."));
 space.sources.push({ id: "knowledge-source", title: "Contract evidence", kind: "text", text: "é😀 evidence preserved", importedAt: timestamp, noteIds: [a.id, b.id] });
@@ -60,8 +60,8 @@ try {
   await request("initialize", { protocolVersion: "2025-06-18", clientInfo: { name: "isolated-library-harness", version: "1" }, capabilities: {} });
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   definitions = (await request("tools/list")).result.tools;
-  assert.equal(definitions.length, 41);
-  assert.equal(new Set(definitions.map((tool) => tool.name)).size, 41);
+  assert.equal(definitions.length, 44);
+  assert.equal(new Set(definitions.map((tool) => tool.name)).size, 44);
   const sources = await tool("orion_list_sources", { query: "Contract evidence" }); assert.equal(sources.sources[0].id, "knowledge-source");
   const evidence = await tool("orion_search_sources", { query: "evidence", source_ids: ["knowledge-source"] }); assert.equal(evidence.matches[0].matchStart, 3);
   const passage = await tool("orion_get_source_passage", { source_id: "knowledge-source", start: 1, max_chars: 2 }); assert.equal(passage.text, "😀 ");
@@ -88,6 +88,20 @@ try {
   await tool("orion_edit_note_text", { space_id: scope, note_id: a.id, expected_version: await version(a.id), old_text: "é😀 evidence", new_text: "é😀 verified evidence" });
   const append = { space_id: scope, note_id: a.id, expected_version: await version(a.id), text: "\nOne append." };
   await tool("orion_append_to_note", append); await tool("orion_append_to_note", append, true);
+  const apply = async (fields, expectError = false) => tool("orion_apply_note_command", {
+    space_id: scope, note_id: a.id, expected_version: await version(a.id), ...fields,
+  }, expectError);
+  const block = { space_id: scope, note_id: a.id, expected_version: await version(a.id), command: "block", text: "## Search review\n\nKeep the reading surface calm.\n\n- [ ] Check keyboard navigation\n- [x] Keep citations close\n\n| Area | Decision |\n| --- | --- |\n| Search | Ask AI on the right |\n| Answers | A clear reading view |" };
+  await tool("orion_apply_note_command", block);
+  await tool("orion_apply_note_command", block, true);
+  await apply({ command: "link", target_note_id: b.id, text: "Supporting note" });
+  await apply({ command: "excerpt", target_note_id: b.id, target_expected_version: await version(b.id), text: "A focused search view keeps the answer readable and the evidence close." });
+  const beforeInvalidCommand = await readFile(vaultPath, "utf8");
+  await apply({ command: "block", placement: "before", anchor: "Keep the reading surface calm.", text: "Must not nest" }, true);
+  await apply({ command: "excerpt", target_note_id: b.id, target_expected_version: "stale", text: "A focused search view keeps the answer readable and the evidence close." }, true);
+  await apply({ command: "table", rows: [["A", "B"], ["C"]] }, true);
+  await apply({ command: "image", image_url: "file:///private.png" }, true);
+  assert.equal(await readFile(vaultPath, "utf8"), beforeInvalidCommand, "Invalid editor commands wrote to the library.");
   const beforeBatch = await readFile(vaultPath, "utf8");
   await tool("orion_batch_update_metadata", { space_id: scope, notes: [{ note_id: a.id, expected_version: await version(a.id) }, { note_id: b.id, expected_version: "stale" }], tags: ["must-not-save"] }, true);
   assert.equal(await readFile(vaultPath, "utf8"), beforeBatch);
@@ -98,8 +112,15 @@ try {
   assert.deepEqual(updated.settings, space.settings); assert.deepEqual(updated.sources, space.sources); assert.deepEqual(updated.concepts, space.concepts);
   assert(updated.notes.find((note) => note.id === a.id).body.includes("- [x] Read beta"));
   assert.equal(updated.notes.find((note) => note.id === a.id).body.match(/One append/g).length, 1);
-  assert.equal(exercised.size, 20, "Not every new tool was exercised against the packaged executable.");
-  console.log("All 20 library tools verified against the exact executable: evidence, navigation, tasks, guarded edits, atomicity, citations, and Space isolation.");
+  const editorNote = updated.notes.find((note) => note.id === a.id);
+  assert(editorNote.body.includes("<!-- orion-block:v1 -->"));
+  assert(editorNote.body.includes("orion-excerpt:v2:"));
+  assert.equal(editorNote.body.match(/## Search review/g).length, 1);
+  if (process.env.ORION_EDITOR_FIXTURE_OUT) {
+    await writeFile(resolve(process.env.ORION_EDITOR_FIXTURE_OUT), JSON.stringify({ spaceId: scope, note: editorNote, sourceNote: updated.notes.find((note) => note.id === b.id) }, null, 2) + "\n");
+  }
+  assert.equal(exercised.size, 21, "Not every new tool was exercised against the packaged executable.");
+  console.log("All 21 library tools verified against the exact executable: evidence, navigation, tasks, guarded edits, editor commands, atomicity, citations, and Space isolation.");
 } finally {
   child.kill();
   await rm(directory, { recursive: true, force: true });

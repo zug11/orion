@@ -1,3 +1,6 @@
+import { runSpaceSearch } from "../spaceSearch";
+import { assistantSearchResult } from "./search";
+import { notesForExportScope } from "../webExport";
 import { nanoid } from "nanoid";
 import type { AppSnapshot, Note, ParsedImport, Source } from "../../types";
 import type { ImportItem, ImportStudioApplyPayload, OrganizedSource } from "../../components/ImportStudio";
@@ -105,15 +108,33 @@ async function importSources(snapshot: AppSnapshot, request: Extract<AssistantRe
 export async function executeAssistantWorkflow(snapshot: AppSnapshot, request: AssistantRequest, deps: WorkflowDependencies): Promise<WorkflowResult> {
   if (request.space_id !== snapshot.workspace.id) throw new Error("Workflow Space mismatch.");
   const grant = snapshot.settings.assistantAccess;
-  const usesAI = request.operation !== "context" && !(request.operation === "import" && request.input.mode === "local");
-  const writes = !["context", "research"].includes(request.operation);
+  const usesAI = !["context", "export"].includes(request.operation) && !(request.operation === "import" && request.input.mode === "local");
+  const writes = !["context", "research", "search", "export"].includes(request.operation);
   if (!grant?.enabled || !grant.spaceIds.includes(request.space_id)) throw new Error("Desktop workflows are disabled for this Space.");
   if (writes && !grant.allowWrites) throw new Error("Workflow writes are disabled.");
   if (usesAI && (!grant.allowAI || !isSelectedAIConfigured(snapshot.settings))) throw new Error("Enable Orion AI for desktop workflows and configure the selected provider in Settings.");
-  if (["research", "develop_concept", "enrich_knowledge", "refresh_overview"].includes(request.operation) && !snapshot.settings.includeExistingNotesInAIContext) throw new Error("Existing-note AI context is off in Orion.");
+  if (["research", "search", "develop_concept", "enrich_knowledge", "refresh_overview"].includes(request.operation) && !snapshot.settings.includeExistingNotesInAIContext) throw new Error("Existing-note AI context is off in Orion.");
   await deps.assertCurrent();
   switch (request.operation) {
     case "context": return { result: { ...buildAssistantContext(snapshot, request.input), providerCalls: 0 } };
+    case "search": {
+      const reply = await runSpaceSearch(snapshot, request.input.query, deps.chat, {
+        signal: deps.signal,
+        onProgress: (message) => { void deps.progress(message).catch(() => undefined); },
+      });
+      await deps.assertCurrent();
+      return { result: assistantSearchResult(snapshot, reply) };
+    }
+    case "export": {
+      const noteId = request.input.note_id ?? null;
+      if (request.input.scope !== "space" && !snapshot.notes.some((note) => note.id === noteId)) throw new Error("Select an exact note in this Space to export.");
+      const notes = notesForExportScope(snapshot, request.input.scope, noteId);
+      if (!notes.length) throw new Error("There are no notes in this export scope.");
+      if (!deps.exportWord) throw new Error("Word export is unavailable in this desktop connection.");
+      await deps.progress("Preparing Word document");
+      const result = await deps.exportWord(snapshot, request.input.scope, noteId);
+      return { result: { spaceId: snapshot.workspace.id, format: "word", ...result, providerCalls: 0 } };
+    }
     case "research": return { result: await researchSpace(snapshot, request.input, deps) };
     case "import": case "reprocess": return importSources(snapshot, request, deps);
     case "generate": {

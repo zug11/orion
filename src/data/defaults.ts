@@ -45,6 +45,8 @@ export const defaultSettings: Settings = {
   themeSurfaceCustom: "",
   themeTextWarmth: "neutral",
   themeContrast: "balanced",
+  themeSavedPalettes: [],
+  themeActivePaletteId: "",
   noteTypeface: "sans",
   windowGlass: { ...defaultWindowGlass },
   themeIcon: true,
@@ -170,28 +172,11 @@ export function normalizeThemeContrast(value: unknown): ThemeContrast {
 }
 
 export function normalizeHomeAtmosphere(value: unknown): HomeAtmosphere {
-  if (
-    value === "signal-decay" ||
-    value === "line-waves" ||
-    value === "quiet-loom" ||
-    value === "nova" ||
-    value === "flux" ||
-    value === "tidal-glass" ||
-    value === "prism-drift" ||
-    value === "nebula" ||
-    value === "emberwake" ||
-    value === "gravity-silk" ||
-    value === "mirage" ||
-    value === "field"
-  ) {
-    return value;
-  }
-  if (value === "antigravity" || value === "constellation") {
-    return "signal-decay";
-  }
-  if (value === "aurora" || value === "liquid-ether") {
-    return "line-waves";
-  }
+  if (value === "signal-decay" || value === "line-waves" || value === "mirage" ||
+      value === "field" || value === "opal" || value === "ripple-glass") return value;
+  if (value === "antigravity" || value === "constellation") return "signal-decay";
+  if (value === "aurora" || value === "liquid-ether") return "line-waves";
+  if (["quiet-loom", "nova", "flux", "tidal-glass", "prism-drift", "nebula", "emberwake", "gravity-silk"].includes(String(value))) return "mirage";
   return defaultSettings.homeAtmosphere;
 }
 

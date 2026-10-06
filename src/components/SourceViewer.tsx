@@ -7,8 +7,10 @@ import {
   Trash2,
   X,
 } from "../lib/icons";
-import { useEffect, useMemo, useRef, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { Note, Source } from "../types";
+import type { ExcerptPassage } from "../lib/noteExcerpts";
+import { consumeSourcePassageNavigation, SOURCE_PASSAGE_NAVIGATION_EVENT } from "../lib/sourcePassageNavigation";
 
 interface SourceViewerProps {
   source: Source;
@@ -48,6 +50,8 @@ export function SourceViewer({
   onClose,
 }: SourceViewerProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const passageRef = useRef<HTMLElement>(null);
+  const [passage, setPassage] = useState<ExcerptPassage>();
   const connectedNotes = useMemo(
     () =>
       source.noteIds
@@ -57,6 +61,23 @@ export function SourceViewer({
   );
   const sourceUrl = safeExternalUrl(source.sourceUrl);
   const size = readableSize(source.byteSize);
+  const currentPassage = passage && source.text.slice(passage.from, passage.to) === passage.text ? passage : undefined;
+
+  useEffect(() => {
+    // Consume after StrictMode's first setup/cleanup replay.
+    let frame = 0;
+    const reveal = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => setPassage(consumeSourcePassageNavigation(source)));
+    };
+    const receive = (event: Event) => { if ((event as CustomEvent<{ sourceId: string }>).detail?.sourceId === source.id) reveal(); };
+    window.addEventListener(SOURCE_PASSAGE_NAVIGATION_EVENT, receive);
+    reveal();
+    return () => { window.removeEventListener(SOURCE_PASSAGE_NAVIGATION_EVENT, receive); cancelAnimationFrame(frame); };
+  }, [source]);
+  useEffect(() => {
+    if (passage) passageRef.current?.scrollIntoView?.({ block: "center", behavior: "instant" });
+  }, [passage]);
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -180,7 +201,7 @@ export function SourceViewer({
                 : "Preserved text"}
             </span>
           </div>
-          <pre>{source.text || "This source does not contain extracted text."}</pre>
+          <pre>{currentPassage ? <>{source.text.slice(0, currentPassage.from)}<mark ref={passageRef} className="source-search-target">{currentPassage.text}</mark>{source.text.slice(currentPassage.to)}</> : source.text || "This source does not contain extracted text."}</pre>
         </section>
 
         {connectedNotes.length > 0 ? (

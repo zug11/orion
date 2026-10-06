@@ -213,7 +213,10 @@ describe("Orion editable tables", () => {
     expect(view.container.querySelector('[aria-label="More table options"]')).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Delete table" })).toBeNull();
     fireEvent.click(terminal.querySelector("button")!);
-    expect(screen.getByRole("menuitem", { name: "Delete selected row" })).toBeVisible();
+    expect(screen.getByRole("menuitem", { name: "Delete table" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Delete selected row" })).toHaveAttribute("title", "Delete selected row");
+    expect(screen.getByRole("button", { name: "Add row below" }).querySelector("svg")).not.toBeNull();
+    expect(view.container.querySelector(".orion-table-toolbar-label")).toBeNull();
     fireEvent.keyDown(screen.getByRole("menu", { name: "More table options" }), { key: "Escape" });
     expect(document.activeElement).toBe(terminal.querySelector("button"));
     expect(screen.queryByRole("menuitem", { name: "Delete table" })).toBeNull();
@@ -256,6 +259,25 @@ describe("Orion editable tables", () => {
     fireEvent.click(screen.getByRole("button", { name: "3 columns, 3 rows" }));
     expect(editor.getMarkdown()).toBe("/table");
     expect(screen.getByRole("alert")).toHaveTextContent("The note changed");
+  });
+
+  it("keeps core table icons visible in narrow layouts and leaves select keys native", () => {
+    const editor = createEditor("| A | B |\n| --- | --- |\n| One | Two |");
+    selectCell(editor, 1, 0);
+    render(<TableToolbar editor={editor} compact cramped/>);
+    for (const name of ["Add row below", "Delete selected row", "Add column right", "Delete selected column"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button).toHaveAttribute("title", name);
+      expect(button.querySelector("svg")).not.toBeNull();
+    }
+    fireEvent.click(screen.getByRole("button", { name: "More table options" }));
+    expect(screen.getByRole("menuitem", { name: "Add row above" })).toBeVisible();
+    const width = screen.getByRole("combobox", { name: "Table width" });
+    width.focus();
+    expect(fireEvent.keyDown(width, { key: "ArrowDown" })).toBe(true);
+    expect(width).toHaveFocus();
+    fireEvent.keyDown(width, { key: "Escape" });
+    expect(screen.getByRole("button", { name: "More table options" })).toHaveFocus();
   });
 
   it("exposes only adjacent bounded table metadata to read and export renderers", () => {

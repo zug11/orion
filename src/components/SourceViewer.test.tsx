@@ -1,13 +1,27 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { Note, Source } from "../types";
 import { SourceViewer } from "./SourceViewer";
+import { requestSourcePassageNavigation } from "../lib/sourcePassageNavigation";
 
 const NOW = "2026-08-07T00:00:00.000Z";
 
 describe("SourceViewer", () => {
+  it("reveals the exact matching source passage and rejects a stale request", async () => {
+    const source: Source = { id: "matched-source", title: "Matched source", kind: "text", importedAt: NOW, text: "Opening. A precise search phrase. Ending.", noteIds: [] };
+    requestSourcePassageNavigation(source, { from: 9, to: 32, text: source.text.slice(9, 32) });
+    const callbacks = { onOpenNote: vi.fn(), onDeleteSource: vi.fn(), onClose: vi.fn() };
+    const { container, rerender } = render(<SourceViewer source={source} notes={[]} {...callbacks} />);
+    await waitFor(() => expect(container.querySelector("mark")).toHaveTextContent("A precise search phrase"));
+    act(() => requestSourcePassageNavigation(source, { from: 0, to: 8, text: "Opening." }));
+    await waitFor(() => expect(container.querySelector("mark")).toHaveTextContent("Opening."));
+    act(() => requestSourcePassageNavigation(source, { from: 9, to: 32, text: source.text.slice(9, 32) }));
+    rerender(<SourceViewer source={{ ...source, text: "The source text has changed." }} notes={[]} {...callbacks} />);
+    await waitFor(() => expect(container.querySelector("mark")).not.toBeInTheDocument());
+    expect(screen.getByText("The source text has changed.")).toBeVisible();
+  });
   it("shows preserved text and opens a note shaped by the source", () => {
     const note: Note = {
       id: "note-lecture",

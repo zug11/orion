@@ -4,61 +4,30 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { Topbar } from "./Topbar";
 
-describe("Topbar", () => {
-  it("marks the non-interactive window chrome as draggable", () => {
-    const { container } = render(
-      <Topbar
-        workspaceName="Research"
-        contextOpen={false}
-        onOpenSearch={vi.fn()}
-        onExport={vi.fn()}
-      />,
-    );
+describe("Topbar writing window", () => {
+  it("offers the writing action immediately before export and prevents duplicate opening", () => {
+    const onOpenWritingWindow = vi.fn();
+    const props = {
+      workspaceName: "My space",
+      contextOpen: false,
+      onOpenSearch: vi.fn(),
+      onExport: vi.fn(),
+      onOpenWritingWindow,
+    };
+    const { rerender } = render(<Topbar {...props} />);
+    const open = screen.getByRole("button", { name: "Open in writing window" });
+    expect(open.nextElementSibling).toBe(screen.getByRole("button", { name: "Share or export" }));
+    fireEvent.click(open);
+    expect(onOpenWritingWindow).toHaveBeenCalledOnce();
 
-    expect(container.querySelector(".topbar")).toHaveAttribute(
-      "data-tauri-drag-region",
-    );
-
-    const workspaceCrumb = container.querySelector(".workspace-crumb");
-    expect(workspaceCrumb).toHaveAttribute("data-tauri-drag-region");
-    workspaceCrumb?.querySelectorAll("span, small").forEach((element) => {
-      expect(element).toHaveAttribute("data-tauri-drag-region");
-    });
-
-    screen.getAllByRole("button").forEach((button) => {
-      expect(button).not.toHaveAttribute("data-tauri-drag-region");
-    });
+    rerender(<Topbar {...props} openingWritingWindow />);
+    expect(open).toBeDisabled();
+    fireEvent.click(open);
+    expect(onOpenWritingWindow).toHaveBeenCalledOnce();
   });
 
-  it("keeps top-bar actions clickable", () => {
-    const onOpenSearch = vi.fn();
-    const onExport = vi.fn();
-    const onToggleContext = vi.fn();
-
-    render(
-      <Topbar
-        workspaceName="Research"
-        contextOpen={false}
-        onOpenSearch={onOpenSearch}
-        onExport={onExport}
-        onToggleContext={onToggleContext}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: /Search your atlas/i }));
-    fireEvent.click(screen.getByRole("button", { name: "Share or export" }));
-    const detailsButton = screen.getByRole("button", {
-      name: "Open note details",
-    });
-    expect(detailsButton).toHaveAttribute(
-      "aria-controls",
-      "note-details-panel",
-    );
-    expect(detailsButton).toHaveAttribute("aria-expanded", "false");
-    fireEvent.click(detailsButton);
-
-    expect(onOpenSearch).toHaveBeenCalledOnce();
-    expect(onExport).toHaveBeenCalledOnce();
-    expect(onToggleContext).toHaveBeenCalledOnce();
+  it("omits the action when no document can be detached", () => {
+    render(<Topbar workspaceName="My space" contextOpen={false} onOpenSearch={vi.fn()} onExport={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Open in writing window" })).not.toBeInTheDocument();
   });
 });

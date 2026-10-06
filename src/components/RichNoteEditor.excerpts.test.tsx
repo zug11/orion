@@ -7,10 +7,12 @@ import { consumeNoteExcerptNavigation } from "../lib/noteExcerptNavigation";
 import { RichNoteEditor } from "./RichNoteEditor";
 
 describe("editor excerpt source navigation", () => {
-  it("uses current notes and the current navigation callback without recreating the editor", () => {
+  it.each(["v1", "v2"])("uses current Space notes and the current navigation callback for %s without recreating the editor", (version) => {
     const source: Note = { id: "excerpt-source", title: "Source article", body: "The selected sentence.", slug: "source", summary: "", aliases: [], tags: [], kind: "article", status: "ready", conceptIds: [], sourceIds: [], createdAt: "2026-09-28T00:00:00Z", updatedAt: "2026-09-28T00:00:00Z" };
     const selection = createNoteExcerptSelection(source, [{ from: 0, to: source.body.length }]);
-    const markdown = `> ${selection.text}\n>\n> [Source article](orion-note://${source.id} "${encodeNoteExcerptTitle(selection)}")`;
+    const title = version === "v1" ? encodeNoteExcerptTitle(selection)
+      : "orion-excerpt:v2:" + encodeURIComponent(JSON.stringify({ noteId: source.id, passages: [{ text: selection.text }] }));
+    const markdown = `> ${selection.text}\n>\n> [Source article](orion-note://${source.id} "${title}")`;
     const oldOpen = vi.fn();
     const currentOpen = vi.fn();
     const props = { noteId: "origin", markdown, concepts: [], sources: [], attachedSourceIds: [], onChange: vi.fn(), onAttachSource: vi.fn(), onRegisterConcept: vi.fn(), onDisableConceptAutoLink: vi.fn() };
@@ -25,7 +27,8 @@ describe("editor excerpt source navigation", () => {
     editor.view.props.handleClick?.(editor.view, 0, event);
     expect(currentOpen).toHaveBeenCalledWith(source.id);
     expect(oldOpen).not.toHaveBeenCalled();
-    expect(consumeNoteExcerptNavigation(source.id)?.passages).toEqual(selection.passages);
+    expect(consumeNoteExcerptNavigation(source.id)?.passages).toEqual(version === "v1"
+      ? selection.passages : [{ text: selection.text, locator: "unique-text" }]);
 
     rerender(<RichNoteEditor {...props} notes={[]} onOpenNote={currentOpen}/>);
     editor.view.props.handleClick?.(editor.view, 0, event);

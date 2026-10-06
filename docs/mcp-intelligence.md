@@ -1,8 +1,8 @@
 # Orion desktop intelligence through MCP
 
 Implementation scope for the Codex and Claude Desktop connectors. See also the
-[20 additional local library tools](mcp-library-tools.md), bringing the shared
-connector to 41 tools. This extends
+[21 additional local library tools](mcp-library-tools.md), bringing the shared
+connector to 44 tools. This extends
 the existing local vault tools with the running app's context engine and native
 AI execution. The MCP executable never receives provider credentials or calls a
 provider itself. There is no hosted endpoint or background daemon.
@@ -15,6 +15,13 @@ provider itself. There is no hosted endpoint or background daemon.
 - Research, compare supplied material, identify research gaps, review an
   argument, and prepare a working brief through one evidence-bearing research
   contract. Follow-ups may reference a prior result, with freshness rechecked.
+- Search one Space adaptively with `orion_search_space`, returning exact cited
+  passages and coverage without writing notes or Chat. Queries are bounded to
+  600 characters and use the configured provider and context policy.
+- Export a note, one visible link hop, or an entire Space as Word with
+  `orion_export_word`. The app opens Save As; caller paths are not accepted.
+  This is keyless and does not require note-write access. Cancelled or stale jobs
+  cannot replace the destination after the dialog. Check `cancelled` in results.
 - Import text, supported local documents/images/media, public webpages, and
   YouTube sources through the existing extraction and knowledge-import flow.
   Preserve sources, provenance, canonical reuse, recovery diagnostics, and the
@@ -44,7 +51,7 @@ provider itself. There is no hosted endpoint or background daemon.
   retained evidence, elapsed work, and retries are bounded. Cancellation stops
   queued stages and prevents late mutation; physical calls retain their slots
   until they actually finish.
-- Research/context jobs never write notes or Chat history. Creation/revision
+- Research/context/search/export jobs never write notes or Chat history. Creation/revision
   workflows persist ordinary notes, without agent attribution or a new lifecycle.
 - Writes use the existing advisory lock, revision check, and atomic replacement.
   Recheck both the live renderer and persisted Space before committing. Results

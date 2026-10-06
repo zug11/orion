@@ -13,9 +13,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.4.6-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.4.7-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
   ·
-  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.4.6.m-Apple-Silicon.dmg">Whisper Medium edition</a>
+  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.4.7.m-Apple-Silicon.dmg">Whisper Medium edition</a>
   ·
   <a href="#the-orchestration-topology">How it works</a>
   ·
@@ -24,7 +24,7 @@
   <a href="#local-first-by-construction">Privacy</a>
 </p>
 
-> Orion 0.4.6 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
+> Orion 0.4.7 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
 
 ## Knowledge work should produce knowledge, not another inbox
 
@@ -40,7 +40,7 @@ The result is a personal wiki that gets more coherent over time:
 - **Notes stay ordinary.** They are permanent, editable, portable Markdown from the moment they are created.
 - **Projects stay separate.** Spaces are hard boundaries for notes, sources, concepts, Chat, navigation, and AI context.
 - **Chat reads as it goes.** Chat uses the Space hierarchy and compact note directories to find promising material, searches note and source bodies, then opens exact passages and follows connections as needed. Replies can cite the passages actually read; click a citation to inspect it or open the original item. Reading is bounded, can be stopped, and reports partial coverage. Chat can create notes only when explicitly asked. Created notes and **Keep as note** retain exact quoted passages and source links, including when an original later changes or is removed. This uses the selected OpenAI or Anthropic model and may make several requests for a question.
-- **Search reaches the original text.** Search finds phrases throughout note bodies and preserved source text, including across line breaks. Results show the matching passage and open the exact note or source in the current Space.
+- **Search reaches the original text.** Search finds phrases and relevant combinations of words throughout note bodies and preserved sources. Filter Notes, Sources, or Concepts, see highlighted matches, and jump to the passage. Choose **Ask AI** at the right of the search field for a cited answer from the current Space. Switch between Matches and Answer without repeating the request; ordinary search stays local and works without a key.
 - **AI stays optional.** Manual organization and the entire local knowledge layer work without OpenAI or Anthropic.
 
 ## From raw material to a personal wiki
@@ -82,6 +82,15 @@ decoded audio; longer material can be split into separate files.
 **Settings → Intelligence** includes **GPT-6 Astra** for complex research and
 synthesis through your OpenAI connection, with Low through Extra high reasoning.
 
+## Orion 0.4.7
+
+Version 0.4.7 packages the current editor, search, export and appearance work in
+both Whisper Small and Medium editions. The editor toolbar has a consistent
+frosted native glass surface, with spacing between control groups instead of
+vertical dividing lines. See [the 0.4.7 release notes](releases/0.4.7.md) for
+the included changes and verification details. Both installers are Developer ID
+signed, Apple notarized and stapled, and pass Gatekeeper.
+
 ## Writing and narration in 0.4.6
 
 Orion 0.4.6 includes a compact slash menu, precise linked excerpts, Word-style
@@ -99,6 +108,14 @@ with a visible **Passage timing** fallback. Cloud passages are prepared as neede
 and cached for seeking; local alignment adds preparation time to OpenAI playback.
 No original dictation recordings are retained by this feature.
 
+Orion 0.4.7 also brightens every word before a new seek position
+immediately, leaving only upcoming words dim. **Download narration** saves the
+whole written note as audio: Mac system voices produce a local AIFF; OpenAI and
+ElevenLabs produce a WAV and reuse already prepared passages. Missing cloud
+passages use the selected provider normally. Downloads are cancellable and
+bounded to 80,000 characters and 128 MiB of audio, with a clear error instead of
+truncation. These follow-up changes are included in the 0.4.7 installers.
+
 The Space switcher now has a pencil action to rename a Space. Import knowledge
 uses larger supporting text, and the editor has a clearer standalone sparkle
 icon for **AI tools**, covering writing, rewriting and image generation. Its
@@ -109,6 +126,82 @@ lower-priority tools moving into that menu as space narrows. Slash choices stay
 below the caret in a scrollable menu. Tables use edge count controls with
 chevrons and protect nonempty content when reducing rows or columns. Excerpts
 share a quiet left rule and small bottom-right attribution in reading/editing.
+Opening the text-formatting **…** menu with the mouse leaves Text style
+unhighlighted until you interact with it. Keyboard opening focuses the first
+control; arrow keys navigate the menu and Escape returns to **…**, preserving
+the selected passage.
+
+The current development toolbar promotes row/column insertion and deletion,
+header and alternating-row controls to icons with hover labels. **Justify text**
+(Cmd+Shift+J, or More in a narrow toolbar) formats the selected paragraphs and
+survives reopening, reading and offline HTML export. Click it again to restore
+left alignment. Lists retain one interactive checkbox per task. The table width
+control shows its percentage directly, with no decorative icon beside it.
+
+Each note remembers whether you left it in edit or preview mode during the
+current window session. Returning to it restores that mode; **Done** leaves it
+in preview. Note actions sit above the title and subtitle, which stay together
+without a divider or concept/source statistics below them. The formatting
+toolbar sits below the heading and groups controls with spacing instead of
+vertical dividers. Active controls retain their outlines. It becomes
+sticky only when scrolling takes it to the top of the writing pane. Entering edit
+mode places the caret in text without automatically selecting an opening photo
+or scrolling the note.
+
+**Margins** in the toolbar (or **…** at narrow widths) toggles a horizontal ruler
+directly below it, pinned together with the toolbar. On macOS 26 and later the
+toolbar and **More** menu use the same native Regular Liquid Glass treatment,
+while the ruler keeps the more
+transparent Clear glass with no added frosting. Their materials stay independent
+while their native surfaces move together. **More** opens on its own native
+Regular glass surface and keeps the toolbar and ruler glass visible beneath it.
+All three follow the Mac's Liquid Glass
+appearance preference; maximum system tint makes even Clear glass more opaque.
+The writing pane stops at its scroll
+boundaries without elastic overscroll while editing.
+Older systems, browser preview and accessibility modes use a solid surface.
+Drag its left and right markers independently
+to reflow the text immediately. With no passage highlighted, the ruler changes
+the document body's margins. Highlight text to adjust only the selected
+paragraphs or headings, including prose in lists and quotes; tables
+and code keep their own layout. Each side runs from 0–25% of the available
+writing width, without creating a special block.
+The ruler follows your current selection while it remains visible. Rapid drag
+adjustments keep the latest margin and selected passage as the app saves them.
+Its markers
+also support arrow keys, with Shift for larger steps. The small reset icon below
+the ruler on the right clears margins for the current scope; click **Margins**
+again to hide the ruler. Undo restores each completed drag independently. Margins
+survive saving, reopening, reading, Markdown round trips, offline HTML export
+and Word export.
+
+**Block controls**, shown by three small rectangles inside **…**, optionally
+groups the current paragraph, heading, list, table, image, quote, excerpt or
+selected passage into a persistent block. Blocks and ordinary prose share the
+same note. Clicking outside a block returns to normal writing without removing
+the block; clicking back inside restores its controls. Use Block controls again
+to remove the grouping while keeping its content. The `/block` slash command
+also creates a block.
+
+Press Enter in a block's paragraph or heading to continue in a new block. Use
+Shift+Enter for a line break inside the same block. Lists, tables, code and quotes
+keep their usual Enter behavior; Enter outside blocks continues ordinary prose.
+
+Blocks have no visible box or decorative corners. Small plus controls just above
+and below the active block insert another block with the same choices as slash.
+The hamburger, upper plus and trash sit on one line above the block, clear of
+table selection controls. The trash action deletes that block, and the hamburger
+on the left lets you drag it to a new position or move it with the Up/Down arrow
+keys. The small controls
+have larger invisible click areas. Wrapping, unwrapping,
+deleting and moving each support Undo. Normal writing can continue below the last
+block, and images keep their free placement and text wrapping.
+
+Block grouping survives saving and reopening through bounded Markdown comment
+wrappers; reading and offline HTML hide those markers. This remains one document
+format and does not introduce an application-wide preference. Text style/Header
+choices are in **…**. In a narrow image toolbar, alignment and width also move
+into **…**, while placement stays directly available.
 
 Images can be dragged continuously within the writing column, staying at their
 displayed size without a separate destination box or position label. Captions
@@ -127,11 +220,13 @@ There is no Markdown mode and no read/write split. Click **Edit**, write with a 
 
 While editing a note, the microphone in the sticky writing toolbar records dictation and inserts the transcript at the preserved text cursor. The control remains available as the note scrolls. Recording and transcription stay on-device; the temporary M4A is deleted when bundled Whisper finishes.
 
-The ordinary `0.4.6` download bundles Whisper Small and processes two-minute segments. The `0.4.6.m` download bundles Whisper Medium, loads it once per dictation, and transcribes overlapping 30-second windows in the background. Both keep all generated text hidden until you press Stop, and neither imposes a fixed recording-duration cap.
+The ordinary `0.4.7` download bundles Whisper Small and processes two-minute segments. The `0.4.7.m` download bundles Whisper Medium, loads it once per dictation, and transcribes overlapping 30-second windows in the background. Both keep all generated text hidden until you press Stop, and neither imposes a fixed recording-duration cap.
 
-Inline AI writing is deliberately non-destructive. Continue at the caret or select a passage to Rewrite, Clarify, Tighten, Simplify, Expand, or Enrich from the active Space. A proposal is never saved until you accept it, and acceptance is one ordinary Undo step. An OpenAI key also enables selected-passage image generation with `gpt-image-2.5-sunburst`; image bytes remain transient until accepted.
+Inline AI writing is deliberately non-destructive. Continue at the caret or select a passage to Rewrite, Clarify, Tighten, Simplify, Expand, or Enrich from the active Space. A proposal is never saved until you accept it, and acceptance is one ordinary Undo step. An OpenAI key also enables selected-passage image generation. Choose **Fast** (Flare) or **Detailed** (Sunburst); image bytes remain transient until accepted.
 
-Illustrations are planned in context. Your selected Intelligence model first identifies relevant notes and original sources in the active Space, then reads bounded excerpts and prepares a visual brief for Sunburst. It uses the live editor selection and surrounding prose, rather than relying on the Space summary alone. Planning needs the selected provider's key; rendering needs an OpenAI key. Turning off existing-note AI context limits planning to the highlighted passage, note title and your optional image direction. No notes are changed during planning, and cancellation or changed Space content stops the next generation stage.
+Illustrations can use **Selection only** or **Related Space**, independently of image quality. Related Space searches for relevant passages, reads independent questions in parallel, follows important gaps and compresses the findings into a grounded visual brief. It adapts to useful evidence rather than reading a fixed quota of notes. Selection only sends the highlighted passage and your optional direction; it excludes the note title and surrounding Space material. The initial choice follows your existing AI-context setting, and you can override it for one image.
+
+Research uses your selected Intelligence model with Low reasoning; the final brief uses your selected reasoning effort. Planning needs that provider's key; rendering needs an OpenAI key. Progress names the current stage, limited coverage is disclosed, and Retry preserves completed research and the brief. If insertion fails, Retry restores the downloaded image without generating it again. Scope or supporting-evidence changes invalidate stale work; unrelated note edits do not restart it. No notes are changed during planning. See [adaptive image context](docs/adaptive-image-context.md) for boundaries and recovery details.
 
 **New note** still opens a blank page. When a key is configured for your selected AI provider, the chevron next to it opens **Generate**: a note, a podcast script, a slide deck, or a slide deck written to be heard. The chevron stays hidden without that key. Each result lands as an ordinary note. Generated articles receive an AI-written title alongside their body; a title you edit during generation is preserved. **Play** in the note header reads the open page with System speech, OpenAI `gpt-4o-mini-tts`, or an optional ElevenLabs key. Slide decks generate complete `gpt-image-2.5-sunburst` slides that letter the title and bullets in distinctive fonts, hide speaker notes on screen, and Play times those slides to the narration.
 
@@ -155,6 +250,14 @@ Teach Orion a phrase once and it becomes durable vocabulary for that Space. Crea
 When Orion names a page from a highlighted passage, it checks the active Space's titles and aliases. A matching article is reused, and an empty article can continue generating under its canonical name. If AI suggests the current note or an ambiguous name, Orion tries a more specific title automatically. The link composer identifies existing articles before linking, and their text stays intact.
 
 Use **Cmd+Shift+N** or **File → New Window** to open another Orion window in the current Space. Each window can browse a different note or Space, with its own Back and Forward history. Edits sync across windows; competing edits to the same text offer a choice before saving. Closing one window leaves the others open, and quitting Orion saves every window first. **Cmd+N** continues to create a note.
+
+For a focused document view, click **Open in writing window** immediately left of
+Download in a note's top bar. The same note opens ready to edit in its own
+resizable window without the sidebar or library navigation. Changes save back to
+the original note. Follow links in the library while keeping your draft open. The writing-window
+header keeps only the title and Download. Opening the same note again brings its
+existing writing window forward.
+
 
 Drag any unused part of the top bar to move the window, including the space above the sidebar and the gaps around navigation and search. Buttons keep their normal actions.
 
@@ -210,24 +313,20 @@ Even one short note can produce a summary. The overview grows with the material;
 brief Spaces can stay at a sentence or a few short paragraphs. Blank starter
 notes do not count as knowledge, and a local summary stays visible during AI refreshes.
 
-**Settings → Appearance → Home atmosphere** includes nine original procedural
-effects alongside Line Waves, Signal Decay, and Field:
+**Settings → Appearance** lets you save up to 24 named personal palettes.
+Saved palettes appear in the same room-preview grid as Orion, Tide, Grove, and
+Ember, with update and delete controls on each saved card.
+Canvas depth and Surface lift retain your chosen colours while adjusting their
+appearance. Save a new palette, explicitly overwrite an existing one, revert
+changes, or delete a saved choice. Dark, Light, and System remain independent.
 
-- **Quiet Loom** — a turning sculpture of iridescent woven ribbons.
-- **Nova** — a pulsing plasma core with spiralling filaments and streaming sparks.
-- **Flux** — luminous currents flowing across the entire backdrop.
-- **Tidal Glass** — shifting liquid caustics and refracted light.
-- **Prism Drift** — a rolling landscape of reflective crystal facets.
-- **Nebula** — layered clouds of light with drifting stars.
-- **Emberwake** — glowing sparks and curved trails carried by a sweeping wind.
-- **Gravity Silk** — billowing satin folds with moving highlights.
-- **Mirage** — drifting glass lenses that refract a travelling sheet of light.
-
-The last seven fill the Home backdrop. All nine are written directly in local
-WebGL, with no downloaded artwork, textures, or external shader dependencies.
+**Home atmosphere** has six choices: Mirage, Signal Decay, Field, Line Waves,
+**Opal** (iridescent glass ribbons), and **Ripple Glass** (overlapping optical
+ripples). Older retired effects migrate to Mirage. The glass effects are local
+WebGL with no downloaded artwork, textures, or external shader dependencies.
 Their colours follow your room and accent; Still, Calm, and Alive control motion.
 Light mode uses a gently shaded paper backdrop, richer coloured midtones, and
-restrained highlights. Lenses, facets, and fabric use separate daylight lighting
+restrained highlights. The optical effects use separate daylight lighting
 so their highlights stay light. Mirage retains crisp lens edges and refraction
 detail in light mode, using the same rendering resolution as dark mode.
 **Appearance → Always dark** keeps just the Home
@@ -246,10 +345,18 @@ They pause when hidden and respect reduced motion.
 
 Export the open note, one visible link hop, or an entire Space as:
 
-- a self-contained, responsive HTML article that works offline; or
+- a self-contained, responsive HTML article that works offline;
+- an editable Word `.docx` with headings, lists, tasks, tables, links, local images, and citations; or
 - portable Markdown files with adjacent image assets.
 
-The web export includes only the selected notes and safe citation attribution. It excludes raw source bodies, Chat, settings, provider keys, import state, and every other Space.
+Word exports use a clean document layout: free image placement and note frames
+flow into regular Word content. Document and paragraph margins become editable
+Word indents. DOCX imports preserve semantic formatting and
+convert embedded pictures to their descriptive alt text. Import Studio and MCP
+use the same importer. DOCX import does not restore Orion's margin settings;
+Markdown round trips preserve them.
+
+Web and Word exports include only the selected notes and safe citation attribution. They exclude raw source bodies, Chat, settings, provider keys, import state, and every other Space.
 
 ## The orchestration topology
 
@@ -393,7 +500,7 @@ Enable **Settings → Connections → Orion workflows**, select allowed Spaces,
 and independently allow API use and workflow writes. Older libraries start with
 these workflows disabled. The existing direct read/write tools keep their access.
 
-The expanded MCP surface has **41 tools**: 29 local library tools and twelve
+The expanded MCP surface has **44 tools**: 30 local library tools and fourteen
 workflow/capability/job tools. It can build local evidence packets; research,
 compare, review, find gaps, or prepare briefs using Orion's configured AI;
 process text, files, webpages, and YouTube through the full import flow;
@@ -404,22 +511,28 @@ in Orion. Its existing-note context preference remains authoritative.
 
 Workflows return jobs with status, cancellation, exact note citations, bounded
 evidence, freshness, and available usage metadata. They commit through the same
-revision checks and atomic writer as the app. Research does not modify notes or
-Chat. The private app connection requires no hosted endpoint or separate daemon.
+revision checks and atomic writer as the app. Research and AI search do not modify notes or Chat. `orion_search_space` uses
+adaptive exact-passage retrieval; `orion_export_word` prepares a Word document
+without AI and asks for its destination in the native Save As dialog. The private app connection requires no hosted endpoint or separate daemon.
 See [the workflow contract](docs/mcp-intelligence.md) for bounds and behavior.
 
-Twenty additional local tools provide exact source passages and note sections,
+Twenty-one additional local tools provide exact source passages and note sections,
 batched note reads, concept and link-path navigation, provenance tracing, tags,
 Markdown tasks, duplicate detection, integrity checks, and recent changes.
 Version-guarded text edits and atomic metadata batches reject stale targets
 before saving. These tools work with Orion closed and use no provider account.
-See [all 20 tools and their contracts](docs/mcp-library-tools.md).
+MCP can also create movable writing blocks and the content of slash commands—
+headings, tasks, lists, tables, code, note links, excerpts, and existing images—
+through `orion_apply_note_command`. The result uses the same portable format as
+the editor and remains editable when reopened. Every command checks the current
+note version and exact Space before saving.
+See [all 21 tools and their contracts](docs/mcp-library-tools.md).
 
 ## Download
 
-[**Download Orion 0.4.6 for Apple Silicon**](https://github.com/zug11/orion/releases/latest/download/Orion-0.4.6-Apple-Silicon.dmg)
+[**Download Orion 0.4.7 for Apple Silicon**](https://github.com/zug11/orion/releases/latest/download/Orion-0.4.7-Apple-Silicon.dmg)
 
-[**Download Orion 0.4.6 with Whisper Medium**](https://github.com/zug11/orion/releases/latest/download/Orion-0.4.6.m-Apple-Silicon.dmg)
+[**Download Orion 0.4.7 with Whisper Medium**](https://github.com/zug11/orion/releases/latest/download/Orion-0.4.7.m-Apple-Silicon.dmg)
 
 The standard installer includes Whisper Small. The larger Medium edition includes Whisper Medium and its persistent dictation worker. Both contain the same app features, two-tone shader picker, Claude connector, and Codex plugin.
 
@@ -488,7 +601,7 @@ Browser preview is a renderer-development convenience, not Orion's desktop secur
 | `cargo test --manifest-path src-tauri/Cargo.toml` | Run Rust host tests |
 | `cargo test --manifest-path src-tauri/mcp-server/Cargo.toml` | Run MCP server tests |
 
-Native bundles are written below `src-tauri/target/release/bundle/`. Public release packaging additionally requires Developer ID signing and notarization. Use `./script/package_release.sh 0.4.6` for Small and `ORION_WHISPER_MODEL=medium ./script/package_release.sh 0.4.6.m` for Medium rather than treating a local ad-hoc build as a distributable release.
+Native bundles are written below `src-tauri/target/release/bundle/`. Public release packaging additionally requires Developer ID signing and notarization. Use `./script/package_release.sh 0.4.7` for Small and `ORION_WHISPER_MODEL=medium ./script/package_release.sh 0.4.7.m` for Medium rather than treating a local ad-hoc build as a distributable release.
 
 ## Architecture
 

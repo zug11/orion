@@ -24,7 +24,7 @@ function expectRoom(room: AtmospherePalette, theme: ThemePalette) {
 describe("home atmosphere theme inheritance", () => {
   const atmospheres = [
     "line-waves", "signal-decay", "field", "quiet-loom", "nova", "flux",
-    "tidal-glass", "prism-drift", "nebula", "emberwake", "gravity-silk", "mirage",
+    "tidal-glass", "prism-drift", "nebula", "emberwake", "gravity-silk", "mirage", "opal", "ripple-glass",
   ] as const;
 
   it("can keep only the hero dark while retaining the selected theme and custom colours", () => {
@@ -90,7 +90,7 @@ describe("home atmosphere theme inheritance", () => {
     const theme = resolveThemePalette(defaultSettings, "dark");
     for (const mode of [
       "line-waves", "signal-decay", "field", "quiet-loom", "nova", "flux",
-      "tidal-glass", "prism-drift", "nebula", "emberwake", "gravity-silk", "mirage",
+      "tidal-glass", "prism-drift", "nebula", "emberwake", "gravity-silk", "mirage", "opal", "ripple-glass",
     ] as const) {
       const custom = resolveAtmospherePalette(mode, "mint", theme, "#ff4c80");
       expect(custom.primary).toBe("#FF4C80");
@@ -136,7 +136,7 @@ describe("home atmosphere theme inheritance", () => {
       const rooms = ([
         "line-waves", "signal-decay", "field", "quiet-loom", "nova",
         "flux", "tidal-glass", "prism-drift", "nebula",
-        "emberwake", "gravity-silk", "mirage",
+        "emberwake", "gravity-silk", "mirage", "opal", "ripple-glass",
       ] as const).map(
         (atmosphere) =>
           resolveAtmospherePalette(atmosphere, "signature", theme),
@@ -251,7 +251,7 @@ describe("home atmosphere theme inheritance", () => {
       );
       for (const mode of [
         "line-waves", "quiet-loom", "nova", "flux", "tidal-glass", "prism-drift", "nebula",
-        "emberwake", "gravity-silk", "mirage",
+        "emberwake", "gravity-silk", "mirage", "opal", "ripple-glass",
       ] as const) {
         const atmosphere = resolveAtmospherePalette(mode, tone, theme);
         for (const color of [atmosphere.primary, atmosphere.secondary, atmosphere.tertiary]) {

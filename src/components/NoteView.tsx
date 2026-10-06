@@ -1,14 +1,17 @@
 import { parseNoteExcerptTitle } from "../lib/noteExcerpts";
-import { requestNoteExcerptNavigation, consumeNoteExcerptNavigation, revealNoteExcerptPassage, clearNoteExcerptHighlight } from "../lib/noteExcerptNavigation";
+import { requestNoteExcerptNavigation, consumeNoteExcerptNavigation, revealNoteExcerptPassage, clearNoteExcerptHighlight, NOTE_PASSAGE_NAVIGATION_EVENT } from "../lib/noteExcerptNavigation";
 import { noteTableHeaderInfo, noteTableLayoutAtLine, remarkNoteTableMetadata } from "../lib/noteTables";
+import { remarkNoteBlocks } from "../lib/noteBlocks";
+import { remarkNoteTextAlignment } from "../lib/noteTextAlignment";
+import { splitDocumentMargins, noteMarginsStyle, remarkNoteMargins } from "../lib/noteMargins";
 import "./editor/excerpt.css";
 import {
   ArrowUp,
   Check,
   ChevronDown,
-  CircleDot,
   Edit3,
-  Link2,
+  Download,
+  LoaderCircle,
   Pause,
   Play,
   Quote,
@@ -40,6 +43,7 @@ import "./editor/EditorExperience.css";
 import type { RegisterWikiLinkInput } from "../lib/concepts";
 import type { AIWritingRequestInput } from "../lib/aiWriting";
 import type { AIImageProposal, AIImageRequestInput } from "../lib/aiImages";
+import type { AIImageGenerationCallbacks } from "./RichNoteEditor";
 import {
   expandOrionWikiLinks,
   restoreMarkdownFrontmatter,
@@ -89,7 +93,23 @@ const RichNoteEditor = lazy(() =>
 
 const EMPTY_SOURCES: readonly Source[] = [];
 
+/** Loose GFM lists nest their marker in a paragraph. Nested lists keep their
+ * own markers so each list-item renderer can replace exactly one checkbox. */
+function withoutTaskMarker(children: ReactNode): ReactNode {
+  return Children.map(children, (child) => {
+    if (!isValidElement<{ children?: ReactNode; type?: string }>(child)) return child;
+    if (child.type === "input" && child.props.type === "checkbox") return null;
+    if (child.type === "ul" || child.type === "ol") return child;
+    return child.props.children === undefined ? child : cloneElement(child, {
+      children: withoutTaskMarker(child.props.children),
+    });
+  });
+}
+
 interface NoteViewProps {
+  initialEditing?: boolean;
+  /** Window-local modes for this Space; these are navigation state, not note data. */
+  editingModes?: Map<string, boolean>;
   noteTypeface?: NoteTypeface;
   onNoteTypefaceChange?: (typeface: NoteTypeface) => void;
   note: Note;
@@ -111,6 +131,7 @@ interface NoteViewProps {
   onGenerateAIImage?: (
     input: Omit<AIImageRequestInput, "originNoteId">,
     signal: AbortSignal,
+    callbacks?: AIImageGenerationCallbacks,
   ) => Promise<AIImageProposal>;
   onSpeakNote?: (
     text: string,
@@ -119,12 +140,15 @@ interface NoteViewProps {
     options?: SpeechPlaybackOptions,
   ) => Promise<void>;
   onPrepareSpeech?: (text: string, signal?: AbortSignal) => Promise<void>;
+  onDownloadNarration?: (text: string, title: string, signal: AbortSignal,
+    onProgress: (completed: number, total: number) => void) => Promise<void>;
   onPrepareVoiceMemoSession?: (sessionId: string) => Promise<void>;
   onTranscribeVoiceMemo?: (audio: Blob, sessionId: string) => Promise<string>;
   onFinishVoiceMemoSession?: (sessionId: string) => Promise<void>;
   onDisableConceptAutoLink: (conceptId: string) => void;
   aiArticleWritingEnabled?: boolean;
   aiImageGenerationEnabled?: boolean;
+  imageContextEnabled?: boolean;
   aiProviderName?: string;
 }
 
@@ -144,6 +168,8 @@ function safeUrl(url: string) {
 }
 
 export function NoteView({
+  initialEditing = false,
+  editingModes,
   noteTypeface = "sans",
   onNoteTypefaceChange,
   note,
@@ -163,15 +189,23 @@ export function NoteView({
   onGenerateAIImage,
   onSpeakNote,
   onPrepareSpeech,
+  onDownloadNarration,
   onPrepareVoiceMemoSession,
   onTranscribeVoiceMemo,
   onFinishVoiceMemoSession,
   onDisableConceptAutoLink,
   aiArticleWritingEnabled = false,
   aiImageGenerationEnabled = false,
+  imageContextEnabled = false,
   aiProviderName,
 }: NoteViewProps) {
-  const [editing, setEditing] = useState(note.title === "Untitled note");
+  const localEditingModes = useRef(new Map<string, boolean>());
+  const modes = editingModes ?? localEditingModes.current;
+  const [editing, setEditingState] = useState(() => modes.get(note.id) ?? (initialEditing || note.title === "Untitled note"));
+  const setEditing = useCallback((value: boolean) => {
+    modes.set(note.id, value);
+    setEditingState(value);
+  }, [modes, note.id]);
   const [savedPulse, setSavedPulse] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
@@ -180,6 +214,14 @@ export function NoteView({
   const [findRevision, setFindRevision] = useState(0);
   const [listening, setListening] = useState(false);
   const [listenError, setListenError] = useState<string | null>(null);
+  const [narrationDownload, setNarrationDownload] = useState<{ completed: number; total: number } | null>(null);
+  const narrationDownloadRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    narrationDownloadRef.current?.abort();
+    narrationDownloadRef.current = null;
+    setNarrationDownload(null);
+    return () => { narrationDownloadRef.current?.abort(); };
+  }, [note.id, note.title, note.summary, note.body, editing]);
   const [listenProgress, setListenProgress] =
     useState<SpeechPlaybackProgress | null>(null);
   const [narrationActive, setNarrationActive] = useState(false);
@@ -242,7 +284,8 @@ export function NoteView({
       ),
     [markdown, sources],
   );
-  const visibleMarkdown = citationDocument.body;
+  const marginDocument = useMemo(() => splitDocumentMargins(citationDocument.body), [citationDocument.body]);
+  const visibleMarkdown = marginDocument.body;
   const outlineHeadings = useMemo(
     () => extractNoteOutline(visibleMarkdown),
     [visibleMarkdown],
@@ -303,9 +346,7 @@ export function NoteView({
         .filter((concept) => concept.noteIds.length > 0),
     [concepts, note.id],
   );
-  const noteConcepts = concepts.filter((concept) =>
-    note.conceptIds.includes(concept.id),
-  );
+
   const sourceById = useMemo(
     () => new Map(sources.map((source) => [source.id, source])),
     [sources],
@@ -323,28 +364,35 @@ export function NoteView({
 
   useEffect(() => {
     dirtyEditingRef.current = false;
-    setEditing(note.title === "Untitled note");
+    setEditing(modes.get(note.id) ?? (initialEditing || note.title === "Untitled note"));
     setFindOpen(false);
     setFindQuery("");
     setFindResultCount(0);
     setActiveFindIndex(0);
     setActiveHeadingId(null);
-  }, [note.id]);
+  }, [note.id, modes]);
 
   useEffect(() => {
     // Consume only after StrictMode's setup/cleanup replay. Consuming during
     // setup loses the one-shot request when that first animation frame is cancelled.
-    let frame = window.requestAnimationFrame(() => {
-      const request = consumeNoteExcerptNavigation(note.id);
-      if (request) {
-        setEditing(false);
-        frame = window.requestAnimationFrame(() => {
-          const prose = findScopeRef.current?.querySelector<HTMLElement>(".note-prose");
-          if (prose) revealNoteExcerptPassage(prose, currentNoteRef.current, request);
-        });
-      }
-    });
-    return () => { window.cancelAnimationFrame(frame); clearNoteExcerptHighlight(); };
+    let frame = 0;
+    const reveal = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const request = consumeNoteExcerptNavigation(note.id);
+        if (request) {
+          setEditing(false);
+          frame = window.requestAnimationFrame(() => {
+            const prose = findScopeRef.current?.querySelector<HTMLElement>(".note-prose");
+            if (prose) revealNoteExcerptPassage(prose, currentNoteRef.current, request);
+          });
+        }
+      });
+    };
+    const receive = (event: Event) => { if ((event as CustomEvent<{ noteId: string }>).detail?.noteId === note.id) reveal(); };
+    window.addEventListener(NOTE_PASSAGE_NAVIGATION_EVENT, receive);
+    reveal();
+    return () => { window.removeEventListener(NOTE_PASSAGE_NAVIGATION_EVENT, receive); window.cancelAnimationFrame(frame); clearNoteExcerptHighlight(); };
   }, [note.id]);
 
   const openFind = useCallback(() => {
@@ -611,13 +659,18 @@ export function NoteView({
       setListenError("This note has nothing to play.");
       return;
     }
-    const start = narrationWordAt(script, requestedCharacter)?.from ?? 0;
+    const word = narrationWordAt(script, requestedCharacter);
+    const start = word?.from ?? 0;
     stopPlayback({ keepProgress: true });
     narrationRef.current = script;
     narrationPreparationRef.current ??= new AbortController();
     const preparationSignal = narrationPreparationRef.current.signal;
     narrationSourceRef.current = note;
-    narrationPositionRef.current = { charIndex: start, charLength: 0 };
+    const seekPosition = { charIndex: start, charLength: word ? word.to - word.from : 0 };
+    narrationPositionRef.current = seekPosition;
+    // Seeking changes the reading position immediately, even if repeated seeks
+    // share the same pending audio request and React batches loading updates.
+    if (followNarration) highlightNarration(script, seekPosition.charIndex, seekPosition.charLength);
     setNarrationActive(true);
     const generation = playGenerationRef.current;
     const controller = new AbortController();
@@ -630,7 +683,7 @@ export function NoteView({
       ratio: start / Math.max(1, script.text.length),
       loading: true,
       charIndex: start,
-      charLength: 0,
+      charLength: seekPosition.charLength,
     });
     try {
       await onSpeakNote(script.text, controller.signal, (progress) => {
@@ -643,7 +696,7 @@ export function NoteView({
         const now = performance.now();
         if (now - progressPaintRef.current >= 80 || position.charIndex !== previous.charIndex || progress.loading || progress.ratio >= 1) {
           progressPaintRef.current = now;
-          setListenProgress(progress);
+          setListenProgress({ ...progress, ...position });
         }
       }, { startCharIndex: start, trackWords: true, preparationSignal });
     } catch (error) {
@@ -668,6 +721,40 @@ export function NoteView({
       }
     }
   }
+
+  async function saveNarration() {
+    if (narrationDownloadRef.current) {
+      narrationDownloadRef.current.abort();
+      narrationDownloadRef.current = null;
+      setNarrationDownload(null);
+      return;
+    }
+    if (!onDownloadNarration || !findScopeRef.current || editing) return;
+    const script = buildNarrationDocument(findScopeRef.current);
+    const controller = new AbortController();
+    narrationDownloadRef.current = controller;
+    setNarrationDownload({ completed: 0, total: 0 });
+    setListenError(null);
+    try {
+      await onDownloadNarration(script.text, note.title, controller.signal, (completed, total) => {
+        if (!controller.signal.aborted) setNarrationDownload({ completed, total });
+      });
+    } catch (error) {
+      if (!controller.signal.aborted) setListenError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (narrationDownloadRef.current === controller) {
+        narrationDownloadRef.current = null;
+        setNarrationDownload(null);
+      }
+    }
+  }
+
+  const downloadControl = onDownloadNarration && !editing && !showSlideshow ? <button
+    type="button" className="icon-button" aria-label={narrationDownload ? "Cancel narration download" : "Download narration"}
+    title={narrationDownload ? `Cancel narration download${narrationDownload.total ? ` (${narrationDownload.completed}/${narrationDownload.total})` : ""}` : "Download narration"}
+    onClick={() => { void saveNarration(); }}>
+    {narrationDownload ? <LoaderCircle size={15} className="narration-download-spinner"/> : <Download size={15}/>}
+  </button> : null;
 
   function update(patch: Partial<Note>) {
     if (editing) {
@@ -911,6 +998,13 @@ export function NoteView({
     });
   }
 
+  const paragraphMarginStyle = (node?: { properties?: Record<string, unknown> }) => {
+    const left = node?.properties?.["data-orion-margin-left"];
+    const right = node?.properties?.["data-orion-margin-right"];
+    if (left === undefined && right === undefined) return undefined;
+    return noteMarginsStyle({ left: Number(left ?? 0), right: Number(right ?? 0) });
+  };
+
   const markdownComponents = {
     table: ({ children, node }: { children?: ReactNode; node?: MarkdownElement }) => {
       const layout = noteTableLayoutAtLine(visibleMarkdown, node?.position?.start.line ?? 0);
@@ -941,8 +1035,8 @@ export function NoteView({
       </span>;
     },
 
-    p: ({ children }: { children?: ReactNode }) => (
-      <p>{renderLinkedChildren(children)}</p>
+    p: ({ children, node, ...props }: { children?: ReactNode; node?: MarkdownElement }) => (
+      <p {...props} style={paragraphMarginStyle(node)}>{renderLinkedChildren(children)}</p>
     ),
     li: ({
       children,
@@ -961,9 +1055,7 @@ export function NoteView({
       if (!task) {
         return <li className={className}>{renderedChildren}</li>;
       }
-      const taskBody = Children.toArray(renderedChildren).filter(
-        (child) => !(isValidElement(child) && child.type === "input"),
-      );
+      const taskBody = withoutTaskMarker(renderedChildren);
       return (
         <li className={className}>
           <input
@@ -984,23 +1076,23 @@ export function NoteView({
         </li>
       );
     },
-    h1: ({ children, node }: {children?:ReactNode;node?:{position?:{start?:{line?:number}}}}) => (
-      <h1 id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>{renderLinkedChildren(children)}</h1>
+    h1: ({ children, node, ...props }: {children?:ReactNode;node?:{position?:{start?:{line?:number}};properties?:Record<string, unknown>}}) => (
+      <h1 {...props} style={paragraphMarginStyle(node)} id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>{renderLinkedChildren(children)}</h1>
     ),
-    h2: ({ children, node }: {children?:ReactNode;node?:{position?:{start?:{line?:number}}}}) => (
-      <h2 id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>{renderLinkedChildren(children)}</h2>
+    h2: ({ children, node, ...props }: {children?:ReactNode;node?:{position?:{start?:{line?:number}};properties?:Record<string, unknown>}}) => (
+      <h2 {...props} style={paragraphMarginStyle(node)} id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>{renderLinkedChildren(children)}</h2>
     ),
-    h3: ({ children, node }: {children?:ReactNode;node?:{position?:{start?:{line?:number}}}}) => (
-      <h3 id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>{renderLinkedChildren(children)}</h3>
+    h3: ({ children, node, ...props }: {children?:ReactNode;node?:{position?:{start?:{line?:number}};properties?:Record<string, unknown>}}) => (
+      <h3 {...props} style={paragraphMarginStyle(node)} id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>{renderLinkedChildren(children)}</h3>
     ),
-    h4: ({ children, node }: {children?:ReactNode;node?:{position?:{start?:{line?:number}}}}) => (
-      <h4 id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>{renderLinkedChildren(children)}</h4>
+    h4: ({ children, node, ...props }: {children?:ReactNode;node?:{position?:{start?:{line?:number}};properties?:Record<string, unknown>}}) => (
+      <h4 {...props} style={paragraphMarginStyle(node)} id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>{renderLinkedChildren(children)}</h4>
     ),
-    h5: ({ children, node }: {children?:ReactNode;node?:{position?:{start?:{line?:number}}}}) => (
-      <h5 id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>{renderLinkedChildren(children)}</h5>
+    h5: ({ children, node, ...props }: {children?:ReactNode;node?:{position?:{start?:{line?:number}};properties?:Record<string, unknown>}}) => (
+      <h5 {...props} style={paragraphMarginStyle(node)} id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>{renderLinkedChildren(children)}</h5>
     ),
-    h6: ({ children, node }: {children?:ReactNode;node?:{position?:{start?:{line?:number}}}}) => (
-      <h6 id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>{renderLinkedChildren(children)}</h6>
+    h6: ({ children, node, ...props }: {children?:ReactNode;node?:{position?:{start?:{line?:number}};properties?:Record<string, unknown>}}) => (
+      <h6 {...props} style={paragraphMarginStyle(node)} id={headingIdByLine.get(node?.position?.start?.line ?? -1)}>{renderLinkedChildren(children)}</h6>
     ),
     blockquote: ({ children }: { children?: ReactNode }) => (
       <blockquote>
@@ -1094,7 +1186,7 @@ export function NoteView({
   // Playback ticks must not remount the reading text: its native ranges also
   // anchor Find, selection, excerpts and narration highlighting.
   const renderedMarkdown = useMemo(() => (
-    <ReactMarkdown remarkPlugins={[remarkGfm, remarkNoteTableMetadata]} components={markdownComponents} urlTransform={safeUrl}>
+    <ReactMarkdown remarkPlugins={[remarkGfm, remarkNoteTableMetadata, remarkNoteBlocks, remarkNoteMargins, remarkNoteTextAlignment]} components={markdownComponents} urlTransform={safeUrl}>
       {visibleMarkdown}
     </ReactMarkdown>
   ), [visibleMarkdown, note, notes, concepts, sources, findQuery, selectedPassageId,
@@ -1139,17 +1231,6 @@ export function NoteView({
       )}
       <div className="note-document">
         <header className="note-header">
-        <div className="note-title-line">
-          {editing ? (
-            <input
-              className="note-title-input"
-              value={note.title}
-              onChange={(event) => update({ title: event.target.value })}
-              aria-label="Note title"
-            />
-          ) : (
-            <h1 data-narration-text="title">{highlightFindText(note.title, "note-title")}</h1>
-          )}
           <div className="note-actions">
             <span
               className={savedPulse ? "save-state pulse" : "save-state"}
@@ -1189,6 +1270,7 @@ export function NoteView({
                 {listening ? <Pause size={16} /> : <Play size={16} fill="currentColor" />}
               </button>
             ) : null}
+            {!narrationActive && downloadControl}
             <button
               ref={findButtonRef}
               type="button"
@@ -1242,6 +1324,17 @@ export function NoteView({
               <Trash2 size={16} />
             </button>
           </div>
+        <div className="note-title-line">
+          {editing ? (
+            <input
+              className="note-title-input"
+              value={note.title}
+              onChange={(event) => update({ title: event.target.value })}
+              aria-label="Note title"
+            />
+          ) : (
+            <h1 data-narration-text="title">{highlightFindText(note.title, "note-title")}</h1>
+          )}
         </div>
         {editing ? (
           <textarea
@@ -1256,21 +1349,7 @@ export function NoteView({
             {highlightFindText(note.summary, "note-summary")}
           </p>
         )}
-        <div className="note-header-meta-row">
-          <div className="note-meta">
-            <span>
-              <CircleDot size={12} />
-              {noteConcepts.length} concepts
-            </span>
-            <span>
-              <Link2 size={12} />
-              {note.sourceIds.length} sources
-            </span>
-            {listenError ? (
-              <span role="status">{listenError}</span>
-            ) : null}
-          </div>
-        </div>
+        {listenError ? <p className="note-listen-error" role="status">{listenError}</p> : null}
         </header>
 
       {findOpen && (
@@ -1377,6 +1456,7 @@ export function NoteView({
               onFinishVoiceMemoSession={onFinishVoiceMemoSession}
               aiArticleWritingEnabled={aiArticleWritingEnabled}
               aiImageGenerationEnabled={aiImageGenerationEnabled}
+              imageContextEnabled={imageContextEnabled}
               aiProviderName={aiProviderName}
               findQuery={findQuery}
               onFindDecorationsChanged={() =>
@@ -1395,7 +1475,9 @@ export function NoteView({
           />
         ) : (
           <div className="note-prose" data-narration-text="body">
-            {renderedMarkdown}
+            <div className="note-prose-content" style={noteMarginsStyle(marginDocument.margins)}>
+              {renderedMarkdown}
+            </div>
             {selectedPassage && <CitedPassage evidence={selectedPassage} notes={notes} sources={sources}
               panelId={passagePanelId} savedWith="note" onClose={closePassage} onOpenNote={onOpenNote} onOpenSource={onOpenSource} />}
             <SourceReferences
@@ -1510,12 +1592,14 @@ export function NoteView({
               : formatSpeechClock(playheadProgress?.durationSeconds ?? 0)}
           </span>
           {narrationActive && <>
+            {downloadControl}
             <label className="note-listen-playhead__follow"><input type="checkbox" checked={followNarration} onChange={(event) => setFollowNarration(event.target.checked)} />Follow text</label>
-            <span className="note-listen-playhead__hint">{listenProgress?.timingGranularity === "chunk" ? "Passage timing" : "Click text to jump"}</span>
+            {listenProgress?.timingGranularity === "chunk" && <span className="note-listen-playhead__hint">Passage timing</span>}
             <button type="button" className="icon-button" aria-label="Stop narration" title="Stop narration" onClick={() => stopPlayback()}><X size={14}/></button>
           </>}
         </div>
       ) : null}
+      {narrationDownload && <span className="sr-only" role="status">Preparing narration download{narrationDownload.total ? `: ${narrationDownload.completed} of ${narrationDownload.total} passages` : ""}.</span>}
     </article>
   );
 }

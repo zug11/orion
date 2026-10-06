@@ -17,6 +17,10 @@ These product decisions are intentional:
   seeded Chat messages to a real vault.
 - Notes have one direct reading/writing surface. Editing reveals a lightweight
   word-processing toolbar; users never need to understand Markdown.
+  Each window remembers each note's last edit/preview mode independently by
+  Space during the session, including navigation through Home or another view.
+  Returning to a note resumes that mode; Done explicitly returns it to preview.
+  This is transient window navigation state, never a persisted note field.
 - The sticky rich-text toolbar can record dictation at the current body cursor.
   The renderer preserves and tracks that insertion point while rotating the
   live microphone into bounded M4A segments. The Small edition uses independent
@@ -126,6 +130,8 @@ src/components/Nebula.tsx           layered full-width cloud and star field
 src/components/Emberwake.tsx        advected full-width spark streams and wakes
 src/components/GravitySilk.tsx      billowing satin field with analytic normals
 src/components/Mirage.tsx           drifting procedural glass-lens field
+src/components/Opal.tsx          local iridescent glass ribbons
+src/components/RippleGlass.tsx   local refractive optical ripples
 src/components/ProceduralAtmosphere.tsx shared bounded WebGL lifecycle
 src/components/atmosphereShader.ts  local GLSL palette and room composition
 src/components/DotField.tsx         settling Canvas 2D interaction field
@@ -136,7 +142,8 @@ src/lib/linkedArticle.ts            selected-text article request and AI merge
 src/lib/wikiEnrichment.ts           new-note wiki refresh requests and safe merge
 src/lib/wiki.ts                     link resolution, references, and backlinks
 src/lib/chat.ts                     bounded Chat context and message updates
-src/lib/aiImages.ts                 Space-aware illustration planning and context gate
+src/lib/aiImages.ts                 adaptive illustration research and resumable checkpoints
+src/lib/imageContextSearch.ts       incremental Space-local exact passage search
 src/lib/aiImagePlanningProtocol.json shared read-only image planning instructions/schema
 src-tauri/src/image_planning.rs     cancellable provider transport for illustration plans
 src/lib/studio.ts                   dormant Studio-state normalization
@@ -195,7 +202,9 @@ Never copy, reset, or seed the user's vault for this preview. Its library
 persists across preview builds; normal Quit must complete before rebuilding
 a running preview. This ad-hoc local app is not a release artifact.
 Vitest excludes `outputs/`, which may contain archived diagnostic test fixtures;
-maintained application tests belong in `src/`.
+maintained application tests belong in `src/`. TypeScript excludes local
+`* 2.ts` / `* 2.tsx` duplicate copies under `src/`; these retained copies are
+not maintained application source and must not be imported.
 `npm run tauri build` is the canonical native integration and release check.
 Native artifacts are produced under `src-tauri/target/release/bundle/`.
 
@@ -235,6 +244,25 @@ flushed temporary file plus atomic replacement.
   than its broad night-glow mask, and retains refraction and rim detail. Both
   modes use the same pixel budget. Preserve dark rendering, custom colour pairs,
   and bounded lifecycles.
+- Named personal palettes use optional `themeSavedPalettes` and
+  `themeActivePaletteId`, validated at the storage boundary and normalized on
+  hydration. A saved palette contains only the bounded nine theme preferences,
+  a stable `palette-` ID, and a trimmed name of at most 60 characters. Cap the
+  collection at 24 unique IDs; modes and Home atmosphere settings are independent.
+  Saved palettes appear alongside curated presets in the same room-preview card
+  grid. Saving, overwriting, deleting, applying, and reverting are explicit UI actions.
+  Tuning Canvas/Surface preserves the custom colour seed and applies relative
+  tone/lift changes through `resolveThemePalette`; it must not clear a custom
+  colour or silently overwrite the saved palette. Shared appearance updates
+  continue across all Spaces. Older vaults have an empty palette collection.
+- Home atmosphere offers only Mirage, Signal Decay, Field, Line Waves, Opal,
+  and Ripple Glass. Retired recent effect IDs remain accepted at the storage
+  boundary and hydrate to Mirage; older Antigravity/Constellation and
+  Aurora/Liquid Ether aliases retain their Signal Decay/Line Waves migrations.
+  The new glass shaders share the existing bounded local WebGL lifecycle,
+  daylight shading, custom colour pair, offscreen pause, context recovery,
+  and reduced-motion handling. Do not import retired shader components into
+  the active renderer.
 - `homeAtmosphereCustomColor` and `homeAtmosphereCustomSecondaryColor` are
   optional six-digit hex colours (or empty) at the storage boundary, hydrated
   to empty for older vaults. Together they override the first two colour
@@ -311,6 +339,22 @@ current Space after flushing the originating window. **Cmd+N** still creates a
 note. Windows share one vault while keeping their active Space, selected note,
 history, scroll position, and transient UI independent. Titles identify the
 current Space and note for the macOS Window menu.
+
+The note toolbar's **Open in writing window** icon (left of Export) flushes the
+current edits and opens a dedicated window for that exact Space and note. Reuse
+an existing writing window for the same target. Its immutable launch route uses
+`view=writing`, `space`, and `note`; it starts in the normal rich editor with no
+sidebar or library navigation. Deleted or invalid targets show an unavailable
+state, never a different note. Linked notes and excerpt
+references route into a library window while the draft stays open. The minimal
+window header has only the title and Export; do not add a back button. Excerpt
+passages travel only as bounded transient native navigation data. Library
+listeners register before declaring navigation ready, so loading windows can
+queue a target. External citations and global theme-icon changes target library
+windows. Writing windows retain ordinary autosave, conflict choices, native
+fullscreen, and the shared Close/Quit save handshake; there is no separate copy
+or persisted writing-window schema. Cmd+N in a writing window opens a library
+window so it cannot replace the bound draft.
 
 `src-tauri/src/desktop_windows.rs` owns window creation, native menus, citation
 routing, overview ownership, and the per-window quit handshake. New windows use
@@ -415,7 +459,7 @@ Preserve these trust boundaries:
 
 ### Additional local library tools
 
-The independent MCP crate also exposes 20 tools from `src/library`:
+The independent MCP crate also exposes 21 tools from `src/library`:
 `orion_list_sources`, `orion_search_sources`, `orion_get_source_passage`,
 `orion_get_note_section`, `orion_get_notes`, `orion_list_concepts`,
 `orion_get_concept`, `orion_resolve_link`, `orion_get_related_notes`,
@@ -423,7 +467,7 @@ The independent MCP crate also exposes 20 tools from `src/library`:
 `orion_set_task_completion`, `orion_edit_note_text`, `orion_append_to_note`,
 `orion_batch_update_metadata`, `orion_find_duplicate_notes`,
 `orion_check_space_integrity`, `orion_get_recent_changes`, and
-`orion_get_link_path`. They work with Orion closed, without credentials or
+`orion_get_link_path`, and `orion_apply_note_command`. They work with Orion closed, without credentials or
 provider calls, under the existing direct local-library access contract.
 
 - Reads default only to the active Space. Every write requires an explicit
@@ -431,6 +475,16 @@ provider calls, under the existing direct local-library access contract.
   Batch metadata updates validate every member before any mutation. Preserve
   unrelated raw fields and settings; content edits stale the overview, pin-only
   edits do not. A stale retry must never duplicate an append or erase new text.
+- `orion_apply_note_command` is a direct local version-guarded writer for portable
+  editor content. Its finite command set covers writing blocks, text/headings,
+  tasks/lists, dividers, quotes/code, tables, same-Space note links and excerpts,
+  and already referenced managed images. Insertions use note boundaries or an
+  exact unique anchor; validate destination/source versions and target ownership
+  under the same vault lock. Never execute arbitrary slash text, shell commands,
+  provider calls, or native pickers. Contextual table deletion remains a guarded
+  exact text edit. Preserve block framing, safe Markdown escaping, and import
+  round trips; flatten balanced pre-existing frames when wrapping content and
+  reject malformed frames or insertions that would create nested blocks.
 - Tasks remain Markdown checkboxes. Return exact raw text and zero-based line
   indices, ignore frontmatter/fenced examples, and change only the requested
   marker. Collapse matching task copies only with shared provenance or a wiki
@@ -449,12 +503,13 @@ provider calls, under the existing direct local-library access contract.
   version history. Integrity tooling never silently repairs or deletes data.
 - Run `script/test_mcp_library.mjs` against each exact extracted package binary
   and include this harness in release fingerprints. The harness uses only
-  isolated fixtures and exercises all 20 new tools, including real atomic edits.
+  isolated fixtures and exercises all 21 local additions, including real atomic edits.
 
 ### Optional native desktop workflows
 
-The shared connector now exposes 41 tools: 29 local library tools and 12 desktop workflows. The optional workflows are
-`orion_get_capabilities`, `orion_get_context`, `orion_research`, `orion_import`,
+The shared connector now exposes 44 tools: 30 local library tools and 14 desktop workflows. The optional workflows are
+`orion_get_capabilities`, `orion_get_context`, `orion_research`,
+`orion_search_space`, `orion_export_word`, `orion_import`,
 `orion_reprocess_sources`, `orion_generate`, `orion_develop_concept`,
 `orion_enrich_knowledge`, `orion_refresh_overview`, `orion_get_job`,
 `orion_list_jobs`, and `orion_cancel_job`.
@@ -482,6 +537,23 @@ The shared connector now exposes 41 tools: 29 local library tools and 12 desktop
   versioned excerpts, host-built citations, partial coverage, and explicit AI
   interpretation. Research never writes notes or Chat. Follow-ups reject stale
   prior Space versions. Unknown usage is not zero or a dollar estimate.
+- `orion_search_space` explicitly runs the same adaptive exact-passage AI search
+  as the app, with a 600-character query bound, no Chat history or note actions,
+  immutable Space context, configured-provider policy, and partial coverage.
+  MCP answers convert transient renderer anchors to stable Space-scoped note
+  citations; source evidence retains its exact source ID/range and bounded
+  related-note navigation. Never invent a native source route.
+- `orion_export_word` accepts only `scope` (note/linked/space) and an exact
+  `note_id` for note/linked scopes. It makes no provider call and changes no
+  vault state. The running app prepares an editable DOCX and asks the user for
+  its destination through Save As. No caller path is accepted. The native
+  Word exporter checks the job lease, operation, grant, cancellation, and
+  persisted Space freshness before the dialog and just before atomic replace.
+  Native export enters the shared `committing` state for the atomic replace and
+  records its own terminal result so cancellation or subsequent content changes
+  cannot relabel a saved file or lose its chosen path.
+  Existing enabled-Space workflow access is required; the note-write/API grants
+  remain independent. A cancelled dialog returns `cancelled: true`.
 - Import preserves all extracted source text up to its explicit 1.8 MB total
   bound. File inputs are exact paths from the captured request: native code
   validates regular files, extensions, and document/media bounds before using
@@ -1575,8 +1647,8 @@ checks. Webpage import is intentionally a single-page reader, not a crawler.
 
 ## Portable export contract
 
-The top-bar Share or export action supports a self-contained web article and
-the existing Markdown files. Both formats share three active-Space scopes: the
+The top-bar Share or export action supports a self-contained web article,
+an editable Word document, and portable Markdown files. All formats share three active-Space scopes: the
 open note, the open note plus exactly one hop through its visible links, or the
 entire Space. A linked-page scope includes destinations reached through
 explicit note/concept links, resolved wiki syntax, and the same automatic
@@ -1615,6 +1687,32 @@ capturing Orion's live DOM. Preserve these rules:
 - Markdown export continues to write portable UTF-8 notes with title/tag
   frontmatter and no overwrite, but it uses the same scope resolver as web
   export. Adding a new export format must not weaken these scope/privacy rules.
+
+`src/lib/wordExport.ts` lazily loads the DOCX library and converts the semantic
+scoped HTML export to OOXML. Preserve headings, emphasis, safe external and
+included-note links, lists/tasks, tables, code, quotes, text alignment, image
+captions, document/paragraph margins, and citation attribution. Document body
+margins become per-note paragraph insets, with paragraph percentages applied
+inside the remaining width. Preserve list hanging indents and quote/code
+padding, constrain tables/images to that width, and reset document insets for
+table-cell content and the next note. Headers and references retain their own
+layout. Word uses document flow; note frames and
+free image placement become ordinary Word content. Managed raster attachments
+use the native opaque-ID resolver; WebP is converted only in the exported copy.
+No remote images are downloaded. Bound text to 16 MiB, each image to 12 MiB,
+and final document to 128 MiB. `word_export.rs` validates the ZIP package,
+entry paths, content types, CRCs, expanded sizes, and required OOXML parts before
+Save As; it flushes then atomically replaces only the user-selected `.docx` file.
+
+DOCX imports use Mammoth semantic HTML with embedded style maps and external
+file access disabled, then `docxImport.ts` converts to safe portable Markdown.
+Preserve headings, emphasis, lists, checkbox text, tables, quotes, code and safe
+public links. Embedded pictures remain descriptive alt text during extraction;
+never load arbitrary image paths or silently discard this limitation. Both
+Import Studio and `orion_import` use this same parser. Markdown import and MCP
+note writes preserve Orion's portable blocks/table/alignment/margins/image
+metadata. Mammoth's semantic DOCX extraction does not retain paragraph indents;
+do not claim that importing a Word document restores Orion margin settings.
 
 ## Note image attachment contract
 
@@ -1812,7 +1910,32 @@ source text, allowing whitespace and line breaks within a phrase. Rank titles,
 aliases, tags, and body matches before limiting results; bound only the displayed
 excerpt. Search only the supplied active Space. Source results open their exact
 source ID through the preserved source viewer. Do not scan a closed palette or
-truncate searchable bodies to the preview length.
+truncate searchable bodies to the preview length. Plain-language multi-word
+queries can fall back to stopword-aware relevance matches; quoted phrases and
+punctuation stay literal. Filter All/Notes/Sources/Concepts before the result
+limit, highlight matches, and open the matching note or source passage even
+when that item is already open. MCP `orion_search` follows the same discovery
+rules and reports bounded scan coverage/truncation.
+
+MCP-created excerpts may use `orion-excerpt:v2:` percent-encoded JSON containing
+only `noteId` and `passages: [{text}]`. Keep v1 range-based excerpts compatible.
+Validate v2 metadata, limits, and the exact note URL; it never carries invented
+visible-text offsets. V2 highlighting requires a unique exact match in both the
+current canonical visible text and rendered prose. Preserve the same excerpt
+styling, hidden metadata tooltip, Backspace/Undo, and Markdown import round trip.
+
+AI search is an explicit action in the command palette, never a paid request
+while typing. `runSpaceSearch` reuses the bounded adaptive Chat reader with no
+history and no note-write authority on any request. Require exact evidence
+citations or a clear evidence gap; cancellation/query/Space/content/model
+changes discard stale replies. Answers remain transient and do not create Chat
+history. Ordinary local search remains useful without a key. The explicit Ask AI
+control sits at the right of the search field. Local matches lead while typing;
+requested answers use a separate reading view, with Matches/Answer controls that
+retain the current result without another provider call. Kind filters belong only
+to matches. Keyboard result navigation applies only in the matches view; never
+open a hidden match from the answer view. Keep one progress message, visible stop
+and retry, exact citation details, and partial-coverage disclosure.
 
 ## Linking model
 
@@ -2111,62 +2234,97 @@ note. For a whole-note enrichment, produce one coherent integrated revision:
 - never cross the active Space boundary or invent facts to make the revision
 appear richer.
 
-**Generate image** opens the same compact composer pattern with one optional
-**Image direction** field. Submitting it blank asks Orion for its best visual
-interpretation of the highlighted passage in its Space; typed guidance is scoped
-to that one image. Planning uses the Space's selected Intelligence model and
-reasoning effort, with that provider's configured key. Rendering always uses
-`gpt-image-2.5-sunburst` through the one-shot OpenAI Image API, including when
-Anthropic plans the illustration. Do not offer it without an OpenAI key or
-silently substitute a planning model. Keep its dedicated `plan_note_image`
-transport and shared `aiImagePlanningProtocol.json` separate from Chat,
-inline-writing and knowledge-writing request schemas; no note actions are legal.
+**Generate image** opens the compact composer with optional **Image direction**,
+independent **Fast / Detailed** rendering and **Selection only / Related Space**
+context choices. Detailed is the default; context initially follows
+`includeExistingNotesInAIContext`. Choosing Related Space is explicit consent for
+that image only, without changing the shared preference. Fast uses
+`gpt-image-2.5-flare`; Detailed uses `gpt-image-2.5-sunburst`. Both use the one-shot
+OpenAI Image API, even when Anthropic plans the illustration. Do not offer image
+generation without an OpenAI key or silently substitute a model. These choices
+are transient captured-request state, not new persisted settings.
 
-With `includeExistingNotesInAIContext` enabled, two bounded planning calls first
-select relevant context, then interpret exact evidence into a visual brief. The
-initial packet includes the exact selection, captured live editor surroundings,
-an origin-note excerpt, an optional non-stale overview used only for orientation,
-and a directory of up to 16 other notes and 12 sources. The planner may choose
-four discovered note IDs, four discovered source IDs and three local queries.
-The host rejects invented or cross-Space IDs, searches beyond that initial
-directory, and resolves excerpts from up to six other notes and four preserved
-original sources. Search scans at most 2,000 records / 8 million UTF-16 units,
-with a 2-million-unit per-record ceiling, and reports partial coverage. Excerpts
-retain exact text and UTF-16 offsets, with omission flags. Selection context is
-bounded to 1,200 characters on each side; origin/other-note/source excerpt budgets
-are 3,000/1,800/2,400 UTF-16 units. A serialized planning packet cannot exceed
-256,000 UTF-8 bytes. No arbitrary file or URL reads are allowed.
+`src/lib/aiImages.ts` owns an adaptive, read-only research tree. The selected
+Intelligence model derives relevant local queries from the exact selection,
+optional direction, title and captured surroundings (1,200 Unicode characters on
+either side). There is no arbitrary note directory or overview supplied as
+evidence. `src/lib/imageContextSearch.ts` maintains an incremental Space-local
+passage index with term rarity, phrases, headings, titles, aliases and associated
+concepts. It has no embeddings, external search or arbitrary file/URL access.
+Search yields during expensive work, preserves exact UTF-16 offsets and versions,
+and retrieves about 8,000 characters per reader, selected for relevance rather
+than a fixed note count. Live editor text overrides the saved origin body.
 
-The composition pass returns a bounded visual brief, descriptive alt text and
-IDs of exact evidence actually used; reject references that were not read. The
-image prompt combines that interpretation with the exact selection and artistic
-direction. Note/source/overview prose is always untrusted subject data, never
-authority. With context disabled, skip retrieval and send only the selection,
-active note title and direction to one composition pass. No surrounding prose,
-directory, overview or source material leaves the device. Planning is transient
-and read-only; it never changes the vault or Chat. Check Space/content/settings
-versions and cancellation between stages and after rendering. Planner failures,
-invalid output or stale context must not start a Sunburst request. Both provider
-transports use the shared scheduler, strict stage schemas, the selected model,
-and a cancellable 90-second ceiling per planning call; OpenAI uses `store: false`.
+Independent questions fan out to at most three concurrent readers. Readers
+compress exact supplied passages, preserve disagreements and return cited
+findings plus optional queries for important gaps. Branches can deepen through
+three refinement levels; equivalent repeated queries page past their already
+read ranges. Distinct questions may share evidence without paying its byte budget
+twice. Mergers reduce findings using exact support. Grouping measures serialized
+packet sizes, and reader admission reserves the remaining reduction tree using
+worst-case bounded summaries and queries. A merge-only 6,000-character selection
+excerpt is explicitly marked when truncated; search, reading and final composition
+retain the exact full selection. Partial coverage must be disclosed, never presented
+as exhaustive Space knowledge.
 
-Request one `1536x1024`, medium-quality JPEG with output compression 88.
-The Image API has no documented Fast mode or `service_tier` parameter as of
-2026-09-25; do not send the Responses/Chat-only setting or silently substitute
-Flare. Keep the native request and renderer's `AI_IMAGE_MODEL` in sync. See
-[OpenAI's Image API](https://developers.openai.com/api/reference/resources/images/methods/generate)
-and [Fast mode guide](https://developers.openai.com/api/docs/guides/fast-mode).
-Returned base64 bytes are transient proposal state, bounded to Orion's existing
-12-MiB note-image limit, and must pass both the renderer and Rust JPEG boundary.
-They do not enter the vault or private image directory until the user presses
-the tick. The preview appears immediately after the selected top-level passage
-without changing or autosaving the document; accepting persists the image and
-inserts its ordinary portable Markdown reference after the unchanged passage as
-one Undo step. Refresh regenerates from the same captured selection/direction,
-X cancels or discards, and late results after cancellation, a note mutation, a
-Space switch, or unmount are ignored. Native generation is cancellable and has
-an independent three-minute emergency transport ceiling because image creation
-can legitimately take longer than prose generation.
+Emergency ceilings are 18 research calls and four minutes per attempt, 64,000
+UTF-8 bytes / 96 records of distinct exact evidence, and 256,000 UTF-8 bytes per
+planning packet. They are resource limits, not a target number of notes to read.
+The index bounds local memory to 32,000 passages, 4,096 per record, 20,000 records,
+about one million body-term associations, bounded heading terms and 128,000
+metadata-term associations. At these pathological ceilings it samples across
+records and document extents, including tails, and reports incomplete coverage.
+The orchestration cache retains at most three Space indexes. Normal incremental
+updates reuse unchanged records instead of rereading/tokenizing an entire Space
+for every branch. Never interpret limited coverage as exhaustive absence.
+
+Keep the dedicated `plan_note_image` transport and shared
+`aiImagePlanningProtocol.json` separate from Chat, inline-writing and
+knowledge-writing schemas. Legal stages are search/read/merge/compose, with
+legacy select retained only for compatibility; no note actions are legal.
+Search/read/merge use the selected Intelligence model at Low reasoning; final
+composition uses the user's selected effort. Research requests have up to 90
+seconds within the overall research budget. Composition has 120 seconds, or 240
+for High/Extra high/Max. Output-token allowances include headroom for reasoning
+(6,000 for low research, 12,000 for composition/medium, 24,000 for high and above).
+OpenAI uses `store: false`; explicit None is sent on supported models, while
+Astra requires at least Low. Both provider paths remain cancellable under the
+shared provider scheduler and retain the 2-MiB response bound.
+
+Research summaries require exact supplied evidence IDs; empty IDs require an
+empty research summary. Composition returns a bounded visual brief, alt text and
+IDs actually used; an abstract brief may have no IDs. Reject invented, unread or
+cross-Space references. The composer receives compressed findings together with
+the original exact support, and the renderer receives the selection, direction
+and resulting brief. All retrieved prose and model findings are untrusted subject
+data. Selection only skips research and sends only the selection and direction
+to composition/rendering: no title, surrounding text, overview, notes or sources.
+
+`ImageGenerationSession` checkpoints successful searches, reader branches,
+merges, the final brief and returned image in memory for at most 20 minutes.
+Retry resumes completed work; a failed render reuses the brief and a failed
+insertion reuses downloaded bytes and the same asset ID. Regenerating a successful
+preview reruns rendering from the retained brief. Failures settle sibling readers
+before returning; cancelled/cleared sessions cannot be resurrected by late results.
+Cancellation, discard, acceptance or editor teardown clears the checkpoint.
+Changes to the origin, Space, AI settings or actual retrieved evidence invalidate
+it; unrelated note changes do not restart completed research. Check scope,
+versions and cancellation between stages and after rendering. Invalid planning
+must never start an image request. Stage progress and safe timing/failure-kind
+metrics are transient; do not log note text or keys or persist diagnostics.
+
+Request one `1536x1024`, medium-quality JPEG with output compression 88 from the
+explicitly chosen image model. Fast means Flare, not a `service_tier` parameter;
+never send Responses-only Fast mode settings to the Image API. See
+[OpenAI's image guide](https://developers.openai.com/api/docs/guides/image-prompting).
+Returned base64 bytes are transient proposal state, bounded to the existing
+12-MiB note-image limit, and must pass renderer and Rust JPEG validation. They
+do not enter the vault or private image directory until acceptance. The preview
+appears after the unchanged selected top-level passage; acceptance persists and
+inserts its ordinary portable Markdown reference as one Undo step. Native image
+rendering retains its independent three-minute transport ceiling; the renderer
+also bounds queue-plus-transport waiting. No automatic retry may create duplicate
+paid image renders.
 
 All AI writing operations are non-destructive. Generation must not immediately
 replace or autosave the selected document range. Hold the exact original rich
@@ -2553,6 +2711,10 @@ this integration's scope.
   link clicks. Pause retains the current word, while editing, changed wording,
   navigation and Stop clear the timing map. Keep the Markdown subtree stable
   across playback ticks. The playback slider also supports arrow keys/Home/End.
+  Seeking immediately updates three disjoint highlight ranges, even while audio
+  loads: all preceding text uses the normal foreground, the current word has the
+  active highlight, and only following text is dim. Do not restore the visible
+  Click text to jump hint; retain the Passage timing fallback when needed.
 - System narration uses actual speech word-boundary events. ElevenLabs uses
   the original-text alignment from its `/with-timestamps` response. OpenAI
   keeps its existing speech request and optionally aligns the generated MP3
@@ -2567,6 +2729,19 @@ this integration's scope.
   deletion stay unchanged. Cloud note playback lazily generates 1200-character
   passages with at most one following passage prefetched; seeking reuses cached
   audio/timings. The optional `trackWords` IPC field defaults false for decks.
+- Written-note Download narration captures the same complete displayed script.
+  `narrationDownload.ts` reuses the same 1200-character cloud passage/cache keys,
+  decodes complete files, then packs one 24-kHz mono 16-bit PCM WAV; never simply
+  concatenate MP3 containers. Bound downloads to 80,000 UTF-16 characters and
+  128 MiB; reject oversize output rather than truncating it. Abort on navigation,
+  changed wording, editing or explicit cancellation. Existing provider gates
+  apply to missing passages; never fall back to a different provider silently.
+  `narration_export.rs` accepts exactly one bounded WAV or system script and a
+  window-scoped media job. Only a native Save As dialog supplies the destination.
+  Mac system speech exports AIFF locally through `/usr/bin/say`, using private
+  temporary files, cancellation, a 300-second deadline and kernel file-size
+  limit. Final writes are flushed and atomic. Browser previews support cloud
+  downloads only. Do not change dictation retention or vault data for export.
 - Space renaming stays in the existing switcher, using exact IDs, normalized
   bounded names and duplicate checks. Reject a changed original name rather
   than overwriting a concurrent rename. Preserve the existing vault merge/save
@@ -2577,16 +2752,172 @@ this integration's scope.
   text and image actions. Its tooltip describes those capabilities. Preserve
   provider gates and preview/accept behavior; merely opening it performs no
   generation. Narrow layouts move secondary tools into More without scrolling.
+  Keep redundant file-count/size/privacy captions out of the import intake;
+  retain the actual validation limits and actionable error messages.
 - Keep the toolbar's original width. Its text, image and table modes share
   contextual More at the far right after Undo/Redo, using only the ellipsis
   without a chevron in every context. Move lower-priority actions
   into More as width narrows; do not add horizontal scrolling. Align menu icons
   and labels in fixed columns, and preserve the selected object during actions.
+  Opening text More by pointer focuses the menu container without an outline,
+  never the native Text style select. Enter, Space and Arrow Down open at the
+  first enabled control; Arrow Up opens at the last. Preserve native select
+  keys and ordinary Tab navigation. Escape returns focus to More, and all
+  opening paths preserve the editor selection.
+- Justify text toggles selected prose paragraphs/headings with one undoable
+  transaction (Cmd+Shift+J). `NoteStarterKit` and `NoteTaskItem` preserve it through
+  tight/loose lists using only the exact inline suffix
+  `<!-- orion-text:v1 justify -->`. `remarkNoteTextAlignment` hides that marker
+  and applies the same bounded attribute in reading and offline HTML. Preserve
+  code examples, links, task line indices and ordinary left-aligned Markdown;
+  never accept arbitrary CSS. Table cells keep their separate GFM alignment.
+  Reading tasks recursively remove the GFM-generated checkbox before adding the
+  interactive control; leave nested lists to their own item renderer.
+- Note actions (Done/Edit, Play, Find, Favorite and Delete) sit above the title
+  and subtitle. Keep the heading and subtitle together and omit the divider
+  above the formatting toolbar. Do not show concept/source counts in the header.
+  Editing removes the header bottom padding and uses a 12px editor gap, bringing
+  the toolbar directly under the subtitle without changing its sticky behavior.
+- Margins toggles a horizontal ruler beneath the toolbar, available through
+  More at narrow widths. Keep the toolbar below the note title and subtitle,
+  with the ruler directly below it in the same inline sticky formatting dock.
+  The dock sticks only after scrolling past the note heading; never move the
+  formatting controls above the heading to work around native tracking.
+  Disable vertical elastic overscroll in the writing pane while editing:
+  WebKit rubber-banding occurs outside the DOM/native geometry contract. The
+  toolbar and More formatting menu use untinted native Regular Liquid Glass.
+  The shallow toolbar clips a 224-point-high Regular surface to its normal
+  rounded bounds, matching the menu's scattering without a second material,
+  tint, or blur filter. Its foreground is drawn at the original toolbar size in
+  the middle of that surface; never stretch the controls. The pass-through clip
+  owns the original toolbar frame, so scroll motion and hit targets stay aligned.
+  Extra material opacity produces a flat grey bar; an unpadded shallow Regular
+  surface remains too clear. The ruler retains Clear with no tint or added
+  frosting. The toolbar clip, ruler and menu are children of one
+  full-viewport pass-through NSView, with their frames updated together. Keep
+  macOS's Liquid Glass appearance preference in the native QA matrix: Clear
+  still follows the system tint amount. The unchanged earlier preview also
+  appeared opaque with maximum system tint; grouping and parent geometry were
+  not established as the cause. Never override the system preference through
+  undocumented defaults. Keep the ruler aligned to the actual writing
+  surface, with independent draggable markers and measured ticks on a 44px track.
+  `src-tauri/src/ruler_glass.rs` hosts the scale/handles in Clear's `contentView`.
+  `nativeToolbarPaint` paints only the existing local toolbar glyphs, labels and
+  control states into a bounded transparent foreground inside Regular's
+  `contentView`. Group toolbar controls with whitespace, never vertical rules;
+  preserve active-button outlines and keyboard focus rings. The native painter
+  draws controls only, not group containers or spacers. Accept only bounded PNG bytes (maximum 4096x160 pixels and
+  350,000 encoded characters), never arbitrary SVG, a path or a URL. No document
+  content is read by this paint path. More formatting uses a third native
+  Regular glass surface above the ruler, retaining both underlying materials.
+  Its local control foreground has separate limits of 1024x1536 pixels and
+  700,000 encoded characters, within a 512x768 CSS-pixel viewport-bounded menu.
+  Menu scrolling repaints its clipped controls and scroll indicator; closing it
+  hides only that surface. Reuse foregrounds during document scrolling.
+  DOM controls remain the sole source of selection, input, accessibility, undo
+  and persistence. `NativeFormattingDock` owns `useNativeRulerGlass`, which
+  coalesces layout/appearance updates and dispatches scroll geometry immediately
+  without another frame or previous IPC acknowledgement. Once artwork is
+  acknowledged, `move_ruler_glass` sends only bounded coordinates tied to that
+  artwork revision, never PNGs. It only translates existing visible surfaces;
+  resizing, repainting and material changes use the full command. Retry invalid
+  motion once through the full path before falling back. Per-WebView monotonic
+  revisions reject stale native arrivals and renderer responses. Hiding removes
+  native content while retaining only a hidden noninteractive revision receipt.
+  Keep the host at viewport bounds and translate the glass views without
+  relaying out foregrounds. Scoped AppKit and Core Animation transactions disable implicit
+  animation. Vertical scrolling must not recalculate paragraph margin state.
+  Hide DOM artwork only after native activation succeeds. Restore HTML controls
+  for other overlapping menus/dialogs, active numeric toolbar editing, paint failures,
+  unsupported systems and accessibility requests. The ruler fallback is solid;
+  never imitate native glass with a CSS shader or specular top stroke. The editor
+  material does not change the shared window-frame material.
+  Put fallback borders on the absolute backplate so they never offset measured horizontal geometry; do
+  not clip the edge handles or focus rings. Extend only the glass backplate by
+  8px at either end to give endpoint labels room inside its corners, offset the
+  margin shading by the same amount, and omit the 0/100 tick strokes so no stray
+  vertical lines touch the rim. Keep the document/selection scope screen-reader
+  only through the ruler's accessible description, with no visible caption or
+  close X. A small RotateCcw reset icon sits below the ruler on the right, named
+  and titled Reset margins; the toolbar toggle hides the ruler. Do not restore a
+  separate ruler popover, stacked sliders or numeric-entry panel. Handles expose
+  keyboard slider semantics: arrow keys, Shift for larger steps and Home/End.
+  A collapsed text selection targets the document body; a highlighted range
+  targets the intersecting ordinary paragraphs/headings, including list and
+  quote prose, while excluding tables and code. Never require or create a
+  `noteBlock`. Left and Right are independent integer percentages from 0 to 25
+  of the available writing width, with immediate reflow and a scope-local Reset.
+  The visible ruler follows the current selection. Capture the target and
+  measured geometry at drag/keyboard start and map it across editor
+  transactions; mixed values must not overwrite the other side. Pointer
+  movement reflows live, and release/cancellation ends the adjustment. Changes
+  emitted by the rich editor may return through the parent after a newer drag
+  update; consume pending local Markdown echoes in order without replacing the
+  document or selection. Retire acknowledged echoes so genuine external edits
+  and reverts still load normally. Changes retain ordinary undo/redo, with each
+  drag grouped separately from later
+  drags and surrounding typing. Document margins affect the body only, leaving
+  note headers and the toolbar stable, in both library and writing windows.
+  `src/components/editor/NoteMargins.ts` stores document attributes through the
+  `NoteMarkdown` manager and changes paragraph attributes without wrapping
+  content. `src/lib/noteMargins.ts` validates only the exact document prefix
+  `<!-- orion-document-margins:v1 LEFT RIGHT -->` after optional frontmatter and
+  paragraph/heading suffix `<!-- orion-paragraph-margins:v1 LEFT RIGHT -->`.
+  Zero defaults need no metadata. Preserve literal code examples, existing
+  justification suffixes and list/task structure; reject arbitrary CSS.
+  `remarkNoteMargins` consumes valid suffixes into bounded numeric attributes
+  for reading and offline HTML. Markdown exports/imports retain the markers;
+  Word exports translate them into real indents. This adds no note schema or
+  shared application preference, and DOCX import does not restore the margins.
+- The contextual More menu's optional Block controls action uses a three-rectangle icon and
+  wraps the current top-level content or adjacent selected nodes in one persistent
+  `noteBlock` within the same Tiptap document. It is not a shared setting or a
+  separate note format. `NoteBlock.ts` preserves ordinary rich children between
+  exact `<!-- orion-block:v1 -->` and `<!-- /orion-block -->` Markdown comments;
+  parsing is bounded, preserves fenced examples, and flattens nested wrappers.
+  `remarkNoteBlocks` in `src/lib/noteBlocks.ts` gives reading and offline HTML the
+  same grouping without exposing those comments. Whole lists, tables, images and
+  excerpts retain their own structure and attributes.
+  Ordinary prose coexists outside blocks. Clicking outside a block hides its
+  controls without unwrapping it; selecting its content restores them. Keep an
+  ordinary writable paragraph after the last block. Enter in a block's direct
+  paragraph or heading splits it into persistent sibling blocks and puts the
+  cursor in the new block; Shift+Enter inserts a line break in the same block.
+  Enter in ordinary prose outside blocks stays ordinary. Lists, tables, code and
+  nested quotes keep their existing Enter behavior. An open slash menu consumes
+  its Enter choice before the block keymap. Clicking Block controls while
+  inside a block explicitly unwraps it without deleting its children. Wrapping,
+  unwrapping, deletion and movement each have an independent Undo step.
+  `NoteBlockControls.tsx` adds no visible box, outline or decorative corners.
+  Small plus controls sit just above/below the active block, with trash at its
+  upper right and a hamburger move handle on the left. The upper plus, hamburger
+  and trash share one horizontal centre line above the block, clear of table
+  selection controls. Plus circles are 20 px
+  with 12 px glyphs; the 12 px hamburger sits in a 20 px control. Invisible 4 px
+  hit-area expansion keeps the controls easy to target without enlarging their
+  visual footprint. Dragging the handle reorders the
+  persistent block; Arrow Up/Down moves it one adjacent sibling. `useBlockReorder`
+  keeps the original document unchanged until drop, supports bounded auto-scroll,
+  and cancels on Escape, pointer cancellation, lost capture, blur, changed content
+  or unmount. `noteBlocks.ts` validates immutable captured targets and top-level
+  boundaries, rejects drops into the source itself, and preserves child attributes
+  plus text, image and table-cell selections through movement.
+  `BlockInsertMenu.tsx` reuses slash vocabulary/icons with Text as the base choice,
+  keyboard navigation and scroll room below the boundary. Plus actions insert new
+  persistent blocks. Deferred choices reject changed content; cancelling a picker
+  never inserts a placeholder. Controls and drag indicators remain outside
+  ProseMirror's owned prose. `blockGeometry.ts` positions controls in the available
+  text lane using intrinsic image/caption bounds and live drag exclusions; geometry
+  reads are batched with requestAnimationFrame. Preserve normal image size, free
+  placement and live wrapping. Text style/Header choices live in the contextual
+  More menu, alongside Block controls in every editing context. Compact image
+  tools also move alignment and width into More while
+  keeping placement visible.
 - `SlashMenu.tsx` and `slashCommands.ts` expose the compact icon menu only for a
   slash prefix at a word boundary within ordinary text, including the middle of
   an existing paragraph. Replace only the command range and preserve surrounding
   prose. Keep URLs, paths and code literal.
-  Commands are heading, todo, bullet, numbered, divider, image, code, link,
+  Commands are block, heading, todo, bullet, numbered, divider, image, code, link,
   excerpt and table; H1–H6 also have direct shortcuts. In tables, `/delete`
   offers row, column or table. The menu stays below the caret with a bounded,
   scrollable height and aligned icon/text columns. Preserve keyboard choice,
@@ -2640,8 +2971,15 @@ this integration's scope.
   Keep additional actions in contextual tools, not a floating bar below the
   table. Table width is 35–100%, and Tab at the last
   cell adds a row. Controls disappear when selection returns to prose.
-  Preserve undo and cell data. Optional adjacent `orion-table:v1` JSON comments
-  carry bounded width, column-width, header and banding metadata while the
+  Preserve undo and cell data.
+  The table toolbar exposes row/column insert/delete, header, banding and width
+  with icons and hover labels, without a redundant Table rows-by-columns label.
+  Width shows just its percentage select with a Table width tooltip/accessibility
+  label; do not add a decorative non-clickable icon beside it.
+  At narrower widths move secondary actions into More, keeping the core row and
+  column actions visible and native select keyboard behavior intact.
+  Optional adjacent `orion-table:v1` JSON comments carry bounded width,
+  column-width, header and banding metadata while the
   table remains GFM. `noteTables.ts` is the pure validator/read-rendering helper.
   Its remark filter hides only validated adjacent table metadata in the reading
   tree while retaining source positions and visible code examples.

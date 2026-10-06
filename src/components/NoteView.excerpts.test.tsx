@@ -11,6 +11,22 @@ const source: Note = { id: "excerpt-source", title: "Source article", body: "Ope
 afterEach(() => vi.restoreAllMocks());
 
 describe("excerpt navigation in the reader", () => {
+  it("reveals a new passage request in the already-open note", () => {
+    const frames = new Map<number, FrameRequestCallback>();
+    let frameId = 0;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { frames.set(++frameId, callback); return frameId; });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => { frames.delete(id); });
+    const reveal = vi.spyOn(navigation, "revealNoteExcerptPassage").mockReturnValue(true);
+    render(<NoteView note={source} notes={[source]} concepts={[]}
+      onOpenNote={vi.fn()} onOpenConcept={vi.fn()} onUpdateNote={vi.fn()} onDeleteNote={vi.fn()}
+      onRegisterConcept={vi.fn()} onDisableConceptAutoLink={vi.fn()} />);
+    act(() => { const pending = [...frames.values()]; frames.clear(); pending.forEach((callback) => callback(performance.now())); });
+    expect(reveal).not.toHaveBeenCalled();
+    const selection = createNoteExcerptSelection(source, [{ from: 18, to: source.body.length }]);
+    act(() => navigation.requestNoteExcerptNavigation(source.id, selection.passages));
+    for (let pass = 0; pass < 2; pass += 1) act(() => { const pending = [...frames.values()]; frames.clear(); pending.forEach((callback) => callback(performance.now())); });
+    expect(reveal).toHaveBeenCalledOnce();
+  });
   it("preserves its one-shot request through StrictMode effect replay", () => {
     const frames = new Map<number, FrameRequestCallback>();
     let frameId = 0;

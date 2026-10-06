@@ -32,6 +32,41 @@ async function chooseInlineCommand(editor: Editor, original: string, token: stri
 }
 
 describe("inline slash commands in the real note editor", () => {
+  it.each(["/block", "Before /block after."])("creates a persistent block from %s with the caret ready to write", async original => {
+    const { editor } = fixture(original);
+    await chooseInlineCommand(editor, original, "/block", "Block");
+    expect(editor.state.doc.firstChild?.type.name).toBe("noteBlock");
+    expect(editor.state.doc.firstChild?.textContent).toBe(original.replace("/block", ""));
+    expect(editor.state.selection.$from.parent.type.name).toBe("paragraph");
+    expect(editor.state.selection.$from.node(1).type.name).toBe("noteBlock");
+    act(() => { editor.commands.insertContent("New words"); });
+    expect(editor.state.doc.firstChild?.textContent).toBe(original.replace("/block", "New words"));
+    act(() => { editor.commands.undo(); });
+    expect(editor.state.doc.firstChild?.type.name).toBe("noteBlock");
+    act(() => { editor.commands.undo(); });
+    expect(editor.state.doc.firstChild?.type.name).toBe("paragraph");
+    expect(editor.state.doc.textContent).toBe(original);
+    act(() => { editor.commands.redo(); });
+    expect(editor.state.doc.firstChild?.type.name).toBe("noteBlock");
+    const saved = editor.getMarkdown();
+    const reopened = fixture(saved);
+    expect(reopened.editor.state.doc.toJSON()).toEqual(editor.state.doc.toJSON());
+  });
+
+  it("keeps an existing block when /block is selected again without nesting or unwrapping", async () => {
+    const { editor } = fixture("<!-- orion-block:v1 -->\nInside /block\n<!-- /orion-block -->");
+    vi.spyOn(editor.view, "coordsAtPos").mockReturnValue({ left: 0, right: 1, top: 0, bottom: 20 });
+    act(() => { editor.commands.focus(undefined, { scrollIntoView: false }); });
+    await waitFor(() => expect(editor.isFocused).toBe(true));
+    act(() => { editor.commands.setTextSelection(2 + "Inside /block".length); });
+    fireEvent.click(await screen.findByRole("option", { name: /^Block$/ }));
+    expect(editor.state.doc.firstChild?.type.name).toBe("noteBlock");
+    expect(editor.state.doc.firstChild?.child(0).type.name).toBe("paragraph");
+    expect(editor.state.doc.firstChild?.textContent).toBe("Inside ");
+    act(() => { editor.commands.undo(); });
+    expect(editor.state.doc.firstChild?.textContent).toBe("Inside /block");
+  });
+
   it.each(["Before the table /table", "Before the table /table after the table."])("inserts a table without removing surrounding prose: %s", async (original) => {
     const { editor } = fixture(original);
     await chooseInlineCommand(editor, original, "/table", "Table");

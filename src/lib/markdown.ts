@@ -1,4 +1,5 @@
 import type { Concept, Note } from "../types";
+import { splitDocumentMargins, withDocumentMargins } from "./noteMargins";
 
 export interface MarkdownFrontmatter {
   content: string;
@@ -122,14 +123,10 @@ export function stripDuplicateTitleHeading(
   body: string,
   title: string,
 ): string {
-  const heading = body.match(/^\s*#\s+([^\n]+)\n*/);
-  if (!heading) {
-    return body;
-  }
-  if (normalizeHeading(heading[1]) !== normalizeHeading(title)) {
-    return body;
-  }
-  return body.slice(heading[0].length).replace(/^\n+/, "");
+  const document = splitDocumentMargins(body);
+  const heading = document.body.match(/^\s*#\s+([^\n]+)\n*/);
+  if (!heading || normalizeHeading(heading[1]) !== normalizeHeading(title)) return body;
+  return withDocumentMargins(document.body.slice(heading[0].length).replace(/^\n+/, ""), document.margins);
 }
 
 function normalizeHeading(value: string): string {

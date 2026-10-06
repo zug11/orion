@@ -19,6 +19,10 @@ function renderControls(options: {
   onDiscard?: ControlProps["onDiscard"];
   onRequestImage?: ControlProps["onRequestImage"];
   imageGenerationAvailable?: boolean;
+  imageContextEnabled?: boolean;
+  imageProgress?: ControlProps["imageProgress"];
+  imageContextPartial?: boolean;
+  operationKind?: ControlProps["operationKind"];
 } = {}) {
   const callbacks = {
     onRequest: options.onRequest ?? vi.fn<ControlProps["onRequest"]>(),
@@ -42,6 +46,10 @@ function renderControls(options: {
       onDiscard={callbacks.onDiscard}
       onRequestImage={callbacks.onRequestImage}
       imageGenerationAvailable={options.imageGenerationAvailable}
+      imageContextEnabled={options.imageContextEnabled}
+      imageProgress={options.imageProgress}
+      imageContextPartial={options.imageContextPartial}
+      operationKind={options.operationKind}
     />,
   );
   return { ...callbacks, view };
@@ -185,7 +193,7 @@ describe("AIWritingControls", () => {
     await waitFor(() => expect(input).toHaveFocus());
     fireEvent.click(within(dialog).getByRole("button", { name: "Generate" }));
 
-    expect(onRequestImage).toHaveBeenCalledWith("");
+    expect(onRequestImage).toHaveBeenCalledWith("", { quality: "detailed", contextMode: "selection" });
   });
 
   it("returns focus to Generate image when its optional direction is cancelled", async () => {
@@ -225,6 +233,7 @@ describe("AIWritingControls", () => {
     fireEvent.click(screen.getByRole("button", { name: "Generate" }));
     expect(onRequestImage).toHaveBeenCalledWith(
       "Make it a restrained ink diagram.",
+      { quality: "detailed", contextMode: "selection" },
     );
 
     view.rerender(
@@ -245,6 +254,41 @@ describe("AIWritingControls", () => {
     expect(screen.getByRole("button", { name: "Insert generated image" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Generate image again" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Discard generated image" })).toBeVisible();
+  });
+
+  it("keeps image quality independent from context and defaults context to the Space preference", () => {
+    const { onRequestImage } = renderControls({ hasSelection: true, imageGenerationAvailable: true, imageContextEnabled: true });
+    fireEvent.click(screen.getByRole("button", { name: "Generate image from selected text" }));
+    expect(screen.getByRole("radio", { name: "Detailed" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Related Space" })).toBeChecked();
+    fireEvent.click(screen.getByRole("radio", { name: "Fast" }));
+    expect(screen.getByRole("radio", { name: "Related Space" })).toBeChecked();
+    fireEvent.click(screen.getByRole("radio", { name: "Selection only" }));
+    expect(screen.getByRole("radio", { name: "Fast" })).toBeChecked();
+    expect(screen.getByText("Use only the highlighted text and your image direction.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+    expect(onRequestImage).toHaveBeenCalledWith("", { quality: "fast", contextMode: "selection" });
+  });
+
+  it("lets the user explicitly include related Space context for one image while the global preference is off", () => {
+    const { onRequestImage } = renderControls({ hasSelection: true, imageGenerationAvailable: true, imageContextEnabled: false });
+    fireEvent.click(screen.getByRole("button", { name: "Generate image from selected text" }));
+    expect(screen.getByRole("radio", { name: "Selection only" })).toBeChecked();
+    fireEvent.click(screen.getByRole("radio", { name: "Related Space" }));
+    expect(screen.getByText(/Use this passage and relevant notes and sources/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+    expect(onRequestImage).toHaveBeenCalledWith("", { quality: "detailed", contextMode: "space" });
+  });
+
+  it("announces the actual image stage and carries partial-context disclosure into review", () => {
+    const { view } = renderControls({ phase: "generating", operationKind: "image", imageProgress: {
+      stage: "read", message: "Reading related passages", completedBranches: 2, totalBranches: 3,
+    } });
+    expect(screen.getByRole("status")).toHaveTextContent("Reading related passages · 2 of 3");
+    view.rerender(<AIWritingControls active suspended={false} phase="preview" hasSelection
+      selectionPosition={SELECTION} dockPosition={VISIBLE} operationKind="image" imageContextPartial
+      onRequest={vi.fn()} onAccept={vi.fn()} onRetry={vi.fn()} onDiscard={vi.fn()} />);
+    expect(screen.getByText(/Some context could not be read/)).toBeVisible();
   });
 
   it("morphs into accept, retry, and discard controls without a document action", () => {

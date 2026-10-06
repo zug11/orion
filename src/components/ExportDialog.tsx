@@ -3,6 +3,7 @@ import {
   Check,
   Download,
   FileCode2,
+  FileText,
   Files,
   Link2,
   LoaderCircle,
@@ -13,7 +14,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { notesForExportScope, type ExportScope } from "../lib/webExport";
 import type { AppSnapshot, Note } from "../types";
 
-export type ExportFormat = "web" | "markdown";
+export type ExportFormat = "web" | "word" | "markdown";
 
 export interface ExportRequest {
   format: ExportFormat;
@@ -147,7 +148,7 @@ export function ExportDialog({
           <section className="export-dialog__section">
             <div className="export-dialog__section-heading">
               <strong>Format</strong>
-              <span>{format === "web" ? "One offline file" : "Portable source files"}</span>
+              <span>{format === "web" ? "One offline file" : format === "word" ? "One editable document" : "Portable source files"}</span>
             </div>
             <div className="export-format-options" role="radiogroup" aria-label="Export format">
               <button
@@ -164,6 +165,21 @@ export function ExportDialog({
                   <small>A beautiful self-contained HTML file with working Orion links.</small>
                 </span>
                 <i>{format === "web" ? <Check size={12} /> : null}</i>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-label="Word document"
+                aria-checked={format === "word"}
+                className={format === "word" ? "active" : ""}
+                onClick={() => setFormat("word")}
+              >
+                <span className="export-option-icon"><FileText size={17} /></span>
+                <span>
+                  <strong>Word document</strong>
+                  <small>Editable text, tables, images and citations in one .docx file.</small>
+                </span>
+                <i>{format === "word" ? <Check size={12} /> : null}</i>
               </button>
               <button
                 type="button"
@@ -246,7 +262,7 @@ export function ExportDialog({
         </div>
 
         <footer className="export-dialog__footer">
-          <span>{format === "web" ? "Opens offline in any modern browser" : "One .md file per selected note"}</span>
+          <span>{format === "web" ? "Opens offline in any modern browser" : format === "word" ? "Each note starts a new page; free layouts flow with the text" : "One .md file per selected note"}</span>
           <button
             type="button"
             className="button primary export-dialog__submit"
@@ -258,7 +274,7 @@ export function ExportDialog({
               ? "Preparing export…"
               : format === "web"
                 ? "Export web article"
-                : "Export Markdown"}
+                : format === "word" ? "Export Word document" : "Export Markdown"}
           </button>
         </footer>
       </div>

@@ -30,6 +30,8 @@ pub struct StartRequest {
 pub enum Operation {
     Context,
     Research,
+    Search,
+    Export,
     Import,
     Reprocess,
     Generate,
@@ -58,6 +60,20 @@ pub struct ContextInput {
     pub source_ids: Vec<String>,
     #[serde(default = "default_depth")]
     pub depth: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SearchInput {
+    pub query: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExportInput {
+    pub scope: String,
+    #[serde(default)]
+    pub note_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -192,6 +208,27 @@ impl StartRequest {
                 identifiers(&input.source_ids, 8)?;
                 depth(&input.depth)
             }
+            Operation::Search => {
+                let input: SearchInput = parse(&self.input)?;
+                bounded_text(&input.query, "query", 600, true)
+            }
+            Operation::Export => {
+                let input: ExportInput = parse(&self.input)?;
+                if !matches!(input.scope.as_str(), "note" | "linked" | "space") {
+                    return Err("Export scope must be note, linked, or space.".into());
+                }
+                if input.scope == "space" {
+                    if input.note_id.is_some() {
+                        return Err("Whole-Space export does not take a note ID.".into());
+                    }
+                } else {
+                    identifiers(
+                        &[input.note_id.ok_or("Select an exact note ID to export.")?],
+                        1,
+                    )?;
+                }
+                Ok(())
+            }
             Operation::Research => {
                 let input: ResearchInput = parse(&self.input)?;
                 bounded_text(&input.question, "question", 8_000, true)?;
@@ -297,12 +334,15 @@ impl StartRequest {
     }
 
     pub fn writes(&self) -> bool {
-        !matches!(self.operation, Operation::Context | Operation::Research)
+        !matches!(
+            self.operation,
+            Operation::Context | Operation::Research | Operation::Search | Operation::Export
+        )
     }
 
     pub fn uses_ai(&self) -> bool {
         match self.operation {
-            Operation::Context => false,
+            Operation::Context | Operation::Export => false,
             Operation::Import => self.input.get("mode").and_then(Value::as_str) != Some("local"),
             _ => true,
         }
@@ -313,6 +353,34 @@ impl StartRequest {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn search_and_export_keep_separate_authority_and_reject_paths() {
+        let mut request = StartRequest {
+            space_id: "a".into(),
+            request_id: "new".into(),
+            operation: Operation::Search,
+            input: json!({"query":"Where is the evidence?"}),
+        };
+        assert!(request.validate().is_ok());
+        assert!(request.uses_ai());
+        assert!(!request.writes());
+        request.input["query"] = json!("x".repeat(601));
+        assert!(request.validate().is_err());
+        request.operation = Operation::Export;
+        request.input = json!({"scope":"linked","note_id":"n"});
+        assert!(request.validate().is_ok());
+        assert!(!request.uses_ai());
+        assert!(!request.writes());
+        request.input["path"] = json!("/tmp/unsolicited.docx");
+        assert!(request.validate().is_err());
+        request.input = json!({"scope":"note"});
+        assert!(request.validate().is_err());
+        request.input = json!({"scope":"space","note_id":"n"});
+        assert!(request.validate().is_err());
+        request.input = json!({"scope":"space"});
+        assert!(request.validate().is_ok());
+    }
 
     #[test]
     fn validates_workflow_intent_without_accepting_privilege_flags() {

@@ -60,6 +60,31 @@ describe("note excerpts", () => {
     expect(() => createNoteExcerptSelection(excerptNote("n", "Huge", "a".repeat(13000)), [{ from: 0, to: 13000 }])).toThrow("shorter");
   });
 
+  it("reads MCP text-only metadata without inventing renderer offsets", () => {
+    const title = "orion-excerpt:v2:%7B%22noteId%22%3A%22source%22%2C%22passages%22%3A%5B%7B%22text%22%3A%22Exact%20caf%C3%A9%20%F0%9F%AA%B6%20words.%22%7D%5D%7D";
+    expect(parseNoteExcerptTitle(title, "orion-note://source")).toEqual({
+      noteId: "source", passages: [{ text: "Exact café 🪶 words.", locator: "unique-text" }],
+    });
+    expect(parseNoteExcerptTitle(title, "orion-note://another-space-note")).toBeUndefined();
+  });
+
+  it("strictly bounds text-only metadata and rejects fabricated offsets or malformed encoding", () => {
+    const encode = (value: unknown) => "orion-excerpt:v2:" + encodeURIComponent(JSON.stringify(value));
+    const payload = (texts: string[]) => ({ noteId: "source", passages: texts.map((text) => ({ text })) });
+    expect(parseNoteExcerptTitle(encode(payload(["a".repeat(12000)])))).toBeDefined();
+    expect(parseNoteExcerptTitle(encode(payload(["a".repeat(11998), "b"])))).toBeUndefined();
+    expect(parseNoteExcerptTitle(encode(payload(["🪶".repeat(6001)])))).toBeUndefined();
+    expect(parseNoteExcerptTitle(encode(payload(Array(12).fill("word"))))?.passages).toHaveLength(12);
+    for (const value of [payload([]), payload(Array(13).fill("word")), payload([" \n\t"]), payload(["bad\u0000text"]), payload(["\ud800"]),
+      { ...payload(["exact"]), extra: true }, { ...payload(["exact"]), noteId: "wrong?Space" },
+      { noteId: "source", passages: [{ text: "exact", from: 0, to: 5 }] },
+      { noteId: "source", passages: [{ text: "exact", locator: "unique-text" }] },
+    ]) expect(parseNoteExcerptTitle(encode(value))).toBeUndefined();
+    for (const value of ["%", "%FF", "{}", "A".repeat(80001)]) {
+      expect(parseNoteExcerptTitle("orion-excerpt:v2:" + value)).toBeUndefined();
+    }
+  });
+
   it("captures an exact browser selection across formatted spans and rejects outside selections", () => {
     const root = document.createElement("div");
     root.innerHTML = '<span>The exact <mark>sentence</mark>.</span>\n\n<span>Next paragraph.</span>';

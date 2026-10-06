@@ -1,7 +1,7 @@
 {
   "name": "orion",
-  "version": "0.4.6",
-  "description": "Search, edit, research, import, and generate in your local Orion Spaces.",
+  "version": "0.4.7",
+  "description": "Search, edit, research, import, export, and generate in your local Orion Spaces.",
   "author": {
     "name": "Orion",
     "url": "https://github.com/zug11/orion"
@@ -21,7 +21,7 @@
   "interface": {
     "displayName": "Orion",
     "shortDescription": "Your local knowledge atlas, available in Codex.",
-    "longDescription": "Use Orion's local library and optional AI/context workflows from Codex. Search and cite exact notes, edit knowledge, import source material through Orion's synthesis flow, research evidence, generate notes and decks, and refresh canonical knowledge. Orion retains provider credentials and settings. Enable workflow Spaces, API use, and writes in Orion Connections. Inspect exact passages, sections, tasks, provenance, concepts and link paths. Make version-guarded edits and atomic metadata updates, and diagnose duplicates or broken references. Includes 41 tools across local knowledge and native AI workflows.",
+    "longDescription": "Use Orion's local library and optional AI/context workflows from Codex. Search and cite exact notes, edit knowledge, import source material through Orion's synthesis flow, research evidence, generate notes and decks, and refresh canonical knowledge. Orion retains provider credentials and settings. Enable workflow Spaces, API use, and writes in Orion Connections. Inspect exact passages, sections, tasks, provenance, concepts and link paths. Make version-guarded edits and atomic metadata updates, and diagnose duplicates or broken references. Includes 44 tools across local knowledge and native AI workflows. Ask AI questions with exact Space evidence, search preserved sources, and export editable Word documents through Orion\u2019s native save dialog. Create movable writing blocks and other slash-command content with guarded local edits.",
     "developerName": "Orion",
     "category": "Productivity",
     "capabilities": [
@@ -35,7 +35,7 @@
     "websiteURL": "https://github.com/zug11/orion",
     "defaultPrompt": [
       "Research my Orion Space and cite the supporting evidence.",
-      "Import this material through Orion’s knowledge flow.",
+      "Import this material through Orion\u2019s knowledge flow.",
       "Generate a briefing from the notes in my Orion Space."
     ],
     "brandColor": "#8999FF",

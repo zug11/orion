@@ -1,0 +1,147 @@
+.editor-margins-ruler {
+  width: min(100%, 680px);
+  margin: 5px auto 0;
+  padding-bottom: 3px;
+  color: var(--muted);
+  font-family: var(--ui-font);
+  user-select: none;
+}
+.editor-ruler-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+.editor-ruler-reset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+}
+.editor-ruler-reset:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.editor-ruler-reset:disabled { opacity: .35; }
+.editor-ruler-reset:focus-visible { outline: 2px solid var(--periwinkle); outline-offset: 1px; }
+.editor-margins-track { --ruler-cap: 8px; position: relative; height: 44px; touch-action: none; }
+.editor-margins-track::before {
+  content: "";
+  position: absolute;
+  inset: 3px calc(-1 * var(--ruler-cap)) 0;
+  border: 1px solid color-mix(in srgb, var(--line-strong) 65%, transparent);
+  border-radius: 11px;
+  background: var(--surface-1);
+  pointer-events: none;
+}
+.editor-ruler-shading {
+  position: absolute;
+  inset: 3px calc(-1 * var(--ruler-cap)) 0;
+  border-radius: 11px;
+  background: linear-gradient(to right,
+    color-mix(in srgb, var(--periwinkle) 12%, transparent) 0 calc(var(--ruler-left) + var(--ruler-cap)),
+    transparent calc(var(--ruler-left) + var(--ruler-cap)) calc(var(--ruler-right) + var(--ruler-cap)),
+    color-mix(in srgb, var(--periwinkle) 12%, transparent) calc(var(--ruler-right) + var(--ruler-cap)) 100%);
+  pointer-events: none;
+}
+.editor-ruler-ticks { position: absolute; inset: 0; pointer-events: none; }
+.editor-ruler-tick { position: absolute; bottom: 8px; width: 1px; height: 4px; background: color-mix(in srgb, var(--text-soft) 48%, transparent); }
+.editor-ruler-tick.is-major { height: 7px; background: var(--muted); }
+.editor-ruler-tick:first-child, .editor-ruler-tick:last-child { background: transparent; }
+.editor-ruler-tick > span {
+  position: absolute;
+  bottom: 8px;
+  left: 0;
+  transform: translateX(-50%);
+  color: var(--text-soft);
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.editor-ruler-tick:first-child > span { transform: none; left: 3px; }
+.editor-ruler-tick:last-child > span { transform: translateX(-100%); left: -3px; }
+.editor-ruler-marker {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  display: block;
+  width: 20px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-soft);
+  transform: translateX(-50%);
+  cursor: ew-resize;
+  touch-action: none;
+}
+.editor-ruler-marker-shape {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 10px;
+  height: 8px;
+  transform: translateX(-50%);
+  clip-path: polygon(0 0, 100% 0, 100% 35%, 50% 100%, 0 35%);
+  background: currentColor;
+}
+.editor-ruler-marker:hover,
+.editor-ruler-marker:focus-visible,
+.editor-ruler-marker.is-dragging { color: var(--periwinkle-strong); }
+.editor-ruler-marker:focus-visible { outline: 2px solid var(--periwinkle); outline-offset: 2px; }
+.editor-ruler-marker.is-mixed .editor-ruler-marker-shape { opacity: .6; }
+.editor-ruler-marker:disabled { opacity: .3; cursor: default; }
+.editor-ruler-value {
+  position: absolute;
+  bottom: calc(100% + 3px);
+  left: 50%;
+  display: none;
+  transform: translateX(-50%);
+  padding: 3px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font: 10px/1 var(--ui-font);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.editor-ruler-marker:hover .editor-ruler-value,
+.editor-ruler-marker:focus-visible .editor-ruler-value,
+.editor-ruler-marker.is-dragging .editor-ruler-value { display: block; }
+.editor-formatting-dock[data-native-editor-glass="true"] .editor-margins-track::before,
+.editor-formatting-dock[data-native-editor-glass="true"] .editor-margins-track .editor-ruler-shading { display: none; }
+.editor-formatting-dock[data-native-editor-glass="true"] .editor-margins-track .editor-ruler-ticks,
+.editor-formatting-dock[data-native-editor-glass="true"] .editor-margins-track .editor-ruler-marker-shape { opacity: 0; }
+.editor-formatting-dock[data-native-editor-glass="true"] .editor-margins-track .editor-ruler-marker:focus-visible { outline: none; }
+.editor-margins-ruler.is-unavailable .editor-ruler-shading,
+.editor-margins-ruler.is-unavailable .editor-ruler-ticks { opacity: .45; }
+@container (max-width: 420px) {
+  .editor-ruler-tick:nth-child(10n + 6) > span { display: none; }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .editor-margins-track::before {
+    background: var(--surface-1);
+    border-color: var(--line-strong);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    box-shadow: none;
+  }
+  .editor-ruler-shading {
+    background: linear-gradient(to right,
+      var(--surface-3) 0 calc(var(--ruler-left) + var(--ruler-cap)),
+      transparent calc(var(--ruler-left) + var(--ruler-cap)) calc(var(--ruler-right) + var(--ruler-cap)),
+      var(--surface-3) calc(var(--ruler-right) + var(--ruler-cap)) 100%);
+  }
+  .editor-ruler-tick { background: var(--text-soft); }
+}
+@media (forced-colors: active) {
+  .editor-margins-track::before { background: Canvas; border-color: CanvasText; backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: none; }
+  .editor-ruler-shading { background: none; }
+  .editor-ruler-tick, .editor-ruler-marker-shape { background: CanvasText; forced-color-adjust: none; }
+  .editor-ruler-tick > span { color: CanvasText; }
+  .editor-ruler-marker:focus-visible, .editor-ruler-reset:focus-visible { outline-color: Highlight; }
+}

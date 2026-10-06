@@ -19,6 +19,8 @@ import {
   Trash2,
 } from "../lib/icons";
 import { useEffect, useState, type CSSProperties } from "react";
+import { ThemePalettePicker } from "./ThemePalettePicker";
+import "./appearanceSettings.css";
 import { SavedVoicesSetting } from "./SavedVoicesSetting";
 import { WindowGlassSetting } from "./WindowGlassSetting";
 import type { WindowGlassStatus } from "../lib/windowGlass";
@@ -38,7 +40,6 @@ import {
   themeAccentOptions,
   themeCanvasOptions,
   themeContrastOptions,
-  themePresetOptions,
   themeSurfaceOptions,
   themeWarmthOptions,
   type ThemePalette,
@@ -101,6 +102,8 @@ function ThemeColorOverride({
   onChange: (value: string) => void;
 }) {
   const selected = value || fallback;
+  const [draft, setDraft] = useState<string | null>(null);
+  const hex = (input: string) => /^#?[0-9a-f]{6}$/i.test(input.trim()) ? `#${input.trim().replace(/^#/, "").toUpperCase()}` : "";
   return (
     <div className={`theme-color-override${value ? " active" : ""}`}>
       <label>
@@ -108,13 +111,19 @@ function ThemeColorOverride({
           type="color"
           aria-label={`Custom ${label} color`}
           value={selected}
-          onChange={(event) => onChange(event.target.value.toUpperCase())}
+          onChange={(event) => { setDraft(null); onChange(event.target.value.toUpperCase()); }}
         />
         <span>
           <strong>Custom</strong>
           <small>{value || "Preset"}</small>
         </span>
       </label>
+      <input type="text" className="theme-color-hex" aria-label={`${label[0].toUpperCase() + label.slice(1)} color hex`}
+        value={draft ?? selected} maxLength={7} autoComplete="off" spellCheck={false}
+        aria-invalid={draft !== null && draft !== "" && !hex(draft)}
+        onChange={(event) => { setDraft(event.target.value); const color = hex(event.target.value); if (color) onChange(color); }}
+        onBlur={() => setDraft(null)}
+        onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Escape") { event.preventDefault(); event.currentTarget.blur(); } }} />
       {value ? (
         <button
           type="button"
@@ -223,49 +232,19 @@ const atmosphereOptions: Array<{
     description: "A precise dot matrix that responds to movement.",
   },
   {
-    id: "quiet-loom",
-    name: "Quiet Loom",
-    description: "Woven light folds into a softly moving veil.",
-  },
-  {
-    id: "nova",
-    name: "Nova",
-    description: "A living plasma core, spiralling light, and streaming sparks.",
-  },
-  {
-    id: "flux",
-    name: "Flux",
-    description: "Luminous currents sweep from edge to edge.",
-  },
-  {
-    id: "tidal-glass",
-    name: "Tidal Glass",
-    description: "Liquid light refracts into a shifting web of caustics.",
-  },
-  {
-    id: "prism-drift",
-    name: "Prism Drift",
-    description: "A rolling landscape of iridescent crystal facets.",
-  },
-  {
-    id: "nebula",
-    name: "Nebula",
-    description: "Layered clouds of light drift through a field of stars.",
-  },
-  {
-    id: "emberwake",
-    name: "Emberwake",
-    description: "Streams of glowing sparks ride a sweeping wind.",
-  },
-  {
-    id: "gravity-silk",
-    name: "Gravity Silk",
-    description: "Glossy fabric billows through luminous folds.",
-  },
-  {
     id: "mirage",
     name: "Mirage",
     description: "Drifting glass lenses bend a travelling sheet of light.",
+  },
+  {
+    id: "opal",
+    name: "Opal",
+    description: "Pearlescent glass ribbons catch slow-moving iridescent light.",
+  },
+  {
+    id: "ripple-glass",
+    name: "Ripple Glass",
+    description: "Overlapping optical ripples bend coloured reflections.",
   },
 ];
 
@@ -1350,73 +1329,7 @@ export function SettingsView({
                 </span>
                 <span className="theme-safety-note">Accessible foregrounds</span>
               </div>
-              <div
-                className="theme-preset-grid"
-                role="radiogroup"
-                aria-label="Color preset"
-              >
-                {themePresetOptions.map((preset) => {
-                  const preview = resolveThemePalette(
-                    {
-                      ...settings,
-                      themePreset: preset.id,
-                      themeAccent: "preset",
-                      themeAccentCustom: "",
-                      themeCanvasCustom: "",
-                      themeSurfaceCustom: "",
-                    },
-                    previewMode,
-                  );
-                  return (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      role="radio"
-                      aria-checked={settings.themePreset === preset.id}
-                      className={
-                        settings.themePreset === preset.id ? "active" : ""
-                      }
-                      aria-label={`${preset.name}: ${preset.description}`}
-                      onClick={() =>
-                        patch({
-                          themePreset: preset.id,
-                          themeAccent: "preset",
-                          themeAccentCustom: "",
-                          themeCanvasCustom: "",
-                          themeSurfaceCustom: "",
-                        })
-                      }
-                    >
-                      <span
-                        className="theme-preset-preview"
-                        aria-hidden="true"
-                        style={
-                          {
-                            "--preview-canvas": preview.canvas,
-                            "--preview-surface": preview.surface1,
-                            "--preview-raised": preview.surfaceRaised,
-                            "--preview-accent": preview.accent,
-                            "--preview-text": preview.text,
-                          } as CSSProperties
-                        }
-                      >
-                        <i />
-                        <i />
-                        <i />
-                      </span>
-                      <span>
-                        <strong>{preset.name}</strong>
-                        <small>{preset.description}</small>
-                      </span>
-                      <i className="theme-preset-selection">
-                        {settings.themePreset === preset.id ? (
-                          <Check size={12} />
-                        ) : null}
-                      </i>
-                    </button>
-                  );
-                })}
-              </div>
+              <ThemePalettePicker settings={settings} mode={previewMode} onChange={patch} />
               <div className="theme-mode-setting">
                 <span>
                   <strong>Mode</strong>
@@ -1519,7 +1432,7 @@ export function SettingsView({
                     options={themeCanvasOptions}
                     value={settings.themeCanvasTone}
                     onSelect={(themeCanvasTone) =>
-                      patch({ themeCanvasTone, themeCanvasCustom: "" })
+                      patch({ themeCanvasTone })
                     }
                   />
                   <ThemeColorOverride
@@ -1541,7 +1454,7 @@ export function SettingsView({
                     options={themeSurfaceOptions}
                     value={settings.themeSurfaceLift}
                     onSelect={(themeSurfaceLift) =>
-                      patch({ themeSurfaceLift, themeSurfaceCustom: "" })
+                      patch({ themeSurfaceLift })
                     }
                   />
                   <ThemeColorOverride

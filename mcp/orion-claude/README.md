@@ -20,13 +20,20 @@ This local Claude Desktop extension gives Claude direct access to Orion.
 
 ## Additional local tools
 
-The connector also exposes 20 additional local library tools (41 tools total):
+The connector also exposes 21 additional local library tools (44 tools total):
 exact source passages and note sections, batch reads, concepts, link resolution
 and paths, provenance, tags, Markdown tasks, duplicate detection, integrity,
 recent changes, guarded text edits, and atomic metadata batches. These work
 with Orion closed. Every new write requires an exact Space and current note
 version; conflicts stop before saving. Source offsets count Unicode scalar
 values. Coverage flags distinguish bounded discovery from exhaustive reads.
+
+`orion_apply_note_command` adds version-guarded editor structures: movable
+blocks, headings, tasks, lists, dividers, quotes, code, tables, note links,
+excerpts, and existing managed images. Use its structured arguments instead of
+writing literal slash text. `append`/`prepend` insert at note boundaries;
+`before`/`after`/`replace` require a unique exact anchor. Excerpts validate the
+source note's version as well as the destination. All targets stay in one Space.
 
 ## Optional Orion workflows
 
@@ -67,3 +74,9 @@ before first use so that local library exists.
 Advanced command-line integrations that deliberately keep Orion data somewhere
 else can set `ORION_VAULT_PATH` or launch `orion-mcp --vault /path/to/vault.json`.
 These overrides are not required for the bundled Claude Desktop extension.
+
+The running-app workflows also provide `orion_search_space` for an explicit AI
+question with exact cited passages, and `orion_export_word` for a note, linked
+notes, or a whole Space. Word export is local and opens the native Save As dialog;
+no caller path is accepted. DOCX imports preserve semantic formatting and retain
+embedded pictures as descriptive alt text.

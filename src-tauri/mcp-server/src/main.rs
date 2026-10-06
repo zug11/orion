@@ -736,19 +736,20 @@ fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "orion_search",
             "title": "Search Orion",
-            "description": "Search, find, or look up notes and concepts in one Orion project or knowledge Space. Defaults to the active Space and never searches all Spaces at once.",
+            "description": "Search notes, concepts, and preserved source text in one Orion Space. Literal phrases rank first; plain-language queries also match meaningful words. Use quotes for an exact phrase and kind to filter. Local and provider-free; bounded snippets are discovery, not claim-level evidence. Open exact notes or source passages to verify. Defaults only to the active Space.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
                         "minLength": 1,
-                        "maxLength": 200
+                        "maxLength": 600
                     },
                     "space_id": {
                         "type": "string",
                         "description": "Optional exact Space ID. Omit to search only the active Space."
                     },
+                    "kind": { "type": "string", "enum": ["all", "note", "source", "concept"], "default": "all" },
                     "limit": {
                         "type": "integer",
                         "minimum": 1,
@@ -1156,16 +1157,19 @@ fn browse_space(vault: &Vault, arguments: &Map<String, Value>) -> ToolResult {
 }
 
 fn search_space(vault: &Vault, arguments: &Map<String, Value>) -> ToolResult {
-    reject_unknown_arguments(arguments, &["query", "space_id", "limit"])?;
-    let query = required_string(arguments, "query", 200)?;
+    reject_unknown_arguments(arguments, &["query", "space_id", "limit", "kind"])?;
+    let query = required_string(arguments, "query", 600)?;
     let query = query.trim();
     if query.is_empty() {
         return Err(ToolFailure::new("Search query cannot be blank."));
     }
-    let space = match optional_string(arguments, "space_id", 200)? {
-        Some(space_id) => require_space(vault, &space_id)?,
-        None => active_space(vault)?,
-    };
+    let space = read_space_from_arguments(vault, arguments)?;
+    let kind = optional_string(arguments, "kind", 20)?.unwrap_or_else(|| "all".into());
+    if !["all", "note", "source", "concept"].contains(&kind.as_str()) {
+        return Err(ToolFailure::new(
+            "kind must be all, note, source, or concept.",
+        ));
+    }
     let limit = integer_argument(
         arguments,
         "limit",
@@ -1173,96 +1177,132 @@ fn search_space(vault: &Vault, arguments: &Map<String, Value>) -> ToolResult {
         1,
         MAX_RESULT_LIMIT,
     )?;
-    let normalized_query = query.to_lowercase();
-    let query_terms = normalized_query
-        .split_whitespace()
-        .filter(|term| !term.is_empty())
-        .collect::<Vec<_>>();
+    let literal = query
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(query);
+    let normalized_query = normalize_search_text(literal);
+    if normalized_query.is_empty() {
+        return Err(ToolFailure::new("Search query cannot be blank."));
+    }
+    let terms = search_query_terms(query);
+    let query_terms = terms.iter().map(String::as_str).collect::<Vec<_>>();
     let mut results = Vec::new();
 
-    for note in &space.notes {
-        let title = note.title.to_lowercase();
-        let aliases = note.aliases.join(" ").to_lowercase();
-        let tags = note.tags.join(" ").to_lowercase();
-        let searchable = format!(
-            "{} {} {} {} {}",
-            title,
-            aliases,
-            tags,
-            note.summary.to_lowercase(),
-            note.body.to_lowercase()
-        );
-        let Some(score) = match_score(
-            &normalized_query,
-            &query_terms,
-            &title,
-            &aliases,
-            &searchable,
-        ) else {
-            continue;
-        };
-        results.push((
-            score,
-            note.updated_at.as_str(),
-            json!({
-                "type": "note",
-                "id": note.id,
-                "title": note.title,
-                "summary": note.summary,
-                "snippet": matching_snippet(&note.body, query, 320),
-                "updatedAt": note.updated_at,
+    if kind == "all" || kind == "note" {
+        for note in &space.notes {
+            let title = normalize_search_text(&note.title);
+            let aliases = normalize_search_text(&note.aliases.join(" "));
+            let searchable = normalize_search_text(&format!(
+                "{} {} {} {} {}",
+                note.title,
+                note.aliases.join(" "),
+                note.tags.join(" "),
+                note.summary,
+                note.body
+            ));
+            let Some(score) = match_score(
+                &normalized_query,
+                &query_terms,
+                &title,
+                &aliases,
+                &searchable,
+            ) else {
+                continue;
+            };
+            results.push((score, note.updated_at.as_str(), json!({
+                "type": "note", "id": note.id, "title": truncate_chars(&note.title, 300).0,
+                "summary": truncate_chars(&note.summary, 320).0,
+                "snippet": matching_snippet(&note.body, query, 320), "updatedAt": note.updated_at,
                 "orionUrl": orion_note_url(&space.workspace.id, &note.id),
-                "citation": citation_markdown(&note.title, &space.workspace.id, &note.id)
-            }),
-        ));
+                "citation": citation_markdown(&truncate_chars(&note.title, 300).0, &space.workspace.id, &note.id)
+            })));
+        }
     }
-    for concept in &space.concepts {
-        let label = concept.label.to_lowercase();
-        let aliases = concept.aliases.join(" ").to_lowercase();
-        let searchable = format!(
-            "{} {} {}",
-            label,
-            aliases,
-            concept.description.to_lowercase()
-        );
-        let Some(score) = match_score(
-            &normalized_query,
-            &query_terms,
-            &label,
-            &aliases,
-            &searchable,
-        ) else {
-            continue;
-        };
-        results.push((
-            score,
-            "",
-            json!({
-                "type": "concept",
-                "id": concept.id,
-                "label": concept.label,
-                "description": concept.description,
-                "aliases": concept.aliases,
-                "canonicalNoteId": concept.canonical_note_id,
-                "noteIds": concept.note_ids,
-                "autoLink": concept.auto_link,
-                "orionUrl": concept.canonical_note_id.as_ref().map(|note_id| {
-                    orion_note_url(&space.workspace.id, note_id)
-                })
-            }),
-        ));
+    if kind == "all" || kind == "concept" {
+        for concept in &space.concepts {
+            let label = normalize_search_text(&concept.label);
+            let aliases = normalize_search_text(&concept.aliases.join(" "));
+            let searchable = normalize_search_text(&format!(
+                "{} {} {}",
+                concept.label,
+                concept.aliases.join(" "),
+                concept.description
+            ));
+            let Some(score) = match_score(
+                &normalized_query,
+                &query_terms,
+                &label,
+                &aliases,
+                &searchable,
+            ) else {
+                continue;
+            };
+            let notes = concept
+                .note_ids
+                .iter()
+                .filter(|id| space.notes.iter().any(|note| note.id == **id))
+                .take(25)
+                .collect::<Vec<_>>();
+            let canonical = concept
+                .canonical_note_id
+                .as_ref()
+                .filter(|id| space.notes.iter().any(|note| note.id == **id));
+            results.push((score, "", json!({
+                "type": "concept", "id": concept.id, "label": truncate_chars(&concept.label, 300).0,
+                "description": truncate_chars(&concept.description, 320).0,
+                "aliases": concept.aliases.iter().take(12).map(|value| truncate_chars(value, 200).0).collect::<Vec<_>>(),
+                "canonicalNoteId": canonical, "noteIds": notes, "noteIdsTruncated": concept.note_ids.len() > 25,
+                "autoLink": concept.auto_link, "orionUrl": canonical.map(|id| orion_note_url(&space.workspace.id, id))
+            })));
+        }
+    }
+    if kind == "all" || kind == "source" {
+        for source in &space.sources {
+            let title = normalize_search_text(&source.title);
+            let file_name = normalize_search_text(source.file_name.as_deref().unwrap_or(""));
+            let searchable = normalize_search_text(&format!(
+                "{} {} {} {}",
+                source.title,
+                source.file_name.as_deref().unwrap_or(""),
+                source.source_url.as_deref().unwrap_or(""),
+                source.text
+            ));
+            let Some(score) = match_score(
+                &normalized_query,
+                &query_terms,
+                &title,
+                &file_name,
+                &searchable,
+            ) else {
+                continue;
+            };
+            let notes = source.note_ids.iter().filter_map(|id| space.notes.iter().find(|note| note.id == *id))
+                .take(8).map(|note| json!({"id":note.id,"title":truncate_chars(&note.title,300).0,
+                    "orionUrl":orion_note_url(&space.workspace.id,&note.id),
+                    "citation":citation_markdown(&truncate_chars(&note.title,300).0,&space.workspace.id,&note.id)})).collect::<Vec<_>>();
+            results.push((score, source.imported_at.as_str(), json!({
+                "type": "source", "id": source.id, "title": truncate_chars(&source.title, 300).0,
+                "kind": source.kind, "fileName": source.file_name.as_ref().map(|value|truncate_chars(value,300).0),
+                "snippet": matching_snippet(&source.text, query, 320), "importedAt": source.imported_at,
+                "notes": notes, "notesTruncated": source.note_ids.len() > 8
+            })));
+        }
     }
     results.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(left.1)));
+    let total_matches = results.len();
     let results = results
         .into_iter()
         .take(limit)
         .map(|(_, _, value)| value)
         .collect::<Vec<_>>();
-
     Ok(json!({
-        "space": space_metadata(space),
-        "query": query,
-        "results": results
+        "space": space_metadata(space), "query": query, "kind": kind, "results": results,
+        "totalMatches": total_matches, "truncated": total_matches > limit,
+        "coverage": { "notes": if kind=="all"||kind=="note" {space.notes.len()} else {0},
+            "sources": if kind=="all"||kind=="source" {space.sources.len()} else {0},
+            "concepts": if kind=="all"||kind=="concept" {space.concepts.len()} else {0},
+            "completeScan": true, "method": "Local lexical search. Snippets are bounded discovery; read exact note/source passages for evidence." }
     }))
 }
 
@@ -2278,6 +2318,31 @@ fn relationship_for_note(
     }))
 }
 
+fn normalize_search_text(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn search_query_terms(query: &str) -> Vec<String> {
+    if !query.chars().all(|character| {
+        character.is_alphanumeric() || character.is_whitespace() || character == '?'
+    }) {
+        return vec![];
+    }
+    let stop = "a an and are as at be been being but by can could did do does for from had has have how i in is it its me my of on or our should that the their them these they this to was we were what when where which who why will with would you your about find show tell please notes note source sources space".split_whitespace().collect::<BTreeSet<_>>();
+    query
+        .split(|character: char| !character.is_alphanumeric())
+        .map(str::to_lowercase)
+        .filter(|word| word.chars().count() >= 2 && !stop.contains(word.as_str()))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(40)
+        .collect()
+}
+
 fn match_score(
     query: &str,
     query_terms: &[&str],
@@ -2285,43 +2350,85 @@ fn match_score(
     aliases: &str,
     searchable: &str,
 ) -> Option<u32> {
-    let mut score = 0;
     if title == query {
-        score += 1_000;
-    } else if title.starts_with(query) {
-        score += 600;
-    } else if title.contains(query) {
-        score += 400;
+        return Some(1_000);
     }
-    if aliases.split_whitespace().any(|alias| alias == query) {
-        score += 500;
-    } else if aliases.contains(query) {
-        score += 250;
+    if title.starts_with(query) {
+        return Some(600);
+    }
+    if title.contains(query) {
+        return Some(400);
+    }
+    if aliases == query {
+        return Some(500);
+    }
+    if aliases.contains(query) {
+        return Some(250);
     }
     if searchable.contains(query) {
-        score += 160;
+        return Some(160);
     }
-    for term in query_terms {
-        if searchable.contains(term) {
-            score += 20;
-        } else {
-            return (score > 0).then_some(score);
-        }
+    if query_terms.is_empty() {
+        return None;
     }
-    (score > 0).then_some(score)
+    let found = query_terms
+        .iter()
+        .filter(|term| searchable.contains(**term))
+        .count();
+    let threshold = query_terms
+        .len()
+        .min(2.max((query_terms.len() * 6).div_ceil(10)));
+    if found < threshold {
+        return None;
+    }
+    Some((30 + found * 50 / query_terms.len()) as u32)
 }
 
 fn matching_snippet(text: &str, query: &str, max_chars: usize) -> String {
     if text.is_empty() {
         return String::new();
     }
-    let lower = text.to_lowercase();
-    let query = query.to_lowercase();
-    let start_byte = lower.find(&query).unwrap_or(0);
+    // Map normalized Unicode characters back to original scalar positions:
+    // case folding may expand a character and whitespace may span line breaks.
     let chars = text.chars().collect::<Vec<_>>();
-    let match_char = lower[..start_byte].chars().count().min(chars.len());
+    let mut normalized = String::new();
+    let mut positions = Vec::new();
+    let mut was_space = false;
+    for (index, character) in chars.iter().enumerate() {
+        if character.is_whitespace() {
+            if !was_space && !normalized.is_empty() {
+                normalized.push(' ');
+                positions.push(index);
+            }
+            was_space = true;
+        } else {
+            for lowered in character.to_lowercase() {
+                normalized.push(lowered);
+                positions.push(index);
+            }
+            was_space = false;
+        }
+    }
+    let literal = query
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(query);
+    let needle = normalize_search_text(literal);
+    let start_byte = normalized
+        .find(&needle)
+        .or_else(|| {
+            search_query_terms(query)
+                .iter()
+                .filter_map(|term| normalized.find(term))
+                .min()
+        })
+        .unwrap_or(0);
+    let match_char = positions
+        .get(normalized[..start_byte].chars().count())
+        .copied()
+        .unwrap_or(0);
     let start_char = match_char.saturating_sub(max_chars / 4);
-    let end_char = (start_char + max_chars).min(chars.len());
+    let end_char = (start_char + max_chars.saturating_sub(2)).min(chars.len());
     let mut snippet = chars[start_char..end_char].iter().collect::<String>();
     if start_char > 0 {
         snippet.insert(0, '…');
@@ -2904,7 +3011,7 @@ mod tests {
                 "params": {}
             }))
             .expect("response");
-        assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(41));
+        assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(44));
         let definitions = tools["result"]["tools"].as_array().expect("tools");
         let browse = definitions
             .iter()
@@ -2982,6 +3089,105 @@ mod tests {
                 .map(Vec::len),
             Some(0)
         );
+    }
+
+    #[test]
+    fn mixed_search_finds_source_bodies_with_bounded_discovery_and_exact_space_scope() {
+        let mut fixture = fixture_vault();
+        fixture["spaces"][0]["sources"][0]["text"] = json!(format!(
+            "{}Late sapphire evidence across\nlines.",
+            "Background. ".repeat(2000)
+        ));
+        fixture["spaces"][1]["sources"] = json!([{"id":"private-source","title":"Private sapphire","kind":"text","text":"sapphire","importedAt":"2026-07-31T00:00:00.000Z","noteIds":[]}]);
+        let vault = validate_vault_value(fixture).expect("valid vault");
+        let result = search_space(
+            &vault,
+            json!({"query":"sapphire evidence across lines"})
+                .as_object()
+                .unwrap(),
+        )
+        .expect("source result");
+        assert_eq!(result["totalMatches"], 1);
+        assert_eq!(result["results"][0]["type"], "source");
+        assert_eq!(result["results"][0]["id"], "source-lecture");
+        assert_eq!(result["coverage"]["completeScan"], true);
+        let snippet = result["results"][0]["snippet"].as_str().unwrap();
+        assert!(snippet.contains("Late sapphire evidence"));
+        assert!(snippet.chars().count() <= 320);
+        assert!(!result.to_string().contains("private-source"));
+    }
+
+    #[test]
+    fn mixed_search_filters_before_limiting_and_keeps_phrase_ranking() {
+        let mut fixture = fixture_vault();
+        fixture["spaces"][0]["notes"] = json!([
+            fixture_note(
+                "words",
+                "Regulation",
+                "Compliance costs affect small companies.",
+                &[]
+            ),
+            fixture_note("phrase", "Small companies regulation", "Exact title.", &[])
+        ]);
+        fixture["spaces"][0]["sources"][0]["title"] = json!("Small companies regulation");
+        let vault = validate_vault_value(fixture).unwrap();
+        let result = search_space(
+            &vault,
+            json!({"query":"small companies regulation","kind":"note","limit":1})
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(result["results"][0]["id"], "phrase");
+        assert_eq!(result["totalMatches"], 2);
+        assert_eq!(result["truncated"], true);
+        assert_eq!(result["coverage"]["sources"], 0);
+        let quoted = search_space(
+            &vault,
+            json!({"query":"\"small companies regulation\"","kind":"note"})
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(quoted["totalMatches"], 1);
+        let question = search_space(
+            &vault,
+            json!({"query":"What are the compliance costs for small companies?","kind":"note"})
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(question["results"][0]["id"], "words");
+    }
+
+    #[test]
+    fn mixed_search_preserves_punctuation_and_validates_filters() {
+        let mut fixture = fixture_vault();
+        fixture["spaces"][0]["notes"][0]["body"] = json!("Use C++ (17) and [a-z].");
+        let vault = validate_vault_value(fixture).unwrap();
+        assert_eq!(
+            search_space(&vault, json!({"query":"C++ (17)"}).as_object().unwrap()).unwrap()
+                ["totalMatches"],
+            1
+        );
+        assert_eq!(
+            search_space(&vault, json!({"query":"C++ .*"}).as_object().unwrap()).unwrap()
+                ["totalMatches"],
+            0
+        );
+        assert!(search_space(
+            &vault,
+            json!({"query":"word","kind":"other"}).as_object().unwrap()
+        )
+        .is_err());
+        assert!(search_space(&vault, json!({"query":"\"\""}).as_object().unwrap()).is_err());
+        let snippet = matching_snippet(
+            &format!("{}İstanbul quartz point", "prefix ".repeat(100)),
+            "İstanbul quartz",
+            40,
+        );
+        assert!(snippet.contains("İstanbul quartz"));
+        assert!(snippet.chars().count() <= 40);
     }
 
     #[test]

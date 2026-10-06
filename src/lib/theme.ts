@@ -151,13 +151,15 @@ export function resolveThemePalette(
     PRESET_BY_ID.get(preferences.themePreset) ?? themePresetOptions[0];
   const seed = preset[mode];
   const customCanvas = validThemeColor(preferences.themeCanvasCustom);
-  const canvas = customCanvas
-    ? clampBackgroundForMode(customCanvas, mode)
-    : preferences.themeCanvasTone === "deep"
-      ? mixColor(seed.canvas, "#000000", mode === "dark" ? 0.16 : 0.055)
-      : preferences.themeCanvasTone === "airy"
-        ? mixColor(seed.canvas, "#ffffff", mode === "dark" ? 0.045 : 0.28)
-        : seed.canvas;
+  // Tone is a material adjustment on the chosen colour, including custom
+  // colours. Keep the original seed so moving between options is reversible.
+  const canvasSeed = customCanvas
+    ? clampBackgroundForMode(customCanvas, mode) : seed.canvas;
+  const canvas = preferences.themeCanvasTone === "deep"
+    ? mixColor(canvasSeed, "#000000", mode === "dark" ? 0.16 : 0.055)
+    : preferences.themeCanvasTone === "airy"
+      ? mixColor(canvasSeed, "#ffffff", mode === "dark" ? 0.045 : 0.28)
+      : canvasSeed;
   const surfaceStrength =
     preferences.themeSurfaceLift === "quiet"
       ? 0.64
@@ -165,8 +167,14 @@ export function resolveThemePalette(
         ? 1
         : 0.84;
   const customSurface = validThemeColor(preferences.themeSurfaceCustom);
-  const surface1 = customSurface
-    ? ensureContrast(clampBackgroundForMode(customSurface, mode), canvas, 1.08)
+  const customSurfaceSeed = customSurface
+    ? ensureContrast(clampBackgroundForMode(customSurface, mode), canvas, 1.08) : null;
+  const surface1 = customSurfaceSeed
+    ? preferences.themeSurfaceLift === "quiet"
+      ? mixColor(customSurfaceSeed, canvas, 0.24)
+      : preferences.themeSurfaceLift === "lifted"
+        ? mixColor(customSurfaceSeed, "#ffffff", mode === "dark" ? 0.035 : 0.3)
+        : customSurfaceSeed
     : mixColor(canvas, seed.surface, surfaceStrength);
   const liftTarget = mode === "dark" ? "#ffffff" : "#000000";
   const surface0 = mixColor(canvas, surface1, 0.52);

@@ -1,3 +1,4 @@
+import { docxHtmlToMarkdown } from "./docxImport";
 import type {
   ImportDraft,
   ParsedImport,
@@ -747,8 +748,11 @@ function hasMeaningfulText(value: string): boolean {
 
 async function parseDocx(file: File): Promise<ParsedImport> {
   const { default: mammoth } = await import("mammoth");
-  const result = await mammoth.extractRawText({
-    arrayBuffer: await file.arrayBuffer(),
+  const result = await mammoth.convertToHtml({ arrayBuffer: await file.arrayBuffer() }, {
+    includeEmbeddedStyleMap: false,
+    externalFileAccess: false,
+    styleMap: ["p[style-name='Title'] => h1:fresh", "p[style-name='Code'] => pre:fresh", "p[style-name='Quote'] => blockquote > p:fresh", "r[style-name='Inline code'] => code"],
+    convertImage: mammoth.images.imgElement(async () => ({ src: "" })),
   });
   return {
     title: titleFromFileName(file.name),
@@ -758,7 +762,7 @@ async function parseDocx(file: File): Promise<ParsedImport> {
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     format: "docx",
     byteSize: file.size,
-    text: result.value.trim(),
+    text: docxHtmlToMarkdown(result.value),
     warnings: result.messages.map((message) => message.message),
   };
 }

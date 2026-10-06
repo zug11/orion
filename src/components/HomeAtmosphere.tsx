@@ -1,4 +1,5 @@
 import { lazy, Suspense, useMemo, type CSSProperties } from "react";
+import "./appearanceSettings.css";
 import { resolveAtmospherePalette } from "../lib/homeAtmosphere";
 import type { ThemePalette } from "../lib/theme";
 import type {
@@ -10,15 +11,9 @@ import type {
 const SignalDecay = lazy(() => import("./SignalDecay"));
 const LineWaves = lazy(() => import("./LineWaves"));
 const DotField = lazy(() => import("./DotField"));
-const QuietLoom = lazy(() => import("./QuietLoom"));
-const Nova = lazy(() => import("./Nova"));
-const Flux = lazy(() => import("./Flux"));
-const TidalGlass = lazy(() => import("./TidalGlass"));
-const PrismDrift = lazy(() => import("./PrismDrift"));
-const Nebula = lazy(() => import("./Nebula"));
-const Emberwake = lazy(() => import("./Emberwake"));
-const GravitySilk = lazy(() => import("./GravitySilk"));
 const Mirage = lazy(() => import("./Mirage"));
+const Opal = lazy(() => import("./Opal"));
+const RippleGlass = lazy(() => import("./RippleGlass"));
 
 interface HomeAtmosphereProps {
   atmosphere: HomeAtmosphereMode;
@@ -76,26 +71,14 @@ export default function HomeAtmosphere({
             color3={palette.tertiary}
             motion={motion}
           />
-        ) : atmosphere === "emberwake" ? (
-          <Emberwake palette={palette} motion={motion} />
-        ) : atmosphere === "gravity-silk" ? (
-          <GravitySilk palette={palette} motion={motion} />
-        ) : atmosphere === "mirage" ? (
-          <Mirage palette={palette} motion={motion} />
-        ) : atmosphere === "flux" ? (
-          <Flux palette={palette} motion={motion} />
-        ) : atmosphere === "tidal-glass" ? (
-          <TidalGlass palette={palette} motion={motion} />
-        ) : atmosphere === "prism-drift" ? (
-          <PrismDrift palette={palette} motion={motion} />
-        ) : atmosphere === "nebula" ? (
-          <Nebula palette={palette} motion={motion} />
-        ) : atmosphere === "nova" ? (
-          <Nova palette={palette} motion={motion} />
-        ) : atmosphere === "quiet-loom" ? (
-          <QuietLoom palette={palette} motion={motion} />
-        ) : (
+        ) : atmosphere === "field" ? (
           <DotField palette={palette} motion={motion} />
+        ) : atmosphere === "opal" ? (
+          <Opal palette={palette} motion={motion} />
+        ) : atmosphere === "ripple-glass" ? (
+          <RippleGlass palette={palette} motion={motion} />
+        ) : (
+          <Mirage palette={palette} motion={motion} />
         )}
       </Suspense>
     </div>

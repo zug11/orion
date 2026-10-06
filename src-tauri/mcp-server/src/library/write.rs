@@ -66,6 +66,7 @@ pub(super) fn call(path: &Path, name: &str, args: &Map<String, Value>) -> ToolRe
                 }
             } else {
                 let body = match name {
+                    "orion_apply_note_command" => editor::apply(scope, current, args)?,
                     "orion_append_to_note" => format!("{}{}", current.body, arg(args, "text")),
                     "orion_edit_note_text" => {
                         let old = arg(args, "old_text");

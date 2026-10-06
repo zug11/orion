@@ -56,7 +56,7 @@ pub async fn set_theme_icon(
             let result = (|| {
                 // A delayed background window must not replace a newer choice
                 // in the window the user is working in.
-                if !crate::desktop_windows::preferred_window(&handle)
+                if !crate::desktop_windows::preferred_library_window(&handle)
                     .is_some_and(|preferred| preferred.label() == window.label())
                 {
                     return Ok(IconStatus {

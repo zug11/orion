@@ -3,6 +3,7 @@ import {
   ArrowRight,
   Command,
   Download,
+  ExternalLink,
   PanelRight,
   Search,
 } from "../lib/icons";
@@ -12,6 +13,8 @@ interface TopbarProps {
   contextOpen: boolean;
   onOpenSearch: () => void;
   onExport: () => void;
+  onOpenWritingWindow?: () => void;
+  openingWritingWindow?: boolean;
   onToggleContext?: () => void;
   rightPanelLabel?: string;
   rightPanelControls?: string;
@@ -24,6 +27,8 @@ export function Topbar({
   contextOpen,
   onOpenSearch,
   onExport,
+  onOpenWritingWindow,
+  openingWritingWindow = false,
   onToggleContext,
   rightPanelLabel = "Open note details",
   rightPanelControls = "note-details-panel",
@@ -70,6 +75,18 @@ export function Topbar({
       </button>
 
       <div className="topbar-actions">
+        {onOpenWritingWindow && (
+          <button
+            type="button"
+            className="icon-button"
+            onClick={onOpenWritingWindow}
+            disabled={openingWritingWindow}
+            aria-label="Open in writing window"
+            title="Open in writing window"
+          >
+            <ExternalLink size={16} />
+          </button>
+        )}
         <button
           type="button"
           className="icon-button"

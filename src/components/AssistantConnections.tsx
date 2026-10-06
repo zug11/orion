@@ -14,7 +14,7 @@ interface Props {
 }
 
 const operationNames: Record<AssistantJob["operation"], string> = {
-  context: "Context", research: "Research", import: "Import", reprocess: "Reprocess sources",
+  search: "AI search", export: "Word export", context: "Context", research: "Research", import: "Import", reprocess: "Reprocess sources",
   generate: "Generate", develop_concept: "Develop concept", enrich_knowledge: "Enrich knowledge", refresh_overview: "Refresh overview",
 };
 
@@ -24,7 +24,7 @@ export function AssistantConnections({ access = defaultSettings.assistantAccess,
   const change = (patch: Partial<AssistantAccess>) => onChange({ ...access, ...patch });
   return <div className="setting-card assistant-connections">
     <div className="setting-card-header">
-      <span><strong>Orion workflows</strong><small>Let Codex and Claude Desktop use Orion’s context, import, and generation tools while Orion is open.</small></span>
+      <span><strong>Orion workflows</strong><small>Let Codex and Claude Desktop use Orion’s search, context, import, export, and generation tools while Orion is open.</small></span>
     </div>
     <label className="assistant-permission">
       <input type="checkbox" checked={access.enabled} disabled={!desktop} onChange={(event) => change({ enabled: event.target.checked })} />

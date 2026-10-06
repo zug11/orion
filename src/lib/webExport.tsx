@@ -1,4 +1,7 @@
 import { noteTableHeaderInfo, noteTableLayoutAtLine, remarkNoteTableMetadata } from "./noteTables";
+import { remarkNoteBlocks } from "./noteBlocks";
+import { remarkNoteTextAlignment } from "./noteTextAlignment";
+import { noteMarginsStyle, remarkNoteMargins, splitDocumentMargins } from "./noteMargins";
 import { getNoteExcerptText, parseNoteExcerptTitle } from "./noteExcerpts";
 import { parseNoteImageTitle, noteImageLayoutStyle, noteImageContentStyle } from "./noteImageLayout";
 import {
@@ -203,6 +206,7 @@ a { color: inherit; }
 .export-tags span { padding: 4px 7px; border-radius: 999px; color: var(--muted); background: var(--accent-soft); font-size: 8px; }
 .export-prose { display: flow-root; padding-top: 35px; color: var(--text-soft); font-family: var(--serif); font-size: 17px; line-height: 1.78; }
 .export-prose > :first-child { margin-top: 0; }
+.export-prose [data-orion-justify="true"] { text-align: justify; }
 .export-prose p, .export-prose ul, .export-prose ol, .export-prose blockquote, .export-prose table, .export-prose pre { margin: 0 0 1.25em; }
 .export-prose h1, .export-prose h2, .export-prose h3, .export-prose h4, .export-prose h5, .export-prose h6 { color: var(--text); scroll-margin-top: 24px; }
 .export-prose h1 { margin: 1.25em 0 .5em; font-size: 34px; line-height: 1.15; }
@@ -517,8 +521,16 @@ function ExportLink({
   );
 }
 
+function exportParagraphMargins(properties?: Record<string, unknown>) {
+  const left = Number(properties?.["data-orion-margin-left"]);
+  const right = Number(properties?.["data-orion-margin-right"]);
+  if (![left, right].every((value) => Number.isInteger(value) && value >= 0 && value <= 25)) return undefined;
+  return noteMarginsStyle({ left, right });
+}
+
 function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
-  const document = splitMarkdownFrontmatter(note.body);
+  const { body, margins } = splitDocumentMargins(note.body);
+  const document = splitMarkdownFrontmatter(body);
   const expanded = expandOrionWikiLinks(
     stripDuplicateTitleHeading(
       stripOrionNoteMarkers(document.content),
@@ -603,33 +615,33 @@ function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
       );
     },
 
-    p: ({ children }) => <p>{renderLinkedChildren(children)}</p>,
+    p: ({ children, node, ...props }) => <p {...props} style={exportParagraphMargins(node?.properties)}>{renderLinkedChildren(children)}</p>,
     li: ({ children, className }) => (
       <li className={className}>{renderLinkedChildren(children)}</li>
     ),
-    h1: ({children,node}) => {
+    h1: ({children,node,...props}) => {
       const heading=headingByLine.get(node?.position?.start.line ?? -1);
-      return <h1 id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>{renderLinkedChildren(children)}</h1>;
+      return <h1 {...props} style={exportParagraphMargins(node?.properties)} id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>{renderLinkedChildren(children)}</h1>;
     },
-    h2: ({children,node}) => {
+    h2: ({children,node,...props}) => {
       const heading=headingByLine.get(node?.position?.start.line ?? -1);
-      return <h2 id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>{renderLinkedChildren(children)}</h2>;
+      return <h2 {...props} style={exportParagraphMargins(node?.properties)} id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>{renderLinkedChildren(children)}</h2>;
     },
-    h3: ({children,node}) => {
+    h3: ({children,node,...props}) => {
       const heading=headingByLine.get(node?.position?.start.line ?? -1);
-      return <h3 id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>{renderLinkedChildren(children)}</h3>;
+      return <h3 {...props} style={exportParagraphMargins(node?.properties)} id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>{renderLinkedChildren(children)}</h3>;
     },
-    h4: ({children,node}) => {
+    h4: ({children,node,...props}) => {
       const heading=headingByLine.get(node?.position?.start.line ?? -1);
-      return <h4 id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>{renderLinkedChildren(children)}</h4>;
+      return <h4 {...props} style={exportParagraphMargins(node?.properties)} id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>{renderLinkedChildren(children)}</h4>;
     },
-    h5: ({children,node}) => {
+    h5: ({children,node,...props}) => {
       const heading=headingByLine.get(node?.position?.start.line ?? -1);
-      return <h5 id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>{renderLinkedChildren(children)}</h5>;
+      return <h5 {...props} style={exportParagraphMargins(node?.properties)} id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>{renderLinkedChildren(children)}</h5>;
     },
-    h6: ({children,node}) => {
+    h6: ({children,node,...props}) => {
       const heading=headingByLine.get(node?.position?.start.line ?? -1);
-      return <h6 id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>{renderLinkedChildren(children)}</h6>;
+      return <h6 {...props} style={exportParagraphMargins(node?.properties)} id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>{renderLinkedChildren(children)}</h6>;
     },
     a: ({ href, title, children }) => {
       if (href?.startsWith("#orion-passage-")) {
@@ -740,10 +752,10 @@ function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
             ) : null}
           </header>
 
-          <div className="export-prose">
+          <div className="export-prose" data-orion-margin-left={margins.left} data-orion-margin-right={margins.right} style={noteMarginsStyle(margins)}>
             {citations.body.trim() ? (
               <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkNoteTableMetadata]}
+                remarkPlugins={[remarkGfm, remarkNoteTableMetadata, remarkNoteBlocks, remarkNoteMargins, remarkNoteTextAlignment]}
                 components={components}
                 skipHtml
                 urlTransform={(url) => url}
