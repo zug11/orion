@@ -149,3 +149,29 @@ describe("workflow commits alongside user edits", () => {
     expect(merged.spaces[0].notes[0].body).toBe("AI revision"); expect(merged.spaces[0].notes[0].lastOpenedAt).toBe("2026-09-05");
   });
 });
+
+
+describe("desktop search and Word export", () => {
+  it("exports a bounded scope without AI, note writes, or a caller path", async () => {
+    const space = fixture().spaces[0]; const original = structuredClone(space); const deps = dependencies();
+    space.settings.assistantAccess.allowAI = false; space.settings.assistantAccess.allowWrites = false;
+    deps.exportWord = vi.fn(async (_snapshot, _scope, _id) => ({ path: "/chosen/tides.docx", cancelled: false, noteIds: ["tides"], title: "tides" }));
+    const result = await executeAssistantWorkflow(space, {space_id:space.workspace.id,request_id:"word",operation:"export",input:{scope:"note",note_id:"tides"}},deps);
+    expect(result.snapshot).toBeUndefined(); expect(result.result.path).toBe("/chosen/tides.docx");
+    expect(result.result.providerCalls).toBe(0); expect(deps.chat).not.toHaveBeenCalled();
+    expect(space.notes).toEqual(original.notes);
+    expect(deps.exportWord).toHaveBeenCalledWith(space,"note","tides");
+    await expect(executeAssistantWorkflow(space,{space_id:space.workspace.id,request_id:"bad",operation:"export",input:{scope:"note",note_id:"other-space-note"}},deps)).rejects.toThrow("exact note");
+  });
+  it("keeps Save As cancellation explicit and enforces search grants", async () => {
+    const space=fixture().spaces[0]; const deps=dependencies();
+    deps.exportWord=vi.fn(async()=>({path:"",cancelled:true,noteIds:["tides"],title:"tides"}));
+    const result=await executeAssistantWorkflow(space,{space_id:space.workspace.id,request_id:"cancel",operation:"export",input:{scope:"note",note_id:"tides"}},deps);
+    expect(result.result.cancelled).toBe(true);expect(result.snapshot).toBeUndefined();
+    space.settings.assistantAccess.allowAI=false;
+    await expect(executeAssistantWorkflow(space,{space_id:space.workspace.id,request_id:"search",operation:"search",input:{query:"tides"}},deps)).rejects.toThrow("Enable Orion AI");
+    space.settings.assistantAccess.allowAI=true;space.settings.includeExistingNotesInAIContext=false;
+    await expect(executeAssistantWorkflow(space,{space_id:space.workspace.id,request_id:"search",operation:"search",input:{query:"tides"}},deps)).rejects.toThrow("context is off");
+    expect(deps.chat).not.toHaveBeenCalled();
+  });
+});

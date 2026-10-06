@@ -3,8 +3,9 @@ import type { Editor } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer, useEditorState, type NodeViewProps } from "@tiptap/react";
 import { NodeSelection, Plugin, PluginKey } from "@tiptap/pm/state";
 import { closeHistory } from "@tiptap/pm/history";
+import { Fragment } from "@tiptap/pm/model";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { isSafeNoteImageUrl } from "../../lib/noteImages";
 import {
@@ -21,7 +22,10 @@ import {
 } from "../../lib/noteImageLayout";
 import "./NoteImage.css";
 
-type ImageDragExclusion = { position: number; element: HTMLElement; key: string };
+type ImageDragExclusion = {
+  position: number; element: HTMLElement; key: string;
+  hiddenFrame?: { from: number; to: number };
+};
 export const noteImageDragKey = new PluginKey<ImageDragExclusion | null>("noteImageDrag");
 let imageDragSequence = 0;
 
@@ -51,25 +55,51 @@ export function updateSelectedNoteImage(editor: Editor, changes: Partial<NoteIma
   return true;
 }
 
+function imageMovementScope(editor: Editor, source: number) {
+  const doc = editor.state.doc;
+  const original = doc.nodeAt(source);
+  if (!original || original.type.name !== "image") return null;
+  const resolved = doc.resolve(source);
+  // A solitary framed image owns its frame. An image grouped with other content
+  // stays in that immediate container; dragging must never silently ungroup it.
+  const carryFrame = resolved.depth === 1 && resolved.parent.type.name === "noteBlock"
+    && resolved.parent.childCount === 1;
+  const depth = carryFrame ? 0 : resolved.depth;
+  const from = carryFrame ? resolved.before(1) : source;
+  const payload = carryFrame ? resolved.parent : original;
+  return { original, carryFrame, payload, from, to: from + payload.nodeSize,
+    container: resolved.node(depth), depth, contentStart: resolved.start(depth) };
+}
+
 /** A pointer drop moves the existing image, never a copy reconstructed from its URL. */
 export function moveNoteImage(editor: Editor, source: number, target: number,
   placement?: NoteImageAlignment | Pick<NoteImageLayout, "xPercent" | "offsetY" | "placement">) {
   if (editor.isDestroyed || !editor.isEditable || !Number.isInteger(source) || !Number.isInteger(target)
     || source < 0 || source > editor.state.doc.content.size || target < 0 || target > editor.state.doc.content.size) return false;
-  const original = editor.state.doc.nodeAt(source);
-  // Drops are deliberately anchored between document blocks, not inside prose.
-  if (!original || original.type.name !== "image" || editor.state.doc.resolve(target).depth !== 0) return false;
+  const scope = imageMovementScope(editor, source);
+  const destination = editor.state.doc.resolve(target);
+  // Anchors are boundaries in the same container, never inside prose or another
+  // frame. Only a top-level image-only frame travels between document siblings.
+  if (!scope || destination.depth !== scope.depth || destination.parent !== scope.container
+    || (target > scope.from && target < scope.to)) return false;
+  const { original } = scope;
   const layout = normalizeNoteImageLayout({ ...original.attrs,
     ...(typeof placement === "string" ? { alignment: placement, xPercent: null, offsetY: 0 } : placement) });
   if (layout.xPercent === null && layout.alignment === "center" && layout.placement === "wrap") layout.placement = "break";
   const moved = original.type.create({ ...original.attrs, ...layout }, original.content, original.marks);
-  const tr = closeHistory(editor.state.tr).delete(source, source + original.nodeSize);
-  const insertion = tr.mapping.map(target);
-  tr.insert(insertion, moved);
+  const payload = scope.carryFrame ? scope.payload.copy(Fragment.from(moved)) : moved;
+  const insertionIndex = destination.index(scope.depth);
+  if (!scope.container.canReplace(insertionIndex, insertionIndex, Fragment.from(payload))) return false;
+  // Insert before deleting so a sole image/frame never briefly leaves an empty
+  // block+ container that ProseMirror would repair with an orphan paragraph.
+  const tr = closeHistory(editor.state.tr).insert(target, payload);
+  const mappedSource = tr.mapping.map(scope.from, 1);
+  tr.delete(mappedSource, mappedSource + scope.payload.nodeSize);
+  const insertion = target > scope.from ? target - scope.payload.nodeSize : target;
   if (tr.doc.eq(editor.state.doc)) return false;
-  tr.setSelection(NodeSelection.create(tr.doc, insertion));
+  tr.setSelection(NodeSelection.create(tr.doc, insertion + (scope.carryFrame ? 1 : 0)));
   editor.view.dispatch(tr.setMeta("uiEvent", "drop"));
-  editor.view.dispatch(closeHistory(editor.state.tr).setMeta("addToHistory", false));
+  editor.view.dispatch(closeHistory(editor.state.tr).setMeta("addToHistory", false).setMeta("skipTrailingNode", true));
   editor.view.focus();
   return true;
 }
@@ -95,9 +125,19 @@ export const NoteImage = Image.extend({
       props: {
         decorations: (state) => {
           const current = noteImageDragKey.getState(state);
-          return current ? DecorationSet.create(state.doc, [Decoration.widget(current.position, () => current.element, {
+          if (!current) return DecorationSet.empty;
+          const decorations = [Decoration.widget(current.position, () => current.element, {
             key: current.key, side: -1, ignoreSelection: true, stopEvent: () => true,
-          })]) : DecorationSet.empty;
+          })];
+          const hidden = current.hiddenFrame;
+          const frame = hidden ? state.doc.nodeAt(hidden.from) : null;
+          if (hidden && frame?.type.name === "noteBlock" && hidden.to === hidden.from + frame.nodeSize) {
+            // A frame uses ordinary ProseMirror DOM, so hide it through a node
+            // decoration. Direct style writes would trigger DOM reparsing and
+            // abort the frozen-document drag (and could lose image metadata).
+            decorations.push(Decoration.node(hidden.from, hidden.to, { style: "display: none" }));
+          }
+          return DecorationSet.create(state.doc, decorations);
         },
       },
     })];
@@ -203,6 +243,12 @@ function NoteImageView({ node, editor, selected, getPos }: NodeViewProps) {
     const shell = root.closest<HTMLElement>(".app-shell") ?? root.parentElement;
     if (sourcePosition === null || !shell || !outer) return;
     const source = sourcePosition;
+    const candidateScope = imageMovementScope(editor, source);
+    if (!candidateScope) return;
+    const scope = candidateScope;
+    const candidateScopeDOM = scope.depth ? editor.view.nodeDOM(scope.contentStart - 1) : root;
+    if (!(candidateScopeDOM instanceof HTMLElement)) return;
+    const scopeDOM = candidateScopeDOM;
     editor.commands.setNodeSelection(source);
     editor.view.focus();
     const scroller = root.closest<HTMLElement>(".workspace-content");
@@ -220,12 +266,13 @@ function NoteImageView({ node, editor, selected, getPos }: NodeViewProps) {
     let preview: HTMLDivElement | null = null;
     let clipLayer: HTMLDivElement | null = null;
     let exclusion: HTMLDivElement | null = null;
+    let decorationElement: HTMLDivElement | null = null;
     const exclusionKey = `image-drag-${++imageDragSequence}`;
     let lastPlacement = "";
     let target: { position: number; xPercent: number; offsetY: number } | null = null;
     const originalDocument = editor.state.doc;
     const contentBounds = () => {
-      const rect = root.getBoundingClientRect(), style = getComputedStyle(root);
+      const rect = scopeDOM.getBoundingClientRect(), style = getComputedStyle(scopeDOM);
       const left = rect.left + parseFloat(style.paddingLeft) + parseFloat(style.borderLeftWidth || "0");
       const right = rect.right - parseFloat(style.paddingRight) - parseFloat(style.borderRightWidth || "0");
       return { left, right, width: right - left, top: rect.top + parseFloat(style.paddingTop) + parseFloat(style.borderTopWidth || "0") };
@@ -233,7 +280,7 @@ function NoteImageView({ node, editor, selected, getPos }: NodeViewProps) {
     const originalContentWidth = contentBounds().width;
     const viewport = () => {
       const rect = scroller?.getBoundingClientRect();
-      const toolbar = root.closest(".rich-note-editor")?.querySelector(".editor-toolbar-shell")?.getBoundingClientRect();
+      const toolbar = root.closest(".rich-note-editor")?.querySelector(".editor-formatting-dock, .editor-toolbar-shell")?.getBoundingClientRect();
       return {
         left: Math.max(0, rect?.left ?? 0), right: Math.min(window.innerWidth, rect?.right ?? window.innerWidth),
         top: Math.max(0, rect?.top ?? 0, toolbar && toolbar.top <= (rect?.top ?? 0) + 24 ? toolbar.bottom + 8 : 0),
@@ -260,21 +307,22 @@ function NoteImageView({ node, editor, selected, getPos }: NodeViewProps) {
       preview.style.top = `${imageRect.top + point.y - start.y - clip.top}px`;
       target = null;
       if (point.x < clip.left || point.x > clip.right || point.y < clip.top || point.y > clip.bottom) {
-        if (noteImageDragKey.getState(editor.state)?.element === exclusion) setImageDragExclusion(editor, null);
+        if (noteImageDragKey.getState(editor.state)?.element === decorationElement) setImageDragExclusion(editor, null);
         return;
       }
       const left = Math.max(bounds.left, Math.min(imageRect.left + point.x - start.x, bounds.right - imageRect.width));
       const desiredTop = Math.max(bounds.top + layout.gap, imageRect.top + point.y - start.y);
       // Measure the unobstructed baseline synchronously, without changing prose
       // DOM. Otherwise the temporary wrapping would move its own next anchor.
-      let anchor = { position: 0, top: bounds.top };
+      let anchor = { position: scope.contentStart, top: bounds.top };
       let clearFloor = bounds.top;
       root.style.minHeight = `${Math.max(parseFloat(root.style.minHeight) || 0, root.getBoundingClientRect().height)}px`;
-      const exclusionDisplay = exclusion?.style.display;
-      if (exclusion) exclusion.style.display = "none";
+      const exclusionDisplay = decorationElement?.style.display;
+      if (decorationElement) decorationElement.style.display = "none";
       try {
-        editor.state.doc.forEach((block, pos) => {
-          if (pos === source) return;
+        scope.container.forEach((block, offset) => {
+          const pos = scope.contentStart + offset;
+          if (pos === scope.from) return;
           const element = editor.view.nodeDOM(pos);
           if (!(element instanceof HTMLElement)) return;
           const rect = element.getBoundingClientRect();
@@ -284,23 +332,32 @@ function NoteImageView({ node, editor, selected, getPos }: NodeViewProps) {
             return;
           }
           const top = Math.max(clearFloor, rect.top);
-          if (block.type.name === "paragraph" && top + layout.gap <= desiredTop && top >= anchor.top) anchor = { position: pos, top };
+          if ((block.type.name === "paragraph" || block.type.name === "noteBlock")
+            && top + layout.gap <= desiredTop && top >= anchor.top) anchor = { position: pos, top };
         });
-      } finally { if (exclusion) exclusion.style.display = exclusionDisplay ?? ""; }
-      const next = normalizeNoteImageLayout({ ...layout, xPercent: (left - bounds.left) / bounds.width * 100,
+      } finally { if (decorationElement) decorationElement.style.display = exclusionDisplay ?? ""; }
+      let next = normalizeNoteImageLayout({ ...layout, xPercent: (left - bounds.left) / bounds.width * 100,
         offsetY: desiredTop - anchor.top - layout.gap, placement: layout.placement === "inline" ? "wrap" : layout.placement });
-      target = { position: anchor.position, xPercent: next.xPercent!, offsetY: next.offsetY };
-      if (exclusion) {
+      if (exclusion && decorationElement) {
         // This DOM belongs to the ProseMirror widget, not to the editable prose.
         // Same-anchor movement needs no transaction or document-wide link scan.
         exclusion.style.cssText = noteImageLayoutCss(next);
         const content = exclusion.firstElementChild as HTMLElement;
         content.style.cssText = `${noteImageContentCss(next)};height:${figureHeight}px;pointer-events:none`;
-        setImageDragExclusion(editor, { position: anchor.position, element: exclusion, key: exclusionKey });
-        const actual = content.getBoundingClientRect();
+        setImageDragExclusion(editor, { position: anchor.position, element: decorationElement, key: exclusionKey,
+          ...(scope.carryFrame ? { hiddenFrame: { from: scope.from, to: scope.to } } : {}) });
+        let actual = content.getBoundingClientRect();
+        if (scope.carryFrame) {
+          // The frame's existing margins participate in layout both now and
+          // after the drop. Include them instead of jumping by a frame margin.
+          next = normalizeNoteImageLayout({ ...next, offsetY: next.offsetY + desiredTop - actual.top });
+          exclusion.style.cssText = noteImageLayoutCss(next);
+          actual = content.getBoundingClientRect();
+        }
         preview.style.left = `${actual.left - clip.left}px`;
         preview.style.top = `${actual.top - clip.top}px`;
       }
+      target = { position: anchor.position, xPercent: next.xPercent!, offsetY: next.offsetY };
     }
     function tick() {
       if (!dragging || editor.isDestroyed) return;
@@ -324,9 +381,19 @@ function NoteImageView({ node, editor, selected, getPos }: NodeViewProps) {
       root.style.minHeight = `${root.getBoundingClientRect().height}px`;
       exclusion = document.createElement("div");
       exclusion.className = "note-image-drag-exclusion";
+      exclusion.dataset.placement = layout.placement === "inline" ? "wrap" : layout.placement;
       exclusion.contentEditable = "false";
       exclusion.setAttribute("aria-hidden", "true");
       exclusion.append(document.createElement("div"));
+      decorationElement = exclusion;
+      if (scope.carryFrame) {
+        decorationElement = document.createElement("div");
+        decorationElement.className = "note-block-node";
+        decorationElement.setAttribute("data-note-block", "true");
+        decorationElement.setAttribute("aria-hidden", "true");
+        decorationElement.contentEditable = "false";
+        decorationElement.append(exclusion);
+      }
       preview = document.createElement("div");
       preview.className = "note-image-drag-preview";
       preview.setAttribute("aria-hidden", "true");
@@ -361,7 +428,13 @@ function NoteImageView({ node, editor, selected, getPos }: NodeViewProps) {
       clipLayer.className = "note-image-drag-viewport";
       clipLayer.setAttribute("aria-hidden", "true");
       clipLayer.append(preview);
-      outer!.style.display = "none";
+      if (scope.carryFrame) {
+        exclusion.style.cssText = noteImageLayoutCss(layout);
+        const content = exclusion.firstElementChild as HTMLElement;
+        content.style.cssText = `${noteImageContentCss(layout)};height:${figureHeight}px;pointer-events:none`;
+        setImageDragExclusion(editor, { position: scope.from, element: decorationElement, key: exclusionKey,
+          hiddenFrame: { from: scope.from, to: scope.to } });
+      } else outer!.style.display = "none";
       shell!.append(clipLayer);
       const copiedCaption = preview.querySelector("textarea");
       if (copiedCaption) copiedCaption.scrollTop = captionScrollTop;
@@ -384,7 +457,7 @@ function NoteImageView({ node, editor, selected, getPos }: NodeViewProps) {
       window.removeEventListener("resize", cancel);
       window.removeEventListener("keydown", keydown, true);
       clipLayer?.remove();
-      if (noteImageDragKey.getState(editor.state)?.element === exclusion) setImageDragExclusion(editor, null);
+      if (noteImageDragKey.getState(editor.state)?.element === decorationElement) setImageDragExclusion(editor, null);
       const livePosition = editor.isDestroyed ? null : position();
       const liveNode = livePosition === null ? null : editor.state.doc.nodeAt(livePosition);
       if (outer!.isConnected) outer!.style.cssText = liveNode?.type.name === "image"
@@ -510,7 +583,10 @@ function NoteImageView({ node, editor, selected, getPos }: NodeViewProps) {
   );
 }
 
-export function ImageToolbar({ editor, overflowTarget }: { editor: Editor; overflowTarget?: HTMLElement|null }) {
+export function ImageToolbar({ editor, overflowTarget, compact = false, renderBlockControl }: {
+  editor: Editor; overflowTarget?: HTMLElement|null; compact?: boolean;
+  renderBlockControl?: (close: () => void) => ReactNode;
+}) {
   const state = useEditorState({ editor, selector: ({ editor: current }) => ({
     active: !current.isDestroyed && current.isActive("image"),
     layout: normalizeNoteImageLayout(current.isDestroyed ? undefined : current.getAttributes("image")),
@@ -526,13 +602,14 @@ export function ImageToolbar({ editor, overflowTarget }: { editor: Editor; overf
     if (!moreOpen) return;
     const updatePlacement = () => {
       const rect = moreTrigger.current?.getBoundingClientRect();
-      if (rect) setOpenAbove(window.innerHeight - rect.bottom < 210 && rect.top > window.innerHeight - rect.bottom);
+      const height = moreRef.current?.querySelector<HTMLElement>(".note-image-options")?.getBoundingClientRect().height || (compact ? 280 : 210);
+      if (rect) setOpenAbove(window.innerHeight - rect.bottom < height + 8 && rect.top > window.innerHeight - rect.bottom);
     };
     const dismiss = (event: globalThis.PointerEvent) => {
       if (!moreRef.current?.contains(event.target as Node)) setMoreOpen(false);
     };
     updatePlacement();
-    moreRef.current?.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
+    moreRef.current?.querySelector<HTMLElement>('[role="menuitemcheckbox"]:not([disabled]),select,input')?.focus({ preventScroll: true });
     document.addEventListener("pointerdown", dismiss);
     document.addEventListener("scroll", updatePlacement, true);
     window.addEventListener("resize", updatePlacement);
@@ -541,7 +618,7 @@ export function ImageToolbar({ editor, overflowTarget }: { editor: Editor; overf
       document.removeEventListener("scroll", updatePlacement, true);
       window.removeEventListener("resize", updatePlacement);
     };
-  }, [moreOpen]);
+  }, [moreOpen, compact]);
   if (!state.active) return null;
   const { layout } = state;
   function change(value: Partial<NoteImageLayout>) { updateSelectedNoteImage(editor, value); }
@@ -550,6 +627,13 @@ export function ImageToolbar({ editor, overflowTarget }: { editor: Editor; overf
     if (widthDraft && Number.isFinite(parsed)) change({ widthPercent: Math.min(100 - (layout.xPercent ?? 0), parsed) });
     else setWidthDraft(String(layout.widthPercent));
   }
+  const alignmentControl = <label className="note-image-alignment"><span className={compact ? undefined : "sr-only"}>Alignment</span><select aria-label="Image alignment" value={layout.xPercent !== null ? "free" : layout.alignment} onChange={(event) => {
+    const alignment = event.target.value as NoteImageAlignment;
+    change({ alignment, xPercent: null, offsetY: 0, ...(alignment === "center" && layout.placement === "wrap" ? { placement: "break" } : {}) });
+  }}><option value="free" disabled>Free</option><option value="left">Left</option><option value="center">Centre</option><option value="right">Right</option></select></label>;
+  const widthControl = <label className="note-image-size"><span>Width</span><input aria-label="Image width percent" type="number" min={15} max={100} step={5} value={widthDraft} onChange={(event) => setWidthDraft(event.target.value)} onBlur={saveWidth} onKeyDown={(event) => {
+    if (event.key === "Enter") { event.preventDefault(); saveWidth(); editor.commands.focus(); }
+  }} /><span>%</span></label>;
   const moreControl = <div ref={moreRef} className="note-image-more" onKeyDown={(event) => {
     if (event.key === "Escape" && moreOpen) {
       event.preventDefault();event.stopPropagation();setMoreOpen(false);moreTrigger.current?.focus();
@@ -559,24 +643,20 @@ export function ImageToolbar({ editor, overflowTarget }: { editor: Editor; overf
       aria-haspopup="dialog" aria-expanded={moreOpen} aria-controls={moreOpen ? optionsId : undefined}
       onMouseDown={(event) => event.preventDefault()} onClick={() => setMoreOpen((open) => !open)}>•••</button>
     {moreOpen && <div id={optionsId} className={`note-image-options${openAbove ? " is-above" : ""}`} role="dialog" aria-label="Image options">
+      {renderBlockControl && <div role="menu" aria-label="Image block options">{renderBlockControl(() => setMoreOpen(false))}</div>}
+      {compact && <>{alignmentControl}{widthControl}</>}
       <label><span>Text gap</span><input aria-label="Image text gap" type="range" min={8} max={40} value={layout.gap} onChange={(event) => change({ gap: Number(event.target.value) })} /><output>{layout.gap}px</output></label>
       <label><input type="checkbox" checked={layout.showCaption} onChange={(event) => change({ showCaption: event.target.checked })} /> Caption</label>
       <p>Drag anywhere in the note. Text flows along the roomier side of the image.</p>
     </div>}
   </div>;
-  return <div className="note-image-toolbar" role="group" aria-label="Image tools">
-    <label><span className="sr-only">Image placement</span><select aria-label="Image placement" value={layout.placement} onChange={(event) => {
+  return <div className={`note-image-toolbar${compact ? " is-compact" : ""}`} role="group" aria-label="Image tools">
+    <label className="note-image-placement"><span className="sr-only">Image placement</span><select aria-label="Image placement" value={layout.placement} onChange={(event) => {
       const placement = event.target.value as NoteImageLayout["placement"];
       change({ placement, ...(placement === "inline" ? { xPercent: null, offsetY: 0 } : {}),
         ...(placement === "wrap" && layout.xPercent === null && layout.alignment === "center" ? { alignment: "left", widthPercent: Math.min(layout.widthPercent, 55) } : {}) });
     }}><option value="inline">In line</option><option value="break">Above &amp; below</option><option value="wrap">Wrap text</option></select></label>
-    <label><span className="sr-only">Image alignment</span><select aria-label="Image alignment" value={layout.xPercent !== null ? "free" : layout.alignment} onChange={(event) => {
-      const alignment = event.target.value as NoteImageAlignment;
-      change({ alignment, xPercent: null, offsetY: 0, ...(alignment === "center" && layout.placement === "wrap" ? { placement: "break" } : {}) });
-    }}><option value="free" disabled>Free</option><option value="left">Left</option><option value="center">Centre</option><option value="right">Right</option></select></label>
-    <label className="note-image-size"><span>Width</span><input aria-label="Image width percent" type="number" min={15} max={100} step={5} value={widthDraft} onChange={(event) => setWidthDraft(event.target.value)} onBlur={saveWidth} onKeyDown={(event) => {
-      if (event.key === "Enter") { event.preventDefault(); saveWidth(); editor.commands.focus(); }
-    }} /><span>%</span></label>
+    {!compact && <>{alignmentControl}{widthControl}</>}
     {overflowTarget ? createPortal(moreControl, overflowTarget) : moreControl}
   </div>;
 }

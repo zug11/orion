@@ -3,9 +3,9 @@
   "manifest_version": "0.4",
   "name": "orion-knowledge-atlas",
   "display_name": "Orion",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "description": "Search, edit, research, import, and generate in your local Orion Spaces.",
-  "long_description": "Connect Claude Desktop to Orion's local library and optional native AI workflows. Read and edit notes without an API key, or enable scoped research, source import/reprocessing, generation, concept development, enrichment, and overview refresh while Orion is open. The app retains credentials, provider settings, and atomic writes. Jobs report evidence, coverage, freshness, and cancellation. Includes exact source passages, note sections, concept and link-path navigation, provenance, tasks, guarded text edits, atomic metadata batches, duplicate detection, and integrity checks. All 29 local library tools work while Orion is closed.",
+  "long_description": "Connect Claude Desktop to Orion's local library and optional native AI workflows. Read and edit notes without an API key, or enable scoped research, source import/reprocessing, generation, concept development, enrichment, and overview refresh while Orion is open. The app retains credentials, provider settings, and atomic writes. Jobs report evidence, coverage, freshness, and cancellation. Includes exact source passages, note sections, concept and link-path navigation, provenance, tasks, guarded text edits, atomic metadata batches, duplicate detection, and integrity checks. All 30 local library tools work while Orion is closed. Includes guarded writing blocks and slash-command formatting.",
   "author": {
     "name": "Orion"
   },
@@ -62,6 +62,14 @@
     {
       "name": "orion_get_context",
       "description": "Build a local versioned context packet with exact evidence and bounded coverage."
+    },
+    {
+      "name": "orion_search_space",
+      "description": "Ask Orion AI to search one Space and return an answer grounded in exact cited passages, without changing notes or Chat."
+    },
+    {
+      "name": "orion_export_word",
+      "description": "Export a note, linked notes, or a whole Space as Word through the native save dialog, without AI or vault changes."
     },
     {
       "name": "orion_research",
@@ -182,6 +190,10 @@
     {
       "name": "orion_get_link_path",
       "description": "Find one shortest directed connection path between two exact notes using existing Orion links and persisted relationships. Search has explicit node, edge, text, and hop bounds; returns cited steps and no graph UI."
+    },
+    {
+      "name": "orion_apply_note_command",
+      "description": "Insert writing blocks, headings, tasks, lists, tables, code, links, excerpts, or existing images through version-guarded slash-command semantics in one exact Space."
     }
   ],
   "tools_generated": false,

@@ -1,6 +1,7 @@
 import type { AppSnapshot, Concept, Note, Source } from "../types";
 import { Lexer } from "marked";
 import { splitMarkdownFrontmatter } from "./markdown";
+import { getNoteExcerptText, type ExcerptPassage } from "./noteExcerpts";
 
 const SNIPPET_LENGTH = 200;
 const noteTextCache = new WeakMap<Note, { body: string; text: string }>();
@@ -66,6 +67,7 @@ export interface LocalSearchMatch<T> {
   item: T;
   score: number;
   snippet: string;
+  matchKind?: "phrase" | "words";
 }
 
 export type SpaceSearchMatch =
@@ -80,7 +82,7 @@ interface SearchField {
 }
 
 function queryPattern(query: string): RegExp | null {
-  const words = query.trim().split(/\s+/u).filter(Boolean);
+  const words = query.trim().slice(0, 600).replace(/^"([\s\S]*)"$/u, "$1").split(/\s+/u).filter(Boolean);
   if (words.length === 0) return null;
   // Treat input literally while allowing phrases to span line breaks in a
   // preserved PDF/transcript. Search the complete text before bounding excerpts.
@@ -88,6 +90,31 @@ function queryPattern(query: string): RegExp | null {
     words.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+"),
     "iu",
   );
+}
+
+const SEARCH_STOP_WORDS = new Set("a an and are as at be been being but by can could did do does for from had has have how i in is it its me my of on or our should that the their them these they this to was we were what when where which who why will with would you your about find show tell please notes note source sources space".split(" "));
+
+/** Plain-language discovery terms; quoted phrases and punctuation stay literal. */
+export function localSearchTerms(query: string): string[] {
+  const text = query.trim().slice(0, 600);
+  if (!/^[\p{L}\p{N}\s?]+$/u.test(text)) return [];
+  return [...new Set(text.toLocaleLowerCase().match(/[\p{L}\p{N}]{2,}/gu) ?? [])]
+    .filter((word) => !SEARCH_STOP_WORDS.has(word)).slice(0, 40);
+}
+
+function wordMatch<T>(item: T, fields: SearchField[], terms: readonly string[], defaultPreview: string): LocalSearchMatch<T> | null {
+  if (!terms.length) return null;
+  const indexed = fields.map((field) => ({ field, lower: field.text.toLocaleLowerCase() }));
+  const found = terms.filter((term) => indexed.some(({ lower }) => lower.includes(term)));
+  // Every word in a short query matters; longer questions may contain wording
+  // absent from the original. Show only meaningful overlap, below phrase hits.
+  if (found.length < Math.min(terms.length, Math.max(2, Math.ceil(terms.length * 0.6)))) return null;
+  const ranked = indexed.map(({ field, lower }) => ({ field, hits: terms.filter((term) => lower.includes(term)) }))
+    .filter(({ hits }) => hits.length).sort((a, b) => b.hits.length - a.hits.length || b.field.score - a.field.score);
+  const best = ranked[0];
+  const offset = best ? new RegExp(best.hits[0], "iu").exec(best.field.text)?.index ?? 0 : 0;
+  return { item, score: 10 + 20 * found.length / terms.length + (best?.field.score ?? 0) / 100,
+    snippet: excerpt(best?.field.preview || best?.field.text || defaultPreview, best?.field.preview ? 0 : offset), matchKind: "words" };
 }
 
 function excerpt(text: string, offset = 0): string {
@@ -116,6 +143,7 @@ function matchFields<T>(
       item,
       score: field.score + (match[0].length === field.text.length ? 10 : 0),
       snippet: field.preview ? excerpt(field.preview) : excerpt(field.text, match.index),
+      matchKind: "phrase",
     };
   }
   return null;
@@ -123,7 +151,7 @@ function matchFields<T>(
 
 function noteMatch(note: Note, pattern: RegExp | null): LocalSearchMatch<Note> | null {
   const metadata = matchFields(note, [
-    { text: note.title, score: 100, preview: note.summary },
+    { text: note.title, score: 100, preview: note.summary || readableNoteBody(note) },
     ...note.aliases.map((text) => ({ text, score: 90 })),
     ...note.tags.map((text) => ({ text, score: 80 })),
     { text: note.summary, score: 60 },
@@ -166,25 +194,51 @@ export function searchLocalSpace(
   snapshot: Pick<AppSnapshot, "notes" | "concepts" | "sources">,
   query: string,
   limit = 12,
+  kind: "all" | "note" | "source" | "concept" = "all",
 ): SpaceSearchMatch[] {
   const pattern = queryPattern(query);
   if (!pattern) return [];
+  const terms = localSearchTerms(query);
   const matches: SpaceSearchMatch[] = [];
-  for (const note of snapshot.notes) {
-    const match = noteMatch(note, pattern);
+  for (const note of kind === "all" || kind === "note" ? snapshot.notes : []) {
+    const match = noteMatch(note, pattern) ?? wordMatch(note, [
+      { text: note.title, score: 100, preview: note.summary || readableNoteBody(note) },
+      ...note.aliases.map((text) => ({ text, score: 90 })),
+      ...note.tags.map((text) => ({ text, score: 80 })),
+      { text: note.summary, score: 60 }, { text: readableNoteBody(note), score: 40 },
+    ], terms, note.summary);
     if (match) matches.push({ ...match, type: "note" });
   }
-  for (const concept of snapshot.concepts) {
-    const match = matchFields(concept, [
+  for (const concept of kind === "all" || kind === "concept" ? snapshot.concepts : []) {
+    const fields = [
       { text: concept.label, score: 100, preview: concept.description },
       ...concept.aliases.map((text) => ({ text, score: 90 })),
       { text: concept.description, score: 60 },
-    ], pattern, concept.description);
+    ];
+    const match = matchFields(concept, fields, pattern, concept.description) ?? wordMatch(concept, fields, terms, concept.description);
     if (match) matches.push({ ...match, type: "concept" });
   }
-  for (const source of snapshot.sources) {
-    const match = sourceMatch(source, pattern);
+  for (const source of kind === "all" || kind === "source" ? snapshot.sources : []) {
+    const match = sourceMatch(source, pattern) ?? wordMatch(source, [
+      { text: source.title, score: 100, preview: source.fileName ?? source.text },
+      { text: source.fileName ?? "", score: 90 }, { text: source.text, score: 40 },
+    ], terms, source.text);
     if (match) matches.push({ ...match, type: "source" });
   }
   return matches.sort((left, right) => right.score - left.score).slice(0, Math.max(0, limit));
+}
+
+/** Current exact visible note text or untouched source text, for passage navigation. */
+export function localSearchPassage(match: SpaceSearchMatch, query: string): ExcerptPassage | undefined {
+  if (match.type === "concept") return;
+  const text = match.type === "note" ? getNoteExcerptText(match.item) : match.item.text;
+  const exact = queryPattern(query)?.exec(text);
+  const words = localSearchTerms(query);
+  const found = exact ?? (words.length ? new RegExp(words.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "iu").exec(text) : null);
+  if (!found) return;
+  let from = Math.max(0, found.index - 48);
+  let to = Math.min(text.length, found.index + found[0].length + 96);
+  if (from > 0 && /[\uDC00-\uDFFF]/u.test(text[from])) from -= 1;
+  if (to < text.length && /[\uDC00-\uDFFF]/u.test(text[to])) to += 1;
+  return { from, to, text: text.slice(from, to) };
 }

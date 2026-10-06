@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { nanoid } from "nanoid";
 import { buildImportPayload, classifyImportUrl, pastedTextToParsedImport } from "../../components/ImportStudio";
 import type { AppSnapshot, ParsedImport, TranscribedMedia } from "../../types";
-import { chatWithOrion, createFailoverKnowledgeDriver, fetchWebPage, generateNoteImage, organizeWithAI, recognizeDocumentText, saveNoteImage, transcribeYouTube, withMediaImportCancellation } from "../storage";
+import { exportWordDocument, chatWithOrion, createFailoverKnowledgeDriver, fetchWebPage, generateNoteImage, organizeWithAI, recognizeDocumentText, saveNoteImage, transcribeYouTube, withMediaImportCancellation } from "../storage";
 import { parseImportFile } from "../files";
 import { transcriptToParsedImport } from "../transcription";
 import { buildSlideImagePrompt, MAX_DECK_SLIDE_IMAGES, parseDeckSlides } from "../slideDeck";
@@ -67,9 +67,17 @@ export function startAssistantExecutor(host: ExecutorHost): () => void {
       const dependencies: WorkflowDependencies = {
         signal, assertCurrent: gate,
         progress: async (stage) => { await gate(); await invoke("assistant_progress", { ...jobArgs, stage }); },
-        chat: async (request) => { await gate(); calls++; const result = await chatWithOrion(request, signal); await gate(); return result; },
+        chat: async (request, requestSignal) => { await gate(); calls++; const result = await chatWithOrion(request, requestSignal ?? signal); await gate(); return result; },
         organize: async (request) => { await gate(); calls++; const result = await organizeWithAI(request, { signal }); await gate(); return result; },
         driver, buildImportPayload,
+        exportWord: async (space, scope, noteId) => {
+          await gate();
+          const { buildWordExportDocument } = await import("../wordExport");
+          const document = await buildWordExportDocument(space, scope, noteId);
+          await gate();
+          const result = await exportWordDocument(document.fileName, document.bytes, { jobId: claim.id, sessionId });
+          return { ...result, noteIds: document.noteIds, title: document.title };
+        },
         previousResult: (previousJobId) => invoke("assistant_previous_result", { ...jobArgs, previousJobId }),
         readInput: async (index): Promise<ParsedImport> => {
           await gate();
@@ -105,7 +113,9 @@ export function startAssistantExecutor(host: ExecutorHost): () => void {
         },
       };
       const outcome = await executeAssistantWorkflow(snapshot, claim.request, dependencies);
-      await gate();
+      // Native Word export completes its own atomic boundary and retains the
+      // chosen path even if knowledge changes immediately after saving.
+      if (claim.request.operation !== "export") await gate();
       outcome.result.execution = {
         configuredModel: calls ? snapshot.settings.model : null, configuredReasoningEffort: calls ? snapshot.settings.reasoningEffort : null,
         elapsedMs: Date.now() - startedAt, scheduledAIRequests: calls,

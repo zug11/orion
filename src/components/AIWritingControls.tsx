@@ -1,5 +1,7 @@
 import {
   useEffect,
+  useId,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -9,6 +11,7 @@ import type {
   AIWritingAction,
   AIWritingLength,
 } from "../lib/aiWriting";
+import type { AIImageContextMode, AIImageQuality, ImageGenerationProgress } from "../lib/aiImages";
 import {
   Check,
   ChevronDown,
@@ -39,6 +42,11 @@ interface AIWritingControlsProps {
   error?: string;
   writingAvailable?: boolean;
   imageGenerationAvailable?: boolean;
+  imageContextEnabled?: boolean;
+  imageProgress?: ImageGenerationProgress;
+  imageContextPartial?: boolean;
+  imageContextNotice?: string;
+  imageInsertionRetry?: boolean;
   operationKind?: "writing" | "image";
   onRequest: (
     action: AIWritingAction,
@@ -48,7 +56,10 @@ interface AIWritingControlsProps {
   onAccept: () => void;
   onRetry: () => void;
   onDiscard: () => void;
-  onRequestImage?: (instruction: string) => void;
+  onRequestImage?: (instruction: string, options?: {
+    quality: AIImageQuality;
+    contextMode: AIImageContextMode;
+  }) => void;
 }
 
 const REWRITE_ACTIONS: readonly {
@@ -102,6 +113,11 @@ export function AIWritingControls({
   error,
   writingAvailable = true,
   imageGenerationAvailable = false,
+  imageContextEnabled = false,
+  imageProgress,
+  imageContextPartial = false,
+  imageContextNotice,
+  imageInsertionRetry = false,
   operationKind = "writing",
   onRequest,
   onAccept,
@@ -118,6 +134,13 @@ export function AIWritingControls({
   const [continueInstruction, setContinueInstruction] = useState("");
   const [rewriteInstruction, setRewriteInstruction] = useState("");
   const [imageInstruction, setImageInstruction] = useState("");
+  const [imageQuality, setImageQuality] = useState<AIImageQuality>("detailed");
+  const [imageContextMode, setImageContextMode] = useState<AIImageContextMode>(
+    imageContextEnabled ? "space" : "selection",
+  );
+  const imageOptionsId = useId();
+  const imageComposerRef = useRef<HTMLFormElement>(null);
+  const [imagePanelTop, setImagePanelTop] = useState<number>();
   const rewriteInputRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLTextAreaElement>(null);
   const continueAmountRef = useRef<HTMLInputElement>(null);
@@ -126,6 +149,26 @@ export function AIWritingControls({
   const imageButtonRef = useRef<HTMLButtonElement>(null);
   const continueToggleRef = useRef<HTMLButtonElement>(null);
   const actionMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setImageContextMode(imageContextEnabled ? "space" : "selection");
+  }, [imageContextEnabled]);
+
+  useLayoutEffect(() => {
+    if (selectionPanel !== "image" || !imageComposerRef.current) {
+      setImagePanelTop(undefined);
+      return;
+    }
+    const position = () => {
+      const height = imageComposerRef.current?.getBoundingClientRect().height ?? 0;
+      const anchor = selectionPosition.top ?? 16;
+      const desired = selectionPosition.placement === "below" ? anchor : anchor - height;
+      setImagePanelTop(Math.max(16, Math.min(desired, window.innerHeight - height - 16)));
+    };
+    position();
+    window.addEventListener("resize", position);
+    return () => window.removeEventListener("resize", position);
+  }, [selectionPanel, selectionPosition.top, selectionPosition.placement]);
 
   useEffect(() => {
     if (!active || suspended || phase !== "idle") {
@@ -137,8 +180,10 @@ export function AIWritingControls({
       setContinueInstruction("");
       setRewriteInstruction("");
       setImageInstruction("");
+      setImageQuality("detailed");
+      setImageContextMode(imageContextEnabled ? "space" : "selection");
     }
-  }, [active, phase, suspended]);
+  }, [active, phase, suspended, imageContextEnabled]);
 
   useEffect(() => {
     setSelectionPanel(null);
@@ -192,7 +237,11 @@ export function AIWritingControls({
 
   if (!active || suspended) return null;
 
-  const selectionStyle = positionStyle(selectionPosition);
+  const selectionStyle: CSSProperties = {
+    ...positionStyle(selectionPosition),
+    ...(selectionPanel === "image" && imagePanelTop !== undefined
+      ? { top: imagePanelTop, bottom: undefined, transform: "translate(-50%, 0)" } : {}),
+  };
   const dockStyle = positionStyle(dockPosition);
   const showSelectionControl =
     phase === "idle" && hasSelection && selectionPosition.visible;
@@ -225,7 +274,7 @@ export function AIWritingControls({
     const instruction = imageInstruction.trim();
     setSelectionPanel(null);
     setImageInstruction("");
-    onRequestImage?.(instruction);
+    onRequestImage?.(instruction, { quality: imageQuality, contextMode: imageContextMode });
   }
 
   function closeSelectionPanel(returnFocus: "main" | "toggle") {
@@ -309,14 +358,51 @@ export function AIWritingControls({
             </form>
           ) : selectionPanel === "image" ? (
             <form
-              className="ai-writing-selection-composer"
+              ref={imageComposerRef}
+              className="ai-writing-selection-composer ai-image-composer"
               role="dialog"
               aria-label="Generate image from selected text"
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  closeImagePanel();
+                }
+              }}
               onSubmit={(event) => {
                 event.preventDefault();
                 startImageRequest();
               }}
             >
+              <fieldset className="ai-image-options">
+                <legend>Generation</legend>
+                <div className="ai-image-options__segments">
+                  {([ ["fast", "Fast"], ["detailed", "Detailed"] ] as const).map(([value, label]) => (
+                    <label key={value}>
+                      <input type="radio" name={`${imageOptionsId}-quality`} value={value}
+                        checked={imageQuality === value} onChange={() => setImageQuality(value)} />
+                      <span>{label}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <fieldset className="ai-image-options">
+                <legend>Context</legend>
+                <div className="ai-image-options__segments">
+                  {([ ["selection", "Selection only"], ["space", "Related Space"] ] as const).map(([value, label]) => (
+                    <label key={value}>
+                      <input type="radio" name={`${imageOptionsId}-context`} value={value}
+                        checked={imageContextMode === value} onChange={() => setImageContextMode(value)} />
+                      <span>{label}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <p className="ai-image-composer__scope">
+                {imageContextMode === "space"
+                  ? "Use this passage and relevant notes and sources from this Space for this image."
+                  : "Use only the highlighted text and your image direction."}
+              </p>
               <label htmlFor="ai-writing-image-instruction">
                 <span>Image direction</span>
                 <small>Optional</small>
@@ -337,6 +423,7 @@ export function AIWritingControls({
                   }
                 }}
               />
+              <p className="ai-image-composer__help">Fast prioritizes speed; Detailed prioritizes image quality.</p>
               <div>
                 <button
                   type="button"
@@ -561,11 +648,12 @@ export function AIWritingControls({
           ) : phase === "generating" || phase === "saving" ? (
             <div className="ai-writing-dock__state">
               <LoaderCircle className="ai-writing-spinner" size={14} />
-              <span>
+              <span className="ai-writing-dock__progress">
                 {phase === "saving"
                   ? "Adding image…"
                   : operationKind === "image"
-                    ? "Creating image…"
+                    ? <>{imageProgress?.message ?? "Preparing image…"}{imageProgress?.stage === "read" && imageProgress.totalBranches
+                      ? ` · ${imageProgress.completedBranches ?? 0} of ${imageProgress.totalBranches}` : ""}</>
                     : "Writing…"}
               </span>
               {phase === "generating" ? (
@@ -584,6 +672,10 @@ export function AIWritingControls({
               ) : null}
             </div>
           ) : phase === "preview" ? (
+            <>
+            {operationKind === "image" && (imageContextPartial || imageContextNotice) ? (
+              <p className="ai-writing-dock__notice">{imageContextNotice ?? "Some context could not be read. This image uses the available passages."}</p>
+            ) : null}
             <div
               className="ai-writing-dock__state ai-writing-dock__preview-actions"
               role="group"
@@ -632,6 +724,7 @@ export function AIWritingControls({
                 <X size={14} />
               </button>
             </div>
+            </>
           ) : (
             <>
               <p className="ai-writing-dock__error">{error}</p>
@@ -643,7 +736,9 @@ export function AIWritingControls({
                 <button
                   type="button"
                   aria-label={
-                  operationKind === "image" ? "Generate image again" : "Try AI writing again"
+                  operationKind === "image"
+                    ? imageInsertionRetry ? "Restore generated image preview" : "Retry image generation"
+                    : "Try AI writing again"
                 }
                   title="Try again"
                   onClick={onRetry}

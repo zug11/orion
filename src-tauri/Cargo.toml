@@ -1,6 +1,6 @@
 [package]
 name = "orion"
-version = "0.4.6"
+version = "0.4.7"
 description = "Orion — an AI-organized personal knowledge atlas"
 authors = ["Orion"]
 edition = "2021"
@@ -23,6 +23,8 @@ strip = "none"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+quick-xml = { version = "0.38", default-features = false }
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 base64 = "0.22"
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-dialog = "2"
@@ -42,7 +44,7 @@ tokio = { version = "1", features = ["macros", "sync"] }
 keyring = { version = "3.6", features = ["apple-native"] }
 objc2 = "0.6"
 objc2-foundation = "0.3"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSImage", "NSWorkspace", "NSGlassEffectView", "NSLayoutConstraint", "NSView", "NSResponder", "NSWindow", "NSVisualEffectView", "NSGraphics", "NSUserInterfaceItemIdentification", "objc2-core-foundation"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSImage", "NSImageRep", "NSWorkspace", "NSGlassEffectView", "NSColor", "NSFont", "NSBezierPath", "NSAttributedString", "NSStringDrawing", "NSAppearance", "NSAnimationContext", "NSLayoutConstraint", "NSView", "NSResponder", "NSWindow", "NSVisualEffectView", "NSGraphics", "NSUserInterfaceItemIdentification", "objc2-core-foundation"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6", features = ["windows-native"] }

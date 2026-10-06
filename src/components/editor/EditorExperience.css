@@ -1,6 +1,32 @@
 /* Shared interaction surfaces for the editor preview. */
 .editor-toolbar-contextual { min-height: 36px; }
+[data-orion-justify="true"] { text-align: justify; }
 .rich-note-editor .editor-toolbar-shell { overflow: visible; }
+/* Native ruler geometry cannot follow WebKit's compositor-only rubber band.
+   Keep the writing pane inside its real scroll range while the ruler is open. */
+.workspace-content:has(.editor-formatting-dock) { overscroll-behavior-y: none; }
+.editor-formatting-dock .editor-toolbar-shell { animation: none; }
+.editor-formatting-dock[data-native-editor-glass="true"] .editor-toolbar-shell {
+  background: transparent; border-color: transparent; box-shadow: none;
+  backdrop-filter: none; -webkit-backdrop-filter: none;
+}
+/* Only native foreground is visible. These controls retain their exact hit
+   targets, selection behaviour and accessibility. More has native paint too. */
+.editor-formatting-dock[data-native-editor-glass="true"] .editor-toolbar button:not([role="menu"] button,[role="dialog"] button),
+.editor-formatting-dock[data-native-editor-glass="true"] .editor-toolbar select:not([role="menu"] select,[role="dialog"] select),
+.editor-formatting-dock[data-native-editor-glass="true"] .editor-toolbar input[type="number"]:not([role="dialog"] input),
+.editor-formatting-dock[data-native-editor-glass="true"] .note-image-size:not([role="dialog"] .note-image-size) > span,
+.editor-formatting-dock[data-native-editor-glass="true"] .editor-style-select:not([role="menu"] .editor-style-select)::after { opacity: 0; }
+.editor-formatting-dock[data-native-editor-glass="true"] .editor-more-menu {
+  background: transparent; border-color: transparent; box-shadow: none;
+  scrollbar-width: none;
+}
+.editor-formatting-dock[data-native-editor-glass="true"] .editor-more-menu::-webkit-scrollbar { display: none; }
+.editor-formatting-dock[data-native-editor-glass="true"] .editor-more-menu > * { opacity: 0; }
+.editor-formatting-dock { position: sticky; top: 12px; z-index: 32; margin-bottom: 22px; }
+.editor-formatting-dock .editor-toolbar-shell { position: relative; top: auto; margin-bottom: 0; }
+.note-view.has-find .editor-formatting-dock { top: 66px; }
+.note-view.has-find .editor-formatting-dock .editor-toolbar-shell { top: auto; }
 .editor-toolbar-overflow { display: flex; align-items: center; flex: 0 0 auto; margin-left: 2px; }
 .editor-toolbar-contextual .editor-toolbar-main { overflow: visible; gap: 3px; }
 .editor-toolbar-contextual [hidden] { display: none; }
@@ -14,6 +40,9 @@
 .editor-more-menu { right: 0; max-height: min(460px, 65vh); overflow-y: auto; }
 .editor-toolbar .editor-floating-menu button { width: 100%; height: auto; min-height: 36px; justify-content: flex-start; padding: 7px 9px; gap: 10px; font-size: 13px; }
 .editor-toolbar .editor-more-menu button { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; text-align: left; white-space: nowrap; }
+.editor-toolbar button.editor-block-controls-menuitem { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; width: 100%; height: auto; min-height: 35px; padding: 7px 9px; gap: 10px; border-radius: 7px; background: transparent; color: var(--text-soft); text-align: left; font: 400 13px var(--ui-font); }
+.editor-toolbar button.editor-block-controls-menuitem:hover,.editor-toolbar button.editor-block-controls-menuitem[aria-checked="true"] { background: var(--periwinkle-wash); color: var(--text); }
+.editor-toolbar button.editor-block-controls-menuitem:disabled { opacity: .45; cursor: default; }
 .editor-menu-icon { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; line-height: 1; }
 .editor-menu-icon svg { display: block; flex: none; margin: 0; }
 .editor-menu-icon > span { flex: none; }
@@ -54,10 +83,10 @@
 @container (max-width: 520px) {
   .editor-toolbar-contextual { gap: 1px; }
   .editor-toolbar-contextual .editor-toolbar-main { gap: 0; }
-  .editor-toolbar-contextual .editor-toolbar-separator { margin-inline: 1px; }
+  .editor-toolbar-contextual .editor-toolbar-spacer { margin-inline: 1px; }
   .editor-toolbar-contextual button { width: 27px; }
   .editor-toolbar button.editor-heading-trigger { width: 85px; font-size: 11px; }
-  .editor-toolbar-contextual .editor-toolbar-history,.editor-toolbar-contextual .editor-toolbar-ai,.editor-toolbar-contextual .editor-toolbar-dictation { padding-left: 2px; }
+  .editor-toolbar-contextual .editor-toolbar-history,.editor-toolbar-contextual .editor-toolbar-ai,.editor-toolbar-contextual .editor-toolbar-dictation { padding-left: 3px; }
 }
 @media (prefers-reduced-motion: reduce) { .editor-floating-menu { animation: none; } }
 .note-prose .note-image-reading > img,.note-prose .note-image-reading > .note-image-free-content > img { width: 100%; margin: 0; height: auto; }
@@ -70,3 +99,12 @@
 .note-table-reading[data-banded="false"] tr { background: transparent; }
 .note-table-reading[data-banded="true"][data-header="true"] tbody tr:nth-child(even),
 .note-table-reading[data-banded="true"][data-header="false"] tbody tr:nth-child(odd) { background: color-mix(in srgb, var(--text) 3%, transparent); }
+
+/* Document insets live inside the normal reading measure, matching the editor. */
+.note-prose-content {
+  display: flow-root;
+  min-width: 0;
+}
+.note-prose-content > :first-child {
+  margin-top: 0;
+}

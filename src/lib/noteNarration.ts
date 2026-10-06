@@ -98,7 +98,7 @@ export function narrationRanges(script: NarrationDocument, from: number, to: num
   return ranges;
 }
 
-const UNREAD = "orion-narration-unread", CURRENT = "orion-narration-current";
+const READ = "orion-narration-read", UNREAD = "orion-narration-unread", CURRENT = "orion-narration-current";
 type Registry = { set(name: string, value: unknown): void; delete(name: string): void };
 function highlightApi() {
   return {
@@ -108,13 +108,15 @@ function highlightApi() {
 }
 export function clearNarrationHighlight() {
   const { registry } = highlightApi();
-  registry?.delete(UNREAD); registry?.delete(CURRENT);
+  registry?.delete(READ); registry?.delete(UNREAD); registry?.delete(CURRENT);
 }
 export function highlightNarration(script: NarrationDocument, from: number, length: number): boolean {
   const { registry, Highlight } = highlightApi();
   if (!registry || !Highlight) return false;
-  const end = Math.min(script.text.length, Math.max(0, from) + Math.max(0, length));
+  const start = Math.max(0, Math.min(script.text.length, from));
+  const end = Math.min(script.text.length, start + Math.max(0, length));
+  registry.set(READ, new Highlight(...narrationRanges(script, 0, start)));
   registry.set(UNREAD, new Highlight(...narrationRanges(script, end, script.text.length)));
-  registry.set(CURRENT, new Highlight(...narrationRanges(script, from, end)));
+  registry.set(CURRENT, new Highlight(...narrationRanges(script, start, end)));
   return true;
 }

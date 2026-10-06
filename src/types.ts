@@ -145,6 +145,8 @@ export type HomeAtmosphere =
   | "nebula"
   | "emberwake"
   | "gravity-silk"
+  | "opal"
+  | "ripple-glass"
   | "mirage"
   | "field";
 
@@ -187,6 +189,20 @@ export interface AssistantAccess {
   spaceIds: string[];
 }
 
+export interface SavedThemePalette {
+  id: string;
+  name: string;
+  themePreset: ThemePreset;
+  themeAccent: ThemeAccent;
+  themeAccentCustom: string;
+  themeCanvasTone: ThemeCanvasTone;
+  themeCanvasCustom: string;
+  themeSurfaceLift: ThemeSurfaceLift;
+  themeSurfaceCustom: string;
+  themeTextWarmth: ThemeTextWarmth;
+  themeContrast: ThemeContrast;
+}
+
 export interface Settings {
   /** Opt-in desktop workflows. Legacy vaults hydrate the disabled default. */
   assistantAccess: AssistantAccess;
@@ -227,6 +243,9 @@ export interface Settings {
   themeSurfaceCustom: string;
   themeTextWarmth: ThemeTextWarmth;
   themeContrast: ThemeContrast;
+  /** Named palette choices are shared across Spaces; legacy vaults start empty. */
+  themeSavedPalettes?: SavedThemePalette[];
+  themeActivePaletteId?: string;
   /** Optional in older vaults; Sans serif is the default reading/writing face. */
   noteTypeface: NoteTypeface;
   /** Optional in older vaults; hydrated to a complete appearance preference. */

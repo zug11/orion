@@ -124,8 +124,6 @@
 .orion-table-custom-size label { display: flex; flex-direction: column; flex: 1; gap: 6px; color: var(--muted); font-size: 12px; }
 .orion-table-custom-size input { min-width: 0; width: 100%; border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 6px; padding: 6px 8px; }
 .orion-table-toolbar { display: flex; flex-wrap: nowrap; align-items: center; gap: 3px; min-height: 30px; min-width: 0; font: 12px var(--ui-font, sans-serif); }
-.orion-table-toolbar-label { color: var(--text); padding: 0 5px; white-space: nowrap; }
-.orion-table-toolbar-label > span { color: var(--muted); margin-left: 4px; font-size: 11px; }
 .editor-toolbar .orion-table-toolbar button,
 .editor-toolbar .orion-table-toolbar select { width: auto; flex: 0 0 auto; height: 30px; min-height: 30px; border: 1px solid transparent; padding: 5px 7px; border-radius: 6px; color: var(--muted); background: transparent; font: inherit; cursor: pointer; white-space: nowrap; }
 .editor-toolbar .orion-table-toolbar select { max-width: 76px; padding-left: 3px; }
@@ -135,10 +133,10 @@
 .orion-table-more { position: relative; }
 .orion-table-more-menu { position: absolute; top: calc(100% + 10px); right: 0; width: 212px; max-width: calc(100vw - 32px); max-height: min(390px, 60vh); overflow-y: auto; z-index: 70; }
 .editor-toolbar .orion-table-toolbar .orion-table-more-menu button { width: 100%; height: auto; min-height: 34px; padding: 6px 8px; justify-content: flex-start; font-size: 12px; gap: 8px; }
-.editor-toolbar .orion-table-toolbar .orion-table-more-menu button[role="menuitemcheckbox"] { justify-content: space-between; }
+.editor-toolbar .orion-table-toolbar .orion-table-more-menu button { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; text-align: left; }
+.editor-toolbar .orion-table-toolbar button.orion-table-column-tool { margin-left: 5px; }
 .editor-toolbar .orion-table-toolbar .orion-table-more-menu button.orion-table-delete { color: var(--danger); }
 .orion-table-menu-separator { height: 1px; background: var(--line); margin: 4px 5px; }
-@container (max-width: 410px) { .orion-table-toolbar-label > span { display: none; } .orion-table-width-label { font-size: 0; } .editor-toolbar .orion-table-toolbar select { font-size: 12px; } }
 @media (pointer: coarse) { .orion-table-picker-grid button { min-height: 44px; } .orion-table-frame .orion-table-resize { width: 18px; height: 18px; } }
 @media (prefers-reduced-motion: reduce) { .orion-table-columns, .orion-table-rows, .orion-table-select-all, .orion-table-resize, .orion-table-count { transition: none; } }
 

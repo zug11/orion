@@ -2466,9 +2466,6 @@ export function ImportStudio({
                   <span className="import-studio__eyebrow">Bring anything</span>
                   <h3 id={`${titleId}-add`}>Gather your source material</h3>
                 </div>
-                <span className="import-studio__limit">
-                  Up to {MAX_FILES} files · {formatBytes(MAX_FILE_BYTES)} each
-                </span>
               </div>
 
               <div className="import-studio__unified-intake">
@@ -2506,11 +2503,6 @@ export function ImportStudio({
                       Paste text
                     </button>
                   </div>
-                  <small className="import-studio__intake-note">
-                    Documents up to {formatBytes(MAX_FILE_BYTES)} · media up to
-                    2 GB · originals never leave your Mac unless you later
-                    choose AI organization
-                  </small>
                   <input
                     className="import-studio__file-input"
                     ref={fileInputRef}

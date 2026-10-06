@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { Note } from "../types";
 import { clearNoteExcerptHighlight, consumeNoteExcerptNavigation, requestNoteExcerptNavigation, revealNoteExcerptPassage } from "./noteExcerptNavigation";
-import { createNoteExcerptSelection } from "./noteExcerpts";
+import { createNoteExcerptSelection, parseNoteExcerptTitle } from "./noteExcerpts";
 
 const source: Note = { id: "source", title: "Source", body: "First paragraph.\n\nAn exact sentence with bold words.", slug: "source", summary: "", aliases: [], tags: [], kind: "article", status: "ready", conceptIds: [], sourceIds: [], createdAt: "2026-09-28T00:00:00Z", updatedAt: "2026-09-28T00:00:00Z" };
 afterEach(() => { document.body.replaceChildren(); clearNoteExcerptHighlight(); window.getSelection()?.removeAllRanges(); });
@@ -42,5 +42,36 @@ describe("excerpt source navigation", () => {
     const repeated = "Opening.\n\n" + selection.text + "\n\n" + selection.text;
     root.textContent = repeated;
     expect(revealNoteExcerptPassage(root, { ...source, body: repeated }, request)).toBe(false);
+  });
+
+  it("locates an MCP text-only excerpt only when both current visible representations are unique", () => {
+    const text = "Exact café 🪶 words.";
+    const title = "orion-excerpt:v2:" + encodeURIComponent(JSON.stringify({ noteId: source.id, passages: [{ text }] }));
+    const reference = parseNoteExcerptTitle(title, `orion-note://${source.id}`)!;
+    requestNoteExcerptNavigation(reference.noteId, reference.passages);
+    const request = consumeNoteExcerptNavigation(source.id)!;
+    expect(request.passages[0]).not.toHaveProperty("from");
+    const current = { ...source, body: `# Source\n\nA new opening.\n\nExact **café** 🪶 words.` };
+    const root = document.createElement("div");
+    root.innerHTML = "<p>A new opening.</p><p>Exact <strong>café</strong> 🪶 words.</p>";
+    document.body.append(root);
+    expect(revealNoteExcerptPassage(root, current, request)).toBe(true);
+    expect(window.getSelection()?.toString()).toBe(text);
+    expect(revealNoteExcerptPassage(root, { ...current, id: "other-space" }, request)).toBe(false);
+    expect(revealNoteExcerptPassage(root, { ...current, body: `Changed. ${text.slice(6)}` }, request)).toBe(false);
+    expect(revealNoteExcerptPassage(root, { ...current, body: `${text}\n\n${text}` }, request)).toBe(false);
+    // Even when the canonical text has one exact match, collapsed whitespace in
+    // the rendered prose must not let a text-only locator choose an occurrence.
+    root.innerHTML = `<p>${text}</p><p>${text.replace("Exact ", "Exact   ")}</p>`;
+    expect(revealNoteExcerptPassage(root, { ...current, body: `${text}\n\n${text.replace("Exact ", "Exact   ")}` }, request)).toBe(false);
+  });
+
+  it("refuses to highlight raw Markdown that differs from the source's visible words", () => {
+    const root = document.createElement("div");
+    root.innerHTML = "<p>Exact <strong>words</strong>.</p>";
+    document.body.append(root);
+    const text = "Exact **words**.";
+    const request = { noteId: source.id, passages: [{ text, locator: "unique-text" as const }], requestedAt: Date.now() };
+    expect(revealNoteExcerptPassage(root, { ...source, body: text }, request)).toBe(false);
   });
 });

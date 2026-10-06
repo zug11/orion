@@ -1,19 +1,26 @@
 import type { Editor } from "@tiptap/core";
 import { useEditorState } from "@tiptap/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { BookOpen, Bold, Braces, FileCode2, Image as ImageIcon, Italic, Link2, List, ListTodo, ListOrdered, Quote, Redo2, Sheet, Undo2, Unlink } from "../lib/icons";
+import { BookOpen, Bold, Braces, FileCode2, Image as ImageIcon, Italic, Link2, List, ListTodo, ListOrdered, Ruler, Quote, Redo2, Sheet, Undo2, Unlink } from "../lib/icons";
 import { findConceptByPhrase } from "../lib/concepts";
 import type { Concept, EntityId, NoteTypeface } from "../types";
 import { AIWritingMark } from "./icons/AIWritingMark";
+import { BlocksMark } from "./icons/BlocksMark";
 import { NOTE_IMAGE_ACCEPT } from "../lib/noteImages";
 import { VoiceMemoButton } from "./VoiceMemoButton";
 import { HeadingPicker } from "./editor/HeadingPicker";
 import { ImageToolbar } from "./editor/NoteImage";
 import { TableToolbar } from "./editor/TablePicker";
 import { useMenuHeight } from "./editor/useMenuHeight";
+import { AlignJustify } from "../lib/icons";
+import { toggleNoteJustification } from "./editor/NoteTextAlignment";
 import "./editor/EditorExperience.css";
 
 interface EditorToolbarProps {
+  marginsVisible?: boolean;
+  onToggleMargins?: () => void;
+  blockControls?: boolean;
+  onToggleBlockControls?: () => void;
   noteTypeface?: NoteTypeface;
   onNoteTypefaceChange?: (typeface: NoteTypeface) => void;
   editor: Editor;
@@ -50,6 +57,8 @@ interface EditorToolbarProps {
   }
 
 export function EditorToolbar({
+  marginsVisible = false, onToggleMargins,
+  blockControls = false, onToggleBlockControls,
   noteTypeface = "sans", onNoteTypefaceChange, editor, concepts, onOpenLink, onUnlink,
   citationAvailable, onOpenCitation, onOpenExcerpt, onOpenTable, onInsertImages, imageBusy = false,
   noteId, onVoiceMemoSessionStart, onVoiceMemoSessionEnd, onTranscribeVoiceMemo, onCompleteVoiceMemo,
@@ -59,6 +68,7 @@ export function EditorToolbar({
   const toolbarRef = useRef<HTMLDivElement>(null);
   const moreRef = useRef<HTMLDivElement>(null);
   const moreTrigger = useRef<HTMLButtonElement>(null);
+  const moreOpeningFocus = useRef<"menu" | "first" | "last">("menu");
   const imageInputRef = useRef<HTMLInputElement>(null);
   const [more, setMore] = useState(false);
   const [overflowTarget, setOverflowTarget] = useState<HTMLDivElement | null>(null);
@@ -77,6 +87,7 @@ export function EditorToolbar({
       bold:current.isActive("bold"),italic:current.isActive("italic"),strike:current.isActive("strike"),code:current.isActive("code"),
       bulletList:current.isActive("bulletList"),orderedList:current.isActive("orderedList"),taskList:current.isActive("taskList"),
       blockquote:current.isActive("blockquote"),codeBlock:current.isActive("codeBlock"),link:current.isActive("link"),
+      justified: current.isActive({ textAlign: "justify" }),
       sourceCitation:href.startsWith("orion-source://"),canUndo:current.can().undo(),canRedo:current.can().redo(),
       canInsertDivider:current.can().setHorizontalRule(),canUnlink:current.isActive("link")||Boolean(conceptId),unlinkConceptId:conceptId,
     };
@@ -90,34 +101,72 @@ export function EditorToolbar({
     });
     observer.observe(toolbarRef.current); return () => observer.disconnect();
   },[]);
-  useEffect(() => { setMore(false); },[state.context]);
+  useEffect(() => { setMore(false); },[state.context, editor]);
   useEffect(() => {
     if (!more) return;
     const dismiss = (event:PointerEvent) => { if (!moreRef.current?.contains(event.target as Node)) setMore(false); };
     document.addEventListener("pointerdown",dismiss);
-    moreRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    const menu = moreRef.current?.querySelector<HTMLElement>('[role="menu"]');
+    const choices = Array.from(menu?.querySelectorAll<HTMLElement>('button:not([disabled]), select:not([disabled])') ?? []);
+    const target = moreOpeningFocus.current === "menu" ? menu
+      : moreOpeningFocus.current === "last" ? choices[choices.length - 1] : choices[0];
+    target?.focus({ preventScroll: true });
     return () => document.removeEventListener("pointerdown",dismiss);
   },[more]);
   const textContext = state.context === "text";
   const fontPicker = onNoteTypefaceChange && <label className="editor-style-select editor-typeface-select">
     <span className="sr-only">Note font</span><select aria-label="Note font" value={noteTypeface}
-      onKeyDown={event=>event.stopPropagation()} onChange={event=>{
+      onKeyDown={event=>{if(event.key!=="Escape")event.stopPropagation();}} onChange={event=>{
         const value=event.target.value;if(value==="sans"||value==="serif"){onNoteTypefaceChange(value);editor.commands.focus();}
       }}><option value="sans">Sans serif</option><option value="serif">Serif</option></select>
   </label>;
+  const renderBlockControl = (close: () => void) => onToggleBlockControls && <button type="button"
+    className="editor-block-controls-menuitem" role="menuitemcheckbox" aria-label="Block controls"
+    aria-checked={blockControls} disabled={aiWritingBusy || imageBusy}
+    title={blockControls ? "Remove this block's frame and keep its content" : "Make selected content a block"}
+    onMouseDown={event => event.preventDefault()} onClick={() => { close(); onToggleBlockControls(); }}>
+    <BlocksMark size={16}/><span>Block controls</span><span aria-hidden="true">{blockControls ? "✓" : ""}</span>
+  </button>;
+  const renderMarginsTrigger = (menu = false) => <button type="button" aria-label="Margins"
+    title={marginsVisible ? "Hide margins ruler" : "Show margins ruler"}
+    role={menu ? "menuitemcheckbox" : undefined} aria-checked={menu ? marginsVisible : undefined}
+    aria-pressed={menu ? undefined : marginsVisible}
+    className={marginsVisible ? "active" : undefined} disabled={aiWritingBusy}
+    onMouseDown={event => event.preventDefault()} onClick={() => {
+      onToggleMargins?.();
+      setMore(false);
+    }}>
+    {menu ? <><span className="editor-menu-icon" aria-hidden="true"><Ruler size={16}/></span><span>Margins</span></>
+      : <Ruler size={16} aria-hidden="true"/>}
+  </button>;
   const moreMenu = (
         <div className="editor-more" ref={moreRef}>
           <button ref={moreTrigger} type="button" aria-label="More formatting" aria-haspopup="menu" aria-expanded={more} className="editor-more-trigger"
-            onMouseDown={event=>event.preventDefault()} onClick={()=>setMore(!more)}>•••</button>
-          {more&&<div role="menu" aria-label="More formatting" className="editor-more-menu editor-floating-menu" style={{ maxHeight: moreHeight }} onClick={event=>{if((event.target as HTMLElement).closest('[role="menuitem"]'))setMore(false);}} onKeyDown={event=>{
+            onMouseDown={event=>event.preventDefault()} onClick={event=>{
+              moreOpeningFocus.current=event.detail===0?"first":"menu";
+              setMore(!more);
+            }} onKeyDown={event=>{
+              if(!["ArrowDown","ArrowUp","Enter"," "].includes(event.key))return;
+              event.preventDefault();event.stopPropagation();
+              moreOpeningFocus.current=event.key==="ArrowUp"?"last":"first";
+              setMore(more&&(event.key==="Enter"||event.key===" ")?false:true);
+            }}>•••</button>
+          {more&&<div role="menu" aria-label="More formatting" tabIndex={-1} className="editor-more-menu editor-floating-menu" style={{ maxHeight: moreHeight, outline: "none" }} onClick={event=>{if((event.target as HTMLElement).closest('[role="menuitem"]'))setMore(false);}} onKeyDown={event=>{
             if(event.key==="Escape"){event.preventDefault();event.stopPropagation();setMore(false);moreTrigger.current?.focus();}
+            if(event.target===event.currentTarget&&["Enter"," "].includes(event.key)){
+              event.preventDefault();event.stopPropagation();event.currentTarget.querySelector<HTMLElement>('button:not([disabled]), select:not([disabled])')?.focus();
+            }
             if(["ArrowDown","ArrowUp","Home","End"].includes(event.key)){
-              event.preventDefault();event.stopPropagation();const choices=Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled]),select'));
-              const index=choices.indexOf(document.activeElement as HTMLElement);const next=event.key==="Home"?0:event.key==="End"?choices.length-1:(index+(event.key==="ArrowDown"?1:-1)+choices.length)%choices.length;choices[next]?.focus();
+              event.preventDefault();event.stopPropagation();const choices=Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled]),select:not([disabled])'));
+              const index=choices.indexOf(document.activeElement as HTMLElement);const next=event.key==="Home"?0:event.key==="End"?choices.length-1:index<0?(event.key==="ArrowDown"?0:choices.length-1):(index+(event.key==="ArrowDown"?1:-1)+choices.length)%choices.length;choices[next]?.focus();
             }
           }}>
             {compact&&fontPicker}
+            <HeadingPicker editor={editor} level={state.heading} onChoose={() => setMore(false)}/>
+            {renderBlockControl(() => setMore(false))}
             {cramped&&<Tool menu label="Italic" action={()=>editor.chain().focus().toggleItalic().run()}><Italic size={15}/></Tool>}
+            {compact&&<Tool menu label="Justify text" active={state.justified} action={()=>toggleNoteJustification(editor)}><AlignJustify size={15}/></Tool>}
+            {compact&&renderMarginsTrigger(true)}
             {cramped&&<Tool menu label="Create reusable link" action={onOpenLink}><Link2 size={15}/></Tool>}
             {compact&&<Tool menu label="Bulleted list" active={state.bulletList} action={()=>editor.chain().focus().toggleBulletList().run()}><List size={16}/></Tool>}
             {narrow&&<Tool menu label="To-do list" action={()=>editor.chain().focus().toggleTaskList().run()}><ListTodo size={16}/></Tool>}
@@ -149,15 +198,16 @@ export function EditorToolbar({
       event.preventDefault();controls[next]?.focus();
     }}>
     <div className="editor-toolbar-main" inert={aiWritingBusy?true:undefined}>
-      {state.context==="image" ? <ImageToolbar editor={editor} overflowTarget={overflowTarget}/> : state.context==="table" ? <TableToolbar editor={editor} overflowTarget={overflowTarget}/> : <>
+      {state.context==="image" ? <ImageToolbar editor={editor} overflowTarget={overflowTarget} compact={cramped} renderBlockControl={onToggleBlockControls ? renderBlockControl : undefined}/> : state.context==="table" ? <TableToolbar editor={editor} overflowTarget={overflowTarget} compact={narrow} cramped={cramped} onAnnounce={onAnnounce} renderBlockControl={onToggleBlockControls ? renderBlockControl : undefined}/> : <>
         {!compact&&fontPicker}
-        <HeadingPicker editor={editor} level={state.heading}/>
-        <span className="editor-toolbar-separator" aria-hidden="true"/>
+        <span className="editor-toolbar-spacer" aria-hidden="true"/>
         <Tool label="Bold" active={state.bold} action={()=>editor.chain().focus().toggleBold().run()}><Bold size={15}/></Tool>
         {!cramped&&<Tool label="Italic" active={state.italic} action={()=>editor.chain().focus().toggleItalic().run()}><Italic size={15}/></Tool>}
+        {!compact&&<Tool label="Justify text" active={state.justified} action={()=>toggleNoteJustification(editor)}><AlignJustify size={15}/></Tool>}
+        {!compact&&renderMarginsTrigger()}
         {!compact&&<Tool label="Bulleted list" active={state.bulletList} action={()=>editor.chain().focus().toggleBulletList().run()}><List size={16}/></Tool>}
         {!narrow&&<Tool label="To-do list" active={state.taskList} action={()=>editor.chain().focus().toggleTaskList().run()}><ListTodo size={16}/></Tool>}
-        <span className="editor-toolbar-separator" aria-hidden="true"/>
+        <span className="editor-toolbar-spacer" aria-hidden="true"/>
         {!cramped&&<Tool label="Create reusable link" active={state.link} action={onOpenLink}><Link2 size={15}/></Tool>}
         {!narrow&&<>
           <Tool label="Cite a source" active={state.sourceCitation} disabled={!citationAvailable} action={onOpenCitation}><BookOpen size={15}/></Tool>

@@ -36,7 +36,7 @@ describe("written-note playback tracking", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Follow text" }));
     expect(highlights.size).toBe(0);
     fireEvent.click(screen.getByRole("checkbox", { name: "Follow text" }));
-    expect(highlights.size).toBe(2);
+    expect(highlights.size).toBe(3);
     fireEvent.click(screen.getByRole("button", { name: "Stop narration" }));
     expect(calls[0].signal?.aborted).toBe(true);
     expect(calls[0].options?.preparationSignal?.aborted).toBe(true);
@@ -56,9 +56,29 @@ describe("written-note playback tracking", () => {
     expect(calls[0].options?.preparationSignal).toBe(calls[1].options?.preparationSignal);
     expect(calls[1].options?.preparationSignal?.aborted).toBe(false);
     act(() => calls[0].progress?.({ elapsedSeconds: 0, durationSeconds: 6, ratio: 0, loading: false, charIndex: 0, charLength: 1 }));
-    expect(highlights.get("orion-narration-unread")?.ranges.map((range) => range.toString()).join("")).toContain("Second");
+    expect(highlights.get("orion-narration-current")?.ranges.map((range) => range.toString()).join("")).toBe("Second");
+    expect(highlights.get("orion-narration-read")?.ranges.map((range) => range.toString()).join("")).toContain("First paragraph.");
     fireEvent.keyDown(screen.getByRole("slider", { name: "Playback progress" }), { key: "End" });
     expect(calls[2].options?.startCharIndex).toBe(calls[2].text.lastIndexOf("paragraph."));
+    expect(highlights.get("orion-narration-read")?.ranges.map((range) => range.toString()).join("")).toContain("Second important");
+    act(() => calls[2].progress?.({ elapsedSeconds: 0, durationSeconds: 0, ratio: .9, loading: true }));
+    fireEvent.keyDown(screen.getByRole("slider", { name: "Playback progress" }), { key: "Home" });
+    expect(highlights.get("orion-narration-read")?.ranges).toHaveLength(0);
+    expect(highlights.get("orion-narration-current")?.ranges.map((range) => range.toString()).join("")).toBe("A");
+    expect(screen.queryByText("Click text to jump")).not.toBeInTheDocument();
+  });
+
+  it("downloads the complete displayed narration and cancels preparation on navigation", async () => {
+    const { props, rerender } = setup();
+    const download = vi.fn((_text: string, _title: string, signal: AbortSignal) => new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason))));
+    rerender(<NoteView {...props} onDownloadNarration={download}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Download narration" }));
+    expect(download).toHaveBeenCalledWith("A quiet atlas. First paragraph. Second important paragraph.", note.title, expect.any(AbortSignal), expect.any(Function));
+    expect(screen.getByRole("button", { name: "Cancel narration download" })).toBeVisible();
+    const signal = download.mock.calls[0][2];
+    await act(async () => rerender(<NoteView {...props} note={{ ...note, id: "other" }} onDownloadNarration={download}/>));
+    expect(signal.aborted).toBe(true);
+    expect(screen.queryByRole("button", { name: "Cancel narration download" })).not.toBeInTheDocument();
   });
 
   it("stops before edited words or another note can inherit stale timing ranges", () => {

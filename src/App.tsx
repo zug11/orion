@@ -1,4 +1,8 @@
+import { runSpaceSearch } from "./lib/spaceSearch";
+import { normalizeSavedThemePalettes, normalizeActiveThemePaletteId } from "./lib/savedThemePalettes";
 import { playTrackedSpeech } from "./lib/trackedSpeech";
+import { buildNarrationWav, NARRATION_SAMPLE_RATE, validateNarrationDownload } from "./lib/narrationDownload";
+import { downloadNarration } from "./lib/storage";
 import { generateFromSpace } from "./lib/generatePipeline";
 import { flushSync } from "react-dom";
 import { invoke as invokeAssistantHost } from "@tauri-apps/api/core";
@@ -34,6 +38,8 @@ import { Sidebar, type WorkspaceView } from "./components/Sidebar";
 import { SourceViewer } from "./components/SourceViewer";
 import { SourcesView } from "./components/SourcesView";
 import { Topbar } from "./components/Topbar";
+import { WritingWindowHeader } from "./components/WritingWindowHeader";
+import { applyWindowLaunch, documentWindowUrl, parseWindowLaunch, windowLaunchNote } from "./lib/windowLaunch";
 import {
   activeSpace,
   createEmptySnapshot,
@@ -67,6 +73,7 @@ import {
   deleteApiKey,
   deleteElevenLabsApiKey,
   exportMarkdown,
+  exportWordDocument,
   exportWebPage,
   generateNoteImage,
   planNoteImage,
@@ -151,6 +158,7 @@ import {
   generateContextualNoteImage,
   type AIImageRequestInput,
 } from "./lib/aiImages";
+import type { AIImageGenerationCallbacks } from "./components/RichNoteEditor";
 import {
   applyWikiEnrichmentResult,
   buildWikiEnrichmentRequest,
@@ -174,6 +182,8 @@ import {
   deleteSourceFromSnapshot,
 } from "./lib/sourceDeletion";
 import { parseOrionNoteLink } from "./lib/orionLinks";
+import { consumeNoteExcerptNavigation, requestNoteExcerptNavigation } from "./lib/noteExcerptNavigation";
+import type { ExcerptLocator } from "./lib/noteExcerpts";
 import { normalizeStudio } from "./lib/studio";
 import {
   applySpaceOverviewResult,
@@ -264,17 +274,25 @@ function isRetiredStarterVault(snapshot: AppSnapshot): boolean {
 }
 
 function App() {
+  const [windowLaunch] = useState(() => parseWindowLaunch(window.location.search));
+  const writingWindow = windowLaunch.writing;
+  const [openingWritingWindow, setOpeningWritingWindow] = useState(false);
   const [vault, setVault] = useState<OrionVault>(() =>
     createEmptyVault(),
   );
-  const snapshot = useMemo(() => activeSpace(vault), [vault]);
+  const snapshot = useMemo(() =>
+    (writingWindow ? vault.spaces.find((space) => space.workspace.id === windowLaunch.spaceId) : null)
+      ?? activeSpace(vault), [vault, writingWindow, windowLaunch.spaceId]);
   const { palette: resolvedThemePalette, glassStatus } = useResolvedTheme(
     snapshot.settings,
   );
   const setSnapshot = useCallback(
     (action: SetStateAction<AppSnapshot>) => {
       setVault((currentVault) => {
-        const currentSpace = activeSpace(currentVault);
+        const currentSpace = writingWindow
+          ? currentVault.spaces.find((space) => space.workspace.id === windowLaunch.spaceId)
+          : activeSpace(currentVault);
+        if (!currentSpace) return currentVault;
         const nextSpace =
           typeof action === "function"
             ? action(currentSpace)
@@ -290,7 +308,7 @@ function App() {
         };
       });
     },
-    [],
+    [writingWindow, windowLaunch.spaceId],
   );
   const [screen, setScreen] = useState<AppScreen>("home");
   const [hydrated, setHydrated] = useState(false);
@@ -334,6 +352,13 @@ function App() {
     createNavigationEntry({ screen: "home" }),
   ]);
   const [historyIndex, setHistoryIndex] = useState(0);
+  // Each window remembers how a note was left, independently in each Space.
+  const noteEditingModes = useRef(new Map<string, Map<string, boolean>>());
+  let spaceEditingModes = noteEditingModes.current.get(snapshot.workspace.id);
+  if (!spaceEditingModes) {
+    spaceEditingModes = new Map();
+    noteEditingModes.current.set(snapshot.workspace.id, spaceEditingModes);
+  }
   const saveTimer = useRef<number | null>(null);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const pendingSaveCount = useRef(0);
@@ -391,8 +416,9 @@ function App() {
 
   const activeNote = useMemo(
     () =>
-      snapshot.notes.find((note) => note.id === snapshot.activeNoteId) ?? null,
-    [snapshot.activeNoteId, snapshot.notes],
+      writingWindow ? windowLaunchNote(vault, windowLaunch)
+        : snapshot.notes.find((note) => note.id === snapshot.activeNoteId) ?? null,
+    [writingWindow, vault, windowLaunch, snapshot.activeNoteId, snapshot.notes],
   );
   const selectedSource = useMemo(
     () =>
@@ -864,6 +890,8 @@ function App() {
               themeContrast: normalizeThemeContrast(
                 base.settings.themeContrast,
               ),
+              themeSavedPalettes: normalizeSavedThemePalettes(base.settings.themeSavedPalettes),
+              themeActivePaletteId: normalizeActiveThemePaletteId(base.settings.themeActivePaletteId, normalizeSavedThemePalettes(base.settings.themeSavedPalettes)),
               windowGlass: normalizeWindowGlass(base.settings.windowGlass),
               themeIcon: base.settings.themeIcon ?? defaultSettings.themeIcon,
               homeAtmosphereAppearance: base.settings.homeAtmosphereAppearance === "dark" ? "dark" as const : "theme" as const,
@@ -885,23 +913,18 @@ function App() {
             },
           };
         });
-        const requestedSpaceId = new URLSearchParams(window.location.search).get("space");
-        const nextVault: OrionVault = {
+        const nextVault = applyWindowLaunch({
           ...baseVault,
           spaces,
-          activeSpaceId: requestedSpaceId && spaces.some((space) => space.workspace.id === requestedSpaceId)
-            ? requestedSpaceId : spaces.some(
-            (space) =>
-              space.workspace.id === baseVault.activeSpaceId,
-          )
-            ? baseVault.activeSpaceId
-            : spaces[0].workspace.id,
-        };
+          activeSpaceId: spaces.some((space) => space.workspace.id === baseVault.activeSpaceId)
+            ? baseVault.activeSpaceId : spaces[0].workspace.id,
+        }, windowLaunch);
+        const launchedNote = windowLaunchNote(nextVault, windowLaunch);
+        const initialRoute: NavigationRoute = launchedNote
+          ? { screen: "note", noteId: launchedNote.id } : { screen: "home" };
         setVault(nextVault);
-        replaceHistory(
-          [createNavigationEntry({ screen: "home" })],
-          0,
-        );
+        setScreen(initialRoute.screen);
+        replaceHistory([createNavigationEntry(initialRoute)], 0);
         setPersistenceEnabled(true);
         setHydrated(true);
       })
@@ -916,7 +939,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [loadAttempt, replaceHistory]);
+  }, [loadAttempt, replaceHistory, windowLaunch]);
 
   useEffect(() => {
     if (!hydrated || !persistenceEnabled || closing) return;
@@ -1355,6 +1378,24 @@ function App() {
     [],
   );
 
+  const showNoteInLibrary = useCallback((spaceId: string, noteId: string, passages?: ExcerptLocator[]) => {
+    if (closingRef.current || !persistenceEnabledRef.current) return;
+    const previewWindow = isTauriRuntime() ? null : window.open("about:blank", "_blank");
+    void queueSnapshotSave(vaultRef.current).then(async () => {
+      if (isTauriRuntime()) {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("show_note_in_library", { spaceId, noteId, passages });
+      } else if (previewWindow) {
+        previewWindow.location.replace(documentWindowUrl(window.location.href, spaceId, noteId));
+      } else {
+        throw new Error("Allow pop-up windows to open this note in Orion.");
+      }
+    }).catch((error) => {
+      previewWindow?.close();
+      showToast("Couldn’t open this note", error instanceof Error ? error.message : String(error));
+    });
+  }, [queueSnapshotSave, showToast]);
+
   const openNote = useCallback(
     (
       noteId: string,
@@ -1362,6 +1403,12 @@ function App() {
       preserveConnections = false,
       restorePosition?: ScrollPosition,
     ) => {
+      if (writingWindow) {
+        if (noteId !== windowLaunch.noteId && windowLaunch.spaceId) {
+          showNoteInLibrary(windowLaunch.spaceId, noteId, consumeNoteExcerptNavigation(noteId)?.passages);
+        }
+        return;
+      }
       const now = new Date().toISOString();
       const route: NavigationRoute = { screen: "note", noteId };
       pendingScrollRestore.current = restorePosition
@@ -1391,21 +1438,35 @@ function App() {
         replaceHistory(next.entries, next.index);
       }
     },
-    [closeConnections, replaceHistory],
+    [closeConnections, replaceHistory, writingWindow, windowLaunch, showNoteInLibrary],
   );
 
   const openOrionCitation = useCallback(
-    async (rawUrl: string) => {
+    async (rawUrl: string, passages?: ExcerptLocator[]) => {
       const link = parseOrionNoteLink(rawUrl);
       if (!link) return;
       const { spaceId, noteId } = link;
 
       await queueSnapshotSave(vaultRef.current);
-      const latest = await loadSnapshot();
-      const reconciledLatest = latest
+      const loaded = await loadSnapshot();
+      // Typing and another autosave can finish while this read is in flight.
+      // Merge against the current persisted base, never replace the live draft.
+      const base = persistedVault.current;
+      const latest = loaded && base && Date.parse(base.updatedAt) > Date.parse(loaded.updatedAt)
+        ? base : loaded;
+      let merged = latest;
+      if (latest && base) {
+        try {
+          merged = mergeWindowVault(base, vaultRef.current, latest);
+        } catch (error) {
+          if (error instanceof WindowVaultConflict) setSaveConflict(error);
+          throw error;
+        }
+      }
+      const reconciledLatest = merged
         ? {
-            ...latest,
-            spaces: latest.spaces.map(reconcileSnapshotConceptVocabulary),
+            ...merged,
+            spaces: merged.spaces.map(reconcileSnapshotConceptVocabulary),
           }
         : null;
       const space = reconciledLatest?.spaces.find(
@@ -1443,6 +1504,7 @@ function App() {
       persistedVaultUpdatedAt.current = latest.updatedAt;
       persistedVault.current = latest;
       vaultRef.current = nextVault;
+      if (passages?.length) requestNoteExcerptNavigation(noteId, passages);
       setVault(nextVault);
       setScreen("note");
       closeConnections();
@@ -1457,7 +1519,33 @@ function App() {
   );
 
   useEffect(() => {
-    if (!hydrated || !isTauriRuntime()) {
+    if (!hydrated || !persistenceEnabled || writingWindow || !isTauriRuntime()) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void Promise.all([import("@tauri-apps/api/event"), import("@tauri-apps/api/core")])
+      .then(async ([{ listen }, { invoke }]) => {
+        const stop = await listen<{ spaceId: string; noteId: string; passages?: ExcerptLocator[] }>("orion-open-note", ({ payload }) => {
+          const url = new URL("orion://open");
+          url.searchParams.set("space_id", payload.spaceId);
+          url.searchParams.set("note_id", payload.noteId);
+          void openOrionCitation(url.href, payload.passages).catch((error) =>
+            showToast("Couldn’t open this note", error instanceof Error ? error.message : String(error)));
+        });
+        if (disposed) { stop(); return; }
+        unlisten = stop;
+        await invoke("set_library_navigation_ready", { ready: true });
+        if (disposed) await invoke("set_library_navigation_ready", { ready: false });
+      }).catch((error) => showToast("Window navigation unavailable", String(error)));
+    return () => {
+      disposed = true;
+      unlisten?.();
+      void import("@tauri-apps/api/core").then(({ invoke }) =>
+        invoke("set_library_navigation_ready", { ready: false })).catch(() => undefined);
+    };
+  }, [hydrated, persistenceEnabled, writingWindow, openOrionCitation, showToast]);
+
+  useEffect(() => {
+    if (!hydrated || writingWindow || !isTauriRuntime()) {
       return undefined;
     }
     let disposed = false;
@@ -1504,7 +1592,7 @@ function App() {
       disposed = true;
       stopListening?.();
     };
-  }, [hydrated, openOrionCitation, showToast]);
+  }, [hydrated, writingWindow, openOrionCitation, showToast]);
 
   const followConcept = useCallback(
     (conceptId: string, originNoteId: string | null = null) => {
@@ -1519,10 +1607,15 @@ function App() {
       if (destination.kind === "note") {
         openNote(destination.noteId);
       } else if (destination.kind === "connections") {
-        openConnections(conceptId, originNoteId);
+        if (writingWindow && windowLaunch.spaceId && windowLaunch.noteId) {
+          showToast("Several linked notes", "Open this note in Orion to browse its connections.", {
+            label: "Show in Orion",
+            run: () => showNoteInLibrary(windowLaunch.spaceId!, windowLaunch.noteId!),
+          });
+        } else openConnections(conceptId, originNoteId);
       }
     },
-    [openConnections, openNote],
+    [openConnections, openNote, writingWindow, windowLaunch, showNoteInLibrary, showToast],
   );
 
   const navigateHistory = useCallback(
@@ -2828,13 +2921,14 @@ function App() {
       originNoteId: EntityId,
       input: Omit<AIImageRequestInput, "originNoteId">,
       signal: AbortSignal,
+      callbacks?: AIImageGenerationCallbacks,
     ) => {
       const currentSnapshot = snapshotRef.current;
       return generateContextualNoteImage(currentSnapshot, {
         ...input,
         originNoteId,
       }, { plan: planNoteImage, render: generateNoteImage }, {
-        signal, currentSnapshot: () => snapshotRef.current,
+        ...callbacks, signal, currentSnapshot: () => snapshotRef.current,
       });
     },
     [],
@@ -3167,15 +3261,38 @@ function App() {
         const { invoke } = await import("@tauri-apps/api/core");
         await invoke("new_orion_window", { spaceId });
       } else if (previewWindow) {
-        const url = new URL(window.location.href);
-        url.searchParams.set("space", spaceId);
-        previewWindow.location.replace(url.href);
+        previewWindow.location.replace(documentWindowUrl(window.location.href, spaceId));
       }
     }).catch((error) => {
       previewWindow?.close();
       showToast("Couldn’t open a window", error instanceof Error ? error.message : String(error));
     }).finally(() => { openingWindow.current = false; });
   }, [hydrated, persistenceEnabled, queueSnapshotSave, saveConflict, showToast]);
+
+  const openWritingWindow = useCallback(() => {
+    const current = snapshotRef.current;
+    const noteId = current.activeNoteId;
+    if (!noteId || openingWindow.current || closingRef.current || !persistenceEnabled || saveConflict) return;
+    openingWindow.current = true;
+    setOpeningWritingWindow(true);
+    const previewWindow = isTauriRuntime() ? null : window.open("about:blank", "_blank");
+    void queueSnapshotSave(vaultRef.current).then(async () => {
+      if (isTauriRuntime()) {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("open_writing_window", { spaceId: current.workspace.id, noteId });
+      } else if (previewWindow) {
+        previewWindow.location.replace(documentWindowUrl(window.location.href, current.workspace.id, noteId, true));
+      } else {
+        throw new Error("Allow pop-up windows to open a writing window.");
+      }
+    }).catch((error) => {
+      previewWindow?.close();
+      showToast("Couldn’t open a writing window", error instanceof Error ? error.message : String(error));
+    }).finally(() => {
+      openingWindow.current = false;
+      setOpeningWritingWindow(false);
+    });
+  }, [persistenceEnabled, queueSnapshotSave, saveConflict, showToast]);
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -3229,6 +3346,14 @@ function App() {
       if (commandOpen || exportOpen || importOpen || selectedSourceId) {
         return;
       }
+      if (writingWindow) {
+        // Library navigation must never replace the document in a writing window.
+        if (modifier && ["k", "n", "i", "[", "]"].includes(event.key.toLocaleLowerCase())) {
+          event.preventDefault();
+          if (event.key.toLocaleLowerCase() === "n") openNewWindow();
+        }
+        return;
+      }
       if (modifier && event.key.toLocaleLowerCase() === "k") {
         event.preventDefault();
         setCommandOpen(true);
@@ -3268,11 +3393,19 @@ function App() {
     vaultLoadError,
     openNewWindow,
     saveConflict,
+    writingWindow,
   ]);
 
   async function handleExport(request: ExportRequest): Promise<boolean> {
     try {
       const originNoteId = screen === "note" ? activeNote?.id ?? null : null;
+      if (request.format === "word") {
+        const { buildWordExportDocument } = await import("./lib/wordExport");
+        const document = await buildWordExportDocument(snapshot, request.scope, originNoteId);
+        const result = await exportWordDocument(document.fileName, document.bytes);
+        if (!result.cancelled) showToast("Word document exported", `${document.noteIds.length} ${document.noteIds.length === 1 ? "note" : "notes"} saved${result.path ? ` at ${result.path}` : ""}.`);
+        return true;
+      }
       if (request.format === "web") {
         const document = buildWebExportDocument(
           snapshot,
@@ -3423,6 +3556,27 @@ function App() {
     await loadCloudSpeechChunks(text, signal);
   }
 
+  async function downloadNoteNarration(
+    text: string, title: string, signal: AbortSignal,
+    onProgress: (completed: number, total: number) => void,
+  ): Promise<void> {
+    validateNarrationDownload(text);
+    const engine = resolveSpeechEngine(snapshot.settings);
+    if (engine === "system") {
+      await downloadNarration(title, { systemText: text }, signal);
+      return;
+    }
+    if (engine === "openai" && !snapshot.settings.apiKeyConfigured) throw new Error("Add an OpenAI API key in Settings before downloading OpenAI narration.");
+    if (engine === "elevenlabs" && !snapshot.settings.elevenLabsApiKeyConfigured) throw new Error("Add an ElevenLabs API key in Settings before downloading ElevenLabs narration.");
+    const decoder = new OfflineAudioContext(1, 1, NARRATION_SAMPLE_RATE);
+    const audio = await buildNarrationWav({ text, engine, signal, onProgress,
+      voiceId: engine === "elevenlabs" ? resolveElevenLabsVoiceId(snapshot.settings) : undefined,
+      cache: preparedSpeech.current, generate: generateSpeech,
+      decode: (bytes) => decoder.decodeAudioData(bytes),
+    });
+    await downloadNarration(title, audio, signal);
+  }
+
   async function speakNoteText(
     text: string,
     signal?: AbortSignal,
@@ -3539,9 +3693,18 @@ function App() {
   }
 
   function renderScreen() {
-    if (screen === "note" && activeNote) {
+    if (writingWindow && !activeNote) {
+      return <div className="writing-window-unavailable" role="status">
+        <h1>This note is no longer available</h1>
+        <p>It may have been deleted in another window. You can close this writing window.</p>
+        <button type="button" className="button secondary" onClick={openNewWindow}>Open Orion</button>
+      </div>;
+    }
+    if ((writingWindow || screen === "note") && activeNote) {
       return (
         <NoteView
+          initialEditing={writingWindow}
+          editingModes={spaceEditingModes}
           noteTypeface={snapshot.settings.noteTypeface}
           onNoteTypefaceChange={(noteTypeface) =>
             updateSettings({ ...snapshot.settings, noteTypeface })
@@ -3568,14 +3731,16 @@ function App() {
           onGenerateAIWriting={(input) =>
             generateAIWriting(activeNote.id, input)
           }
-          onGenerateAIImage={(input, signal) =>
-            generateAIImage(activeNote.id, input, signal)
+          onGenerateAIImage={(input, signal, callbacks) =>
+            generateAIImage(activeNote.id, input, signal, callbacks)
           }
           onDisableConceptAutoLink={disableConceptAutoLink}
           aiArticleWritingEnabled={isSelectedAIConfigured(snapshot.settings)}
           aiImageGenerationEnabled={snapshot.settings.apiKeyConfigured}
+          imageContextEnabled={snapshot.settings.includeExistingNotesInAIContext}
           aiProviderName={selectedAIProviderName(snapshot.settings)}
           onSpeakNote={speakNoteText}
+          onDownloadNarration={downloadNoteNarration}
           onPrepareSpeech={prepareSpeech}
           onPrepareVoiceMemoSession={(sessionId) =>
             prepareVoiceMemoForNote(activeNote.id, sessionId)
@@ -3678,7 +3843,8 @@ function App() {
   const shellClassName = [
     "app-shell",
     connectionConcept ? "with-context with-connection-canvas" : "",
-    snapshot.settings.sidebarCollapsed ? "is-sidebar-collapsed" : "",
+    !writingWindow && snapshot.settings.sidebarCollapsed ? "is-sidebar-collapsed" : "",
+    writingWindow ? "is-writing-window" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -3688,7 +3854,7 @@ function App() {
       className={shellClassName}
       data-note-typeface={snapshot.settings.noteTypeface === "serif" ? "serif" : "sans"}
     >
-      <Sidebar
+      {!writingWindow && <Sidebar
         brandMarkSrc={brandMarkSrc}
         view={screen === "note" ? "notes" : screen}
         notes={snapshot.notes}
@@ -3722,13 +3888,18 @@ function App() {
             sidebarCollapsed: !snapshot.settings.sidebarCollapsed,
           })
         }
-      />
+      />}
       <div className="workspace-shell">
-        <Topbar
+        {writingWindow ? <WritingWindowHeader
+          title={activeNote?.title ?? "Writing window"}
+          onExport={activeNote ? () => setExportOpen(true) : undefined}
+        /> : <Topbar
           workspaceName={snapshot.workspace.name}
           contextOpen={Boolean(connectionConcept) || contextOpen}
           onOpenSearch={() => setCommandOpen(true)}
           onExport={() => setExportOpen(true)}
+          onOpenWritingWindow={screen === "note" && activeNote ? openWritingWindow : undefined}
+          openingWritingWindow={openingWritingWindow}
           rightPanelLabel={
             connectionConcept
               ? "Close connections canvas"
@@ -3758,7 +3929,7 @@ function App() {
               ? () => navigateHistory(1)
               : undefined
           }
-        />
+        />}
         <main ref={workspaceContentRef} className="workspace-content">
           {renderScreen()}
         </main>
@@ -3787,6 +3958,12 @@ function App() {
       )}
 
       <CommandPalette
+        onAskSpace={(query, signal, onProgress) => {
+          const space = snapshotRef.current;
+          return runSpaceSearch(space, query, chatWithOrion, { signal, onProgress,
+            currentSnapshot: () => vaultRef.current.spaces.find((candidate) => candidate.workspace.id === space.workspace.id),
+          });
+        }}
         open={commandOpen}
         snapshot={snapshot}
         onClose={() => setCommandOpen(false)}

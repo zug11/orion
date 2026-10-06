@@ -96,4 +96,15 @@ describe("ExportDialog", () => {
     );
     expect(screen.getByText("4 notes selected")).toBeInTheDocument();
   });
+
+  it("offers one editable Word document with the same selected scope", async () => {
+    const snapshot = fixture();
+    const onExport = vi.fn().mockResolvedValue(true);
+    render(<ExportDialog open snapshot={snapshot} activeNote={snapshot.notes[0]} onClose={vi.fn()} onExport={onExport} />);
+    fireEvent.click(screen.getByRole("radio", { name: "Word document" }));
+    fireEvent.click(screen.getByRole("radio", { name: "This note and linked pages" }));
+    expect(screen.getByText("Each note starts a new page; free layouts flow with the text")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Export Word document" }));
+    expect(onExport).toHaveBeenCalledWith({ format: "word", scope: "linked" });
+  });
 });

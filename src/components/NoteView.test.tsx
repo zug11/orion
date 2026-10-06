@@ -10,10 +10,66 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import type { Concept, Note, Source } from "../types";
 import { NoteView } from "./NoteView";
+import { NOTE_BLOCK_CLOSE, NOTE_BLOCK_OPEN } from "../lib/noteBlocks";
+import { buildNarrationDocument } from "../lib/noteNarration";
 
 const NOW = "2026-07-29T01:00:00.000Z";
 
 describe("NoteView", () => {
+  it("restores each note's last edit mode through navigation and remounts, with independent Space state", () => {
+    const first: Note = {
+      id: "remembered-note", title: "First document", slug: "first", summary: "", body: "A draft.",
+      aliases: [], tags: [], kind: "article", status: "ready", conceptIds: [], sourceIds: [], createdAt: NOW, updatedAt: NOW,
+    };
+    const second = { ...first, id: "second-note", title: "Second document" };
+    const modes = new Map<string, boolean>();
+    const props = { notes: [first, second], concepts: [], onOpenNote: vi.fn(), onOpenConcept: vi.fn(),
+      onUpdateNote: vi.fn(), onDeleteNote: vi.fn(), onRegisterConcept: vi.fn(), onDisableConceptAutoLink: vi.fn() };
+    const view = render(<NoteView {...props} note={first} editingModes={modes}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    view.rerender(<NoteView {...props} note={second} editingModes={modes}/>);
+    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+    view.rerender(<NoteView {...props} note={first} editingModes={modes}/>);
+    expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
+    view.unmount();
+    const restored = render(<NoteView {...props} note={first} editingModes={modes}/>);
+    expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    restored.rerender(<NoteView {...props} note={second} editingModes={modes}/>);
+    restored.rerender(<NoteView {...props} note={first} editingModes={modes}/>);
+    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    restored.rerender(<NoteView {...props} note={first} editingModes={new Map()}/>);
+    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+    restored.rerender(<NoteView {...props} note={first} editingModes={modes}/>);
+    expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
+  });
+  it("opens an existing note ready to write when requested and retains normal Done behavior", () => {
+    const note: Note = {
+      id: "note-writing-window",
+      title: "Existing document",
+      slug: "existing-document",
+      summary: "A saved summary.",
+      body: "Saved document text.",
+      aliases: [], tags: [], kind: "article", status: "ready",
+      conceptIds: [], sourceIds: [], createdAt: NOW, updatedAt: NOW,
+    };
+    const props = {
+      notes: [note], concepts: [], onOpenNote: vi.fn(), onOpenConcept: vi.fn(),
+      onUpdateNote: vi.fn(), onDeleteNote: vi.fn(), onRegisterConcept: vi.fn(),
+      onDisableConceptAutoLink: vi.fn(), initialEditing: true,
+    };
+    const { rerender } = render(<NoteView {...props} note={note} />);
+    expect(screen.getByRole("textbox", { name: "Note title" })).toHaveValue(note.title);
+    expect(screen.getByRole("button", { name: "Done" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+
+    rerender(<NoteView {...props} note={{ ...note, id: "note-next", title: "Next document" }} />);
+    expect(screen.getByRole("textbox", { name: "Note title" })).toHaveValue("Next document");
+    expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
+  });
+
   it("renders Orion-managed note images without treating them as external links", () => {
     const note: Note = {
       id: "note-image",
@@ -535,6 +591,68 @@ describe("NoteView", () => {
     expect(
       screen.getByRole("button", { name: "Edit" }),
     ).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("renders exactly one interactive checkbox per loose or nested task", () => {
+    const note: Note = { id: "loose-tasks", title: "Tasks", slug: "tasks", summary: "", body:
+      "- [ ] First **task**\n\n  More detail.\n\n  - [x] Nested task\n\n- [ ] Last task",
+      aliases: [], tags: [], kind: "project", status: "ready", conceptIds: [], sourceIds: [], createdAt: NOW, updatedAt: NOW };
+    const onUpdateNote = vi.fn();
+    const { container } = render(<NoteView note={note} notes={[note]} concepts={[]} onOpenNote={vi.fn()} onOpenConcept={vi.fn()} onUpdateNote={onUpdateNote} onDeleteNote={vi.fn()} onRegisterConcept={vi.fn()} onDisableConceptAutoLink={vi.fn()}/>);
+    expect(screen.getAllByRole("checkbox")).toHaveLength(3);
+    for (const item of container.querySelectorAll("li.task-list-item")) expect(item.querySelectorAll(":scope > input[type=checkbox]")).toHaveLength(1);
+    expect(container.querySelectorAll("p input[type=checkbox]")).toHaveLength(0);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Complete First task" }));
+    expect(onUpdateNote).toHaveBeenCalledWith(expect.objectContaining({ body: note.body.replace("- [ ] First", "- [x] First") }));
+  });
+
+  it("reads justified paragraphs and tasks without exposing formatting metadata", () => {
+    const marker = "<!-- orion-text:v1 justify -->";
+    const note: Note = { id: "aligned", title: "Alignment", slug: "alignment", summary: "", body:
+      `An aligned paragraph. ${marker}\n\n## An aligned heading ${marker}\n\n- An aligned bullet. ${marker}\n\n- [ ] An aligned task. ${marker}`,
+      aliases: [], tags: [], kind: "project", status: "ready", conceptIds: [], sourceIds: [], createdAt: NOW, updatedAt: NOW };
+    const onUpdateNote = vi.fn();
+    const { container } = render(<NoteView note={note} notes={[note]} concepts={[]} onOpenNote={vi.fn()} onOpenConcept={vi.fn()} onUpdateNote={onUpdateNote} onDeleteNote={vi.fn()} onRegisterConcept={vi.fn()} onDisableConceptAutoLink={vi.fn()}/>);
+    expect(container.querySelectorAll('[data-orion-justify="true"]')).toHaveLength(4);
+    expect(container.textContent).not.toContain("orion-text:");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Complete An aligned task." }));
+    expect(onUpdateNote).toHaveBeenCalledWith(expect.objectContaining({ body: note.body.replace("- [ ]", "- [x]") }));
+  });
+
+  it("keeps a persistent block's reading structure, tasks and table layout without exposing markers or adding a box", () => {
+    const note: Note = {
+      id: "persistent-block", title: "Framed content", slug: "framed-content", summary: "", body: [
+        "Before the block.", "", NOTE_BLOCK_OPEN, "## Grouped heading", "", "Retained **rich prose**.", "",
+        "- [ ] Grouped task", "", '<!-- orion-table:v1 {"width":71,"header":false,"banded":false,"columns":[160,220]} -->',
+        "| | |", "| --- | --- |", "| Kept row | Kept value |", NOTE_BLOCK_CLOSE, "", "After the block.",
+      ].join("\n"),
+      aliases: [], tags: [], kind: "project", status: "ready", conceptIds: [], sourceIds: [], createdAt: NOW, updatedAt: NOW,
+    };
+    const onUpdateNote = vi.fn();
+    const { container } = render(<NoteView note={note} notes={[note]} concepts={[]} onOpenNote={vi.fn()} onOpenConcept={vi.fn()} onUpdateNote={onUpdateNote} onDeleteNote={vi.fn()} onRegisterConcept={vi.fn()} onDisableConceptAutoLink={vi.fn()} />);
+    const prose = container.querySelector<HTMLElement>(".note-prose")!;
+    const frame = prose.querySelector<HTMLElement>(".note-block-reading[data-note-block]")!;
+    expect(frame).not.toBeNull();
+    expect(frame.getAttribute("style")).toBeNull();
+    expect(frame.querySelector("h2")?.textContent).toBe("Grouped heading");
+    expect(frame.querySelector("strong")?.textContent).toBe("rich prose");
+    expect(frame.textContent).not.toContain("Before the block.");
+    expect(frame.textContent).not.toContain("After the block.");
+    expect(prose.textContent).toContain("Before the block.");
+    expect(prose.textContent).toContain("After the block.");
+    expect(prose.textContent).not.toContain("orion-block");
+    expect(prose.textContent).not.toContain("orion-table");
+    const table = frame.querySelector<HTMLElement>(".note-table-reading")!;
+    expect(table.style.width).toBe("71%");
+    expect(table.querySelector("thead")).toBeNull();
+    expect(table.textContent).toContain("Kept row");
+    fireEvent.click(within(frame).getByRole("checkbox", { name: "Complete Grouped task" }));
+    expect(onUpdateNote).toHaveBeenCalledWith(expect.objectContaining({ body: note.body.replace("- [ ]", "- [x]") }));
+    const narration = buildNarrationDocument(container);
+    expect(narration.text).toContain("Retained rich prose.");
+    expect(narration.text).toContain("After the block.");
+    expect(narration.text).not.toContain("orion-block");
+    expect(narration.text).not.toContain("orion-table");
   });
 
   it("keeps linked task text in one flowing content container", () => {

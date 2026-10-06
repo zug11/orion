@@ -2,6 +2,10 @@
 // Rollup crawl every icon module, which is both unnecessary and particularly
 // costly on indexed macOS Documents volumes.
 export { default as AlertTriangle } from "lucide-react/dist/esm/icons/alert-triangle.mjs";
+export { default as AlignJustify } from "lucide-react/dist/esm/icons/align-justify.mjs";
+export { default as PanelTop } from "lucide-react/dist/esm/icons/panel-top.mjs";
+export { default as Rows3 } from "lucide-react/dist/esm/icons/rows-3.mjs";
+export { default as StretchHorizontal } from "lucide-react/dist/esm/icons/stretch-horizontal.mjs";
 export { default as ArrowLeft } from "lucide-react/dist/esm/icons/arrow-left.mjs";
 export { default as ArrowRight } from "lucide-react/dist/esm/icons/arrow-right.mjs";
 export { default as ArrowUp } from "lucide-react/dist/esm/icons/arrow-up.mjs";
@@ -49,6 +53,7 @@ export { default as ListTodo } from "lucide-react/dist/esm/icons/list-todo.mjs";
 export { default as ListTree } from "lucide-react/dist/esm/icons/list-tree.mjs";
 export { default as LoaderCircle } from "lucide-react/dist/esm/icons/loader-circle.mjs";
 export { default as LockKeyhole } from "lucide-react/dist/esm/icons/lock-keyhole.mjs";
+export { default as Menu } from "lucide-react/dist/esm/icons/menu.mjs";
 export { default as Maximize2 } from "lucide-react/dist/esm/icons/maximize-2.mjs";
 export { default as MessageCircle } from "lucide-react/dist/esm/icons/message-circle.mjs";
 export { default as Minimize2 } from "lucide-react/dist/esm/icons/minimize-2.mjs";
@@ -57,6 +62,8 @@ export { default as Network } from "lucide-react/dist/esm/icons/network.mjs";
 export { default as Palette } from "lucide-react/dist/esm/icons/palette.mjs";
 export { default as PanelLeft } from "lucide-react/dist/esm/icons/panel-left.mjs";
 export { default as PanelLeftClose } from "lucide-react/dist/esm/icons/panel-left-close.mjs";
+export { default as Ruler } from "lucide-react/dist/esm/icons/ruler.mjs";
+export { default as RotateCcw } from "lucide-react/dist/esm/icons/rotate-ccw.mjs";
 export { default as PanelRight } from "lucide-react/dist/esm/icons/panel-right.mjs";
 export { default as PanelRightClose } from "lucide-react/dist/esm/icons/panel-right-close.mjs";
 export { default as Pause } from "lucide-react/dist/esm/icons/pause.mjs";

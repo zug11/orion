@@ -11,6 +11,7 @@ import {
   stripOrionLinksToTargets,
   stripOrionNoteMarkers,
   stripMarkdownComments,
+  stripDuplicateTitleHeading,
 } from "./markdown";
 import type { Concept, Note } from "../types";
 
@@ -224,4 +225,10 @@ describe("visual wiki links", () => {
       '> Exact quoted words stay unchanged.\n>\n> Original note\n\n[Surviving note](orion-note://surviving "An ordinary title")',
     );
   });
+});
+
+
+it("preserves document margins while stripping a duplicate title heading", () => {
+  expect(stripDuplicateTitleHeading("<!-- orion-document-margins:v1 8 12 -->\n\n# My document\n\nBody", "My document"))
+    .toBe("<!-- orion-document-margins:v1 8 12 -->\n\nBody");
 });

@@ -4,12 +4,17 @@ import type { Note } from "../types";
 import { splitMarkdownFrontmatter, stripDuplicateTitleHeading } from "./markdown";
 
 export const NOTE_EXCERPT_PREFIX = "orion-excerpt:v1:";
+export const NOTE_EXCERPT_TEXT_PREFIX = "orion-excerpt:v2:";
 export const MAX_EXCERPT_CHARACTERS = 12_000;
 export const MAX_EXCERPT_PASSAGES = 12;
 const MAX_EXCERPT_METADATA = 80_000;
 
 export interface ExcerptRange { from: number; to: number }
 export interface ExcerptPassage extends ExcerptRange { text: string }
+/** MCP can preserve exact words without claiming offsets in the renderer's text. */
+export interface ExcerptTextPassage { text: string; locator: "unique-text" }
+export type ExcerptLocator = ExcerptPassage | ExcerptTextPassage;
+export interface NoteExcerptReference { noteId: string; passages: ExcerptLocator[] }
 export interface NoteExcerptSelection {
   noteId: string;
   title: string;
@@ -174,8 +179,10 @@ export function encodeNoteExcerptTitle(selection: NoteExcerptSelection): string 
   return NOTE_EXCERPT_PREFIX + encoded;
 }
 
-export function parseNoteExcerptTitle(title: unknown, href?: string): Pick<NoteExcerptSelection, "noteId" | "passages"> | undefined {
-  if (typeof title !== "string" || !title.startsWith(NOTE_EXCERPT_PREFIX)) return;
+export function parseNoteExcerptTitle(title: unknown, href?: string): NoteExcerptReference | undefined {
+  if (typeof title !== "string") return;
+  if (title.startsWith(NOTE_EXCERPT_TEXT_PREFIX)) return parseTextExcerptTitle(title, href);
+  if (!title.startsWith(NOTE_EXCERPT_PREFIX)) return;
   const encoded = title.slice(NOTE_EXCERPT_PREFIX.length);
   if (!encoded || encoded.length > MAX_EXCERPT_METADATA || !/^[A-Za-z0-9_-]+$/.test(encoded)) return;
   try {
@@ -195,6 +202,32 @@ export function parseNoteExcerptTitle(title: unknown, href?: string): Pick<NoteE
     }
     if (length > MAX_EXCERPT_CHARACTERS) return;
     return { noteId: value.noteId, passages: value.passages.map(({ from, to, text }: ExcerptPassage) => ({ from, to, text })) };
+  } catch { return; }
+}
+
+/** Version 2 is percent-encoded JSON containing text only, never guessed ranges. */
+function parseTextExcerptTitle(title: string, href?: string): NoteExcerptReference | undefined {
+  const encoded = title.slice(NOTE_EXCERPT_TEXT_PREFIX.length);
+  if (!encoded || encoded.length > MAX_EXCERPT_METADATA || !/^(?:[A-Za-z0-9_.!~*'()-]|%[0-9a-f]{2})+$/i.test(encoded)) return;
+  try {
+    const value: unknown = JSON.parse(decodeURIComponent(encoded));
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    const record = value as Record<string, unknown>;
+    if (Object.keys(record).length !== 2 || typeof record.noteId !== "string"
+      || !/^[^\s"<>()[\]\\?#]{1,256}$/u.test(record.noteId)
+      || (href !== undefined && href !== `orion-note://${record.noteId}`)
+      || !Array.isArray(record.passages) || !record.passages.length || record.passages.length > MAX_EXCERPT_PASSAGES) return;
+    const passages: ExcerptTextPassage[] = [];
+    let length = (record.passages.length - 1) * 3;
+    for (const passage of record.passages) {
+      if (!passage || typeof passage !== "object" || Array.isArray(passage) || Object.keys(passage).length !== 1
+        || typeof passage.text !== "string" || !passage.text.trim()
+        || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\uD800-\uDFFF]/u.test(passage.text)) return;
+      length += passage.text.length;
+      if (length > MAX_EXCERPT_CHARACTERS) return;
+      passages.push({ text: passage.text, locator: "unique-text" });
+    }
+    return { noteId: record.noteId, passages };
   } catch { return; }
 }
 

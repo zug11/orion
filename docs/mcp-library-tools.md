@@ -1,7 +1,7 @@
-# Twenty additional Orion library tools
+# Orion local library tools
 
-The shared Codex and Claude Desktop server now has **41 tools**: 29 local
-library tools, including these 20 additions, plus 12 native workflow and job
+The shared Codex and Claude Desktop server now has **44 tools**: 30 local
+library tools, including these 21 additions, plus 14 native workflow and job
 tools. These additions work with Orion closed and never call an AI provider.
 
 | Tool | Capability |
@@ -20,6 +20,7 @@ tools. These additions work with Orion closed and never call an AI provider.
 | `orion_list_tasks` | Retrieve Markdown checkboxes, source notes, versions, and line positions. |
 | `orion_set_task_completion` | Change one exact checkbox without changing surrounding prose. |
 | `orion_edit_note_text` | Replace one unique selection while preserving the rest of the note. |
+| `orion_apply_note_command` | Insert portable writing blocks and slash-command content with a version guard. |
 | `orion_append_to_note` | Append exact text with a version guard against duplicate retries. |
 | `orion_batch_update_metadata` | Atomically set tags and/or pinned state on up to 20 notes. |
 | `orion_find_duplicate_notes` | Identify exact body duplicates or normalized title matches. |
@@ -45,6 +46,47 @@ Metadata batches validate every note before applying any changes. Tags affect
 overview freshness; pin-only updates do not. Writes preserve unrelated fields,
 all other Spaces, existing provenance, and ordinary permanent-note behavior.
 Successful receipts contain updated versions and exact Orion citations.
+
+## Writing blocks and slash-command content
+
+`orion_apply_note_command` applies the content produced by editor commands while
+Orion is open or closed. It takes an exact `space_id`, `note_id`, and current
+`expected_version`, plus a finite `command`; it does not type into the editor.
+
+Supported commands are `text`, `block`, `heading`, `h1` through `h6`, `todo`,
+`bullet`, `numbered`, `divider`, `quote`, `code`, `table`, `link`, `excerpt`, and
+`image`. Supply the command's structured fields from its tool schema. For example,
+wrap rich Markdown in a movable writing block:
+
+```json
+{
+  "space_id": "<exact Space ID>",
+  "note_id": "<exact note ID>",
+  "expected_version": "<version from current read>",
+  "command": "block",
+  "text": "## Next steps\n\n- [ ] Review the draft",
+  "placement": "append"
+}
+```
+
+`placement` defaults to `append`; `prepend` is also available. `before`, `after`,
+and `replace` require an exact, unique `anchor`. Read again after a conflict;
+never replace the version and blindly retry. Content and validation are bounded,
+and a successful receipt includes the updated version and note citation.
+
+Links and excerpts resolve only inside the requested Space. Excerpts also need
+the source note's `target_expected_version` and an exact, unique passage. Their
+text-only locator preserves excerpt styling and navigation without inventing
+editor offsets; Orion highlights only a unique exact match in the current
+visible text. Images reuse a managed attachment already referenced in that
+Space. Importing a new image remains a native attachment operation.
+
+These commands write ordinary Markdown and Orion's portable block/excerpt
+metadata. Existing create, update, exact-edit, append, and Markdown import paths
+preserve it. Literal `/block` text is ordinary prose when written through MCP;
+use the command tool to create the actual structure. Contextual table deletion
+uses `orion_edit_note_text` with the exact selected table Markdown and a current
+version; no implicit cursor or global slash-text execution is assumed.
 
 ## Evidence and coverage
 
@@ -83,7 +125,7 @@ Space when omitted. Writes always require an explicit Space.
 The Rust suite covers schemas, Unicode ranges, fenced Markdown, repeated
 headings, provenance-aware tasks, guarded edits, atomic batches, stale pages,
 duplicate detection, connection paths, diagnostics, and Space isolation.
-`script/test_mcp_library.mjs` exercises all 20 tools against an isolated fixture
+`script/test_mcp_library.mjs` exercises all 21 tools against an isolated fixture
 through stdio. Claude and Codex package builds run it against their exact
 extracted executables. No real vault or API account is used by these tests.
 

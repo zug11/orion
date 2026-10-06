@@ -10,7 +10,7 @@ export function EditorInsertLayer({editor,position,children}:{editor:Editor;posi
     const place=()=>{
       try {
         const caret=editor.view.coordsAtPos(Math.min(position,editor.state.doc.content.size));
-        const toolbar=editor.view.dom.closest(".rich-note-editor")?.querySelector(".editor-toolbar-shell")?.getBoundingClientRect();
+        const toolbar=editor.view.dom.closest(".rich-note-editor")?.querySelector(".editor-formatting-dock, .editor-toolbar-shell")?.getBoundingClientRect();
         const size = layer.current?.getBoundingClientRect();
         const width = size?.width || 282;
         const height = size?.height || 340;

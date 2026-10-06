@@ -1,0 +1,26 @@
+/* Framed identity is structural; blocks deliberately have no visible box. */
+.note-block-node { margin: 40px 0; padding: .01px 0; }
+.editor-prose .note-block-node.ProseMirror-selectednode { outline: none; border-radius: 0; }
+.editor-prose .ProseMirror > .note-block-node:first-child { margin-top: 18px; }
+.note-block-node > :first-child { margin-top: 0; }
+.note-block-node > :last-child { margin-bottom: 0; }
+.note-block-reading { margin: 1.4em 0; }
+.note-block-reading > :first-child { margin-top: 0; }
+.note-block-reading > :last-child { margin-bottom: 0; }
+.note-block-controls button:focus-visible,.editor-block-insert button:focus-visible { outline: 2px solid var(--periwinkle); outline-offset: 2px; }
+.note-block-controls { position: absolute; inset: 0; pointer-events: none; z-index: 3; font-family: var(--ui-font); }
+.note-block-controls button { position: absolute; pointer-events: auto; display: flex; justify-content: center; align-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
+.note-block-controls .note-block-add { width: 20px; height: 20px; border: 1px solid var(--line); border-radius: 50%; background: var(--surface-raised); color: var(--text-soft); }
+/* Keep small visible controls comfortable to hit without adding visual weight. */
+.note-block-controls .note-block-add::after,.note-block-controls .note-block-move::after { content: ""; position: absolute; inset: -4px; }
+.note-block-controls button:hover { color: var(--text); border-color: var(--line-strong); background: var(--surface-raised); }
+.note-block-controls .note-block-add:hover { color: var(--periwinkle); border-color: var(--periwinkle); }
+.note-block-controls .note-block-delete:hover { color: var(--red, #d67c7c); }
+.note-block-controls .note-block-move { width: 20px; height: 20px; cursor: grab; touch-action: none; }
+.is-block-dragging,.is-block-dragging * { cursor: grabbing !important; user-select: none !important; -webkit-user-select: none !important; }
+.note-block-drop { position: absolute; height: 2px; border-radius: 2px; background: var(--periwinkle); box-shadow: 0 0 0 2px var(--surface); }
+.note-block-drop::before { content: ""; position: absolute; width: 6px; height: 6px; border-radius: 50%; background: var(--periwinkle); left: -3px; top: -2px; }
+.editor-block-insert-options { overflow-y: auto; min-height: 0; }
+.editor-block-insert button:focus { background: var(--periwinkle-wash); color: var(--text); }
+.is-image-dragging .note-block-controls button { visibility: hidden; }
+.editor-prose .ProseMirror[data-block-insert-open="true"] { padding-bottom: 300px; }

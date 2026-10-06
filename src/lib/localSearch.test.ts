@@ -1,10 +1,39 @@
 import { describe, expect, it } from "vitest";
 import { createEmptySnapshot } from "../data/defaults";
 import type { Note, Source } from "../types";
-import { searchLocalNotes, searchLocalSources, searchLocalSpace } from "./localSearch";
+import { localSearchPassage, searchLocalNotes, searchLocalSources, searchLocalSpace } from "./localSearch";
 import { saveChatReplyAsNote } from "./chat";
 
 describe("local full-text search", () => {
+  it("previews readable prose for title matches on notes without a summary", () => {
+    const snapshot = createEmptySnapshot();
+    snapshot.notes = [makeNote({ title: "Light and material", summary: "", body: "**Soft light** gives a room depth." })];
+    expect(searchLocalSpace(snapshot, "light")[0].snippet).toBe("Soft light gives a room depth.");
+    expect(searchLocalNotes(snapshot.notes, "light")[0].snippet).toBe("Soft light gives a room depth.");
+  });
+
+  it("ranks exact phrases before plain-language matches across title and full bodies", () => {
+    const snapshot = createEmptySnapshot();
+    snapshot.notes = [makeNote({ id: "words", title: "Regulation", body: "Compliance creates costs for small companies." }),
+      makeNote({ id: "phrase", title: "Small companies regulation", body: "The direct match." })];
+    expect(searchLocalSpace(snapshot, "small companies regulation").map((match) => match.item.id)).toEqual(["phrase", "words"]);
+    expect(searchLocalSpace(snapshot, "What are the compliance costs for small companies?")[0].item.id).toBe("words");
+    expect(searchLocalSpace(snapshot, '"small companies regulation"').map((match) => match.item.id)).toEqual(["phrase"]);
+    expect(searchLocalSpace(snapshot, "costs .*")).toHaveLength(0);
+  });
+
+  it("returns exact current visible passage offsets and filters before limiting", () => {
+    const snapshot = createEmptySnapshot();
+    snapshot.notes = [makeNote({ body: `${"Background. ".repeat(1000)}**QuArtZ** in the final paragraph.` })];
+    snapshot.sources = Array.from({ length: 50 }, (_, index) => makeSource({ id: String(index), title: "quartz" }));
+    const [match] = searchLocalSpace(snapshot, "quartz", 1, "note");
+    expect(match.item.id).toBe("note");
+    const passage = localSearchPassage(match, "quartz")!;
+    expect(passage.from).toBeGreaterThan(10_000);
+    expect(passage.text).toContain("QuArtZ");
+    expect(passage.text).not.toContain("**");
+    expect(localSearchPassage(match, "absent")).toBeUndefined();
+  });
   it("searches saved Chat passages as readable prose without exposing link metadata", () => {
     const snapshot = createEmptySnapshot();
     const source = makeSource({ text: "The signed record places zirconium delivery in November. A & B < C." });

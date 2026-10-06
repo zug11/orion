@@ -72,6 +72,8 @@ const signaturePalettes: Record<HomeAtmosphere, AtmosphereStrokePalette> = {
   emberwake: luminousPalette,
   "gravity-silk": luminousPalette,
   mirage: luminousPalette,
+  opal: luminousPalette,
+  "ripple-glass": luminousPalette,
   "line-waves": {
     primary: "#7BC9B0",
     secondary: "#8FA1E8",
@@ -245,7 +247,7 @@ function themeSignaturePalette(
     atmosphere === "flux" || atmosphere === "tidal-glass" ||
     atmosphere === "prism-drift" || atmosphere === "nebula" ||
     atmosphere === "emberwake" || atmosphere === "gravity-silk" ||
-    atmosphere === "mirage"
+    atmosphere === "mirage" || atmosphere === "opal" || atmosphere === "ripple-glass"
   ) {
     return {
       primary: palette.accentStrong,

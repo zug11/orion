@@ -11,6 +11,8 @@ export interface ResearchInput extends Omit<ContextInput, "query"> {
 export type ImportInput = { kind: "text"; title: string; text: string } | { kind: "file"; path: string } | { kind: "url"; url: string };
 export type AssistantRequest = { space_id: string; request_id: string } & (
   | { operation: "context"; input: ContextInput }
+  | { operation: "search"; input: { query: string } }
+  | { operation: "export"; input: { scope: "note" | "linked" | "space"; note_id?: string } }
   | { operation: "research"; input: ResearchInput }
   | { operation: "import"; input: { inputs: ImportInput[]; guidance?: string; mode?: "ai" | "local" } }
   | { operation: "reprocess"; input: { source_ids: string[]; guidance?: string } }
@@ -35,6 +37,7 @@ export interface WorkflowDependencies {
   organize: typeof organizeWithAI;
   driver: KnowledgeAssignmentDriver;
   buildImportPayload: typeof buildImportPayload;
+  exportWord?: (snapshot: AppSnapshot, scope: "note" | "linked" | "space", noteId: string | null) => Promise<{ path: string; cancelled: boolean; noteIds: string[]; title: string }>;
   readInput: (index: number) => Promise<ParsedImport>;
   previousResult: (jobId: string) => Promise<Record<string, unknown>>;
   illustrate: (body: string, title: string) => Promise<{ body: string; warnings: string[] }>;

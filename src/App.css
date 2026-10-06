@@ -3782,7 +3782,14 @@ kbd {
   width: min(100%, 720px);
   margin: 0 auto;
   padding-bottom: 26px;
-  border-bottom: 1px solid var(--line);
+}
+
+.note-view.is-editing .note-header {
+  padding-bottom: 0;
+}
+
+.note-view.is-editing .rich-note-editor {
+  margin-top: 12px;
 }
 
 .note-kicker {
@@ -3815,7 +3822,7 @@ kbd {
   flex-wrap: wrap;
   align-items: flex-start;
   gap: 18px;
-  margin-top: 13px;
+  margin-top: 20px;
 }
 
 .note-title-line > h1,
@@ -3853,7 +3860,8 @@ kbd {
   margin-left: auto;
   align-items: center;
   gap: 5px;
-  padding-top: 6px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .voice-memo-control {
@@ -3944,15 +3952,6 @@ kbd {
     inset 0 -1px 0 color-mix(in srgb, var(--periwinkle) 26%, transparent);
 }
 
-.note-header-meta-row {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 18px;
-  min-height: 20px;
-  margin-top: 19px;
-}
-
 .note-edit-toggle {
   display: inline-flex;
   height: 32px;
@@ -3993,18 +3992,10 @@ kbd {
   animation: edit-toggle-arrive 360ms var(--ease);
 }
 
-.note-meta {
-  display: flex;
-  align-items: center;
-  gap: 13px;
-  color: var(--faint);
-  font-size: 12px;
-}
-
-.note-meta span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+.note-listen-error {
+  margin-top: 16px;
+  color: var(--coral);
+  font-size: 13px;
 }
 
 .note-find-bar {
@@ -4493,8 +4484,7 @@ kbd {
   flex: 0 0 auto;
   align-items: center;
   gap: 2px;
-  padding-left: 5px;
-  border-left: 1px solid var(--line);
+  padding-left: 6px;
 }
 
 .editor-toolbar-ai,
@@ -4503,8 +4493,7 @@ kbd {
   min-width: max-content;
   flex: 0 0 auto;
   align-items: center;
-  padding-left: 5px;
-  border-left: 1px solid var(--line);
+  padding-left: 6px;
 }
 
 .editor-toolbar-dictation {
@@ -4644,12 +4633,11 @@ kbd {
   background: var(--surface-3);
 }
 
-.editor-toolbar-separator {
+.editor-toolbar-spacer {
   width: 1px;
   height: 17px;
   flex: 0 0 auto;
   margin-inline: 3px;
-  background: var(--line);
 }
 
 .rich-note-editor .note-prose {
@@ -4886,6 +4874,75 @@ kbd {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
+}
+
+.ai-image-composer {
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  gap: 10px;
+}
+
+.ai-image-options {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.ai-image-options legend {
+  margin-bottom: 5px;
+  padding: 0;
+  color: var(--muted);
+  font: 650 11px/1.3 var(--ui-font);
+}
+
+.ai-image-options__segments {
+  display: flex;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-1);
+}
+
+.ai-image-options__segments label {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.ai-image-options__segments input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.ai-image-options__segments span {
+  display: block;
+  padding: 7px 5px;
+  border-radius: 6px;
+  text-align: center;
+  color: var(--muted);
+  font: 560 11.5px/1.25 var(--ui-font);
+}
+
+.ai-image-options__segments input:checked + span {
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-sm);
+}
+
+.ai-image-options__segments input:focus-visible + span {
+  outline: 2px solid var(--periwinkle);
+  outline-offset: 1px;
+}
+
+.ai-image-composer__scope,
+.ai-image-composer__help {
+  margin: 0;
+  color: var(--muted);
+  font: 10.5px/1.45 var(--ui-font);
 }
 
 .ai-writing-text-button,
@@ -5143,7 +5200,8 @@ kbd {
   animation: ai-writing-spin 900ms linear infinite;
 }
 
-.ai-writing-dock__error {
+.ai-writing-dock__error,
+.ai-writing-dock__notice {
   position: absolute;
   bottom: calc(100% + 8px);
   left: 50%;
@@ -5158,6 +5216,16 @@ kbd {
   font-size: 9px;
   line-height: 1.45;
   transform: translateX(-50%);
+}
+
+.ai-writing-dock__notice {
+  border-color: var(--line);
+}
+
+.ai-writing-dock__progress {
+  max-width: min(290px, calc(100vw - 130px));
+  padding: 6px 0;
+  line-height: 1.4;
 }
 
 .ai-writing-original-target {
@@ -7825,53 +7893,72 @@ button.source-citation-marker:focus-visible {
   padding: 0 12px 12px;
 }
 
-.theme-preset-grid > button {
+.theme-preset-card {
   position: relative;
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr) 18px;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
   min-width: 0;
-  padding: 7px;
-  border: 0;
   border-radius: 11px;
   color: var(--muted);
   background: var(--surface-0);
-  text-align: left;
   box-shadow: inset 0 0 0 1px var(--line);
   transition:
     color 150ms ease,
     background 150ms ease,
     box-shadow 150ms ease,
-    transform 180ms var(--ease);
+    transform 180ms ease;
 }
 
-.theme-preset-grid > button:hover {
+.theme-preset-choice {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 10px;
+  align-self: stretch;
+  min-width: 0;
+  min-height: 64px;
+  padding: 7px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.theme-preset-actions {
+  display: grid;
+  gap: 1px;
+  padding: 4px 5px 4px 0;
+}
+
+.theme-preset-card:hover {
   color: var(--text-soft);
   box-shadow: inset 0 0 0 1px var(--line-strong);
   transform: translateY(-1px);
 }
 
-.theme-preset-grid > button.active {
+.theme-preset-card.active {
   color: var(--text);
   background: color-mix(in srgb, var(--periwinkle-wash) 58%, var(--surface-0));
   box-shadow: inset 0 0 0 1px
     color-mix(in srgb, var(--periwinkle) 43%, var(--line));
 }
 
-.theme-preset-grid > button > span:nth-child(2) {
+.theme-preset-label {
+  overflow-wrap: anywhere;
   display: grid;
   gap: 3px;
   min-width: 0;
 }
 
-.theme-preset-grid > button strong {
+.theme-preset-label strong {
   color: inherit;
   font-size: 12px;
   font-weight: 650;
 }
 
-.theme-preset-grid > button small {
+.theme-preset-label small {
   overflow: hidden;
   color: var(--faint);
   font-size: 11px;
@@ -7938,7 +8025,7 @@ button.source-citation-marker:focus-visible {
   background: transparent;
 }
 
-.theme-preset-grid > button.active .theme-preset-selection {
+.theme-preset-card.active .theme-preset-selection {
   background: var(--periwinkle-strong);
 }
 
@@ -9478,20 +9565,20 @@ button.source-citation-marker:focus-visible {
   gap: 2px;
 }
 
-.command-results strong,
-.command-results small {
+.command-results > button > span > strong,
+.command-results > button > span > small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.command-results strong {
+.command-results > button > span > strong {
   color: var(--text-soft);
   font-size: 14px;
   font-weight: 620;
 }
 
-.command-results small {
+.command-results > button > span > small {
   color: var(--faint);
   font-family: var(--ui-font);
   font-size: 12px;
@@ -14160,7 +14247,7 @@ button.source-citation-marker:focus-visible {
 
   .note-actions {
     align-self: flex-end;
-    margin-top: -10px;
+    margin-top: 0;
   }
 
   .editor-toolbar-shell {
@@ -14481,3 +14568,33 @@ button.source-citation-marker:focus-visible {
 .window-save-conflict h2 { margin: 12px 0; font-size: 24px; }
 .window-save-conflict p { line-height: 1.6; }
 .window-save-conflict__actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+
+/* A writing window keeps one document on a full-width, opaque canvas. */
+.app-shell.is-writing-window {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.is-writing-window .workspace-content {
+  border-left: 0;
+  border-top-left-radius: 0;
+  background: var(--surface-0);
+}
+
+.is-writing-window .note-view {
+  padding-top: 32px;
+}
+
+.writing-window-unavailable {
+  max-width: 560px;
+  margin: 12vh auto;
+  padding: 28px;
+}
+
+.writing-window-unavailable h1 {
+  font-size: 24px;
+}
+
+.writing-window-unavailable p {
+  color: var(--muted);
+  line-height: 1.6;
+}

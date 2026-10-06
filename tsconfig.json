@@ -21,5 +21,7 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["src"],
+  // Local duplicate copies are retained but are not application source.
+  "exclude": ["src/**/* 2.ts", "src/**/* 2.tsx"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

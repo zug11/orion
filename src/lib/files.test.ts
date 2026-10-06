@@ -15,6 +15,12 @@ const pdfState = vi.hoisted(() => ({
   beforeRead: undefined as ((pageNumber: number) => Promise<void>) | undefined,
 }));
 const destroyPdf = vi.hoisted(() => vi.fn());
+const convertDocx = vi.hoisted(() => vi.fn());
+
+vi.mock("mammoth", () => ({ default: {
+  convertToHtml: convertDocx,
+  images: { imgElement: (handler: unknown) => handler },
+} }));
 
 vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
   GlobalWorkerOptions: { workerSrc: "test-pdf-worker" },
@@ -54,6 +60,7 @@ describe("import file helpers", () => {
     pdfState.pages = [];
     pdfState.beforeRead = undefined;
     destroyPdf.mockClear();
+    convertDocx.mockReset();
   });
 
   it("detects supported formats from extensions and MIME types", () => {
@@ -68,6 +75,26 @@ describe("import file helpers", () => {
     expect(detectSourceKind("photo.png", "image/png")).toBe("image");
     expect(detectSourceKind("photo.JPG", "")).toBe("image");
     expect(detectSourceKind("whiteboard.heic", "")).toBe("image");
+  });
+
+  it("imports Word structure without embedded style maps, external file access or source image bytes", async () => {
+    const buffer = new ArrayBuffer(8);
+    const file = new File([buffer], "reading-notes.docx", { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+    Object.defineProperty(file, "arrayBuffer", { value: async () => buffer });
+    convertDocx.mockResolvedValue({ value: '<h1>Reading notes</h1><p>Some <strong>evidence</strong>.</p><p>☑ Read the source</p><table><tr><th>Topic</th><th>Finding</th></tr><tr><td>Local</td><td>Preserved</td></tr></table><p><a href="file:///private/source">Source label</a><img src="" alt="Figure description"/></p>', messages: [{ message: "One formatting detail was simplified." }] });
+    const parsed = await parseImportFile(file);
+    expect(parsed.text).toContain("# Reading notes");
+    expect(parsed.text).toContain("**evidence**");
+    expect(parsed.text).toContain("- [x] Read the source");
+    expect(parsed.text).toContain("| Topic | Finding |");
+    expect(parsed.text).toContain("[Image: Figure description]");
+    expect(parsed.text).not.toContain("file:");
+    expect(parsed.warnings).toContain("One formatting detail was simplified.");
+    expect(convertDocx).toHaveBeenCalledWith({ arrayBuffer: buffer }, expect.objectContaining({ includeEmbeddedStyleMap: false, externalFileAccess: false }));
+    const options = convertDocx.mock.calls[0][1];
+    const read = vi.fn();
+    await expect(options.convertImage({ read })).resolves.toEqual({ src: "" });
+    expect(read).not.toHaveBeenCalled();
   });
 
   it("uses local text recognition for image imports", async () => {

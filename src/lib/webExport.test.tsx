@@ -11,6 +11,7 @@ import {
 import { resolveThemePalette, type ThemePalette } from "./theme";
 import { serializeNoteImageTitle } from "./noteImageLayout";
 import { createNoteExcerptSelection, encodeNoteExcerptTitle } from "./noteExcerpts";
+import { NOTE_BLOCK_CLOSE, NOTE_BLOCK_OPEN } from "./noteBlocks";
 
 const NOW = "2026-08-07T05:00:00.000Z";
 
@@ -135,6 +136,54 @@ describe("web export scope", () => {
 });
 
 describe("self-contained web article", () => {
+  it("keeps document and selected paragraph margins scoped to each exported note", () => {
+    const snapshot = fixture();
+    const margin = "<!-- orion-paragraph-margins:v1 10 5 -->";
+    snapshot.notes[0].body = `<!-- orion-document-margins:v1 12 8 -->\n\nSelected paragraph. ${margin}\n\n### Selected heading ${margin}\n\n- Selected bullet. ${margin}\n\n- [ ] Selected task. ${margin}\n\n> Selected quotation. ${margin}\n\nOrdinary paragraph.\n\nJustified paragraph. <!-- orion-text:v1 justify --> ${margin}`;
+    const result = buildWebExportDocument(snapshot, "space", null);
+    const document = new DOMParser().parseFromString(result.html, "text/html");
+    const article = document.querySelector("article.export-note")!;
+    const prose = article.querySelector<HTMLElement>(".export-prose")!;
+    expect(prose.style.marginLeft).toBe("12%");
+    expect(prose.style.marginRight).toBe("8%");
+    expect(article.querySelector<HTMLElement>(".export-note-header")?.style.marginLeft).toBe("");
+    const selected = [...prose.querySelectorAll<HTMLElement>('[data-orion-margin-left="10"]')];
+    expect(selected).toHaveLength(6);
+    for (const paragraph of selected) {
+      expect(paragraph.style.marginLeft).toBe("10%");
+      expect(paragraph.style.marginRight).toBe("5%");
+      expect(["P", "H3"]).toContain(paragraph.tagName);
+    }
+    const ordinary = [...prose.querySelectorAll("p")].find((p) => p.textContent === "Ordinary paragraph.")!;
+    expect(ordinary.style.marginLeft).toBe("");
+    expect(prose.querySelector('[data-orion-justify="true"]')?.textContent).toBe("Justified paragraph.");
+    expect(document.querySelectorAll<HTMLElement>(".export-prose")[1].style.marginLeft).toBe("0%");
+    expect(prose.textContent).not.toContain("orion-paragraph-margins");
+    expect(prose.textContent).not.toContain("orion-document-margins");
+  });
+
+  it("ignores invalid margin instructions and preserves marker code examples", () => {
+    const snapshot = fixture();
+    snapshot.notes[0].body = '<!-- orion-document-margins:v1 900 20 -->\n\nSafe paragraph. <!-- orion-paragraph-margins:v1 10;color:red 5 -->\n\n`<!-- orion-paragraph-margins:v1 10 5 -->`';
+    const document = new DOMParser().parseFromString(buildWebExportDocument(snapshot, "note", "note-origin").html, "text/html");
+    expect(document.querySelector<HTMLElement>(".export-prose")?.style.marginLeft).toBe("0%");
+    expect(document.querySelector('.export-prose p[data-orion-margin-left]')).toBeNull();
+    expect(document.querySelector(".export-prose code")?.textContent).toBe("<!-- orion-paragraph-margins:v1 10 5 -->");
+    expect(document.querySelector(".export-prose")?.innerHTML).not.toContain("color:red");
+  });
+
+  it("preserves paragraph justification in offline HTML without exposing metadata", () => {
+    const snapshot = fixture();
+    const marker = "<!-- orion-text:v1 justify -->";
+    snapshot.notes[0].body = `A justified paragraph. ${marker}\n\n### A heading ${marker}\n\n- A bullet. ${marker}\n\n- [ ] A task. ${marker}\n\nPlain paragraph.`;
+    const result = buildWebExportDocument(snapshot, "note", "note-origin");
+    const document = new DOMParser().parseFromString(result.html, "text/html");
+    expect(document.querySelectorAll('.export-prose [data-orion-justify="true"]')).toHaveLength(4);
+    expect(document.querySelector('.export-prose')?.textContent).not.toContain("orion-text:");
+    expect(result.html).toContain('text-align: justify');
+    expect(document.querySelector('[data-orion-justify="true"] a')).toBeNull();
+  });
+
   it("keeps managed note images for native offline inlining", () => {
     const snapshot = fixture();
     snapshot.notes[0].body +=
@@ -308,6 +357,36 @@ describe("self-contained web article", () => {
 
 
 describe("preview editor export compatibility", () => {
+  it("exports persistent blocks as quiet rich-content wrappers with hidden metadata and intact table layout", () => {
+    const snapshot = fixture();
+    snapshot.notes[0].summary = "";
+    snapshot.notes[0].body = [
+      "Before the block.", "", NOTE_BLOCK_OPEN, "### Grouped heading", "", "Retained **rich prose**.", "",
+      '<!-- orion-table:v1 {"width":69,"header":false,"banded":false,"columns":[160,220]} -->',
+      "| | |", "| --- | --- |", "| Kept row | Kept value |", NOTE_BLOCK_CLOSE, "", "After the block.",
+    ].join("\n");
+    const result = buildWebExportDocument(snapshot, "space", null);
+    const document = new DOMParser().parseFromString(result.html, "text/html");
+    const prose = document.querySelector(".export-prose")!;
+    const frame = prose.querySelector<HTMLElement>(".note-block-reading[data-note-block]")!;
+    expect(frame).not.toBeNull();
+    expect(frame.getAttribute("style")).toBeNull();
+    expect(frame.querySelector("h3")?.textContent).toBe("Grouped heading");
+    expect(frame.querySelector("strong")?.textContent).toBe("rich prose");
+    expect(frame.textContent).not.toContain("Before the block.");
+    expect(frame.textContent).not.toContain("After the block.");
+    expect(prose.textContent).toContain("Before the block.");
+    expect(prose.textContent).toContain("After the block.");
+    const table = frame.querySelector<HTMLElement>(".note-table-reading")!;
+    expect(table.style.width).toBe("69%");
+    expect(table.querySelector("thead")).toBeNull();
+    expect(table.textContent).toContain("Kept row");
+    expect([...table.querySelectorAll<HTMLElement>("col")].map((column) => column.style.width)).toEqual(["160px", "220px"]);
+    expect(document.querySelector(".export-card span")?.textContent).toContain("Retained rich prose.");
+    expect(document.body.textContent).not.toContain("orion-block");
+    expect(document.body.textContent).not.toContain("orion-table");
+  });
+
   it("preserves table metadata code examples while suppressing actual layout comments", () => {
     const snapshot = fixture();
     const metadata = '<!-- orion-table:v1 {"width":74,"header":false,"columns":[127,220]} -->';

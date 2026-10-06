@@ -25,8 +25,10 @@ import { truncateUnicode } from "./text";
 import { AI_IMAGE_MODEL } from "./aiImages";
 import {
   IMAGE_PLANNING_INSTRUCTIONS, imagePlanningSchema, parseImagePlanningContext,
-  parseImagePlanningResult, type ImagePlanningRequest, type ImagePlanningResult,
+  parseImagePlanningResult, imagePlanningTimeoutMs, imagePlanningTimeoutMessage, imagePlanningStageLabel,
+  imagePlanningTokenBudget, imagePlanningEffort, type ImagePlanningRequest, type ImagePlanningResult, type ImageGenerationQuality,
 } from "./aiImagePlanning";
+import { isSavedThemePaletteCollection } from "./savedThemePalettes";
 import { isWindowGlassSettings } from "./windowGlass";
 import {
   providerCallScheduler,
@@ -414,8 +416,36 @@ export async function saveNoteImage(
   };
 }
 
+async function readImagePlanningResponse(response: Response, stageLabel: string): Promise<unknown> {
+  if (!response.body) throw new Error(`${stageLabel} returned an empty response.`);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > 2 * 1024 * 1024) {
+        await reader.cancel();
+        throw new Error(`${stageLabel} response exceeded its limit.`);
+      }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  const encoded = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) { encoded.set(chunk, offset); offset += chunk.length; }
+  try { return JSON.parse(new TextDecoder().decode(encoded)); }
+  catch { throw new Error(`${stageLabel} returned invalid data.`); }
+}
+
 export async function planNoteImage(request: ImagePlanningRequest, signal?: AbortSignal): Promise<ImagePlanningResult> {
   const context = parseImagePlanningContext(request);
+  const timeoutMs = imagePlanningTimeoutMs(request);
+  const effort = imagePlanningEffort(request.model, request.effort);
+  const stageLabel = imagePlanningStageLabel(request.stage);
+  const tokens = imagePlanningTokenBudget(request);
   if (signal?.aborted) throw signal.reason ?? new Error("Image planning was cancelled.");
   const requestId = `image:plan:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 12)}`;
   if (isTauriRuntime()) {
@@ -431,18 +461,17 @@ export async function planNoteImage(request: ImagePlanningRequest, signal?: Abor
     const abort = () => controller.abort(signal?.reason);
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) abort();
-    const timer = globalThis.setTimeout(() => controller.abort(new Error("The illustration planner did not finish within 90 seconds.")), 90_000);
+    const timer = globalThis.setTimeout(() => controller.abort(new Error(imagePlanningTimeoutMessage(request.stage, timeoutMs))), timeoutMs);
     try {
       const schema = imagePlanningSchema(request.stage);
       const payload = JSON.stringify({ stage: request.stage, context });
-      const effort = request.effort === "none" ? undefined : request.effort;
       const anthropic = provider === "anthropic";
       const body = anthropic ? {
-        model: request.model, max_tokens: 6_000, system: IMAGE_PLANNING_INSTRUCTIONS,
+        model: request.model, max_tokens: tokens, system: IMAGE_PLANNING_INSTRUCTIONS,
         messages: [{ role: "user", content: payload }],
         output_config: { format: { type: "json_schema", schema: anthropicCompatibleSchema(schema) }, ...(effort ? { effort } : {}) },
       } : {
-        model: request.model, store: false, max_output_tokens: 6_000, instructions: IMAGE_PLANNING_INSTRUCTIONS, input: payload,
+        model: request.model, store: false, max_output_tokens: tokens, instructions: IMAGE_PLANNING_INSTRUCTIONS, input: payload,
         text: { format: { type: "json_schema", name: "orion_image_plan", strict: true, schema } },
         ...(effort ? { reasoning: { effort } } : {}),
       };
@@ -453,11 +482,20 @@ export async function planNoteImage(request: ImagePlanningRequest, signal?: Abor
         body: JSON.stringify(body),
       });
       if (!response.ok) throw new Error(await readProviderApiError(response, anthropic ? "Anthropic" : "OpenAI"));
-      const data = await response.json();
-      const text = anthropic ? extractAnthropicOutputText(data, "plan this illustration") : extractBrowserOutputText(data, "plan this illustration");
-      return parseImagePlanningResult(JSON.parse(text), request.stage);
+      const data = await readImagePlanningResponse(response, stageLabel);
+      let text: string;
+      try {
+        if (!isRecord(data)) throw new Error("Invalid response object");
+        text = anthropic ? extractAnthropicOutputText(data as AnthropicResponse, "plan this illustration") : extractBrowserOutputText(data as OpenAIResponse, "plan this illustration");
+      } catch {
+        throw new Error(`${stageLabel} did not return a complete plan. Retry to resume from completed work.`);
+      }
+      let result: unknown;
+      try { result = JSON.parse(text); } catch { throw new Error(`${stageLabel} returned invalid structured data.`); }
+      return parseImagePlanningResult(result, request.stage);
     } catch (error) {
       if (controller.signal.aborted) throw controller.signal.reason ?? new Error("Image planning was cancelled.");
+      if (error instanceof TypeError) throw new Error(`${stageLabel} could not reach the planning provider. Retry to resume from completed work.`);
       throw error;
     } finally {
       globalThis.clearTimeout(timer);
@@ -469,7 +507,9 @@ export async function planNoteImage(request: ImagePlanningRequest, signal?: Abor
 export async function generateNoteImage(
   prompt: string,
   signal?: AbortSignal,
+  quality: ImageGenerationQuality = "detailed",
 ): Promise<GeneratedNoteImage> {
+  if (quality !== "fast" && quality !== "detailed") throw new Error("Choose Fast or Detailed image generation.");
   const normalized = prompt.trim();
   if (!normalized) {
     throw new Error("Describe or select something for Orion to illustrate.");
@@ -495,7 +535,7 @@ export async function generateNoteImage(
     };
     const value = await invokeTauri<unknown>(
       "generate_note_image",
-      { request: { requestId, prompt: normalized } },
+      { request: { requestId, prompt: normalized, quality } },
       { queueKey: "images", signal, cancelActive: cancelNative },
     );
     return parseGeneratedNoteImage(value);
@@ -509,7 +549,7 @@ export async function generateNoteImage(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: AI_IMAGE_MODEL,
+        model: quality === "fast" ? "gpt-image-2.5-flare" : AI_IMAGE_MODEL,
         prompt: normalized,
         n: 1,
         size: "1536x1024",
@@ -1375,6 +1415,59 @@ export async function exportMarkdown(
     directory: "Browser download",
     cancelled: false,
   };
+}
+
+export async function downloadNarration(
+  title: string,
+  audio: Uint8Array<ArrayBuffer> | { systemText: string },
+  signal?: AbortSignal,
+): Promise<{ cancelled: boolean; path: string }> {
+  const fileName = `${title.replace(/[\\/:*?"<>|\x00-\x1f]/g, "-").trim().slice(0, 180) || "Orion narration"}.${audio instanceof Uint8Array ? "wav" : "aiff"}`;
+  if (signal?.aborted) throw signal.reason ?? new Error("Narration download cancelled.");
+  if (isTauriRuntime()) {
+    const requestId = `narration-export:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 12)}`;
+    const cancel = () => { void invokeTauri("cancel_media_import", { requestId }).catch(() => undefined); };
+    signal?.addEventListener("abort", cancel, { once: true });
+    try {
+      let wavBase64: string | undefined;
+      if (audio instanceof Uint8Array) {
+        const pieces: string[] = [];
+        for (let offset = 0; offset < audio.length; offset += 32_768) pieces.push(String.fromCharCode(...audio.subarray(offset, offset + 32_768)));
+        wavBase64 = btoa(pieces.join(""));
+      }
+      return await invokeTauri("export_narration", { request: { requestId, fileName,
+        ...(audio instanceof Uint8Array ? { wavBase64 } : audio) } });
+    } finally { signal?.removeEventListener("abort", cancel); }
+  }
+  if (!(audio instanceof Uint8Array)) throw new Error("Download system-voice narration in the Mac app. Browser previews can download OpenAI or ElevenLabs narration.");
+  const url = URL.createObjectURL(new Blob([audio], { type: "audio/wav" }));
+  const anchor = document.createElement("a");
+  anchor.href = url; anchor.download = fileName; document.body.append(anchor); anchor.click(); anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  return { cancelled: false, path: "Browser download" };
+}
+
+export interface WordExportWorkflow { jobId: string; sessionId: string }
+
+export async function readWordExportImage(assetId: string): Promise<{ base64Data: string; mimeType: string }> {
+  if (!isTauriRuntime()) throw new Error("Managed images can be exported from the Orion Mac app.");
+  return invokeTauri("read_word_export_image", { assetId });
+}
+
+export async function exportWordDocument(fileName: string, bytes: Uint8Array<ArrayBuffer>, workflow?: WordExportWorkflow): Promise<ExportWebResult> {
+  if (!bytes.length || bytes.length > 128 * 1024 * 1024) throw new Error("The Word document is empty or exceeds 128 MB.");
+  if (isTauriRuntime()) {
+    const parts: string[] = [];
+    for (let offset = 0; offset < bytes.length; offset += 32768) parts.push(String.fromCharCode(...bytes.subarray(offset, offset + 32768)));
+    return invokeTauri("export_word_document", { request: { fileName, base64Data: btoa(parts.join("")), ...(workflow ? { workflow } : {}) } });
+  }
+  if (workflow) throw new Error("Assistant exports require the Orion Mac app.");
+  const url = URL.createObjectURL(new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }));
+  const anchor = document.createElement("a");
+  anchor.href = url; anchor.download = fileName; anchor.hidden = true;
+  document.body.append(anchor); anchor.click(); anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  return { path: "Browser download", cancelled: false };
 }
 
 export async function exportWebPage(
@@ -2410,6 +2503,8 @@ function isSettings(value: unknown): boolean {
       isOneOf(value.themeTextWarmth, ["cool", "neutral", "warm"])) &&
     (value.themeContrast === undefined ||
       isOneOf(value.themeContrast, ["soft", "balanced", "high"])) &&
+    (value.themeSavedPalettes === undefined || isSavedThemePaletteCollection(value.themeSavedPalettes)) &&
+    (value.themeActivePaletteId === undefined || (typeof value.themeActivePaletteId === "string" && /^(?:palette-[A-Za-z0-9_-]{1,80})?$/.test(value.themeActivePaletteId))) &&
     (value.noteTypeface === undefined ||
       isOneOf(value.noteTypeface, ["sans", "serif"])) &&
     isWindowGlassSettings(value.windowGlass) &&
@@ -2430,6 +2525,8 @@ function isSettings(value: unknown): boolean {
         "emberwake",
         "gravity-silk",
         "mirage",
+        "opal",
+        "ripple-glass",
         "liquid-ether",
         "field",
         "constellation",

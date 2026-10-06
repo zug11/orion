@@ -103,3 +103,26 @@ describe("theme system", () => {
     expect(variables["--theme-selection"]).toMatch(/^rgba\(/);
   });
 });
+
+describe("custom material tuning", () => {
+  it.each(["dark", "light"] as const)("retains custom hues and applies canvas/surface tuning in %s", (mode) => {
+    const settings = { ...defaultSettings,
+      themeCanvasCustom: mode === "dark" ? "#142B28" : "#DFEEE8",
+      themeSurfaceCustom: mode === "dark" ? "#28443D" : "#E5F3EB" };
+    const deep = resolveThemePalette({ ...settings, themeCanvasTone: "deep" }, mode);
+    const balanced = resolveThemePalette(settings, mode);
+    const airy = resolveThemePalette({ ...settings, themeCanvasTone: "airy" }, mode);
+    expect(contrastRatio(deep.canvas, "#000000")).toBeLessThan(contrastRatio(balanced.canvas, "#000000"));
+    expect(contrastRatio(balanced.canvas, "#000000")).toBeLessThan(contrastRatio(airy.canvas, "#000000"));
+    const quiet = resolveThemePalette({ ...settings, themeSurfaceLift: "quiet" }, mode);
+    const lifted = resolveThemePalette({ ...settings, themeSurfaceLift: "lifted" }, mode);
+    expect(quiet.surface1).not.toBe(balanced.surface1);
+    expect(lifted.surface1).not.toBe(balanced.surface1);
+    expect(resolveThemePalette({ ...settings, themePreset: "ember" }, mode).canvas).toBe(balanced.canvas);
+    expect(resolveThemePalette({ ...settings, themePreset: "ember" }, mode).surface1).toBe(balanced.surface1);
+    for (const palette of [deep, balanced, airy, quiet, lifted]) {
+      expect(contrastRatio(palette.text, palette.surface1)).toBeGreaterThanOrEqual(7);
+      expect(contrastRatio(palette.accent, palette.surface1)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});

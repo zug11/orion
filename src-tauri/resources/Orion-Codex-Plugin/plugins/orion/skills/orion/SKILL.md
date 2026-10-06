@@ -1,6 +1,6 @@
 ---
 name: orion
-description: Search, cite, edit, research, import, and generate knowledge in Orion. Use when a user asks Codex to work with their local Orion Spaces, notes, sources, or Orion's configured AI and context engine.
+description: Search, cite, edit, research, import, export, and generate knowledge in Orion. Use when a user asks Codex to work with their local Orion Spaces, notes, sources, or Orion's configured AI and context engine.
 ---
 
 # Orion
@@ -30,7 +30,7 @@ Use the `orion` MCP server to work directly with the user's local Orion library.
 
 ## Inspect and edit precise library content
 
-- The 20 additional library tools work while Orion is closed. They make no provider calls and retain the installed connector's existing local access.
+- The 21 additional library tools work while Orion is closed. They make no provider calls and retain the installed connector's existing local access.
 - Use `orion_list_sources`, `orion_search_sources`, and `orion_get_source_passage` to find and verify preserved source evidence beyond an opening preview. Source search is literal and case-sensitive. Range offsets count Unicode scalar values, not bytes or JavaScript UTF-16 positions.
 - Use `orion_get_note_section` for a named section; choose `occurrence` when headings repeat. `orion_get_notes` reads up to 12 notes from one snapshot and returns the versions needed for guarded edits.
 - Explore `orion_list_concepts`, `orion_get_concept`, and `orion_resolve_link` for exact vocabulary and canonical destinations. Keep ambiguous resolutions explicit. `orion_get_related_notes` ranks stored connections; `orion_get_link_path` returns a bounded directed path, not proof that ideas agree.
@@ -41,10 +41,22 @@ Use the `orion` MCP server to work directly with the user's local Orion library.
 - Use `orion_find_duplicate_notes` and `orion_check_space_integrity` for read-only diagnostics. Matching titles are candidates, not proof of duplication. `orion_get_recent_changes` reports current note timestamps, not a history of deleted notes or previous text.
 - Follow `nextOffset`; carry `vaultRevision` as `expected_revision` to reject changed pagination. Inspect coverage/truncation flags before claiming exhaustive results. A bounded search returning no path or no matches does not prove none exist outside its coverage.
 
+## Use writing blocks and editor commands
+
+- For an authorized structured edit, use `orion_apply_note_command` with exact `space_id`, `note_id`, and `expected_version` from a current read. It works locally with Orion closed and needs no provider key.
+- Use `command: "block"` with rich Markdown `text` to create a movable writing block. Other commands mirror slash content: `text`, `heading`, `h1`–`h6`, `todo`, `bullet`, `numbered`, `divider`, `quote`, `code`, `table`, `link`, `excerpt`, and `image`. Read the tool schema for the relevant structured fields; do not write a literal `/command` expecting it to execute.
+- Placement is `append` by default, or `prepend`, `before`, `after`, or `replace`. The last three require an exact unique `anchor`. Preserve unrelated prose. A version conflict requires rereading and reassessing the edit; never blindly retry with a fresh version.
+- Link and excerpt targets must be exact notes in that Space. Excerpts require `target_expected_version` and a unique exact passage; their text-only locator highlights only a unique current visible match. Do not fabricate passage offsets. Images reuse an existing managed attachment referenced inside that Space; the tool does not fetch URLs or open a file picker.
+- For contextual table deletion, use the existing version-guarded exact text edit with the explicitly selected table Markdown. Existing raw note writes and Markdown imports preserve block, table, image, and excerpt metadata.
+
 ## Use Orion's intelligence and import flow
 
 - Start with `orion_get_capabilities`. The new workflows require Orion to be open and enabled for an exact Space in **Settings → Connections → Orion workflows**. AI use and workflow writes are independently controlled there. Existing local vault tools still work while Orion is closed.
 - `orion_get_context` builds a local, versioned packet with exact evidence ranges and bounded coverage. It makes no provider call. The overview/directory is orientation, not opened evidence.
+- `orion_search` now searches notes, concepts, and preserved sources together; optional `kind` filters before the result limit. Quoted phrases and punctuation remain literal, while natural multi-word queries use relevance matching. Check coverage/truncation and open exact results before relying on a snippet.
+- `orion_search_space` runs Orion's adaptive AI search for an explicit question of up to 600 characters. It reads exact passages and returns an answer, evidence, and partial-coverage metadata without changing notes or Chat. Source evidence carries exact source IDs/ranges and related-note citations, not an invented source deep link.
+- `orion_export_word` exports `scope: "note" | "linked" | "space"`; supply `note_id` for note/linked scopes only. It opens the native Save As dialog and returns the chosen path or `cancelled: true`. No caller destination path or AI call is accepted. Do not report an export until the job succeeds and `cancelled` is false.
+- DOCX file imports preserve headings, emphasis, lists, tasks, tables, quotes, code, and safe links. Embedded pictures become alt text. Markdown imports and direct note writes preserve the existing portable Orion block, table, text-alignment, image-layout, and citation metadata. Appearance preferences remain local shared settings and are never imported from documents.
 - `orion_research` uses Orion's configured model and API account for `answer`, `compare`, `gaps`, `review`, or `brief`. Pass comparison text as `material`; never impersonate a source. Research returns interpretations and exact evidence references without saving notes or changing Chat.
 - `orion_import` sends text, an absolute local document/image/media path, or a public HTTPS webpage/YouTube URL through Orion's existing source extraction and import flow. Use `mode: "local"` for source notes without provider calls, or `"ai"` for synthesis and canonical reuse. Use this for import processing; use direct note creation for finished prose the user simply wants saved.
 - `orion_reprocess_sources` reuses exact preserved source IDs under new guidance. `orion_generate` creates a note, podcast script, slide deck, or narrated deck. Audio playback remains in Orion.

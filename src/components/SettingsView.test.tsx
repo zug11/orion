@@ -179,29 +179,12 @@ describe("SettingsView appearance", () => {
       ...defaultSettings,
       homeAtmosphereMotion: "alive",
     });
-    expect(atmosphereRadios).toHaveLength(12);
-    fireEvent.click(within(atmosphereGroup).getByRole("radio", {
-      name: "Quiet Loom: Woven light folds into a softly moving veil.",
-    }));
-    expect(onChange).toHaveBeenLastCalledWith({
-      ...defaultSettings,
-      homeAtmosphere: "quiet-loom",
-    });
-    fireEvent.click(within(atmosphereGroup).getByRole("radio", {
-      name: "Nova: A living plasma core, spiralling light, and streaming sparks.",
-    }));
-    expect(onChange).toHaveBeenLastCalledWith({
-      ...defaultSettings,
-      homeAtmosphere: "nova",
-    });
+    expect(atmosphereRadios).toHaveLength(6);
+    expect(within(atmosphereGroup).queryByRole("radio", { name: /Nova:/ })).not.toBeInTheDocument();
     for (const [id, name] of [
-      ["flux", "Flux: Luminous currents sweep from edge to edge."],
-      ["tidal-glass", "Tidal Glass: Liquid light refracts into a shifting web of caustics."],
-      ["prism-drift", "Prism Drift: A rolling landscape of iridescent crystal facets."],
-      ["nebula", "Nebula: Layered clouds of light drift through a field of stars."],
-      ["emberwake", "Emberwake: Streams of glowing sparks ride a sweeping wind."],
-      ["gravity-silk", "Gravity Silk: Glossy fabric billows through luminous folds."],
       ["mirage", "Mirage: Drifting glass lenses bend a travelling sheet of light."],
+      ["opal", "Opal: Pearlescent glass ribbons catch slow-moving iridescent light."],
+      ["ripple-glass", "Ripple Glass: Overlapping optical ripples bend coloured reflections."],
     ]) {
       fireEvent.click(within(atmosphereGroup).getByRole("radio", { name }));
       expect(onChange).toHaveBeenLastCalledWith({ ...defaultSettings, homeAtmosphere: id });
@@ -250,8 +233,8 @@ describe("SettingsView appearance", () => {
     fireEvent.change(screen.getByLabelText("Custom shader color"), { target: { value: "#aa66ff" } });
     expect(onChange).toHaveBeenLastCalledWith({ ...settings, homeAtmosphereCustomColor: "#AA66FF" });
     refresh();
-    fireEvent.click(within(group).getByRole("radio", { name: /Flux:/ }));
-    expect(onChange).toHaveBeenLastCalledWith({ ...settings, homeAtmosphere: "flux" });
+    fireEvent.click(within(group).getByRole("radio", { name: /Opal:/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ ...settings, homeAtmosphere: "opal" });
     refresh();
     fireEvent.click(screen.getByRole("button", { name: "Reset shader colours" }));
     expect(onChange).toHaveBeenLastCalledWith({ ...settings, homeAtmosphereCustomColor: "", homeAtmosphereCustomSecondaryColor: "" });
@@ -259,7 +242,7 @@ describe("SettingsView appearance", () => {
     expect(screen.queryByRole("button", { name: "Reset shader colours" })).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Custom shader secondary color"), { target: { value: "#ff6699" } });
-    const preset = resolveAtmospherePalette("flux", settings.homeAtmosphereTone, resolveThemePalette(settings, "dark"));
+    const preset = resolveAtmospherePalette("opal", settings.homeAtmosphereTone, resolveThemePalette(settings, "dark"));
     expect(onChange).toHaveBeenLastCalledWith({ ...settings, homeAtmosphereCustomColor: preset.primary, homeAtmosphereCustomSecondaryColor: "#FF6699" });
     refresh();
     expect(screen.getByRole("button", { name: /Theme accent,/ })).toHaveAttribute("aria-pressed", "false");
@@ -314,6 +297,7 @@ describe("SettingsView appearance", () => {
     expect(onChange).toHaveBeenNthCalledWith(1, {
       ...settings,
       themePreset: "tide",
+      themeActivePaletteId: "",
       themeAccent: "preset",
       themeAccentCustom: "",
       themeCanvasCustom: "",
@@ -341,6 +325,25 @@ describe("SettingsView appearance", () => {
         screen.getByRole("radiogroup", { name: "Canvas depth" }),
       ).getByRole("radio", { name: "Deep" }),
     ).toBeVisible();
+  });
+
+  it("preserves chosen custom colours while changing canvas depth and surface lift", () => {
+    const onChange = vi.fn();
+    const action = vi.fn(async () => undefined);
+    const testKey = vi.fn(async () => ({ valid: true, message: "Connected." }));
+    const settings = { ...defaultSettings, themeCanvasCustom: "#142B28", themeSurfaceCustom: "#28443D" };
+    render(<SettingsView settings={settings} onChange={onChange}
+      onSaveApiKey={action} onDeleteApiKey={action} onTestApiKey={testKey}
+      onSaveAnthropicApiKey={action} onDeleteAnthropicApiKey={action} onTestAnthropicApiKey={testKey}
+      onSaveElevenLabsApiKey={action} onDeleteElevenLabsApiKey={action} onTestElevenLabsApiKey={testKey}
+      onOpenDataLocation={action} onEraseVault={action} />);
+    fireEvent.click(within(screen.getByRole("radiogroup", { name: "Canvas depth" })).getByRole("radio", { name: "Deep" }));
+    expect(onChange).toHaveBeenLastCalledWith({ ...settings, themeCanvasTone: "deep" });
+    fireEvent.click(within(screen.getByRole("radiogroup", { name: "Surface lift" })).getByRole("radio", { name: "Lifted" }));
+    expect(onChange).toHaveBeenLastCalledWith({ ...settings, themeSurfaceLift: "lifted" });
+    const curated = screen.getByRole("radiogroup", { name: "Color preset" });
+    expect(within(curated).getAllByRole("radio").every((radio) => radio.getAttribute("aria-checked") === "false")).toBe(true);
+    expect(screen.getByText("Unsaved palette")).toBeInTheDocument();
   });
 
   it("offers Claude 5 models and saves one shared Anthropic key", async () => {

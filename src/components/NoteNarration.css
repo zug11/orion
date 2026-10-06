@@ -1,8 +1,12 @@
+::highlight(orion-narration-read) { color: var(--text); background-color: transparent; }
 ::highlight(orion-narration-unread) { color: color-mix(in srgb, var(--text, currentColor) 48%, transparent); }
 ::highlight(orion-narration-current) { color: var(--text); background-color: color-mix(in srgb, var(--periwinkle) 14%, transparent); }
 .note-view.has-narration [data-narration-text] { cursor: pointer; }
 .note-listen-playhead__follow { display: inline-flex; align-items: center; white-space: nowrap; gap: 5px; font: 12px var(--ui-font); color: var(--text-soft); }
 .note-listen-playhead__follow input { accent-color: var(--periwinkle); }
 .note-listen-playhead__hint { font: 12px var(--ui-font); color: var(--text-soft); }
+.narration-download-spinner { animation: narration-download-spin 1s linear infinite; }
+@keyframes narration-download-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .narration-download-spinner { animation: none; } }
 @media (max-width: 600px) { .note-listen-playhead__hint { display: none; } }
 @media (prefers-contrast: more) { ::highlight(orion-narration-unread) { color: color-mix(in srgb, var(--text) 72%, transparent); } }

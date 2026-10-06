@@ -103,3 +103,86 @@ authoritative; Mac App Store submission would need a different WebView approach.
 In solid mode, matching top and left canvas borders join at the inner curve.
 The left border starts below the top bar, preserving the continuous navigation
 frame. Native glass keeps its existing open left edge.
+
+## Editor toolbar and ruler
+
+The editor toolbar and More formatting menu use native Regular Liquid Glass
+on macOS 26+, with identical untinted material. The shallow toolbar clips a
+224-point-high Regular surface to its normal rounded bounds: the larger native
+surface gives it menu-like scattering without adding a different material,
+colour overlay or blur filter. Its foreground is drawn at the original size in
+the middle strip, preserving crisp controls and DOM hit targets. The clip has
+the toolbar's original frame and moves through the same geometry-only path.
+Do not add an `NSVisualEffectView` beneath it; that second material creates a
+flat grey fill. An unpadded shallow Regular view remains too transparent.
+Accessibility selects the shared solid fallback before native glass is shown.
+The Margins ruler retains its independent Clear material, with no tint or
+additional frosting. The toolbar clip and the two other `NSGlassEffectView` surfaces are children
+of the original full-viewport, pass-through NSView in the calling WKWebView. Their
+frames update in one native transaction while the host retains its viewport
+bounds. The two materials are not merged into a glass-effect container. This
+does not change the shared window-frame glass or its settings.
+
+Native Clear still follows macOS's Liquid Glass appearance preference. Check
+System Settings → Appearance → Liquid Glass when comparing transparency; a
+fully tinted system setting can obscure content even with Clear and no app tint.
+During the 2 October investigation, the unchanged earlier preview also appeared
+opaque with Liquid Glass Tint Amount at its maximum. The user then switched the
+system setting to clear and confirmed that the ruler was clear again. The renderer's ruler
+backplate was confirmed hidden and the native style was confirmed Clear.
+Do not attribute that observation to toolbar grouping or parent geometry, and
+do not override the user's system preference through undocumented defaults.
+Compare the running app with text behind the ruler before declaring it restored.
+
+Note actions sit above the title and subtitle, with no divider or concept/source
+counts under the header. While editing, omit header bottom padding and use a
+12px editor gap to place the toolbar directly beneath the subtitle.
+The toolbar and ruler remain in the document flow below the title and subtitle.
+They become sticky together only after scrolling past the note heading. While
+editing, the writing pane disables vertical elastic overscroll, which is outside
+the DOM/native geometry contract. Do not move the controls above the heading
+or freeze the note heading to work around native tracking.
+
+Ordinary scrolling uses `move_ruler_glass`: bounded coordinates tied to the
+last acknowledged artwork revision, with no PNG transfer, image decoding,
+material changes or foreground layout. It can only translate existing visible
+surfaces; a resize or changed surface requires the full update. The renderer
+retries a rejected motion once through that full path. Both paths share the
+same monotonic per-WebView receipt so late movement cannot revive hidden glass.
+
+`NativeFormattingDock` and `useNativeRulerGlass` own one bounded, caller-window
+bridge. The DOM remains the authority for input, focus, accessibility, selection,
+menus, undo and saved margins. Native views return no hit-test target. The ruler
+scale and markers are drawn in the Clear view's `contentView`. The toolbar's
+existing local SVG glyphs, labels and control states are painted into a bounded
+transparent foreground at up to 2x resolution, also hosted inside its material.
+This is toolbar chrome only: no document content, network image, font loading,
+arbitrary SVG execution or file capture is involved. The native command accepts
+only a size-checked PNG (up to 4096 by 160 pixels and 350,000 encoded characters),
+never a URL or path. More formatting uses a third Regular glass surface above
+the ruler, so opening it keeps both underlying materials. Its existing controls
+use the same local foreground painter, bounded separately to 1024 by 1536 pixels
+and 700,000 encoded characters, inside a 512 by 768 CSS-pixel viewport-bounded
+menu. Menu scrolling repaints only the visible controls and a scroll indicator;
+closing More hides its native surface. Foreground rendering is reused during
+document scrolling. Toolbar groups are separated by whitespace only. The
+painter omits group containers and spacers, retaining control outlines and
+keyboard focus rings without drawing vertical dividers.
+
+Scroll positions dispatch immediately, without another animation frame or an
+IPC acknowledgement wait. Monotonic revisions reject stale native arrivals and
+renderer responses. Layout and appearance updates are coalesced. A scoped
+zero-duration `NSAnimationContext` and `CATransaction` with actions disabled move
+both glass views together in viewport coordinates and retain their foregrounds.
+Vertical scroll does not recalculate paragraph margins. Unmount/hide
+removes the glass and foregrounds; a hidden noninteractive view retains only the
+last revision until its WKWebView closes. All ownership is window-local.
+
+The renderer hides its matching artwork only after native activation succeeds.
+Other overlapping HTML menus/dialogs, an actively edited numeric toolbar field,
+unsupported systems, native failures and accessibility requests use the existing
+HTML controls. Browser preview stays on HTML. Native drawing failures must never
+hide a control. The ruler fallback is solid with a uniform border. Its visual end
+caps remain separate from horizontal measurement, and its 0/100 tick stems stay
+omitted. Apple's material supplies the refraction and edge lighting; there is no
+CSS blur shader or custom highlight stroke on the native surfaces.

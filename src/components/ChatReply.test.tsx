@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createEmptySnapshot } from "../data/defaults";
 import type { StudioMessage } from "../types";
 import { stableKnowledgeHash } from "../lib/spaceKnowledge";
+import { sourceEvidenceVersion } from "../lib/evidenceVersions";
+import { consumeSourcePassageNavigation } from "../lib/sourcePassageNavigation";
 import { ChatReply } from "./ChatReply";
 
 const NOW = "2026-09-08T00:00:00.000Z";
@@ -56,5 +58,32 @@ describe("Chat evidence", () => {
     render(<ChatReply snapshot={snapshot} message={message} onOpenNote={vi.fn()} />);
     expect(screen.queryByRole("button", { name: /Read citation/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("uses search language and compact coverage without losing exact source navigation", () => {
+    const { snapshot, message } = fixture();
+    message.evidence![0].version = sourceEvidenceVersion(snapshot.sources[0]);
+    const onOpenSource = vi.fn();
+    render(<ChatReply snapshot={snapshot} message={message} context="search" onOpenNote={vi.fn()} onOpenSource={onOpenSource} />);
+    expect(screen.getByText("Read 1 source · Partial Space coverage")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Read citation: Agreement" }));
+    expect(screen.getByText("Exact passage used for this answer.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Open source" }));
+    expect(onOpenSource).toHaveBeenCalledWith("agreement");
+    expect(consumeSourcePassageNavigation(snapshot.sources[0])).toEqual({
+      from: 0, to: snapshot.sources[0].text.length, text: snapshot.sources[0].text,
+    });
+  });
+
+  it("describes changed and removed search evidence without implying a saved Chat reply", () => {
+    const { snapshot, message } = fixture();
+    snapshot.sources[0].text = "The deadline has changed.";
+    const { rerender } = render(<ChatReply snapshot={snapshot} message={message} context="search" onOpenNote={vi.fn()} onOpenSource={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Read citation: Agreement" }));
+    expect(screen.getByText("This item has changed since this answer. The passage shown was used for this answer.")).toBeVisible();
+    expect(screen.getByRole("complementary")).toHaveTextContent("The deadline is 15 November.");
+    rerender(<ChatReply snapshot={{ ...snapshot, sources: [] }} message={message} context="search" onOpenNote={vi.fn()} onOpenSource={vi.fn()} />);
+    expect(screen.getByText("This item is no longer in this Space. The passage shown was used for this answer.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Open source" })).toBeDisabled();
   });
 });

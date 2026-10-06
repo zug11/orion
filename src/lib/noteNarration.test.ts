@@ -61,8 +61,24 @@ describe("displayed-note narration mapping", () => {
     const script = buildNarrationDocument(root);
     expect(highlightNarration(script, 6, 6)).toBe(true);
     expect(highlights.get("orion-narration-current")?.ranges.map((range) => range.toString()).join("")).toBe("second");
+    expect(highlights.get("orion-narration-read")?.ranges.map((range) => range.toString()).join("")).toBe("First ");
     expect(highlights.get("orion-narration-unread")?.ranges.map((range) => range.toString()).join("")).toBe(" third.");
     expect(root.innerHTML).toBe(before);
     clearNarrationHighlight(); expect(highlights.size).toBe(0);
+  });
+
+  it("brightens all preceding text on forward seeks and dims it again on backward seeks", () => {
+    const root = fixture('<p data-narration-text>First second third.</p>');
+    const highlights = new Map<string, { ranges: Range[] }>();
+    vi.stubGlobal("CSS", { highlights });
+    vi.stubGlobal("Highlight", class { ranges: Range[]; constructor(...ranges: Range[]) { this.ranges = ranges; } });
+    const script = buildNarrationDocument(root);
+    highlightNarration(script, 0, 5);
+    highlightNarration(script, 13, 6);
+    expect(highlights.get("orion-narration-read")?.ranges.map(range => range.toString()).join("")).toBe("First second ");
+    expect(highlights.get("orion-narration-unread")?.ranges).toHaveLength(0);
+    highlightNarration(script, 6, 6);
+    expect(highlights.get("orion-narration-read")?.ranges.map(range => range.toString()).join("")).toBe("First ");
+    expect(highlights.get("orion-narration-unread")?.ranges.map(range => range.toString()).join("")).toBe(" third.");
   });
 });

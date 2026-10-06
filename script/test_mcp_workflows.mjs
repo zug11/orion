@@ -81,7 +81,16 @@ try {
   assert.equal(started.structuredContent.state, "queued");
   assert.equal(calls.at(-1).arguments.operation, "context");
   assert.equal(calls.at(-1).arguments.input.query, "Find evidence");
+  await tool("orion_search_space", { space_id: spaceId, request_id: "search-one", query: "Which passages support this?" });
+  assert.equal(calls.at(-1).arguments.operation, "search");
+  assert.equal(calls.at(-1).arguments.input.query, "Which passages support this?");
+  await tool("orion_export_word", { space_id: spaceId, request_id: "word-one", scope: "space" });
+  assert.equal(calls.at(-1).arguments.operation, "export");
+  assert.deepEqual(calls.at(-1).arguments.input, { scope: "space" });
   const beforeInvalid = calls.length;
+  assert.equal((await tool("orion_export_word", { space_id: spaceId, request_id: "bad-path", scope: "space", path: "/tmp/not-authorized.docx" })).isError, true);
+  assert.equal((await tool("orion_export_word", { space_id: spaceId, request_id: "missing-note", scope: "note" })).isError, true);
+  assert.equal((await tool("orion_search_space", { space_id: spaceId, request_id: "bad-query", query: "x".repeat(601) })).isError, true);
   assert.equal((await tool("orion_research", { space_id: spaceId, request_id: "bad", question: "Why?", allow_write: true })).isError, true);
   assert.equal((await tool("orion_import", { request_id: "missing-space", inputs: [{ kind: "text", title: "A", text: "B" }] })).isError, true);
   assert.equal(calls.length, beforeInvalid, "Invalid inputs crossed the native boundary.");

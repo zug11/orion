@@ -21,16 +21,18 @@ describe("normalizeHomeAtmosphere", () => {
     ["signal-decay", "signal-decay"],
     ["line-waves", "line-waves"],
     ["field", "field"],
-    ["quiet-loom", "quiet-loom"],
-    ["nova", "nova"],
-    ["flux", "flux"],
-    ["tidal-glass", "tidal-glass"],
-    ["prism-drift", "prism-drift"],
-    ["nebula", "nebula"],
-    ["emberwake", "emberwake"],
-    ["gravity-silk", "gravity-silk"],
+    ["quiet-loom", "mirage"],
+    ["nova", "mirage"],
+    ["flux", "mirage"],
+    ["tidal-glass", "mirage"],
+    ["prism-drift", "mirage"],
+    ["nebula", "mirage"],
+    ["emberwake", "mirage"],
+    ["gravity-silk", "mirage"],
     ["mirage", "mirage"],
-  ] as const)("keeps the active %s atmosphere", (input, expected) => {
+    ["opal", "opal"],
+    ["ripple-glass", "ripple-glass"],
+  ] as const)("normalizes the saved %s atmosphere", (input, expected) => {
     expect(normalizeHomeAtmosphere(input)).toBe(expected);
   });
 

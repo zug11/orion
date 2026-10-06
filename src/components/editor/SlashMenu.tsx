@@ -3,8 +3,9 @@ import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileText, ListTodo, List, ListOrdered, Image, FileCode2, Link2, Quote, Sheet, Trash2, ChevronRight } from "../../lib/icons";
 import { getSlashMatch, matchingSlashItems, type SlashMatch, type SlashCommand } from "./slashCommands";
+import { BlocksMark } from "../icons/BlocksMark";
 
-const icons = {heading:FileText,todo:ListTodo,bullet:List,numbered:ListOrdered,divider:FileText,image:Image,code:FileCode2,link:Link2,excerpt:Quote,table:Sheet};
+export const slashCommandIcons = {heading:FileText,block:BlocksMark,todo:ListTodo,bullet:List,numbered:ListOrdered,divider:FileText,image:Image,code:FileCode2,link:Link2,excerpt:Quote,table:Sheet};
 export function SlashMenu({editor, suspended, onCommand}:{editor:Editor;suspended:boolean;onCommand:(command:SlashCommand,range:{from:number;to:number})=>void}) {
   const [match, setMatch] = useState<SlashMatch|null>(null);
   const [active,setActive] = useState(0);
@@ -132,7 +133,7 @@ export function SlashMenu({editor, suspended, onCommand}:{editor:Editor;suspende
     <div className="editor-menu-eyebrow">{heading?"Heading size":match.inTable&&match.query.startsWith("d")?"Table":"Insert"}</div>
     <div id={id} role="listbox" aria-label={heading?"Heading levels":"Slash commands"}>
       {items.map((item,index)=>{
-        const Icon= item.id.startsWith("delete")?Trash2:icons[item.id as keyof typeof icons]??FileText;
+        const Icon= item.id.startsWith("delete")?Trash2:slashCommandIcons[item.id as keyof typeof slashCommandIcons]??FileText;
         return <button type="button" role="option" aria-selected={active===index} id={`${id}-${index}`} key={item.id}
           className={/^h[1-6]$/.test(item.id)?`slash-heading heading-choice-${item.id[1]}`:undefined}
           onMouseEnter={()=>setActive(index)} onMouseDown={event=>event.preventDefault()} onClick={()=>choose(item.id)}>
