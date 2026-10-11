@@ -5,6 +5,8 @@ import {
 } from "./concepts";
 import { truncateUnicode } from "./text";
 import type { AppSnapshot, ChatRequest, Concept, Note } from "../types";
+import { projectEditorAIContext, type EditorAILinkContext } from "./editorAIWorkingContext";
+import { workingTaskSnapshot, workingTaskText } from "./taskWorkingView";
 
 export const MAX_LINK_TITLE_CHARS = 120;
 
@@ -51,6 +53,7 @@ export async function generateLinkTitleWithDeduplication(
     signal?: AbortSignal,
   ) => Promise<{ reply: string }>,
   signal?: AbortSignal,
+  editorContext?: EditorAILinkContext,
 ): Promise<string> {
   const workspaceId = readSnapshot().workspace.id;
   const rejectedTitles: string[] = [];
@@ -75,7 +78,7 @@ export async function generateLinkTitleWithDeduplication(
   for (let attempt = 0; attempt < MAX_TITLE_ATTEMPTS; attempt += 1) {
     const result = await requestTitle(
       buildLinkTitleRequest(
-        currentSnapshot(), originNoteId, selectedContext, rejectedTitles,
+        currentSnapshot(), originNoteId, selectedContext, rejectedTitles, editorContext,
       ),
       signal,
     );
@@ -100,7 +103,20 @@ export function buildLinkTitleRequest(
   originNoteId: string,
   selectedContext: string,
   rejectedTitles: readonly string[] = [],
+  editorContext?: EditorAILinkContext,
 ): ChatRequest {
+  if (snapshot.notes.some(note => note.id === originNoteId)) {
+    const projected = projectEditorAIContext(snapshot, {
+      originNoteId, selectedText: selectedContext, ...editorContext,
+    }, "link");
+    snapshot = projected.snapshot;
+    // Naming does not revise a normalized block selection. Keep the exact
+    // original link phrase; the rich guard has established its visibility.
+    selectedContext = workingTaskText(selectedContext);
+  } else {
+    snapshot = workingTaskSnapshot(snapshot);
+    selectedContext = workingTaskText(selectedContext);
+  }
   const originNote = snapshot.notes.find((note) => note.id === originNoteId);
   const context = excerptSelectedContext(selectedContext);
   const originNames = originNote

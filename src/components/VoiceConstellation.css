@@ -1,0 +1,14 @@
+.voice-constellation { position: relative; flex: 0 0 auto; isolation: isolate; touch-action: none; }
+.voice-constellation--sidebar { width: 20px; height: 20px; pointer-events: none; }
+.voice-constellation--pill { width: 46px; height: 46px; }
+.voice-constellation--expanded { width: min(100%, 300px); aspect-ratio: 1; margin: 0 auto; }
+.voice-constellation canvas { display: block; width: 100%; height: 100%; }
+.voice-constellation__target { position: absolute; top: 0; left: 0; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: grab; touch-action: none; }
+.voice-constellation__target[aria-disabled="false"] { cursor: pointer; }
+.voice-constellation__target:active { cursor: grabbing; }
+.voice-constellation__target:focus-visible { outline: 2px solid var(--periwinkle); outline-offset: 3px; background: color-mix(in srgb, var(--periwinkle) 9%, transparent); }
+.voice-constellation__overflow { position: absolute; right: 0; bottom: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; padding: 4px 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-raised); color: var(--text-soft); font: inherit; font-size: 11px; cursor: pointer; }
+.voice-constellation__overflow:focus-visible { outline: 2px solid var(--periwinkle); outline-offset: 2px; }
+.voice-constellation[data-rendering="fallback"]::before { content: ""; position: absolute; width: 30%; height: 30%; inset: 35%; border-radius: 50%; background: var(--periwinkle); }
+.voice-constellation[data-status="disconnected"] { filter: saturate(.25); }
+@media (prefers-contrast: more) { .voice-constellation[data-muted="true"] { opacity: .7; } }

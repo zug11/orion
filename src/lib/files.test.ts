@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { marked } from "marked";
 import {
   delimitedRowsToMarkdown,
   detectSourceKind,
@@ -87,9 +88,10 @@ describe("import file helpers", () => {
     expect(parsed.text).toContain("**evidence**");
     expect(parsed.text).toContain("- [x] Read the source");
     expect(parsed.text).toContain("| Topic | Finding |");
-    expect(parsed.text).toContain("[Image: Figure description]");
+    expect(new DOMParser().parseFromString(marked.parse(parsed.text, { async: false }), "text/html").body.textContent).toContain("[Image: Figure description]");
     expect(parsed.text).not.toContain("file:");
     expect(parsed.warnings).toContain("One formatting detail was simplified.");
+    expect(parsed.warnings).toContain("Images and embedded media were not imported; available descriptions and fallback text were kept.");
     expect(convertDocx).toHaveBeenCalledWith({ arrayBuffer: buffer }, expect.objectContaining({ includeEmbeddedStyleMap: false, externalFileAccess: false }));
     const options = convertDocx.mock.calls[0][1];
     const read = vi.fn();
@@ -569,5 +571,18 @@ describe("import file helpers", () => {
     expect(parsed.text).toContain("# Orion");
     expect(parsed.text).toContain("A winter landmark.");
     expect(parsed.text).not.toContain("bad()");
+  });
+
+  it("keeps HTML file metadata and exposes simplification warnings through the import boundary", () => {
+    const html = '<p><strong>Important</strong> <a href="mailto:a@example.com">Email</a><img src="https://remote.invalid/img" alt="Figure"></p>';
+    const parsed = parseTextImport("field-study.htm", "text/html", html, 999);
+    expect(parsed).toMatchObject({ title: "Field Study", fileName: "field-study.htm", mimeType: "text/html", byteSize: 999, format: "html" });
+    expect(parsed.text).toContain("**Important**");
+    expect(parsed.warnings).toHaveLength(2);
+    expect(parsed.text).not.toMatch(/mailto:|remote\.invalid/);
+  });
+
+  it("fails HTML parsing atomically instead of supplying a partial import", () => {
+    expect(() => parseTextImport("too-deep.html", "text/html", '<section>'.repeat(130) + 'Must be preserved or rejected' + '</section>'.repeat(130))).toThrow("too complex");
   });
 });

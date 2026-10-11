@@ -1,5 +1,6 @@
 import {
   BookOpen,
+  AudioLines,
   ChevronDown,
   GalleryVerticalEnd,
   Home,
@@ -26,6 +27,9 @@ import {
 } from "../lib/linkedArticle";
 import { FavoriteMark } from "./icons/FavoriteMark";
 import { SpaceSwitcher } from "./SpaceSwitcher";
+import { SidebarVoiceIndicator } from "./SidebarVoiceIndicator";
+import type { VoicePresenceStore } from "../lib/voicePresence";
+import type { IconPalette } from "../lib/themeIcon";
 
 export type WorkspaceView =
   | "home"
@@ -59,6 +63,9 @@ interface SidebarProps {
   onDeleteLinkedArticle: (job: LinkedArticleJob) => void;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
+  voicePresence?: VoicePresenceStore;
+  voicePalette?: IconPalette;
+  onStartVoice?: () => void;
 }
 
 const navigation = [
@@ -136,6 +143,9 @@ export function Sidebar({
   onDeleteLinkedArticle,
   collapsed = false,
   onToggleCollapsed,
+  voicePresence,
+  voicePalette,
+  onStartVoice,
 }: SidebarProps) {
   const [generateOpen, setGenerateOpen] = useState(false);
   const [generateKind, setGenerateKind] = useState<GenerateKind>("note");
@@ -286,17 +296,20 @@ export function Sidebar({
 
       <nav className="primary-nav" aria-label="Workspace">
         {navigation.map(({ id, label, icon: Icon }) => (
+          <div key={id} className={id === "chat" ? "sidebar-chat-nav" : "sidebar-nav-row"}>
           <button
-            key={id}
             className={view === id ? "nav-item active" : "nav-item"}
             type="button"
             aria-label={label}
             onClick={() => onViewChange(id)}
           >
-            <Icon size={17} />
+            {id === "chat" && voicePresence ? <SidebarVoiceIndicator presence={voicePresence} voicePalette={voicePalette} /> : <Icon size={17} />}
             <span>{label}</span>
             {id === "notes" && <em>{notes.length}</em>}
           </button>
+          {id === "chat" && onStartVoice && <button type="button" className="sidebar-start-voice"
+            aria-label="Talk to Space" title="Talk to Space" onClick={onStartVoice}><AudioLines size={17} /></button>}
+          </div>
         ))}
       </nav>
 

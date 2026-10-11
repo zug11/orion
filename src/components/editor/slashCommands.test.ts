@@ -4,6 +4,14 @@ import { describe, expect, it } from "vitest";
 import { getSlashMatch, matchingSlashItems } from "./slashCommands";
 
 describe("slash command discovery", () => {
+  it("discovers Write with AI through /write and the former Continue vocabulary", () => {
+    for (const query of ["write", "continue"]) {
+      expect(matchingSlashItems({ from: 1, to: 7, query, inTable: false })).toEqual([
+        expect.objectContaining({ id: "write", title: "Write with AI" }),
+      ]);
+    }
+  });
+
   it("offers all six direct headings and only relevant table deletion choices", () => {
     for (let level = 1; level <= 6; level++) {
       expect(matchingSlashItems({ from: 1, to: 4, query: `h${level}`, inTable: false }).map(item => item.id)).toEqual([`h${level}`]);

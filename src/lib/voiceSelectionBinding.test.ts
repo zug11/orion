@@ -1,0 +1,50 @@
+import { describe, expect, it, vi } from "vitest";
+import { createEmptySnapshot } from "../data/defaults";
+import { VoiceConversation } from "./voiceConversation";
+import { VoiceContextUpdates } from "./voiceContextUpdates";
+import { spaceNoteVersion } from "./spaceKnowledge";
+import { type VoiceSelection } from "./voiceSelection";
+const snapshot = createEmptySnapshot("Writing", "2026-10-11", "s");
+snapshot.notes = [{ id: "n", title: "Story", slug: "n", body: "First passage. Second passage.", summary: "", kind: "article", status: "ready", aliases: [], tags: [], sourceIds: [], conceptIds: [], createdAt: "now", updatedAt: "now" }];
+const first: VoiceSelection = { id: "selection-1", spaceId: "s", noteId: "n", noteTitle: "Story", version: spaceNoteVersion(snapshot.notes[0]), text: "First passage.", range: { from: 0, to: 14, unit: "dom-text-utf16" }, hiddenTaskRanges: [] };
+const second = { ...first, id: "selection-2", text: "Second passage.", range: { ...first.range, from: 15, to: 30 } };
+const speech = (delta: string, start_ms: number, end_ms: number) => ({ type: "session.input_transcript.delta", delta, start_ms, end_ms });
+describe("voice selection routing boundaries", () => {
+  it("binds an utterance to its first fragment's exact immutable selection despite replacement, navigation and delayed delegation", () => {
+    const conversation = new VoiceConversation(), selected = structuredClone(first);
+    conversation.receive(speech("What do you think", 0, 100), "n", selected);
+    selected.text = "Mutated local object";
+    conversation.receive(speech(" of this?", 110, 300), "other-note", second);
+    const [turn] = conversation.takeTurns(); expect(turn.selection).toEqual(first); expect(turn.focusNoteId).toBe("n");
+    conversation.receive({ type: "session.delegation.created", delegation: { id: "delayed" }, offset_ms: 300 });
+    expect(conversation.takeTurns()[0]).toMatchObject({ selection: first, focusNoteId: "n", delegated: true });
+    conversation.receive(speech("Now this other passage", 2000, 2200), "n", second);
+    expect(conversation.takeTurns()[0].selection).toEqual(second);
+  });
+  it("does not attach a later highlight to an utterance begun without selection", () => {
+    const conversation = new VoiceConversation();
+    conversation.receive(speech("Check", 0, 100), "n");
+    conversation.receive(speech(" this", 100, 200), "n", first);
+    expect(conversation.takeTurns()[0].selection).toBeUndefined();
+  });
+  it("sends a quiet bounded delta for replacement and clearing, even under context pressure, without repeating it", () => {
+    const updates = new VoiceContextUpdates(), send = vi.fn((_text: string) => true);
+    const input = { snapshot, jobs: [], conversation: "Still talking", focusNoteId: "n" };
+    updates.reset(input);
+    updates.update({ ...input, selection: first }, send);
+    const initial = JSON.parse(send.mock.calls[0][0]);
+    expect(initial).toMatchObject({ type: "selection_update", referenceOnly: true, selectedText: { id: first.id, passage: first.text } });
+    expect(initial.instruction).toContain("Do not speak");
+    updates.update({ ...input, selection: first }, send); expect(send).toHaveBeenCalledTimes(1);
+    updates.update({ ...input, selection: second, usageRatio: .82 }, send);
+    expect(JSON.parse(send.mock.calls[send.mock.calls.length - 1][0]).selectedText.passage).toBe(second.text);
+    updates.update(input, send);
+    expect(JSON.parse(send.mock.calls[send.mock.calls.length - 1][0])).toMatchObject({ type: "selection_update", selectedText: null });
+  });
+  it("retries a selection context update after a transport refusal", () => {
+    const updates = new VoiceContextUpdates(), input = { snapshot, jobs: [], conversation: "", focusNoteId: "n" };
+    updates.reset(input); const send = vi.fn((_text: string) => false);
+    updates.update({ ...input, selection: first }, send); send.mockReturnValue(true);
+    updates.update({ ...input, selection: first }, send); expect(send).toHaveBeenCalledTimes(2);
+  });
+});

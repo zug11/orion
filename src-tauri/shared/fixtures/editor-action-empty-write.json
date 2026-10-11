@@ -1,0 +1,35 @@
+{
+  "sessionId": "action_BRXXbbLCiKWBiOg4dr9X",
+  "id": "action-3",
+  "targetId": "target-2",
+  "capture": {
+    "documentVersion": "editor-doc__3RObAoPcJOkOGrC",
+    "selectionVersion": "editor-selection_xa3CFGbbEhFbe8wf",
+    "selection": {
+      "coordinateSystem": "prosemirror",
+      "from": 1,
+      "to": 1
+    },
+    "effectiveTarget": {
+      "coordinateSystem": "prosemirror",
+      "from": 0,
+      "to": 2
+    },
+    "baseNote": {
+      "id": "empty",
+      "title": "A blank note",
+      "slug": "empty",
+      "body": "",
+      "summary": "PRIVATEDONEMARKER stale summary",
+      "kind": "article",
+      "status": "ready",
+      "aliases": [],
+      "tags": [],
+      "conceptIds": [],
+      "sourceIds": [],
+      "createdAt": "2026-10-11T12:00:00.000Z",
+      "updatedAt": "2026-10-11T12:00:00.000Z"
+    },
+    "capturedBody": ""
+  }
+}

@@ -3,10 +3,11 @@
 import {
   act,
   fireEvent,
-  render,
+  render as renderView,
   screen,
   waitFor,
 } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { Concept, Note } from "../types";
 import { ConceptLinkPopover } from "./ConceptLinkPopover";
@@ -16,6 +17,84 @@ import { generateLinkTitleWithDeduplication } from "../lib/linkTitle";
 const NOW = "2026-07-28T10:00:00.000Z";
 
 describe("ConceptLinkPopover", () => {
+  it("starts with a focused note or URL destination and never requests AI on opening or search", () => {
+    const onGenerateTitle = vi.fn();
+    const onSubmit = vi.fn();
+    const onNoteLink = vi.fn();
+    renderView(<ConceptLinkPopover initialPhrase="it" selectedText="it" selectionMode="inline"
+      initialDestinationIds={[]} currentNoteId="current"
+      notes={[makeNote("current", "Draft"), makeNote("research", "Relational algebra")]}
+      aiArticleWritingEnabled onGenerateTitle={onGenerateTitle} onCancel={vi.fn()}
+      onSubmit={onSubmit} onNoteLink={onNoteLink} />);
+
+    const destination = screen.getByRole("textbox", { name: "Search notes or paste a URL" });
+    expect(destination).toHaveFocus();
+    expect(screen.queryByLabelText("Page title")).not.toBeInTheDocument();
+    fireEvent.change(destination, { target: { value: "algebra" } });
+    expect(screen.queryByRole("button", { name: /Draft/ })).not.toBeInTheDocument();
+    fireEvent.keyDown(destination, { key: "ArrowDown" });
+    expect(screen.getByRole("button", { name: /Relational algebra/ })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: /Relational algebra/ }));
+    expect(onNoteLink).toHaveBeenCalledWith("research");
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(onGenerateTitle).not.toHaveBeenCalled();
+  });
+
+  it("links a selected phrase to a normalized URL with no key or article creation", () => {
+    const onExternalLink = vi.fn();
+    const onSubmit = vi.fn();
+    renderView(<ConceptLinkPopover initialPhrase="the evidence" selectedText="the evidence" selectionMode="inline"
+      initialDestinationIds={[]} currentNoteId="current" notes={[makeNote("current", "Draft")]}
+      onExternalLink={onExternalLink} onCancel={vi.fn()} onSubmit={onSubmit} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Search notes or paste a URL" }), {
+      target: { value: "example.com/research?year=2026#results" },
+    });
+    fireEvent.submit(screen.getByRole("dialog"));
+    expect(onExternalLink).toHaveBeenCalledWith("https://example.com/research?year=2026#results");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it.each(["javascript:alert(1)", "data:text/html,script", "file:///Users/me/note", "https://user:secret@example.com"])("refuses %s instead of creating an article", (url) => {
+    const onExternalLink = vi.fn();
+    const onSubmit = vi.fn();
+    renderView(<ConceptLinkPopover initialPhrase="a phrase" initialDestinationIds={[]} currentNoteId="current"
+      notes={[]} onExternalLink={onExternalLink} onCancel={vi.fn()} onSubmit={onSubmit} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Search notes or paste a URL" }), { target: { value: url } });
+    expect(screen.getByRole("button", { name: "Add web link" })).toBeDisabled();
+    fireEvent.submit(screen.getByRole("dialog"));
+    expect(screen.getByRole("alert")).toHaveTextContent("valid http:// or https://");
+    expect(onExternalLink).not.toHaveBeenCalled();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("opens the saved external destination explicitly while allowing its replacement", () => {
+    const onOpenExternalLink = vi.fn();
+    const onExternalLink = vi.fn();
+    renderView(<ConceptLinkPopover initialPhrase="source" initialHref="https://example.com/original"
+      initialDestinationIds={[]} currentNoteId="current" notes={[]}
+      onOpenExternalLink={onOpenExternalLink} onExternalLink={onExternalLink} onCancel={vi.fn()} onSubmit={vi.fn()} />);
+    const destination = screen.getByRole("textbox", { name: "Search notes or paste a URL" });
+    expect(destination).toHaveValue("https://example.com/original");
+    fireEvent.change(destination, { target: { value: "https://example.com/replacement" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open link in browser" }));
+    expect(onOpenExternalLink).toHaveBeenCalledWith("https://example.com/original");
+    expect(onExternalLink).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Update link" }));
+    expect(onExternalLink).toHaveBeenCalledWith("https://example.com/replacement");
+  });
+
+  it("returns from article creation to the destination search, and Escape cancels either view", () => {
+    const onCancel = vi.fn();
+    renderView(<ConceptLinkPopover initialPhrase="SQL" initialDestinationIds={[]} currentNoteId="current"
+      notes={[]} onCancel={onCancel} onSubmit={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Create a linked article" }));
+    expect(screen.getByLabelText("Page title")).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Back to link destinations" }));
+    expect(screen.getByRole("textbox", { name: "Search notes or paste a URL" })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
   it("creates a blank named article without invoking AI", () => {
     const onSubmit = vi.fn();
     renderPopover(onSubmit);
@@ -433,6 +512,13 @@ describe("ConceptLinkPopover", () => {
     expect(onGenerateTitle.mock.calls[0][1]?.aborted).toBe(true);
   });
 });
+
+/** Existing article-flow checks enter its explicit secondary step. */
+function render(ui: ReactElement) {
+  const view = renderView(ui);
+  fireEvent.click(screen.getByRole("button", { name: /^(Create a linked article|Edit linked article or destinations)$/ }));
+  return view;
+}
 
 function renderContextSelection({
   onSubmit,

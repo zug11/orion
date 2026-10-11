@@ -20,7 +20,12 @@ vi.mock("./lib/storage", async (original) => ({
   loadSnapshot: runtime.load,
   saveSnapshot: runtime.save,
 }));
-vi.mock("./lib/useResolvedTheme", () => ({ useResolvedTheme: () => ({ palette: {}, glassStatus: null }) }));
+vi.mock("./lib/useResolvedTheme", async () => {
+  const { resolveThemePalette } = await import("./lib/theme");
+  const { defaultSettings } = await import("./data/defaults");
+  const palette = resolveThemePalette(defaultSettings, "dark");
+  return { useResolvedTheme: () => ({ palette, glassStatus: null }) };
+});
 vi.mock("./lib/useThemeIcon", () => ({ useThemeIcon: () => ({ mark: "", message: null }) }));
 vi.mock("./lib/assistant/executor", () => ({ startAssistantExecutor: () => () => undefined }));
 vi.mock("./components/Sidebar", () => ({ Sidebar: () => <aside aria-label="Library sidebar" /> }));

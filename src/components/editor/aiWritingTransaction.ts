@@ -5,8 +5,10 @@ import {
   Node as ProseMirrorNode,
   Slice,
 } from "@tiptap/pm/model";
-import { Selection, TextSelection } from "@tiptap/pm/state";
+import { Selection, TextSelection, type EditorState } from "@tiptap/pm/state";
+import { Transform } from "@tiptap/pm/transform";
 import type { AIWritingLength } from "../../lib/aiWriting";
+import type { EditorAIWorkingContext } from "../../lib/editorAIWorkingContext";
 import type { AIImageProposal } from "../../lib/aiImages";
 import type { NoteImageAttachment } from "../../types";
 import {
@@ -31,6 +33,8 @@ export interface AIWritingCapture {
   selectionJSON: Record<string, unknown>;
   storedMarksJSON: readonly Record<string, unknown>[];
   codeLanguage?: string;
+  /** Provider-only projection; originalDoc and every edit boundary remain authored. */
+  workingContext?: EditorAIWorkingContext;
 }
 
 export interface AIWritingParsedProposal {
@@ -45,8 +49,10 @@ let nextAIWritingPreviewRevision = 1;
 export function captureAIWritingSelection(
   editor: Editor,
   length: AIWritingLength,
+  captureState: EditorState = editor.state,
 ): AIWritingCapture {
-  const { doc, selection, storedMarks } = editor.state;
+  if (!captureState.doc.eq(editor.state.doc)) throw new Error("This capture does not belong to the current document.");
+  const { doc, selection, storedMarks } = captureState;
   const originalFrom = selection.from;
   const originalTo = selection.to;
   const target = normalizeTarget(editor, length);
@@ -60,7 +66,7 @@ export function captureAIWritingSelection(
         )
       : serializeFragment(editor, selectedSlice.content);
 
-  return {
+  const capture: AIWritingCapture = {
     from: target.from,
     to: target.to,
     previewAt: target.previewAt,
@@ -83,6 +89,8 @@ export function captureAIWritingSelection(
     ) as Record<string, unknown>[],
     codeLanguage: target.codeLanguage,
   };
+  capture.workingContext = captureAIWorkingContext(editor, capture, undefined, selection.from);
+  return capture;
 
   function normalizeTarget(
     current: Editor,
@@ -94,7 +102,7 @@ export function captureAIWritingSelection(
     mode: AIWritingTargetMode;
     codeLanguage?: string;
   } {
-    const currentSelection = current.state.selection;
+    const currentSelection = selection;
     const currentDoc = current.state.doc;
     if (currentSelection.empty) {
       if (current.isEmpty) {
@@ -152,6 +160,45 @@ export function captureAIWritingSelection(
     const to = topLevelEnd(currentDoc, originalTo);
     return { from, to, previewAt: to, mode: "blocks" };
   }
+}
+
+/** Build provider context from the full rich document, not a Markdown slice
+ * that may have lost its checked-task ancestor. This transform is never
+ * dispatched: it cannot change the authored note, selection or undo history. */
+export function captureAIWorkingContext(editor: Editor, capture: AIWritingCapture,
+  exactSelection?: { from: number; to: number }, caretPosition = editor.state.selection.from): EditorAIWorkingContext {
+  const captureFrom = exactSelection?.from ?? capture.from;
+  const captureTo = exactSelection?.to ?? capture.to;
+  const hidden: Array<{ from: number; to: number }> = [];
+  capture.originalDoc.descendants((node, position) => {
+    if (node.type.name !== "taskItem" || node.attrs.checked !== true) return true;
+    hidden.push({ from: position, to: position + node.nodeSize });
+    return false; // Descendants of a completed task are private as a unit.
+  });
+  const caret = caretPosition;
+  const selectionTouchesCompleted = !capture.empty && hidden.some(range => range.from < captureTo && range.to > captureFrom);
+  const caretInsideCompleted = capture.empty && hidden.some(range => range.from < caret && range.to > caret);
+  if (!hidden.length && !exactSelection) return {
+    documentMarkdown: capture.documentMarkdown, selectedMarkdown: capture.selectedMarkdown, selectedText: capture.selectedText,
+    beforeMarkdown: capture.beforeMarkdown, afterMarkdown: capture.afterMarkdown, selectionTouchesCompleted, caretInsideCompleted,
+  };
+  const transform = new Transform(capture.originalDoc);
+  for (const range of hidden.reverse()) transform.delete(range.from, range.to);
+  const projected = transform.doc;
+  projected.check();
+  const from = Math.max(0, Math.min(projected.content.size, transform.mapping.map(captureFrom, 1)));
+  const to = Math.max(from, Math.min(projected.content.size, transform.mapping.map(captureTo, -1)));
+  const selected = projected.slice(from, to).content;
+  return {
+    documentMarkdown: hidden.length ? serializeFragment(editor, projected.content) : capture.documentMarkdown,
+    selectedMarkdown: capture.empty ? "" : capture.mode === "code"
+      ? fencedCode(projected.textBetween(from, to, "\n"), capture.codeLanguage)
+      : serializeFragment(editor, selected),
+    selectedText: capture.empty ? "" : projected.textBetween(from, to, "\n\n").trim(),
+    beforeMarkdown: serializeFragment(editor, projected.slice(0, from).content),
+    afterMarkdown: serializeFragment(editor, projected.slice(to, projected.content.size).content),
+    selectionTouchesCompleted, caretInsideCompleted,
+  };
 }
 
 export function isAIWritingCaptureCurrent(

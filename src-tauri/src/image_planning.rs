@@ -228,7 +228,9 @@ async fn run(
     client: &Client,
     request: ImagePlanningRequest,
     context: Value,
+    authorize: impl Fn() -> Result<(), String>,
 ) -> Result<Value, String> {
+    authorize()?;
     let model = normalize_model(request.model.clone())?;
     let anthropic = is_anthropic_model(&model);
     let body = provider_body(&request, &model, context)?;
@@ -253,6 +255,7 @@ async fn run(
     } else {
         client.post(OPENAI_RESPONSES_URL).bearer_auth(key.as_str())
     };
+    authorize()?;
     let mut response = call
         .header(reqwest::header::ACCEPT, "application/json")
         .json(&body)
@@ -291,6 +294,7 @@ async fn run(
     .map_err(|_| {
         format!("{label} did not return a complete plan. Retry to resume from completed work.")
     })?;
+    authorize()?;
     parse_result(&text, &request.stage).map_err(|_| {
         format!(
             "{label} returned invalid structured evidence or an invalid visual brief. Try again."
@@ -319,18 +323,41 @@ where
 
 #[tauri::command]
 pub(crate) async fn plan_note_image(
+    window: tauri::WebviewWindow,
+    bridge: State<'_, assistant_bridge::AssistantBridge>,
+    editor_action_grant: Option<editor_actions_protocol::EditorActionGrant>,
     client: State<'_, OpenAiClient>,
     cancellation: State<'_, KnowledgeCancellation>,
     request: ImagePlanningRequest,
 ) -> Result<Value, String> {
     let context = validate_context(&request)?;
+    let external_model = request.model.clone();
+    let external_effort = request.effort.clone();
+    let external_phase = request.stage.clone();
+    let context_enabled = context["contextEnabled"].as_bool();
+    let authorize = || {
+        if let Some(grant) = &editor_action_grant {
+            bridge.editor_actions.provider(
+                window.label(),
+                grant,
+                editor_actions_protocol::ActionStage::ImagePlanning,
+                external_model.as_deref(),
+                external_effort.as_deref(),
+                context_enabled,
+                None,
+                Some(&external_phase),
+            )?;
+        }
+        Ok::<(), String>(())
+    };
+    authorize()?;
     let deadline = timeout_ms(&request);
     let stage = request.stage.clone();
     let request_id = request.request_id.clone();
     let registration = cancellation.register(&request_id);
     let generation = registration.generation;
     let result = await_stage(
-        run(&client.0, request, context),
+        run(&client.0, request, context, authorize),
         registration.receiver,
         &stage,
         deadline,

@@ -17,7 +17,9 @@ import { partitionImportSourcesForSynthesis } from "../importBatching";
 import { createKnowledgeReadingCache } from "../storage";
 import { prepareSpaceKnowledgeIndex, pendingSpaceBlueprints, buildSpaceBlueprintRequest, applySpaceBlueprintResult, buildSpaceRootRequest, applySpaceRootResult } from "../spaceKnowledge";
 import { applySpaceOverviewResult, hasSubstantiveOverviewNote, markSpaceOverviewStale } from "../spaceOverview";
-import { buildAssistantContext, noteCitation, researchSpace } from "./context";
+import { buildAssistantContext, noteCitation } from "./context";
+import { researchSpace } from "./research";
+import { reconcileImportedSourceCitations } from "../sourceDeletion";
 import type { AssistantRequest, WorkflowDependencies, WorkflowResult } from "./types";
 
 const timestamp = () => new Date().toISOString();
@@ -30,7 +32,9 @@ const upsert = <T extends { id: string }>(before: T[], additions: T[]) => {
 export function applyAssistantImport(snapshot: AppSnapshot, payload: ImportStudioApplyPayload): AppSnapshot {
   if (payload.baseSnapshotVersion && payload.baseSnapshotVersion !== stableSnapshotVersion(snapshot)) throw new Error("Import context changed before assembly.");
   const vocabulary = reconcileConceptVocabulary(upsert(snapshot.notes, payload.notes), upsert(snapshot.concepts, payload.concepts));
-  return markSpaceOverviewStale({ ...snapshot, ...vocabulary, sources: upsert(snapshot.sources, payload.sources), relationships: upsert(snapshot.relationships, payload.relationships), updatedAt: timestamp() });
+  return reconcileImportedSourceCitations(snapshot,
+    markSpaceOverviewStale({ ...snapshot, ...vocabulary, sources: upsert(snapshot.sources, payload.sources), relationships: upsert(snapshot.relationships, payload.relationships), updatedAt: timestamp() }),
+    payload.notes.map((note) => note.id));
 }
 
 function sourceInput(source: Source): ParsedImport {
@@ -119,7 +123,7 @@ export async function executeAssistantWorkflow(snapshot: AppSnapshot, request: A
     case "context": return { result: { ...buildAssistantContext(snapshot, request.input), providerCalls: 0 } };
     case "search": {
       const reply = await runSpaceSearch(snapshot, request.input.query, deps.chat, {
-        signal: deps.signal,
+        signal: deps.signal, taskView: request.input.task_view,
         onProgress: (message) => { void deps.progress(message).catch(() => undefined); },
       });
       await deps.assertCurrent();

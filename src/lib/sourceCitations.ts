@@ -1,4 +1,5 @@
 import type { Source } from "../types";
+import { Lexer, type Token } from "marked";
 import {
   restoreMarkdownFrontmatter,
   splitMarkdownFrontmatter,
@@ -47,7 +48,7 @@ function escapeMarkdownLabel(value: string): string {
 function markdownCodeRanges(markdown: string): MarkdownRange[] {
   const ranges: MarkdownRange[] = [];
   const patterns = [
-    /(^|\n)(?: {0,3})(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n {0,3}\2[ \t]*(?=\n|$)|$)/g,
+    /(^|\n)(?: {0,3})(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n {0,3}\2[ \t]*\r?(?=\n|$)|$)/g,
     /(`+)([^`\n]|`(?!\1))*?\1/g,
   ];
 
@@ -86,7 +87,7 @@ function isProtectedSourceLink(
   );
 }
 
-function splitTrailingReferences(markdown: string): TrailingReferences {
+export function splitTrailingReferences(markdown: string): TrailingReferences {
   const headings = [...markdown.matchAll(REFERENCE_HEADING_PATTERN)];
   const codeRanges = markdownCodeRanges(markdown);
 
@@ -215,6 +216,48 @@ export function canonicalizeSourceCitations(
   };
 }
 
+/** Exact existing citation grammar, restricted to authored Markdown prose.
+ * Import provenance must not turn code, image alt text or raw HTML examples
+ * into durable edges, even when they happen to contain a source-shaped URL.
+ */
+export function proseSourceCitationIds(markdown: string): string[] {
+  const candidates = new Set(canonicalizeSourceCitations(markdown, []).references.map((reference) => reference.sourceId));
+  if (!candidates.size) return [];
+  const body = splitTrailingReferences(splitMarkdownFrontmatter(markdown).content).body;
+  const found = new Set<string>();
+  const exactCitation = new RegExp(`^(?:${SOURCE_LINK_PATTERN.source})$`);
+  const html: string[] = [];
+  const voidTags = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
+  const visit = (tokens: readonly Token[]) => { for (const token of tokens) {
+    if (token.type === "image" || token.type === "code" || token.type === "codespan") continue;
+    if (token.type === "html") {
+      if (token.raw.trimStart().startsWith("<!--")) continue;
+      for (const match of token.raw.matchAll(/<(\/?)([a-z][a-z\d-]*)\b[^>]*>/gi)) {
+        const tag = match[2].toLowerCase();
+        if (match[1]) {
+          const index = html.lastIndexOf(tag);
+          if (index >= 0) html.splice(index);
+        } else if (!voidTags.has(tag) && !/\/\s*>$/.test(match[0])) html.push(tag);
+      }
+      continue;
+    }
+    if (token.type === "link" && !html.length) {
+      const sourceId = exactCitation.exec(token.raw)?.[2];
+      // Marked retains some entities until HTML rendering; never choose a
+      // different opaque ID depending on which reading surface opens the link.
+      const entityDestination = sourceId && /&(?:#\d+|#[xX][\da-fA-F]+|[a-zA-Z][a-zA-Z\d]+);/.test(sourceId);
+      if (sourceId && !entityDestination && token.href === `orion-source://${sourceId}` && candidates.has(sourceId)) found.add(sourceId);
+    }
+    if (token.type === "table") {
+      for (const cell of [...token.header, ...token.rows.flat()]) visit(cell.tokens);
+    } else if (token.type === "list") {
+      for (const item of token.items) visit(item.tokens);
+    } else if ("tokens" in token && token.tokens) visit(token.tokens);
+  } };
+  visit(Lexer.lex(body, { gfm: true }));
+  return [...found];
+}
+
 /**
  * Removes citations to deleted sources. Numeric citation markers disappear;
  * descriptive links created by older Orion builds keep their readable words.
@@ -253,7 +296,9 @@ export function removeSourceCitations(
     const isGeneratedNumber =
       /^\s*\d+\s*$/.test(label) &&
       trailing.titlesBySourceId.has(match[2]);
-    body += isGeneratedNumber ? REMOVED_CITATION : label;
+    // Dropping the link wrapper must preserve authored Markdown escapes and
+    // inline formatting; unescaping here can turn visible brackets into syntax.
+    body += isGeneratedNumber ? REMOVED_CITATION : match[1];
     cursor = matchEnd;
   }
   if (!foundRemovedSource) return markdown;

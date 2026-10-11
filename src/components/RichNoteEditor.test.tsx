@@ -179,14 +179,10 @@ describe("RichNoteEditor AI writing", () => {
       aiProviderName="OpenAI"
     />);
 
-    const toggle = screen.getByRole("button", { name: "Turn on AI tools" });
-    expect(toggle.textContent).toBe("");
-    expect(toggle).toHaveAttribute("aria-disabled", "true");
-    expect(toggle).toHaveAttribute("title", "Add an OpenAI key in Settings to use AI tools");
-    fireEvent.click(toggle);
-    expect(screen.getByText("Add an OpenAI key in Settings to use AI tools."))
-      .toHaveAttribute("aria-live", "polite");
-    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("button", { name: "Turn on AI tools" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "More formatting" }));
+    const write = screen.getByRole("menuitem", { name: "Write with AI" });
+    expect(write).toBeEnabled();
     expect(onChange).not.toHaveBeenCalled();
     expect(onGenerateAIWriting).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "Continue" })).not.toBeInTheDocument();
@@ -219,12 +215,11 @@ describe("RichNoteEditor AI writing", () => {
         </div>,
       );
 
-      fireEvent.click(
-        screen.getByRole("button", { name: "Turn on AI tools" }),
-      );
+      fireEvent.click(screen.getByRole("button", { name: "More formatting" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Write with AI" }));
       expect(onGenerateAIWriting).not.toHaveBeenCalled();
       fireEvent.click(
-        await screen.findByRole("button", { name: "Continue" }),
+        await screen.findByRole("button", { name: "Write" }),
       );
 
       expect(
@@ -237,7 +232,7 @@ describe("RichNoteEditor AI writing", () => {
           length: "paragraph",
           instruction: "",
           documentMarkdown: "The opening thought.",
-        }),
+        }), expect.any(AbortSignal),
       );
 
       fireEvent.click(
@@ -292,11 +287,10 @@ describe("RichNoteEditor AI writing", () => {
         </div>,
       );
 
+      fireEvent.click(screen.getByRole("button", { name: "More formatting" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Write with AI" }));
       fireEvent.click(
-        screen.getByRole("button", { name: "Turn on AI tools" }),
-      );
-      fireEvent.click(
-        await screen.findByRole("button", { name: "Continue" }),
+        await screen.findByRole("button", { name: "Write" }),
       );
       expect(
         await screen.findByRole("button", { name: "Cancel AI writing" }),

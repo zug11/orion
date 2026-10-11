@@ -1,0 +1,20 @@
+{
+  "rewrite": {
+    "spaceId": "isolated-editor-action-space",
+    "action": {
+      "kind": "rewrite",
+      "preset": "clarify",
+      "instruction": "Preserve the author’s voice."
+    },
+    "acceptedBody": "---\ntitle: The keeper’s letter\n---\n\nThe keeper watched the sea. Her compass 🧭 was still.\n\n- [x] PRIVATEDONEMARKER The old lighthouse debt is settled.\n  - [ ] PRIVATECHILDMARKER is inside the completed item.\n- [ ] Follow the keeper along the moonlit coast.\n\nThe letter was still warm."
+  },
+  "empty-write": {
+    "spaceId": "isolated-editor-action-space",
+    "action": {
+      "kind": "write",
+      "amount": "paragraph",
+      "instruction": "Write a calm coastal opening."
+    },
+    "acceptedBody": "Follow the keeper along the moonlit coast."
+  }
+}

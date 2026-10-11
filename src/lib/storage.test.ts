@@ -47,6 +47,20 @@ const invokeTauriMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeTauriMock }));
 
+describe("native Chat errors", () => {
+  it("preserves a native string rejection as an actionable Error for Chat and voice", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
+    invokeTauriMock.mockRejectedValue("The provider timed out while reading. Please retry.");
+    try {
+      await expect(chatWithOrion({ prompt: "Read this note", workspaceName: "Space", notes: [], sources: [], concepts: [], history: [] }))
+        .rejects.toThrow("The provider timed out while reading. Please retry.");
+    } finally {
+      Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+      invokeTauriMock.mockReset();
+    }
+  });
+});
+
 describe("organizer instruction boundaries", () => {
   it("keeps task guidance before a full, independently bounded Space preference", () => {
     const suffix = buildOrganizerInstructionSuffix({

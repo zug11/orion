@@ -4,6 +4,14 @@ This file is the durable operating manual for anyone changing Orion. Read it
 before editing the application. Keep it accurate when architecture, commands,
 security boundaries, schemas, or release procedures change.
 
+The active physical checkout is `/Users/zzz/Developer/orion`, outside iCloud.
+The previous Documents path is a compatibility symlink for existing Codex tasks
+and launch paths. Prefer the Developer path for new work. The older Developer
+snapshot is preserved at `~/Developer/orion-before-cutover-20261011-163852`;
+it is an archive, not another active checkout. Do not delete the compatibility
+link, archived tree or retained conflict copies as incidental cleanup.
+See `docs/development-checkout.md` for migration evidence and path ownership.
+
 ## Product intent
 
 Orion is a beautiful, local-first Tauri knowledge atlas. People import source
@@ -66,14 +74,18 @@ These product decisions are intentional:
 - Spaces are hard project boundaries. Notes, concepts, sources, relationships,
   Chat history, navigation, and automatic links must never leak across Spaces.
 - Chat is one Space-scoped conversation surface. It must not expose a card,
-  proposal, curation, dialectic, promotion, or canvas workflow. When the user
+  curation, dialectic, promotion, or canvas workflow. A requested text edit is reviewed in the actual note, with highlighted
+  replacements, gray additions, and Accept changes/Discard. When the user
   explicitly asks Chat to create or save notes, the host may authorize one
   response to carry at most three bounded creation-only actions; valid actions
   become permanent editable notes in that active Space immediately. The host
   derives that authority from the current user prompt, never Space context or
   model output. Every assistant reply can also be kept through the ordinary
-  local **Keep as note** action. Neither path may update/delete a note or cross
-  Spaces.
+  local **Keep as note** action. These creation paths cannot update/delete a note
+  or cross Spaces. Explicit editing requests or composer edit modes may separately propose
+  bounded focused replacements or a full rewrite for the attached note. Accept rechecks its
+  Space and original body and uses the normal rich editor and autosave, with
+  one Undo. Never silently apply an edit or allow the model to choose a target.
 - AI is optional. Writing, local imports, on-device OCR and transcription,
   source provenance, links, search, Spaces, and web/Markdown export must remain
   useful without an OpenAI or Anthropic key.
@@ -101,8 +113,8 @@ These product decisions are intentional:
   persisted representation.
 - Tauri 2 and Rust provide persistence, OS-keychain access, OpenAI and Anthropic
   calls, native dialogs, media transcription, YouTube downloading, and export.
-- Vitest covers renderer logic. Rust unit tests live at the end of
-  `src-tauri/src/lib.rs`.
+- Vitest covers renderer logic. Native Rust unit tests live with their owning
+  modules, with the remaining command tests in `src-tauri/src/lib.rs`.
 
 Important paths:
 
@@ -142,6 +154,10 @@ src/lib/linkedArticle.ts            selected-text article request and AI merge
 src/lib/wikiEnrichment.ts           new-note wiki refresh requests and safe merge
 src/lib/wiki.ts                     link resolution, references, and backlinks
 src/lib/chat.ts                     bounded Chat context and message updates
+src/lib/chatEdits.ts                current-note edit authority, evidence and stale guards
+src/lib/chatEditsProtocol.json      shared native/browser edit limits and instructions
+src/components/ChatEditPreview.tsx  transient before/after preview and Apply/Discard
+src/components/editor/chatEditTransaction.ts one undoable rich-editor edit
 src/lib/aiImages.ts                 adaptive illustration research and resumable checkpoints
 src/lib/imageContextSearch.ts       incremental Space-local exact passage search
 src/lib/aiImagePlanningProtocol.json shared read-only image planning instructions/schema
@@ -152,6 +168,10 @@ src/lib/transcription.ts            transcript-to-source normalization
 src/lib/tasks.ts                    Space task extraction and persisted toggles
 src/lib/webExport.tsx               offline HTML scope, rendering, and privacy
 src-tauri/src/lib.rs                native commands and trust boundaries
+src-tauri/src/local_transcription.rs offline media/dictation, Whisper runtime and speech alignment
+src-tauri/src/knowledge_schemas.rs  pure organizer/knowledge JSON schemas and provider schema adapters
+src-tauri/src/connector_installation.rs bundled connector validation and native install-page openers
+src-tauri/src/chat_reading.rs       bounded reading schemas, requests, checkpoints and parser tests
 src-tauri/mcp-server/               local read-write MCP server for Claude
 src-tauri/tauri.conf.json           window, CSP, identity, and bundle settings
 src-tauri/native/OrionOCR/           Apple Vision text-recognition sidecar source
@@ -200,7 +220,14 @@ dependencies, and bundles with Tauri. Only the staged config and Keychain
 service change to `app.orion.desktop-preview`, with a separate URL scheme.
 Never copy, reset, or seed the user's vault for this preview. Its library
 persists across preview builds; normal Quit must complete before rebuilding
-a running preview. This ad-hoc local app is not a release artifact.
+a running preview for replacement. `--build-only` instead builds and verifies a
+separate app without querying, quitting or launching the running Preview. It
+writes `outputs/native-preview/latest-built-app.txt`, leaving `latest-app.txt`
+unchanged. Each build records the physical source root, exact staged input
+hashes (including untracked files), Git HEAD and Preview identity patches in
+`source-manifest.json`; this identifies the captured staging tree, not an atomic
+snapshot of a concurrently edited checkout. Shared Cargo caches are excluded.
+This ad-hoc local app is not a release artifact.
 Vitest excludes `outputs/`, which may contain archived diagnostic test fixtures;
 maintained application tests belong in `src/`. TypeScript excludes local
 `* 2.ts` / `* 2.tsx` duplicate copies under `src/`; these retained copies are
@@ -213,6 +240,16 @@ misaligned proc-macro dylibs with the macOS 27 toolchain
 ([upstream issue](https://github.com/rust-lang/rust/issues/157750)). Retain this
 until the supported compiler includes the fix. The independent MCP package
 keeps its existing remapping, stripping, signing, and verification pipeline.
+
+`src-tauri/src/local_transcription.rs` owns offline media imports, persistent
+dictation workers, YouTube acquisition, bundled Whisper runtime validation and
+local alignment of generated speech. `media_jobs.rs` continues to own cancellation,
+window scope and subprocess lifetime. Tauri command names/arguments remain stable;
+the application manages `VoiceMemoWorkers` once and the assistant bridge calls
+the same controlled transcription helpers. Provider speech generation, credentials
+and the Preview Keychain-service rewrite remain in `lib.rs`. Keep temporary-media
+cleanup, partial batch results, deadlines and on-device-only transcription intact
+when changing this module.
 
 ## Persistence and schema rules
 
@@ -262,7 +299,10 @@ flushed temporary file plus atomic replacement.
   The new glass shaders share the existing bounded local WebGL lifecycle,
   daylight shading, custom colour pair, offscreen pause, context recovery,
   and reduced-motion handling. Do not import retired shader components into
-  the active renderer.
+  the active renderer. Palette object refreshes with unchanged render colours must
+  not recreate procedural canvases. Preserve elapsed animation time across
+  colour/motion updates and WebGL context recovery; visibility pauses must
+  resume the existing phase rather than restart it.
 - `homeAtmosphereCustomColor` and `homeAtmosphereCustomSecondaryColor` are
   optional six-digit hex colours (or empty) at the storage boundary, hydrated
   to empty for older vaults. Together they override the first two colour
@@ -477,14 +517,61 @@ provider calls, under the existing direct local-library access contract.
   edits do not. A stale retry must never duplicate an append or erase new text.
 - `orion_apply_note_command` is a direct local version-guarded writer for portable
   editor content. Its finite command set covers writing blocks, text/headings,
-  tasks/lists, dividers, quotes/code, tables, same-Space note links and excerpts,
+  tasks/lists, dividers, quotes/code, tables, web links, same-Space note links and excerpts,
   and already referenced managed images. Insertions use note boundaries or an
   exact unique anchor; validate destination/source versions and target ownership
   under the same vault lock. Never execute arbitrary slash text, shell commands,
-  provider calls, or native pickers. Contextual table deletion remains a guarded
-  exact text edit. Preserve block framing, safe Markdown escaping, and import
+  provider calls, or native pickers. Preserve block framing, safe Markdown escaping, and import
   round trips; flatten balanced pre-existing frames when wrapping content and
   reject malformed frames or insertions that would create nested blocks.
+  `paragraph_format`, `document_margins` and `image_layout` modify existing
+  portable metadata under the same write guard. Paragraphs/ATX headings and
+  standalone managed images require exact whole anchors, not partial structural
+  ranges. Paragraph alignment is left/justify; margins are integer percentages
+  0–25. The finite image schema preserves omitted and unknown existing fields,
+  distinguishes null/zero/false resets, validates position against width, and
+  never imports an asset. Reject invalid numeric values instead of clamping.
+  Layout commands do not accept insertion placement or replacement text.
+  `table_layout` and `table_edit` use an exact complete GFM table anchor including
+  its adjacent metadata, with zero-based logical row/column indices. An empty
+  synthetic header for a headerless table never counts as a data row. Preserve
+  untouched cell Markdown and unknown valid metadata; reject partial tables,
+  code/HTML examples, malformed geometry and stale versions. Explicit row,
+  column or table deletion authorizes that exact removal; shrinking dimensions
+  requires `allow_content_removal: true` when occupied cells would be lost.
+  Width-only changes proportionally scale existing measured columns, matching
+  the editor. Explicit column widths take precedence. Existing oversized imports
+  retain their untouched axis; new growth remains within the editor limits.
+  `inline_format` applies/removes bold, italic, strike or code with an explicit
+  `enabled` boolean and unique original-Markdown anchor. It edits one ordinary
+  paragraph/ATX heading, including within Orion frames, with source-span parsing
+  and visible-text/mark/link equivalence checks. Removal requires complete
+  delimiters; code application accepts unformatted single-line text. `unlink`
+  removes one complete explicit web/note/concept link, retaining its label and
+  marks. Exclude citations, excerpts, autolinks and reference-style links; never
+  mutate concept vocabulary or claim that unlink disables automatic decoration.
+  Both commands reject unsupported containers or partial syntax, keep unrelated
+  source bytes and take no insertion placement/replacement text. The independent
+  MCP crate pins pulldown-cmark 0.13.4 without default features. Include its MIT
+  notice and unicase's MIT notice in both connector packages and the app, and
+  verify those notices after archive extraction.
+  `source_citation` is a separate finite command. Insert requires the current
+  exact same-Space source version as well as the note version; attach both
+  `note.sourceIds` and `source.noteIds` under the same vault lock. Its optional
+  `sourceAttachments` receipt exposes the resulting bounded source/version.
+  Remove requires one exact unique citation anchor and retains provenance.
+  Rebuild only recognized numbered markers and a renderer-owned trailing
+  References footer; preserve authored References prose and literal examples.
+  Reject unsupported citation syntax, ambiguous IDs and unsafe anchors without
+  writing. No provider request, source fetch or source deletion is implied.
+  `link` requires exactly one of `target_note_id` or `url`. The URL variant
+  follows `externalLinks.ts`: bounded HTTP/HTTPS only, recognizable bare domains
+  normalize to HTTPS, and credentials, controls, spaces and backslashes are
+  rejected. WHATWG parsing uses the pinned `url` crate; no destination is fetched.
+  Escape literal labels and URL parentheses for Markdown. An omitted URL-link
+  label preserves the exact replacement anchor, or uses the normalized address
+  at other placements. Existing note links retain their same-Space target check
+  and default title; excerpt source-version checks remain separate.
 - Tasks remain Markdown checkboxes. Return exact raw text and zero-based line
   indices, ignore frontmatter/fenced examples, and change only the requested
   marker. Collapse matching task copies only with shared provenance or a wiki
@@ -504,15 +591,203 @@ provider calls, under the existing direct local-library access contract.
 - Run `script/test_mcp_library.mjs` against each exact extracted package binary
   and include this harness in release fingerprints. The harness uses only
   isolated fixtures and exercises all 21 local additions, including real atomic edits.
+  Its completed-task contract checks default and explicit working reads, scoped
+  history, cached derivative suppression, completion followed by a fresh read in
+  the same process, original versions/Unicode-scalar ranges/CRLF line positions,
+  fenced examples and independent requirements, and byte-for-byte unchanged
+  Markdown outside the intended checkbox. It rejects filtered whole-note
+  replacement and stale completion retries. Passing a freshly built binary does
+  not establish that either client's installed copy has been updated.
 
 ### Optional native desktop workflows
 
-The shared connector now exposes 44 tools: 30 local library tools and 14 desktop workflows. The optional workflows are
+The shared connector now exposes 55 tools: 30 local library tools, 14 desktop
+workflow/capability/job tools, three native edit-review tools and one read-only
+active-editor-context tool, plus three finite voice work-order tools and four
+captured-editor-generation tools. The optional workflows are
 `orion_get_capabilities`, `orion_get_context`, `orion_research`,
 `orion_search_space`, `orion_export_word`, `orion_import`,
 `orion_reprocess_sources`, `orion_generate`, `orion_develop_concept`,
 `orion_enrich_knowledge`, `orion_refresh_overview`, `orion_get_job`,
 `orion_list_jobs`, and `orion_cancel_job`.
+
+`orion_list_voice_work_orders`, `orion_get_voice_work_order` and
+`orion_control_voice_work_order` address existing voice workers through an exact
+`orion_get_capabilities.voiceTargets` identity. These are separate from ordinary
+workflow jobs. The owning library window advertises its current Space even while
+audio is idle; note/Chat navigation and Stop preserve that identity, while a Space
+change, window close, retired renderer session or expired 30-second lease removes
+it. Writing windows cannot register. Native registration trusts the library
+renderer to report its current Space, then binds that exact Space/window/session
+to an opaque target; it never silently chooses another window.
+
+`src-tauri/shared/voice_work_orders_protocol.rs` owns strict request and bounded
+response validation. `assistant_voice_work_orders.rs` owns a separate authenticated
+socket mailbox: immediate request/receipt handling, eight pending requests, 32
+retained receipts, 64 owners and at most 128 active external revision grants.
+The MCP caller polls within three seconds. Controls require a unique idempotency
+key, exact worker revision and opaque control version. A native decision claim
+precedes mutation; recheck the renderer's version after that asynchronous claim.
+Cancel is a no-op on terminal jobs, preserving findings. Read/cancel need enabled
+desktop access to the exact Space but no AI or write grant; retry/steer additionally
+need AI permission and a ready selected provider. Neither path grants note writes.
+
+`src/lib/assistant/voiceWorkOrders.ts` sends only identity/readiness heartbeats.
+`voiceWorkOrderHost.ts` merges admitted workers and pending reservations without
+cloning their captured context. Stable inventory versions guard subsequent pages;
+reservation generations guard revisions still numbered 1. Steering a waiting
+worker admits that same ID with its original note/selection, consumes only that
+member and invalidates dependent clarification routes. Admitted retry/steer uses
+the existing reader with host-enforced search-only authority. Every provider
+stage and result publication rechecks the exact native grant under a fresh vault
+lock; revocation, owner loss and mailbox failure cancel only external revisions.
+Terminal/superseded grants are released. No MCP operation controls the microphone,
+playback, call connection, conversational focus, selection, navigation or saving;
+external findings remain inspectable without unsolicited spoken commentary.
+Reject external retry/steer of the currently focused worker before and after the
+native claim; ask the user to return to the main conversation first. This prevents
+the existing stale-focus handoff from reconnecting audio as a control side effect.
+
+Public details expose bounded exact findings, evidence ranges, coverage and public
+checkpoint decisions/open questions/finite next operations, never raw transcripts,
+captured selections, discovery dumps, queries or private provider reasoning.
+Working reads withhold all history-derived freeform content, including paraphrases;
+explicit history is required to inspect it or continue/retry its scope. A new
+working scope drops historical memory. Stale evidence also withholds content.
+Return exact UTF-16 fragments, Unicode-scalar omissions and one shared max_chars
+budget up to 12,000. This source/fixture contract is separate from installing the
+updated connector or validating real voice/provider behavior.
+
+`orion_get_editor_context` reads one exact native-issued
+`orion_get_capabilities.editorTargets` entry. It requires enabled desktop
+workflows and the exact allowed Space, independently of AI/write grants or a
+voice call. `src-tauri/shared/editor_context_protocol.rs` owns its finite schema;
+`src-tauri/src/assistant_editor_context.rs` owns a separate read mailbox. The
+authenticated socket handles request/get immediately; the MCP tool polls within
+a three-second bound, so waiting for a renderer cannot block research control.
+Keep at most eight pending reads, 64 targets and a 30-second target lease.
+Responses are consumed once; do not retain selected text as job history.
+
+`src/lib/assistant/editorContext.ts` advertises only exact note/Space identity and
+readiness. It sends text only for an explicit read. NoteView supplies the current
+authored document ahead of parent/save debounce, with no forced flush; Flow,
+unaccepted Chat review and generated writing previews are unavailable. A
+selection drag becomes pending before the 180 ms settling period. Preserve
+captures when other controls take focus, but invalidate them on navigation or
+authored changes and recheck after an asynchronous poll.
+
+`src/lib/editorSelectionContext.ts` projects the local capture before IPC. Working
+view omits completed-task text; explicit history may include it. Return bounded
+exact fragments and original DOM UTF-16 offsets, with scalar-count omissions and
+truncation. Rich-editor carets use real ProseMirror positions; reading carets use
+DOM UTF-16. A cursor supplies no surrounding prose and never becomes voice
+context. Bounds are 12,000 Unicode characters and 128 fragments. The prefixed
+`documentVersion` is a displayed-document fingerprint, not a native persisted
+`expected_version`; it cannot authorize a direct write or edit-review proposal.
+Readiness changes retain the target ID; changing its note, Space or renderer
+session invalidates the old target. Native caller window ownership is implicit,
+including immutable writing-window routes. Never silently pick another window.
+
+`orion_capture_editor_action`, `orion_start_editor_action`,
+`orion_get_editor_action` and `orion_cancel_editor_action` use the separate
+`editorActionTargets` capability and native mailbox in
+`assistant_editor_actions.rs`, with the strict shared
+`editor_actions_protocol.rs` contract. Capture binds one finite Write amount,
+Rewrite preset or Image quality/context choice plus bounded instructions to the
+actual ready rich editor. It performs no generation, navigation or editing.
+Never use the read-only context tool's DOM offsets as edit authority. The native
+capture ID binds window/session/Space/note, actual ProseMirror selection and
+effective target, displayed-document and selection versions, and an exact
+persisted-note baseline. Original rich data stays local; the native mailbox
+receives bounded private baseline/captured bodies only to verify freshness.
+Public receipts expose no note body, generated prose or image bytes.
+
+Start consumes that capture with an idempotent request ID; changed arguments or
+a changed document/selection require a new capture. Do not revive an old capture
+after moving the selection away and back or undoing a document change. A normal
+autosave of the exact captured draft may advance only its body and update time;
+other persisted edits invalidate it. The mailbox retains at most eight pending
+actions, 32 receipts and 64 owners, with a 30-second owner/capture lease, three
+seconds to answer a capture, 20-minute operation limit and bounded private text.
+It is independent of the research executor. Flow, dictation, local composers,
+uploads and existing reviews make new captures unavailable.
+
+External generation requires enabled workflows, the exact allowed Space, AI and
+workflow-write grants. Every actual native text/image provider dispatch and
+publication checks its exact action/window/session grant and current settings.
+Image research uses the existing low-effort reader stages and configured effort
+for composition. External Enrich and Related Space image requests require the
+saved existing-note context preference; they cannot substitute for the local
+UI's explicit per-action consent. Authority travels as a separate native invoke argument,
+never in model context; browser provider fallbacks reject it.
+
+`src/lib/assistant/editorActions.ts` coordinates the owning App's mailbox with
+the real rich editor via `editorActionHost.ts`. Local Accept must await a native
+claim, then recheck the captured rich document before the existing one-Undo
+transaction. Image bytes are persisted only after that claim. Discard or
+cancellation before acceptance cannot mutate authored text. A physical text
+provider request may finish after cancellation; keep its scheduler slot until
+settlement and suppress its late result. External generation Retry requires a
+fresh capture rather than silently repeating paid work.
+
+Record the actual serialized body after acceptance and flush through the normal
+revision-guarded save queue. Only fresh disk equality yields a `saved` receipt
+and note citation; an accepted editor edit and a saved note are distinct states.
+Save failure preserves the local edit without replaying insertion. An already
+accepted transaction may finish saving after navigation in its owning session.
+These implementation and fixture contracts do not establish installed-client,
+live-provider or native interaction acceptance.
+
+`orion_propose_note_edit`, `orion_get_edit_review`, and
+`orion_cancel_edit_review` use a separate transient review lane. They do not
+occupy the ordinary executor while a person considers a proposal. Discover
+native-issued targets through `orion_get_capabilities.reviewTargets`; each is
+bound to an actual window, renderer session, active Space and open note.
+Submissions require an exact target, note and current opaque version. Never
+navigate another window or switch its Space to satisfy a submission. Writing
+windows additionally retain their immutable native note route.
+
+Review access requires enabled workflows, the exact allowed Space and write
+permission, but no AI permission or provider call. Reuse the existing in-note
+focused/full-rewrite validation, decorations, Accept/Discard and one Undo.
+Submitting or discarding a proposal does not mutate the note. A native decision
+claim must precede acceptance; cancellation cannot pretend to undo a claim or
+accepted edit. Receipt states distinguish editor acceptance from verified disk
+persistence. Save failures retain the accepted local text and existing conflict
+UI; never replay the transaction or report a saved citation before checking the
+persisted body. The review is transient and independent of Chat history.
+Completed-task working views cannot become whole-note replacements; explicit
+history is required for a rewrite when the original has hidden completed tasks.
+Keep source bodies and proposal base bodies out of external receipt/target data.
+
+`src-tauri/shared/assistant_review_protocol.rs` owns the finite external review
+schema. `src-tauri/src/assistant_review.rs` keeps its separate bounded native
+mailbox and receipts; it never writes the vault or calls a provider. Review
+commands receive the real Tauri caller window implicitly. Writing-window targets
+must match their immutable launch route. `src-tauri/shared/note_version.rs`
+preserves the independent MCP crate's existing opaque v1 projection for native
+version checks. Do not substitute renderer timestamps or body-only hashes.
+
+`src/lib/assistant/editReviews.ts` registers a window-local mailbox independently
+from the single research executor. The App supplies its existing serialized save
+queue and the real note surface supplies readiness. A proposal may enter review
+in the same note's reading surface but must never navigate to a different note.
+The rich editor awaits a native acceptance claim, then rechecks its document and
+review identity before the existing single Undo transaction. Capture the actual
+serialized body after normal React updates settle; only native verification of
+that body on fresh disk can report `saved`. A failed receipt or save must never
+replay the editor transaction. Keep local accepted text available to resolve a
+save conflict. An admitted transaction may complete after navigation while its
+window/session remains alive. Revoked grants prevent new proposals/claims.
+
+Review targets have a 30-second lease; at most 64 live sessions, eight pending
+reviews and 32 retained receipts are allowed. Limit individual base/accepted
+bodies to 2,000,000 bytes, retained body/edit memory to 16 MiB and encoded
+deliveries to 2 MiB. Pending reviews expire after 20 minutes; terminal receipts
+after one hour. There is one pending review per target. Unknown fields and
+caller-supplied acceptance, model, title and base-body arguments are rejected.
+Keep a stable renderer session across ordinary navigation and grant changes;
+when idle with no permitted target, it need not poll native storage.
 
 - `src-tauri/shared/assistant_protocol.rs` defines the strict, bounded request
   contract. `src-tauri/src/assistant_bridge.rs` owns the per-user Unix socket,
@@ -537,6 +812,18 @@ The shared connector now exposes 44 tools: 30 local library tools and 14 desktop
   versioned excerpts, host-built citations, partial coverage, and explicit AI
   interpretation. Research never writes notes or Chat. Follow-ups reject stale
   prior Space versions. Unknown usage is not zero or a dollar estimate.
+- `assistant/research.ts` runs desktop MCP research through `runChatReading` in
+  read-only search mode, followed by one structured findings-synthesis call.
+  The bounded reader can use up to six calls; synthesis adds one. Explicit
+  note/source IDs are priority references, not an exclusive corpus. The full
+  supported question and comparison material remain reference context, without
+  Chat history, active editor selection or write authority. Findings may cite
+  only retained exact evidence; directories and prior interpretations are not
+  evidence. `researchCheckpoint.ts` validates host-produced task memory from a
+  succeeded prior job in the same Space, snapshot and working/history view.
+  Retain at most 1,000,000 UTF-8 bytes with explicit continuity omissions inside
+  the existing 2 MiB job-result contract. Missing older checkpoints start fresh;
+  malformed or stale checkpoints fail. This does not retain hidden reasoning.
 - `orion_search_space` explicitly runs the same adaptive exact-passage AI search
   as the app, with a 600-character query bound, no Chat history or note actions,
   immutable Space context, configured-provider policy, and partial coverage.
@@ -1705,14 +1992,57 @@ entry paths, content types, CRCs, expanded sizes, and required OOXML parts befor
 Save As; it flushes then atomically replaces only the user-selected `.docx` file.
 
 DOCX imports use Mammoth semantic HTML with embedded style maps and external
-file access disabled, then `docxImport.ts` converts to safe portable Markdown.
-Preserve headings, emphasis, lists, checkbox text, tables, quotes, code and safe
-public links. Embedded pictures remain descriptive alt text during extraction;
-never load arbitrary image paths or silently discard this limitation. Both
+file access disabled, then `docxImport.ts` delegates to the bounded inert HTML
+extractor. Its Word profile retains leading checkbox glyph tasks and safe
+mailto links without changing ordinary HTML import. Preserve headings, emphasis,
+lists, actual table headers/data rows, quotes, literal punctuation/entities and
+code spacing. Embedded pictures remain descriptive alt text during extraction;
+never read their bytes or load arbitrary image paths. Return explicit conversion
+warnings for omitted pictures and simplified structures alongside Mammoth's
+warnings. Both
 Import Studio and `orion_import` use this same parser. Markdown import and MCP
 note writes preserve Orion's portable blocks/table/alignment/margins/image
 metadata. Mammoth's semantic DOCX extraction does not retain paragraph indents;
 do not claim that importing a Word document restores Orion margin settings.
+Validate real generated DOCX bytes through the shared file parser, import
+payload and repeated production-editor save/reopen cycles, including headerless
+tables with a blank first data row and exact literal code.
+Word export must omit `tableHeader` on data rows rather than serialize false:
+the current Mammoth reader interprets the presence of `w:tblHeader` as true.
+Imported multiple header rows keep their grid/content with one clear warning
+that portable Markdown retains only the first row as a header.
+
+Local import preserves the complete parsed/extracted text in its source record.
+HTML inputs share `htmlImport.ts` across Import Studio and desktop MCP import.
+Parse into detached inert template content, never attach imported nodes or
+resolve resource properties. Bound input, node count, nesting and generated
+output before returning content; fail without creating a partial source.
+Preserve semantic headings, paragraphs, marks, safe absolute HTTP(S) links,
+lists/tasks, quotes and simple tables. Headerless tables need their portable
+metadata plus synthetic header; real blank rows must remain. Escape authored
+Markdown punctuation and ignore imported Orion metadata. Unknown containers
+must preserve readable descendants and block boundaries. Images are descriptions
+only; unsupported links, complex tables and styling get bounded warnings and
+readable fallbacks. Inline/fenced code uses the shared literal serializer,
+including edge spaces, dynamic backticks and table pipes. Never fetch resources,
+interpret interactive HTML or claim full original-layout/raw-HTML preservation.
+Validate through `parseTextImport`, the real import payload and repeated editor
+reopening, with a separate real-browser passive-resource probe.
+Import payloads carry their originating snapshot version. Keep frontmatter at
+the start when adding a generated note heading. After a guarded local or
+assistant import merge, reconcile citations only for imported note IDs and
+sources that occur exactly once in both the original and merged active Space.
+Attach both provenance arrays in the same immutable update without changing
+source content. Code, images, raw HTML, metadata and generated References do
+not establish citation edges. Preserve ordinary imported-source provenance;
+never fetch missing targets, remap IDs or look in another Space.
+The editable note copies at most 200,000 UTF-16 units of that text through
+`importNoteExcerpt.ts`, ending before an incomplete top-level Markdown unit.
+Keep Orion frames balanced and table metadata attached to its table; never cut a
+fence, link, list, frontmatter or surrogate pair. Oversized single structures are
+omitted from the excerpt, so it may be much shorter than the cap. A generated
+title and an explicit shortened-excerpt notice are additional. Do not silently
+truncate the source or claim original binary layout is preserved.
 
 ## Note image attachment contract
 
@@ -1955,10 +2285,30 @@ Concepts are reconciled from:
 
 Tags are excluded. Do not seed, merge, or auto-link a concept from `Note.tags`.
 
-The editor Link tool uses an empty destination selection as the normal
-Wikipedia-style path: create or reuse the exact named article, then register it
-as the concept's canonical target. The user chooses either an AI-written
-definitional article—with an optional page-specific instruction—or a genuinely
+The editor exposes **Link** beside a text selection without an AI key. The
+formatting toolbar and Cmd+K remain secondary ways to open the same anchored
+composer. Its first view is **Search notes or paste a URL**: search only the
+active Space's notes, link directly to an existing note, or add a web address.
+Applying either destination preserves the selected visible words and their
+formatting, writes an ordinary rich-editor link mark through portable Markdown,
+and remains undoable. Reject a stale captured document before applying it.
+With no selection, a destination can insert its note title or web address.
+Opening Link within an existing web link captures the complete marked phrase
+and offers **Update link** and **Open**.
+
+`src/lib/externalLinks.ts` normalizes recognizable bare domains to HTTPS and
+accepts bounded HTTP/HTTPS web addresses only. Reject executable or unsupported
+schemes, embedded credentials, control characters, and malformed addresses.
+While editing, an ordinary click places the caret; only **Open** or Cmd-click
+(Ctrl-click on other platforms) routes a web link through the desktop opener
+to the default browser. Browser preview uses its ordinary browser fallback.
+Reopening a saved note must preserve its URL and original visible wording.
+Do not turn pasted web destinations into concepts or AI requests.
+
+**Create a linked article** opens the existing article path in the same
+composer. An empty destination selection creates or reuses the exact named
+article, then registers it as the concept's canonical target. The user chooses
+either an AI-written definitional article—with an optional page-specific instruction—or a genuinely
 blank article. Only the AI choice queues a linked-article job, and Restart must
 retain its instruction. A non-empty destination selection is an explicit
 compatibility override for an existing manual/legacy branch. Never default a
@@ -2160,53 +2510,88 @@ renaming, removing, and selecting voices stay entirely in Settings. The active
 Orion default. Presets are local metadata, never credentials or provider-side
 voice changes, and share the existing application-wide settings scope.
 
-## Inline AI writing mode
+## AI actions where you write
 
-This editor interaction is shipped and regression-protected. Keep its request
-boundary, non-destructive preview state, caret safety, and single-transaction
-acceptance together when changing it.
+Keep the request boundary, non-destructive preview state, captured cursor, and
+single-transaction acceptance together when changing these interactions.
+Inline Write/Rewrite, image generation and AI link naming use
+`editorAIWorkingContext.ts` before assembling provider input. The rich editor
+captures a separate transient working projection from the full ProseMirror
+document, so selecting part of a checked item cannot lose its task ancestry.
+Removing checked subtrees from this nondispatched copy must never change the
+authored document, captured replacement, preview, acceptance or Undo. Direct
+selections/carets in a checked subtree, and normalized replacements crossing one,
+require an explicit current instruction to include completed tasks; otherwise
+stop before the provider call with an actionable explanation. AI page naming has
+no history instruction and offers manual naming instead. Local links stay usable.
+Filter live surroundings, related notes/sources and cached derivatives separately;
+never replace an authored range with a filtered body. A plain selected fragment
+without a rich capture cannot establish its boundary in a note containing checked
+work. Note content and prior requests never grant history access.
 
-The rich-text toolbar gets one restrained, monochrome four-point **magic** icon.
-It is a toggle for a temporary AI writing mode; clicking the icon alone never
-generates or changes text. Avoid a purple gradient, glow, wand, icon collection,
-or continuous sparkle animation. The active state may use the current theme
-accent and one subtle transition. When the mode is off, all inline AI overlays
-disappear and the editor behaves exactly as it does today.
+AI-created linked articles use that same captured context, including when the
+page title is entered manually. Validate before creating the placeholder/link;
+blank articles and existing manual destinations remain local. Linked jobs retain
+their capture only in transient UI state. Retry and late result merging recheck
+the original source body. The editor supplies an exact post-link body receipt
+through its normal serialization (including frontmatter/references) only after
+a successful transaction, so Orion's own inserted link is allowed without
+accepting arbitrary later changes. Do not replace this with broad Markdown
+normalization or retarget a stale capture to the current selection.
 
-While AI mode is active and the selection is collapsed, show one small floating
-card at the bottom centre of the visible writing area. It is overlaid within the
-note viewport, remains available while the note scrolls, and is not a footer at
-the physical end of the document. Reserve enough editor padding that it never
-covers the final lines. Its normal state is the split control **Continue ▴**:
+Image research keeps working/history indexes and resumable sessions separate.
+Its index uses offset-preserving Markdown masking, then supplies only exact
+visible original spans to the planner. Rich-context offsets are not source
+offsets. Retain original unfiltered evidence versions locally and recheck them
+before reuse/publication, including changes hidden by masking. Ordinary unfinished
+nested tasks remain discoverable under the shared Markdown working-view rules;
+direct rich selections inside a checked ancestor remain protected as a unit.
+AI actions become available from their configured provider keys; there is no
+editor AI toggle or persistent Continue button. Selecting text, opening a
+composer, or changing an amount must never start a provider request.
 
-- **Continue** requests the currently selected amount of new prose. A sentence
-  can continue at a meaningful caret; paragraph and section output attach after
-  the current top-level block. With no meaningful caret, continue at the end of
-  the document.
-- The chevron opens a compact upward-facing composer containing exactly two
-  controls: a native three-stop **Amount of text** slider and one optional
+`/write` and **More → Write with AI** open the same compact, anchored composer
+near the captured body cursor. The command consumes only its slash prefix and
+preserves surrounding prose. Write captures the collapsed end of the selection;
+rewriting remains a separate selection action. Reject submission if the captured
+document changed while the composer was open.
+
+- Show one native three-stop **Amount of text** slider and one optional
   **Custom instructions** field. The stops map to **Sentence**, **Paragraph**
   (default), and **Section**; show the current semantic value as the slider
   changes and retain the quiet **Less** / **More** endpoints.
-- The primary **Continue** half is the sole generation action. Do not put a
-  second Continue/submit button, segmented length picker, provider control, or
-  any other setting inside the composer. The custom instruction is
+- **Write** is the sole generation action. An empty instruction continues from
+  the captured cursor. A sentence can continue at a meaningful caret;
+  paragraph and section output attach after the current top-level block. With
+  no meaningful caret, continue at the end of the document. The instruction is
   request-scoped and clears after submission.
 - Opening the composer focuses the slider. Preserve its native keyboard
-  controls and accessible semantic value. Escape or clicking the chevron again
-  closes the composer and returns focus to that chevron.
+  controls and accessible semantic value. Escape and Cancel close the composer
+  and restore the captured body cursor and editor focus. Clicking outside
+  closes it without stealing focus from that outside target.
+- Keep the composer inside the visible writing area at normal and narrow
+  widths. Live Write, Rewrite, image and Link inputs share the frosted HTML
+  surface; the toolbar and More retain their existing native Regular Liquid
+  Glass. These live composers are not identical native glass surfaces and must
+  not snapshot editable text into the native chrome painter.
 - Do not expose provider/model selection, prompt history, Chat history, or a
   context engineering panel here. Use the Space's configured provider/model.
-  Continue and ordinary rewrite operations receive only the bounded live editor
+  Write and ordinary rewrite operations receive only the bounded live editor
   context; only **Enrich** may retrieve additional active-Space knowledge.
 
-When the user makes a non-empty text selection, the Continue card disappears
-immediately and a compact split control **Rewrite ▾** appears just above the
-selection, beside a restrained **Generate image** action when an OpenAI key is
-configured. Collapsing the selection restores Continue. Clicking **Rewrite**
-opens one anchored instruction field; submitting it blank requests Orion's best
-meaning-preserving rewrite, while typed text supplies a request-scoped custom
-direction. The chevron contains text-labelled presets rather than an icon grid:
+A non-empty text selection exposes compact **Rewrite ▾**, **Generate image**,
+and **Link** controls beside the passage. Link remains available without keys.
+`src/lib/editorAICapabilities.ts` gates writing and rewriting on the selected
+provider's configured key. Image generation also requires an OpenAI key for
+rendering, including when its selected planning provider is Anthropic. Check
+both dependencies even for Selection only; do not silently change the planning
+model. Keep unavailable actions discoverable with action-specific explanations,
+without disabling local writing or links or issuing a request.
+
+Clicking **Rewrite** opens one anchored instruction field; submitting it blank
+requests Orion's best meaning-preserving rewrite, while typed text supplies a
+request-scoped custom direction. The chevron contains text-labelled presets
+rather than an icon grid:
 
 - **Clarify** — improve logic and structure without reducing complexity.
 - **Tighten** — make the passage shorter while preserving its meaning.
@@ -2329,21 +2714,23 @@ paid image renders.
 All AI writing operations are non-destructive. Generation must not immediately
 replace or autosave the selected document range. Hold the exact original rich
 document slice—including marks, links, task state, table structure, and code—
-until the user resolves an inline preview. Once generation begins, remove the
-selection-level Rewrite control and morph the same bottom-centre card through
-these states without moving or changing its visual height:
+until the user resolves an inline preview. Once generation begins, close the
+input composer and suspend the selection controls. A restrained bottom-centre
+status/review dock remains in the visible writing area with these states:
 
-1. Ready: **Continue ▴**.
-2. Generating: a restrained spinner, **Writing…** or **Creating image…**, and
+1. Generating: a restrained spinner, **Writing…** or image-stage progress, and
    **×** to cancel.
-3. Preview: three icon-only controls **✓  ↻  ×**.
+2. Preview: three icon-only controls **✓  ↻  ×**.
+
+There is no idle dock after the operation is resolved. Keep enough editor
+padding that the status/review dock does not cover the final lines.
 
 The tick accepts the proposal as one editor transaction and then autosaves; one
 ordinary Undo must restore the complete original. Refresh generates another
 proposal with the same action, length, and custom instruction without first
 accepting the prior attempt. X discards the proposal and restores the original
-exactly. After accepting, return to Continue. After discarding a Rewrite,
-restore the prior selection and its Rewrite control when practical.
+exactly. After accepting, return to ordinary writing. After discarding a
+Rewrite, restore the prior selection and its selection controls when practical.
 
 Every icon-only state needs a visible tooltip, accessible name, focus style,
 keyboard operation, and reduced-motion treatment. The tick may carry the theme
@@ -2356,18 +2743,71 @@ Provider requests use the dedicated `inline-writing` mode on Orion's existing
 native AI transport. That mode supplies writing-specific system instructions
 and a 12,000-token output ceiling; it must not inherit Chat's conversational
 framing or history. The request still uses the active Space's selected provider,
-model, reasoning effort, and Keychain-held credential. Cancellation invalidates
-late results immediately even where the underlying native request cannot itself
-be interrupted.
+model, reasoning effort, and Keychain-held credential. Pass cancellation through
+the shared scheduler so queued work cannot start after cancellation, and
+immediately reject or invalidate late results. An in-flight native/provider
+request may already be running; do not promise that cancellation reverses an
+already-started request or its API usage.
 
 ## Chat contract
 
 The visible route and navigation label are **Chat**. It is one persistent
 conversation scoped to the captured active Space, not a thinking-card workspace.
+A quiet bottom-right circle opens the same conversation beside the document.
+It appears when the selected provider is configured and is hidden during Flow
+and on the full Chat route. `ChatDock` keeps one `ChatView` mounted across collapse and expansion, retaining the draft,
+pending prompt, cancellation and reply. Space changes remount transient UI;
+history stays in that Space's existing `studio.messages`. The panel is nonmodal
+and does not replace the editor or its scroll position. Writing windows keep
+Chat compact so expanding it cannot replace their bound draft.
+
+Empty Chat generates suggestions from the substance of the active Space, with
+up to two ideas in the compact panel and four on the full route. The bounded
+context builder in `src/lib/chatSuggestions.ts` selects exact working passages
+from the attached note, its connections and recent material. Exclude completed
+tasks and their continuation text, frontmatter, fenced/quoted examples and
+portable block metadata; stale summaries/overviews must not revive retired work.
+Use at most eight 2,000-character passages and twelve directory hints, within a
+32 KB context. Directory titles alone are not evidence.
+
+The dedicated read-only `chat-suggestions` mode uses the selected provider,
+model and reasoning setting. Its shared JSON protocol asks for specific,
+evidence-grounded possibilities, not stock capability prompts or title-swapped
+templates. Native and browser validate the context, 2–4 distinct bounded prompts,
+evidence IDs and intent; this mode accepts no creation/edit authority or read
+requests and sends no legacy note bodies or chat history. Note text is untrusted
+data. Suggestions are transient and consume API usage. Generation is debounced,
+uses the shared provider scheduler, and is suppressed while hidden, typing,
+talking or sending. Cache a bounded number of batches in the current window;
+reopening unchanged context reuses a batch. Refresh explicitly generates new
+ideas, with previous prompts provided to avoid repetition. Space/content/focus
+or model changes invalidate the visible batch; discard late responses. Failed
+generation stays quiet and offers explicit retry, never canned filler or an
+automatic retry loop. Empty content does not call a provider.
+
+The visible suggestion is the exact prompt placed in the composer. Selecting it
+only fills and focuses the composer; it does not send or create anything. Edit
+ideas exist only for the attached note, and that target stays captured with the
+draft through navigation and refinement. Show the original target when it differs
+from the current note. A deleted or cross-Space target must fail closed without
+losing the draft. Explicit Send still uses normal Chat authority, reading, edit
+review and persistence boundaries.
+
+An optional current-note ID is captured on send and resolved only inside the
+captured Space. It enters the reading packet as a routing hint, never a note
+body or write permission. Exact passages still require the ordinary read loop.
+The circle reuses the bounded native chrome paint bridge with `surface: chat`,
+its own window-owned sequence receipt and a circular clip over the same Regular
+material as the toolbar. It never owns keyboard or accessibility input. Browser,
+older macOS and accessibility fallbacks keep opaque readable chrome. Chat's live
+text panel uses a restrained frosted CSS surface; it does not snapshot the text
+or composer into native artwork.
+
 `src/lib/chatReading.ts` coordinates adaptive reads through the existing Chat
 provider transport. Begin with a validated Space hierarchy (or bounded overview
 fallback), locally ranked whole-body digests, and local full-text discovery.
-The model can request `search`, `cluster`, `note`, `source`, and `related` reads,
+The model can request `search`, `cluster`, `note`, `source`, `note-full`,
+`source-full`, and `related` reads,
 then decide whether to read further or answer. Search includes all current-Space
 note and source bodies, including material outside the displayed hierarchy.
 Only discovered exact IDs may be opened. Hierarchy, directory summaries, links,
@@ -2375,9 +2815,17 @@ and search hits route reading; they are never claim-level evidence.
 
 Every provider step receives a fresh bounded working set, not an accumulating
 reading transcript: at most 12 recent conversation messages within 12,000 code
-points, 24 directory entries, and 12 exact passages of at most 3,000 UTF-16 units
-each. Bound the encoded reading packet to 96,000 UTF-8 bytes, evicting older
-working material as needed; only passages still present may be cited. Each reply
+points, 24 directory entries, and up to 96 exact passages of at most 3,000 UTF-16
+units each. Whole-document reads collect up to 192,000 JSON-encoded text bytes
+in one local batch; use them for whole-note analysis instead of exhausting turns
+on short excerpts. The complete packet is bounded to 320,000 UTF-8 bytes.
+`chatDocumentReading.ts` preserves Unicode boundaries and original offsets,
+filters completed tasks, and reports per-document retained ranges, completeness
+and the first unread offset. Eviction must update that coverage; previously read
+but discarded text is not current evidence. Oversized documents remain explicitly
+partial. Final replies/actions still retain at most 12 cited passages, independent
+of the larger transient reading workspace. These limits are shared through
+`chatReadingProtocol.json`; none enlarge live voice context. Each reply
 gets at most six sequential provider steps and three minutes. Each step may ask
 for at most four reads. Repeated reads cannot extend the budget. Finalization
 requires an answer or a clear failure; never silently claim exhaustive coverage.
@@ -2387,6 +2835,10 @@ Simple conversation may answer immediately without opening knowledge bodies.
 read schema source. `chat-reading` is a distinct transport mode; inline writing
 and ordinary transport consumers retain their existing schemas. Validate read
 operations, offsets, packet size, and model replies in TypeScript and Rust.
+The native schema, packet validation, public checkpoint types and reading-response
+parser live in `src-tauri/src/chat_reading.rs`; `lib.rs` retains Chat commands,
+provider transport and the existing edit wrapper. Keep this boundary free of
+vault access, provider calls and write authority.
 Reads never apply accompanying prose or note actions. Preserve host-derived
 creation authority only for the final answer. Never grant writes from context.
 
@@ -2426,7 +2878,68 @@ windows. Prioritize uncovered query terms, merge overlapping ranges, preserve
 exact UTF-16 offsets, and keep the combined text within the caller's budget.
 Fixed chunk boundaries and frequent terms must not hide another query term.
 
-The host derives note-write intent from the current user prompt before calling
+### Current-note text edits
+
+Chat has one composer and no Chat/focused/rewrite mode selector. The shared
+`chatEditsProtocol.json` tells the reading agent to infer `editIntent` (`none`,
+`focused`, or `rewrite`) from the current request and relevant conversation,
+including affirmative follow-ups. Quoted replies and note/source text remain
+untrusted subject matter. Prefer the smallest suitable change. Questions,
+critique and unclear requests can remain conversational; never ask for a mode.
+The captured Space-local attached-note ID enables review-only proposal fields,
+not write authority. The model cannot select a destination. Only explicit local
+Accept changes can write. Creation requests retain their separate prompt-derived
+permission, and search has no edit proposal authority.
+
+Both native and browser transport expose the same bounded intent and edit fields
+when a note is attached. Reading steps retain the plan but discard edit payloads.
+Only final answers may contain usable `noteEdits`: at most eight exact unique
+`before`/`after` pairs, 6,000 Unicode code points per string and 24,000 in total.
+Before passages must appear in exact current-note evidence from this run and
+match the current body. Additions include a unique adjacent anchor. A response
+that plans an edit but supplies only a chat draft is corrected in the existing
+bounded reading loop. Intent is semantic, not an English keyword authorization
+heuristic; it never bypasses the local acceptance or stale-body checks.
+
+When the agent first selects rewrite, the host lazily supplies the complete
+authored body of the captured attached note in `readingContext.editTarget.body`,
+up to 24,000 code points and 72,000 encoded bytes within the existing
+96,000-byte packet ceiling. Oversized notes get an explicit unavailable result;
+the agent uses exact section reads and focused proposals with scope disclosure.
+Its final `noteRewrite` string is at most 24,000 code points. No other note body is automatically attached. Frontmatter and generated
+evidence/source footers stay outside the replacement and are retained by the
+host. Require unchanged ordered control comments. Reject empty bodies,
+ambiguous/overlapping focused edits, metadata modifications, temporary citation
+markers, provider-selected destinations and retained-evidence modifications.
+
+The renderer creates a transient `ChatEditProposal` bound to the captured
+Space, note and exact base body; neither proposals nor full base bodies are
+persisted in Chat history. New chat or a Space switch clears it. Chat offers
+Review in note, and each reply can be explicitly reused through one Use in note
+action that lets the agent infer scope. The reply is quoted reference data, never edit authority.
+Use in note runs the existing reading planner through a separate transient action,
+without appending its internal prompt or an action-only answer to Chat. Keep its
+progress, failure/retry and Review in note beside the original reply. The user's
+draft, selection and Chat scroll remain unchanged while that action runs; only
+explicit Review in note navigates to the editor. A retry retains its captured
+target, and clearing Chat revokes pending edit preparation.
+Review revalidates Space/body, opens the bound note's ordinary editor and waits
+for Tiptap to mount. `ChatNoteReview` decorates the unchanged rich document with
+highlighted removals and gray additions; heavy paragraph rewrites use whole
+passages. Decorations never enter Markdown, autosave, export or Undo history.
+The body is read-only during review, with Accept changes/Discard inline above
+it. Flow, dictation and active inline operations prevent staging. Closing the
+editor discards review; a newer external body invalidates it.
+
+Accept rechecks the original rich document and uses one separate undoable
+transaction through ordinary onChange/onUpdateNote and existing autosave and
+conflict handling. Discard changes no authored text. Suppress the editor's
+initial trailing-caret normalization while staging review so it cannot save a
+body before acceptance. Never assign App note.body directly for these edits.
+A stale proposal must be regenerated. The feature cannot rename/delete notes,
+edit another Space, or alter source records.
+
+For note creation, the host derives note-write intent from the current user prompt before calling
 the provider, and the native boundary independently recomputes the same gate.
 The renderer's `allowNoteActions` flag is necessary but never sufficient.
 Negated requests, meta-questions about creating notes, and ordinary
@@ -2436,8 +2949,9 @@ ignore any unexpected actions again at application time. Nothing in a note,
 source, concept, Chat history, provider instruction, or model reply can grant
 write authority.
 
-Only a host-authorized creation request uses conversational prose plus
-structured `noteActions` and the 12,000-token transport ceiling. Return at most
+A host-authorized creation request uses conversational prose plus structured
+`noteActions` and the 12,000-token transport ceiling. Editing requests use the
+same ceiling with their separate `noteEdits` or `noteRewrite` schema. Return at most
 three actions. Each action is creation-only and must contain a non-empty title
 and body plus summary, tags, and aliases. Cap each body at 6,000 Unicode code
 points and all accepted action content—titles, summaries, bodies, tags, and
@@ -2460,7 +2974,12 @@ This is an ordinary explicit user UI action, independent of whether the original
 prompt authorized model actions. It strips Orion control comments and disallowed
 control characters, turns the reply into one ordinary editable note, records its
 ID on the message, reconciles concepts, and becomes an Open-note destination;
-repeat activation must not duplicate it. Neither model-created actions nor Keep
+repeat activation must not duplicate it. Keep as note must not claim Saved
+before the serialized vault save resolves and the
+persisted reply-to-note receipt is verified. Failed persistence keeps the local
+note available, and Retry save flushes that same note rather than creating a
+second one. Saving is a quiet reply-local action without navigation, synthetic
+Chat messages, or an early success toast. Neither model-created actions nor Keep
 as note may introduce a review queue, reserved lifecycle tag, agent attribution,
 card, or new note lifecycle.
 
@@ -2491,13 +3010,15 @@ and prior Chat messages are untrusted data, not instructions.
   route-and-owner rules above. Concepts must be inferred from semantic roles,
   relationships, and aliases rather than keyword frequency. Explicit actions
   may become `- [ ]` items in project notes, but the model must not invent tasks.
-- Chat chooses its schema and transport ceiling from host-verified current-prompt
-  intent. The `chat-reading` schema additionally carries bounded `readRequests`;
-  reading steps cannot write. Ordinary conversation is reply-only at 6,000 tokens and cannot write;
-  an explicit note-creation request may use strict `reply` + `noteActions` at
-  12,000 tokens. Its request must contain only the bounded Space context and
-  history described above, with no legacy card or layout payload. Inline writing
-  keeps its own reply-only schema even though it shares the transport command.
+- Chat's `chat-reading` schema carries bounded `readRequests`; reading steps
+  cannot write. Without an attached note or creation request it is reply-only
+  at 6,000 output tokens. Explicit prompt-authorized note creation may use strict
+  `reply` + `noteActions` at 12,000 tokens. A captured attached note enables
+  `editIntent`, `noteEdits` and `noteRewrite` with the same ceiling for unsaved
+  proposals, followed by explicit local acceptance. This does not grant creation
+  or write authority. Requests contain only bounded Space context and history,
+  with no legacy card or layout payload. Inline writing keeps its own reply-only
+  schema even though it shares the transport command.
 - Living-overview generation uses the organizer's strict schema but accepts only
   one returned note as the overview artifact. It must write an editorial title
   and cohesive orientation rather than a source inventory, provenance section,
@@ -2617,6 +3138,19 @@ Reuse the existing colors, surfaces, typography, radii, and compact scale in
   titles open the preserved Source viewer. Deleting a source removes numeric
   markers entirely, retains descriptive prose from legacy citation links, and
   renumbers the remaining references;
+- `noteCodeSerialization.ts` preserves literal code through the instance-scoped
+  `NoteMarkdown` serializer wrapper. Work on a transient JSON copy; collision-free
+  placeholders must be restored before returning Markdown, never persisted.
+  Derive inline/fenced delimiters from real content and protect code spacing
+  from general mark/table trimming. Ordinary table pipes need correct escaping.
+  An odd backslash run before a table-code pipe uses adjacent code spans joined
+  by exactly `<!-- orion-code-join -->`; only the matching inline-code triple
+  inside a table is merged by reading/export. Literal comments, other comments
+  and comments outside that shape remain untouched. Keep three-reopen and
+  reading/export equivalence checks. Inline line endings follow CommonMark;
+  use fenced code for literal newlines. Do not patch Tiptap globals/node_modules,
+  mutate editor state while saving or introduce an autosave exception for
+  ordinary code typing;
 - note-local Find in reading and editing modes through the header control and
   `Cmd/Ctrl+F`, with wrapping previous/next navigation and no mutation of note
   content; closing Find must preserve the current reading position and restore
@@ -2715,6 +3249,10 @@ this integration's scope.
   loads: all preceding text uses the normal foreground, the current word has the
   active highlight, and only following text is dim. Do not restore the visible
   Click text to jump hint; retain the Passage timing fallback when needed.
+- Formatted empty paragraphs retain their margins and justification through
+  unescaped `&nbsp;` markers. Strip paragraph metadata before recognizing a blank
+  marker, and preserve every formatted blank on repeated save/reopen. Escaped
+  literal entities and code must never be globally decoded to repair old data.
 - System narration uses actual speech word-boundary events. ElevenLabs uses
   the original-text alignment from its `/with-timestamps` response. OpenAI
   keeps its existing speech request and optionally aligns the generated MP3
@@ -2917,9 +3455,10 @@ this integration's scope.
   slash prefix at a word boundary within ordinary text, including the middle of
   an existing paragraph. Replace only the command range and preserve surrounding
   prose. Keep URLs, paths and code literal.
-  Commands are block, heading, todo, bullet, numbered, divider, image, code, link,
-  excerpt and table; H1–H6 also have direct shortcuts. In tables, `/delete`
-  offers row, column or table. The menu stays below the caret with a bounded,
+  Commands are write, block, heading, todo, bullet, numbered, divider, image,
+  code, link, excerpt and table; H1–H6 also have direct shortcuts. `/write` opens
+  **Write with AI** and requires an explicit Write submission before generation.
+  In tables, `/delete` offers row, column or table. The menu stays below the caret with a bounded,
   scrollable height and aligned icon/text columns. Preserve keyboard choice,
   Escape, the captured insertion point and single-transaction replacement. Reject deferred insertion
   when the captured document changed.
@@ -2985,6 +3524,32 @@ this integration's scope.
   tree while retaining source positions and visible code examples.
   Headerless GFM uses a synthetic empty header; suppress that header without
   deleting an author's row. Never interpret metadata as arbitrary CSS or HTML.
+
+## Writing sessions
+
+The rich editor's clock button offers an ordinary writing timer and optional
+Flow drafting. `writingSession.ts` owns the deadline-based state machines;
+`WritingSessionControl` expands setup and status directly inside the toolbar;
+there is no modal, popover, or separate writing surface.
+The ordinary timer is transient and per window, survives editor/navigation
+remounts, and supports pause/resume/stop without affecting normal autosave.
+Neither mode adds a vault field or makes provider calls.
+
+`FlowWriting` is a ProseMirror plugin that appends a new writing paragraph to
+the real editor and protects all pre-session nodes. Its unsaved rich-text
+passage starts timing with the first text input. After 30% of the chosen
+5/10/20-second inactivity interval it gradually dims through node decorations;
+expiry deletes it. All provisional transactions and their removal exclude
+history, and RichNoteEditor suppresses their onChange publication. Expired text
+must never reach autosave or Undo/Redo. Actual text changes reset inactivity;
+IME composition pauses both clocks. Compare absolute deadlines on every input,
+tick, and Stop so suspended callbacks cannot rescue an expired passage.
+Finishing the 1–180-minute timer or choosing **Stop and keep** commits the rich
+passage in one separate Undo group and resumes normal autosave. Existing note
+content is never subject to expiry. Leaving the editor or closing Orion loses
+unfinished Flow text. An external note replacement ends Flow before loading
+the newer document. Sessions belong to their exact editor and never transfer
+across notes or Spaces. Native toolbar paint includes the inline timer labels.
 
 ## Change checklist
 
@@ -3098,3 +3663,268 @@ finished app bundle downloaded a real bounded YouTube source with its bundled
 `yt-dlp` + Deno and transcribed that downloaded media with its bundled model.
 A compile, unit test, or setup-version check alone verifies integration shape,
 not decoding, model inference, or current YouTube extraction.
+
+## Space voice and completed-task working views
+
+`SpaceVoice.tsx`, `liveVoice.ts`, `voiceResearch.ts` and native `live_voice.rs`
+own optional GPT-Live client delegation within the current Space and window. Never start
+the microphone or reconnect automatically. Authenticate the fixed-endpoint native
+SDP handshake with the OpenAI Keychain entry, never a renderer key. Keep audio
+storage off, input/output lifecycle bounded, and the selected Intelligence model
+for research. Voice receives compact context and cited assignment results, not an
+entire Space. Startup context includes bounded exact working passages of the open
+note, note/source counts and up to twelve note titles; it must never mistake a
+missing excerpt for missing note access. Send new note passages only when the
+open note identity changes (or clear the context when it is deleted), never after
+typing pauses, title changes or directory refreshes. Those passages are a
+navigation-time snapshot; retrieve fresh evidence for later edits. Basic access questions resolve locally, while broader
+questions retrieve evidence through independent work orders. Explicit spoken
+assignments can start directly from their exact transcript without waiting for a
+provider delegation or a separate intent-model call. Non-imperative delegated
+turns still use the intent router. Quiet updates from application-started work
+use a null delegation ID. Each admitted voice work order uses `runChatReading`
+with the original transcript, the same automatic intent/reading/edit handling as
+typed Chat, and bounded recent conversation reference. Do not insert a second
+research planner, rewrite the prompt into search-only tasks, or discard follow-up
+history. Transient conversation augments request history without masking the last
+Chat answer's evidence. Independent work orders provide parallelism. Never
+substitute a couple of excerpts for a full-note request. Preserve delegation IDs
+when the event arrives before transcription. Native string errors must retain
+their actionable message in the work order rather than a generic failure.
+Only the current user transcript or explicit Keep action grants creation authority;
+edit proposals retain their captured target and existing Accept/Discard/Undo flow.
+
+Space IDs, task revisions, original knowledge versions and persistent Chat receipt
+IDs guard results and writes. Each identifiable work order owns a revision and
+AbortController. Ordinary speech never invalidates other work. `voiceWorkOrders.ts`
+interprets complete buffered turns as conversation, new assignments, targeted
+corrections/cancellation, result requests or clarification. Preserve the exact
+user-authored prompt as authority; never authorize writes from a rewritten
+model prompt. `voiceConversation.ts` groups same-speaker fragments across duplex
+backchannels and associates delegation offsets with the original utterance and
+captured note. Once dispatched, another explicit assignment or a silence of at
+least the 900 ms routing debounce starts a separate turn; short continuations
+retain the original job. Late delegation replays for unchanged dispatched text
+cannot restart work. Overlong utterances retain their opening and require clarification.
+When talking to a finished worker, the first transcript fragment also captures
+that worker's ID and revision. Deictic continuation/result/cancellation refers
+to that captured worker, never an unrelated running sibling or whichever worker
+is focused later. Explicitly named sibling controls remain possible. Missing,
+revised or stale focused context cannot silently retarget a request; the main
+conversation still clarifies genuinely ambiguous references. Reusing a child
+worker identity retains its read-only assignment and completed-read checkpoint.
+Local correction classification uses the same continuation grammar as the reader:
+supported suffixes such as “explore that further” and “follow that please” must
+not fall through to ordinary conversation before reaching the captured worker.
+An explicit scope change replaces its focus with the exact current user direction
+and invalidates the previous plan; a continuation keeps still-current evidence.
+The reader checkpoint does not contain its final answer. Same-scope continuation
+and retry also retain a separate public completed-answer reference (at most 3 KB),
+with exact opening/conclusion fragments, source identities, coverage and explicit
+omissions. Recheck evidence, focus, settings and task-view before reuse; a changed
+scope or selection drops it. This reference cannot grant writes or citation
+authority. A fresh revision-guarded continuation may repeat an earlier phrase even
+after Keep, while the per-worker save reservation still prevents duplicate saves.
+Interpret turns in order; direct local cancellation also reaches pending routing
+requests. Cancelled generations cannot be revived by a late model response.
+A single spoken request can admit multiple distinct read-only assignments. The
+host reserves one stable orb identity per requested worker while routing or
+clarifying; a topic answer consumes those same identities and the original note
+and selection capture. Clarification, unrelated speech and note navigation cannot
+drop reservations. Cancelling a reservation aborts any dependent answer route so
+a stale batch cannot revive it. Generated child scopes never grant save/edit
+authority; the exact current transcript remains the prompt and search purpose
+strips writes. Existing single-worker explicit save/edit requests retain their
+normal authority and review flow.
+Reference-only clarification answers such as “this note” and “what I highlighted”
+may complete that original request. They still require a complete validated batch
+of scopes; a generic comment or a compound new instruction is not a reference-only
+answer. Do not use blanket deictic-word rejection to strand pending workers.
+Scope planning receives the original captured note's ID, title bounded to 200
+Unicode characters and current content version as reference metadata. Keep its
+body/summary with the research reader. Missing or duplicate original note IDs
+require clarification and cannot silently fall back to current navigation.
+
+`voiceReservations.ts` owns pending groups, turn aliases, cancelled turns and the
+current clarification. It captures the original note/selection and preserves the
+surviving worker IDs when a member is cancelled or corrected. Group revisions and
+call epochs reject answers captured before a group changes or a reconnect clears
+pending state. Consume a valid reservation before admitting its workers. Keep
+provider routing, admitted work, audio and React publication with their existing
+owners; this class is not a second work-execution or persistence system.
+
+`voiceTurnRouter.ts` owns the ordered interpretation queue, transcript debounce,
+route deadlines and AbortControllers. Cancelling or expiring a route releases
+its slot immediately even if the provider never settles; stale continuations
+cannot clear a newer route. `voiceCallLifecycle.ts` owns one transport recipient,
+call epochs, mute, current-call delegation IDs and the accepting-input boundary.
+Stop rejects new events immediately; callbacks from an old call cannot mutate a
+reconnected call. `voiceFindingScheduler.ts` owns the finding queue, delivery
+timer and transcript/audio timing. `SpaceVoice.tsx` retains semantic decisions,
+the admitted research engine, conversation references, selection and UI
+publication. Ending audio preserves admitted work; leaving the Space disposes
+its coordinator. None of these transient owners adds vault state.
+
+There is no six-worker or cumulative admission limit. Three workers execute at
+once; additional jobs remain visible and cancellable as queued, with execution
+deadlines beginning only on dispatch. Retention bounds 24 terminal records,
+never running/queued jobs. Router responses plan at most 24 distinct scopes per
+page and automatically page larger requests, validating the whole batch before
+admission. One utterance has a 1,000-worker allocation guard with an explicit
+clarification for larger counts; no silent truncation. Provider routing context
+and reconnect context remain bounded and report omitted identities as retained
+work, never cancellation. Physical calls still use the global provider scheduler.
+
+Voice opts into the shared reader's bounded `checkpoint` response field. A read
+step can include a concise public finding with exact citations, public task
+decisions and unresolved questions; ordinary accompanying prose and actions are
+still discarded. The host validates retained citation IDs, suppresses duplicate
+findings, publishes up to six useful updates on the work order, and queues them
+through the same revision-aware spoken-delivery path. A progress label is never
+a research finding. Checkpoints cannot save notes or bypass edit review.
+`chatReadingCheckpoint.ts` holds session-local continuity: exact evidence and
+versions, discovered IDs, completed operations, public findings/decisions,
+unresolved questions and pending reads. A corrected work-order revision resumes
+its last completed local read boundary; stale evidence and decisions based on it
+are removed before the next provider call. An explicit failed-job `retry` can
+resume that boundary, while duplicate delegation replay cannot restart work.
+Only retained current passages are citation authority; evicted ranges can be
+read again. Packet continuity is bounded separately to leave room for evidence.
+This preserves task memory across model invocations, not hidden chain-of-thought
+or an uninterrupted model process. Completed/current workers expose a bounded
+`conversationContext` for optional conversations, never new write authority.
+Its bounded answer and passage excerpts explicitly declare missing content and
+coverage rather than implying that the entire result was handed to voice.
+
+Read-only search and voice Chat work can opt into evidence-dependent freshness: recheck opened
+note/source versions and provider/context settings instead of rejecting an
+unrelated note edit. Ordinary Chat, note creation and edit proposals retain
+strict snapshot checks. The shared reader promotes any focused/rewrite intent
+back to the original full snapshot before preparing an edit, even when the run
+started as read-only. A clarification without creation actions never triggers a
+save. One persistence reservation per work-order ID is shared
+by revisions and Keep, with stable host receipt ID `<job>-save`; cancellation
+cannot undo an atomic write already in progress. Retain its confirmed receipt
+without announcing a superseded result. Reconnect restores bounded conversation,
+quoted user decisions/corrections, jobs and receipts without rerunning them.
+
+`voiceFindingScheduler.ts` buffers whole commentary updates and rechecks job revisions
+before transport chunking. Quiet context is separate from spoken delivery.
+`voiceFindingDelivery.ts` keeps worker identity, stage, evidence/coverage and
+confirmed-save/proposal state in quiet reference metadata. Commentary carries
+its exact quiet packet so delivery can pair current worker/revision/sequence and
+bounded exact source identities/titles immediately before the finding, even when
+several workers finish out of order. A rejected reference send holds commentary;
+retries repeat the pair. Remap delegation IDs against the receiving audio call.
+Switching between finished workers and the centre preserves admitted findings
+while resetting old audio pacing; only the main conversation offers them. Stop
+and explicit reconnect still clear pending speech. Capture the exact completed
+revision when opening a worker, including for later transcript binding. Stale,
+revised or evicted focused results hand an ongoing call back to the centre, but
+cannot restart a stopped or disconnected call. Commentary carries the useful
+finding with its qualifications and any necessary review action;
+do not prepend repeated research-status or unsaved-status announcements. Keep
+partial coverage explicit where it limits the finding, preserve ending caveats,
+and never turn an oversized reply into a misleading prefix. Explicit Keep gets
+a brief acknowledgement only from a confirmed save receipt. These channel
+choices do not establish that the provider spoke naturally or was heard.
+`voiceContextUpdates.ts` sends changed job fields and confirmed receipts only,
+with full bounded context reserved for connection/reconnect. It uses validated
+`session.usage.updated.context_window.usage_ratio`, retaining the last known
+ratio when a later event omits it. At 80% usage it omits optional note excerpts
+and progress; at 85% it sends one bounded 6 KB continuity checkpoint, rearmed only
+below 75%. This never restarts a call or a job. Detailed evidence stays local.
+`voiceDeliveryTiming.ts` uses arriving transcripts as the primary speech signal;
+local mic/output energy can extend only a short quiet interval. Unrelated intent
+routing never holds a completed result. A finding held for its own correction
+stays queued while the oldest eligible unrelated finding can pass it. Recheck
+its revision after correction and retain pacing between actual accepted sends.
+Commentary is offered to the provider
+within 12 seconds even with continued noise/speech; this is an offer, not forced
+playback or proof of audible delivery. Pending corrections still resolve first
+under the bounded routing timeout, and every offered result rechecks its revision.
+Transport chunks prefer sentences, then words/graphemes; the conservative 480-byte
+fallback remains until a verified GPT-Live tokenizer mapping is available for the
+API's 500-token cap. No provider speech-start/stop or audio-done event is assumed. Sent
+commentary cannot be retracted or treated as heard. Keep result controls inside
+the expandable work summary. End voice immediately releases capture and closes
+the connection while already requested work can finish. ChatDock owns the
+mounted call outside its hidden Chat panel. Collapsing/clearing Chat and note or
+view navigation preserve it. Flow, Space changes and window teardown close
+capture and cancel work. An inherited sidebar toggle counter must never start a
+new Space's microphone. Mute gates only input; playback and work continue.
+Permanent loss of every microphone track disconnects with a capture-loss message,
+clears both audio envelopes and preserves admitted work. Require explicit
+reconnect; never reacquire capture automatically. Temporary track mute can recover
+in place. Unregister ended listeners before intentional stream disposal.
+Persist through the serialized window-vault path,
+verify saved note IDs, then announce a save. Never equate a context-append ACK with
+played speech. Live microphone/provider QA remains a separate verification gate.
+
+`voiceSelection.ts` owns a transient current-Space, per-window selection store.
+`useVoiceSelection` captures exact displayed body text after a 180 ms settling
+interval, with note/Space identity, authored note version, and UTF-16 DOM text
+range (never pretend these are Markdown offsets). Dragging does not stream
+updates. Voice controls preserve the capture; deselection within the note,
+note navigation, or authored changes clear the current reference. The first
+user transcript fragment copies its selection into the immutable voice turn,
+so later highlights/navigation cannot redirect an admitted assignment. Provider
+context contains only a bounded reference packet; large selections retain their
+full local range and use the shared note reader. Changed selected-note versions
+withhold all selected text at the context boundary and fail clearly before
+starting research. Ranges crossing unaccepted Chat/AI proposal widgets are not
+authored-note selections and clear the captured reference. Completed tasks and their descendants
+remain masked in selected reference text unless the actual current user request
+explicitly asks for history. A highlight sends quiet context and a Selected text
+cue only, never speech, research or editing permission. Explicit editing still
+uses the ordinary proposal and actual-note Accept/Discard/Undo path.
+
+`taskWorkingView.ts` and MCP `working_view.rs` construct transient working views
+before discovery or provider context. Mask completed checkbox text/continuations,
+preserve standalone requirements, and remove cached derivatives that could leak
+completed work. Do not modify the vault during reads. MCP task listing stays open
+by default; `completed`/`all` explicitly request history. Other reads accept scoped
+`task_view: working|history`; ordinary reads use working. Desktop context, research
+and search share this contract and do not reuse history interpretations in working
+mode. Original note/source versions and line/scalar offsets remain write authority;
+renderer citations retain exact original UTF-16 passages. A filtered note body is
+never a full replacement. Legacy whole-body updates containing completed tasks
+require an explicit history read plus its current expected version. Document any
+remaining prior-conversation exposure rather than claiming old model context was
+erased. See `docs/space-voice-and-working-context.md`.
+
+Chat automatically carries the open note into the composer and retains that
+context when expanded. Do not expose an Attached note dropdown or editing-mode
+selector. To change the edit target, navigate to the note; the model still cannot
+choose a different destination, and each proposal names its captured target.
+
+The empty Chat composer shows an audio-wave voice button in the send position.
+Typing replaces it with Send when idle. During a call, the same position shows
+a square Stop voice button even if a draft is being typed. Starting voice from
+the sidebar leaves the current note open; ordinary Chat navigation still opens
+Chat. A bottom-right glass pill exposes mute/end, Chat and a work summary.
+When either full or compact Chat is open, the same call renders its orb scene
+inside Chat and docks controls above the composer; no fixed pill overlays Chat.
+The idle welcome also uses the orb identity. Stable presentation portals keep
+the call owner outside the hidden/remounted Chat view and retain its motion model.
+Keep transcripts transiently for delegation, without elapsed-time or provider
+copy in the composer. Research results, citations, saves and actionable errors
+remain in the expanded summary.
+
+`VoiceConstellation` and `voiceOrbMotion.ts` use actual normalized input/output
+PCM levels from `LiveVoiceConnection`, gated on track availability and local
+playback. No synthetic speech envelope, transcript or append ACK may animate
+speaking. The selected recipient (main or one finished worker) owns the audio
+gesture. Sidebar/pill/expanded circles share one SpaceVoice-owned physical field
+and the adaptive icon palette; advance that field once per animation timestamp.
+Keep the approved gravity study's asymmetric orbits, central proportions and
+mixed-size ambient field. Worker updates arrive on one shared flight clock and
+give the centre a finite receiving gesture; they must never masquerade as speech. See `docs/voice-constellation.md` for bounded motion and controls.
+Only completed, current workers with results may open conversations. Switching
+explicitly disposes the old audio connection before starting the selected one,
+with bounded retained evidence and separate conversation context. Further work
+on that worker preserves its identity and hands the call back to the centre.
+Update sequences and completion drive distinct visual transitions. Returning a
+completed orb to the swarm is visual dismissal, never result deletion; returning
+a researching orb cancels only its job. No result opens a panel or captures the
+writing cursor automatically.

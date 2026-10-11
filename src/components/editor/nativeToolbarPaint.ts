@@ -93,7 +93,9 @@ function paintChrome(toolbar: HTMLElement, menu: boolean): ToolbarPaint | null {
       ctx.textBaseline = "middle";
       if (control instanceof HTMLSelectElement || control instanceof HTMLInputElement) {
         const text = control instanceof HTMLSelectElement ? control.selectedOptions[0]?.text ?? "" : control.value;
-        ctx.fillText(text, x + (parseFloat(style.paddingLeft) || 8), y + box.height / 2);
+        const centered = control instanceof HTMLInputElement && style.textAlign === "center";
+        ctx.textAlign = centered ? "center" : "left";
+        ctx.fillText(text, centered ? x + box.width / 2 : x + (parseFloat(style.paddingLeft) || 8), y + box.height / 2);
         if (control instanceof HTMLSelectElement) {
         ctx.strokeStyle = style.color; ctx.lineWidth = 1.2;
         ctx.beginPath(); ctx.moveTo(x + box.width - 16, y + box.height / 2 - 2); ctx.lineTo(x + box.width - 12, y + box.height / 2 + 2); ctx.lineTo(x + box.width - 8, y + box.height / 2 - 2); ctx.stroke();
@@ -118,8 +120,8 @@ function paintChrome(toolbar: HTMLElement, menu: boolean): ToolbarPaint | null {
     }
     ctx.restore();
   }
-  // Image-width labels sit beside the input rather than inside a button.
-  for (const label of toolbar.querySelectorAll<HTMLElement>(".note-image-size > span,.editor-style-select > span:not(.sr-only)")) {
+  // Context labels and writing-session status sit outside the native-painted controls.
+  for (const label of toolbar.querySelectorAll<HTMLElement>(".note-image-size > span,.editor-style-select > span:not(.sr-only),.writing-session-duration > span,.writing-session-label,.writing-session-clock,.writing-session-hint")) {
     if (!visible(label, toolbar)) continue;
     const box = label.getBoundingClientRect(), style = getComputedStyle(label);
     ctx.fillStyle = style.color; ctx.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;

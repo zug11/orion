@@ -61,7 +61,7 @@ describe("desktop workflow evidence", () => {
     deps.chat = vi.fn(async (request: ChatRequest) => {
       expect(request.prompt.length).toBeLessThan(8_000);
       expect(request.notes.every((item) => item.body.length <= 8_000)).toBe(true);
-      expect(request.history).toEqual([]); expect(request.allowNoteActions).toBeUndefined();
+      expect(request.history).toEqual([]); expect(request.allowNoteActions).toBe(false);
       return { reply: JSON.stringify({ answer: "Insufficient evidence.", findings: [], gaps: ["Missing measurements."], followUpQuestions: [] }) };
     });
     const result = await executeAssistantWorkflow(space, { space_id: space.workspace.id, request_id: "research", operation: "research", input: { question: "Q".repeat(8_000), material: "M".repeat(24_000) } }, deps);

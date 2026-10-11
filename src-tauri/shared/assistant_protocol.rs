@@ -50,9 +50,19 @@ pub struct Access {
     pub space_ids: Vec<String>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskView {
+    #[default]
+    Working,
+    History,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContextInput {
+    #[serde(default)]
+    pub task_view: TaskView,
     pub query: String,
     #[serde(default)]
     pub note_ids: Vec<String>,
@@ -65,6 +75,8 @@ pub struct ContextInput {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SearchInput {
+    #[serde(default)]
+    pub task_view: TaskView,
     pub query: String,
 }
 
@@ -79,6 +91,8 @@ pub struct ExportInput {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResearchInput {
+    #[serde(default)]
+    pub task_view: TaskView,
     pub question: String,
     #[serde(default)]
     pub material: String,
@@ -203,6 +217,7 @@ impl StartRequest {
         match self.operation {
             Operation::Context => {
                 let input: ContextInput = parse(&self.input)?;
+                let _ = input.task_view;
                 bounded_text(&input.query, "query", 8_000, true)?;
                 identifiers(&input.note_ids, 16)?;
                 identifiers(&input.source_ids, 8)?;
@@ -210,6 +225,7 @@ impl StartRequest {
             }
             Operation::Search => {
                 let input: SearchInput = parse(&self.input)?;
+                let _ = input.task_view;
                 bounded_text(&input.query, "query", 600, true)
             }
             Operation::Export => {
@@ -231,6 +247,7 @@ impl StartRequest {
             }
             Operation::Research => {
                 let input: ResearchInput = parse(&self.input)?;
+                let _ = input.task_view;
                 bounded_text(&input.question, "question", 8_000, true)?;
                 bounded_text(&input.material, "material", 24_000, false)?;
                 identifiers(&input.note_ids, 16)?;

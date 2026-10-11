@@ -82,9 +82,19 @@ enum Side {
     Right,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum Surface {
+    #[default]
+    Editor,
+    Chat,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RulerGlassRequest {
+    #[serde(default)]
+    surface: Surface,
     sequence: u64,
     visible: bool,
     frame: Option<Frame>,
@@ -167,6 +177,18 @@ impl RulerGlassRequest {
         let invalid = || "The ruler geometry or colours are invalid.".to_string();
         let frame = self.frame.ok_or_else(invalid)?;
         let viewport = self.viewport.ok_or_else(invalid)?;
+        if self.surface == Surface::Chat
+            && (self.ruler_visible
+                || self.menu.is_some()
+                || frame.width != frame.height
+                || !bounded(frame.width, 24.0, 64.0)
+                || self
+                    .toolbar
+                    .as_ref()
+                    .is_none_or(|toolbar| toolbar.frame != frame))
+        {
+            return Err(invalid());
+        }
         if !bounded(viewport.width, 1.0, 32768.0)
             || !bounded(viewport.height, 1.0, 32768.0)
             || !bounded(frame.width, 24.0, viewport.width)
@@ -343,6 +365,7 @@ pub async fn set_ruler_glass(
     request: RulerGlassRequest,
 ) -> Result<RulerGlassStatus, String> {
     let sequence = request.sequence;
+    let surface = request.surface;
     let visual = request.validate()?;
     #[cfg(target_os = "macos")]
     {
@@ -350,7 +373,7 @@ pub async fn set_ruler_glass(
         window
             .with_webview(move |webview| {
                 // Tauri runs this closure on the main thread with a live WKWebView.
-                let result = unsafe { macos::apply(webview.inner(), sequence, visual) };
+                let result = unsafe { macos::apply(webview.inner(), sequence, surface, visual) };
                 let _ = send.send(result);
             })
             .map_err(|_| "Orion could not reach the ruler window.".to_string())?;
@@ -360,7 +383,7 @@ pub async fn set_ruler_glass(
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (window, sequence, visual);
+        let _ = (window, sequence, surface, visual);
         Ok(RulerGlassStatus {
             active: false,
             available: false,
@@ -649,6 +672,7 @@ mod macos {
     fn toolbar_surface(
         host: &NSView,
         frame: NSRect,
+        radius: f64,
         mtm: MainThreadMarker,
     ) -> Result<(Retained<NSGlassEffectView>, bool), String> {
         let identifier = ns_string!("orion-toolbar-glass");
@@ -664,7 +688,7 @@ mod macos {
             view.setWantsLayer(true);
             let layer: Option<Retained<AnyObject>> = unsafe { msg_send![&*view, layer] };
             if let Some(layer) = layer {
-                let _: () = unsafe { msg_send![&*layer, setCornerRadius: 11.0_f64] };
+                let _: () = unsafe { msg_send![&*layer, setCornerRadius: radius] };
                 let _: () = unsafe { msg_send![&*layer, setMasksToBounds: Bool::YES] };
             }
             let _: () = unsafe { msg_send![&*view, setAccessibilityElement: Bool::NO] };
@@ -767,21 +791,28 @@ mod macos {
     pub unsafe fn apply(
         content: *mut c_void,
         sequence: u64,
+        surface: Surface,
         visual: Option<RulerVisual>,
     ) -> Result<RulerGlassStatus, String> {
         let mtm = MainThreadMarker::new().ok_or("The ruler requires the macOS main thread.")?;
         let _geometry = ImmediateGeometry::new();
         let webview = unsafe { &*content.cast::<NSView>() };
+        // Independent window-owned receipts keep the chat circle and editor
+        // from hiding one another. Both reuse the same Regular material.
+        let identifier = match surface {
+            Surface::Editor => IDENTIFIER,
+            Surface::Chat => "orion-native-chat-overlay",
+        };
         let existing = webview.subviews().iter().find(|view| {
             view.identifier()
-                .is_some_and(|id| id.to_string() == IDENTIFIER)
+                .is_some_and(|id| id.to_string() == identifier)
         });
         let bounds = webview.bounds();
         let overlay = if let Some(view) = existing {
             view
         } else {
             let view = OrionRulerGlassView::new(mtm, bounds);
-            view.setIdentifier(Some(ns_string!("orion-native-ruler-overlay")));
+            view.setIdentifier(Some(&NSString::from_str(identifier)));
             let _: () = unsafe { msg_send![&*view, setAccessibilityElement: Bool::NO] };
             // Since hitTest always returns nil, DOM sliders underneath remain
             // the only input and accessibility controls. No focus is stolen.
@@ -849,7 +880,12 @@ mod macos {
             ns_string!("NSAppearanceNameAqua")
         });
         if let Some(toolbar) = &visual.toolbar {
-            let (glass, created) = toolbar_surface(&host, local_frame(toolbar.frame), mtm)?;
+            let radius = if surface == Surface::Chat {
+                toolbar.frame.width * scale_x / 2.0
+            } else {
+                11.0
+            };
+            let (glass, created) = toolbar_surface(&host, local_frame(toolbar.frame), radius, mtm)?;
             glass.setHidden(false);
             let drawing = glass
                 .contentView()
@@ -962,6 +998,49 @@ mod macos {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chat_surface_is_an_independent_bounded_circle_and_cannot_draw_menus() {
+        let mut bytes = vec![0; 33];
+        bytes[..16].copy_from_slice(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR");
+        bytes[16..20].copy_from_slice(&92_u32.to_be_bytes());
+        bytes[20..24].copy_from_slice(&92_u32.to_be_bytes());
+        bytes[24] = 8;
+        bytes[25] = 6;
+        let mut valid = request();
+        valid["surface"] = "chat".into();
+        valid["rulerVisible"] = false.into();
+        valid["frame"] = serde_json::json!({"x":1100,"y":700,"width":46,"height":46});
+        valid["rightPosition"] = 46.into();
+        valid["toolbar"] = serde_json::json!({"frame":valid["frame"],"paint":{"png":STANDARD.encode(bytes),"width":92,"height":92}});
+        let validate = |value| {
+            serde_json::from_value::<RulerGlassRequest>(value)
+                .unwrap()
+                .validate()
+        };
+        assert!(validate(valid.clone()).is_ok());
+        for field in ["width", "height"] {
+            let mut invalid = valid.clone();
+            invalid["frame"][field] = 65.into();
+            assert!(validate(invalid).is_err());
+        }
+        let mut invalid = valid.clone();
+        invalid["rulerVisible"] = true.into();
+        assert!(validate(invalid).is_err());
+        let mut invalid = valid;
+        invalid["toolbar"]["frame"]["x"] = 900.into();
+        assert!(validate(invalid).is_err());
+        let hide: RulerGlassRequest = serde_json::from_value(
+            serde_json::json!({"sequence":2,"surface":"chat","visible":false}),
+        )
+        .unwrap();
+        assert_eq!(hide.surface, Surface::Chat);
+        assert!(hide.validate().unwrap().is_none());
+        assert!(serde_json::from_value::<RulerGlassRequest>(
+            serde_json::json!({"sequence":2,"surface":"arbitrary","visible":false})
+        )
+        .is_err());
+    }
 
     #[test]
     fn scroll_motion_is_bounded_and_cannot_supply_artwork() {

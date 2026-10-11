@@ -2,6 +2,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import JSZip from "jszip";
+import { marked } from "marked";
 import { createEmptySnapshot } from "../data/defaults";
 import type { Note } from "../types";
 import { serializeNoteImageTitle } from "./noteImageLayout";
@@ -173,12 +174,14 @@ describe("Word export", () => {
     const { default: mammoth } = await import("mammoth");
     const html = await mammoth.convertToHtml({ buffer: Buffer.from(output.bytes) }, { includeEmbeddedStyleMap: false, styleMap: ["p[style-name='Title'] => h1:fresh", "p[style-name='Code'] => pre:fresh", "p[style-name='Quote'] => blockquote > p:fresh", "r[style-name='Inline code'] => code"] });
     const markdown = docxHtmlToMarkdown(html.value);
-    expect(markdown).toContain("# Origin & evidence");
+    const rendered = new DOMParser().parseFromString(marked.parse(markdown, { async: false }), "text/html");
+    expect(rendered.querySelector("h1")?.textContent).toBe("Origin & evidence");
     expect(markdown).toContain("## Important heading");
     expect(markdown).toContain("**bold**");
-    expect(markdown).toContain("- [ ] Read the source");
+    expect(markdown, html.value).toContain("- [ ] Read the source");
     expect(markdown).toContain("- [x] Record the result");
-    expect(markdown).toContain("| **Concept** | **Value** |");
+    expect(rendered.querySelector("table"), html.value).not.toBeNull();
+    expect(Array.from(rendered.querySelectorAll("th"), (cell) => cell.textContent)).toEqual(["Concept", "Value"]);
     expect(markdown).toContain("> *A preserved quotation.*");
     expect(markdown).toContain("```\nconst answer = 42;\nconsole.log(answer);\n```");
     expect(markdown).toContain("https://example.com/public");

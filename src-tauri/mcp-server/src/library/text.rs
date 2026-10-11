@@ -1,14 +1,14 @@
 use super::*;
 
 #[derive(Debug)]
-pub(super) struct Line<'a> {
+pub(crate) struct Line<'a> {
     pub index: usize,
     pub byte: usize,
     pub text: &'a str,
     pub visible: bool,
 }
 
-pub(super) fn lines(body: &str) -> Vec<Line<'_>> {
+pub(crate) fn lines(body: &str) -> Vec<Line<'_>> {
     let raw: Vec<_> = body.split_inclusive('\n').collect();
     let frontmatter = if raw.first().is_some_and(|line| line.trim_end() == "---") {
         raw.iter()
@@ -59,13 +59,13 @@ pub(super) fn lines(body: &str) -> Vec<Line<'_>> {
 }
 
 #[derive(Debug)]
-pub(super) struct Section {
+pub(crate) struct Section {
     pub title: String,
     pub level: usize,
     pub start: usize,
     pub end: usize,
 }
-pub(super) fn sections(body: &str) -> Vec<Section> {
+pub(crate) fn sections(body: &str) -> Vec<Section> {
     let lines = lines(body);
     let mut headings = Vec::new();
     for (index, line) in lines.iter().enumerate() {
@@ -128,13 +128,13 @@ pub(super) fn sections(body: &str) -> Vec<Section> {
 }
 
 #[derive(Debug)]
-pub(super) struct Task {
+pub(crate) struct Task {
     pub line: usize,
     pub marker_byte: usize,
     pub raw: String,
     pub checked: bool,
 }
-pub(super) fn tasks(body: &str) -> Vec<Task> {
+pub(crate) fn tasks(body: &str) -> Vec<Task> {
     lines(body)
         .into_iter()
         .filter_map(|line| {
@@ -175,7 +175,7 @@ pub(super) fn tasks(body: &str) -> Vec<Task> {
 }
 
 // Readable labels only, never a Markdown-to-HTML renderer.
-pub(super) fn plain(value: &str) -> String {
+pub(crate) fn plain(value: &str) -> String {
     let mut output = String::new();
     let mut remaining = value;
     while !remaining.is_empty() {
@@ -208,7 +208,7 @@ pub(super) fn plain(value: &str) -> String {
     output.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-pub(super) fn task_concept<'a>(scope: &'a Space, note: &Note, raw: &str) -> Option<&'a Concept> {
+pub(crate) fn task_concept<'a>(scope: &'a Space, note: &Note, raw: &str) -> Option<&'a Concept> {
     for concept in &scope.concepts {
         if raw.contains(&format!("orion-concept://{})", concept.id))
             || concept

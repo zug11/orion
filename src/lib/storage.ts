@@ -1,3 +1,4 @@
+import { CHAT_EDIT_INSTRUCTIONS, CHAT_EDIT_SCHEMA, CHAT_EDIT_INTENT_SCHEMA, parseChatEditIntent, CHAT_REWRITE_SCHEMA, chatRequestAllowsEdits, parseChatNoteEdits, parseChatRewrite } from "./chatEdits";
 import type {
   ApiKeyStatus,
   ApiKeyTestResult,
@@ -22,6 +23,7 @@ import type {
   WhisperConfig,
 } from "../types";
 import { truncateUnicode } from "./text";
+import type { EditorActionGrant } from "./assistant/editorActionHost";
 import { AI_IMAGE_MODEL } from "./aiImages";
 import {
   IMAGE_PLANNING_INSTRUCTIONS, imagePlanningSchema, parseImagePlanningContext,
@@ -63,9 +65,11 @@ import {
   normalizeChatNoteActions,
 } from "./chat";
 import {
-  CHAT_READING_INSTRUCTIONS, CHAT_READ_REQUESTS_SCHEMA, MAX_CHAT_EVIDENCE,
+  CHAT_READING_INSTRUCTIONS, CHAT_READ_REQUESTS_SCHEMA, CHAT_READING_CHECKPOINT_SCHEMA, parseChatReadingFinding, MAX_CHAT_EVIDENCE,
   isChatCoverage, isChatEvidence, parseChatReadingContext, parseChatReadRequests,
 } from "./chatReadingProtocol";
+
+import { CHAT_SUGGESTIONS_INSTRUCTIONS, CHAT_SUGGESTIONS_SCHEMA, parseChatSuggestionContext, parseChatSuggestionResult } from "./chatSuggestionsProtocol";
 
 const VAULT_STORAGE_KEY = "orion:vault:v2";
 const LEGACY_SNAPSHOT_STORAGE_KEY = "orion:vault:v1";
@@ -440,7 +444,18 @@ async function readImagePlanningResponse(response: Response, stageLabel: string)
   catch { throw new Error(`${stageLabel} returned invalid data.`); }
 }
 
-export async function planNoteImage(request: ImagePlanningRequest, signal?: AbortSignal): Promise<ImagePlanningResult> {
+function requireNativeEditorAction(grant: EditorActionGrant | undefined) {
+  if (grant === undefined) return;
+  if (!isTauriRuntime()) throw new Error("External editor actions require the native Orion window.");
+  if (!grant || Object.keys(grant).sort().join(",") !== "actionId,sessionId" ||
+    ![grant.actionId, grant.sessionId].every(value => typeof value === "string" && value.length > 0 &&
+      value.length <= 200 && value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value))) {
+    throw new Error("The external editor action has invalid native authority.");
+  }
+}
+
+export async function planNoteImage(request: ImagePlanningRequest, signal?: AbortSignal, editorActionGrant?: EditorActionGrant): Promise<ImagePlanningResult> {
+  requireNativeEditorAction(editorActionGrant);
   const context = parseImagePlanningContext(request);
   const timeoutMs = imagePlanningTimeoutMs(request);
   const effort = imagePlanningEffort(request.model, request.effort);
@@ -449,7 +464,7 @@ export async function planNoteImage(request: ImagePlanningRequest, signal?: Abor
   if (signal?.aborted) throw signal.reason ?? new Error("Image planning was cancelled.");
   const requestId = `image:plan:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 12)}`;
   if (isTauriRuntime()) {
-    const value = await invokeTauri<unknown>("plan_note_image", { request: { ...request, requestId } }, {
+    const value = await invokeTauri<unknown>("plan_note_image", { request: { ...request, requestId }, ...(editorActionGrant ? { editorActionGrant } : {}) }, {
       queueKey: "images", signal,
       cancelActive: () => { void invokeTauri("cancel_note_image_generation", { requestId }).catch(() => undefined); },
     });
@@ -508,7 +523,9 @@ export async function generateNoteImage(
   prompt: string,
   signal?: AbortSignal,
   quality: ImageGenerationQuality = "detailed",
+  editorActionGrant?: EditorActionGrant,
 ): Promise<GeneratedNoteImage> {
+  requireNativeEditorAction(editorActionGrant);
   if (quality !== "fast" && quality !== "detailed") throw new Error("Choose Fast or Detailed image generation.");
   const normalized = prompt.trim();
   if (!normalized) {
@@ -535,7 +552,7 @@ export async function generateNoteImage(
     };
     const value = await invokeTauri<unknown>(
       "generate_note_image",
-      { request: { requestId, prompt: normalized, quality } },
+      { request: { requestId, prompt: normalized, quality }, ...(editorActionGrant ? { editorActionGrant } : {}) },
       { queueKey: "images", signal, cancelActive: cancelNative },
     );
     return parseGeneratedNoteImage(value);
@@ -582,7 +599,9 @@ export async function generateNoteImage(
 export async function persistGeneratedNoteImage(
   value: GeneratedNoteImage,
   assetId: string,
+  editorActionGrant?: EditorActionGrant,
 ): Promise<NoteImageAttachment> {
+  requireNativeEditorAction(editorActionGrant);
   const image = parseGeneratedNoteImage(value);
   if (isTauriRuntime()) {
     return invokeTauri<NoteImageAttachment>("save_note_image", {
@@ -592,6 +611,7 @@ export async function persistGeneratedNoteImage(
         mimeType: image.mimeType,
         base64Data: image.base64Data,
       },
+      ...(editorActionGrant ? { editorActionGrant } : {}),
     });
   }
   return {
@@ -1335,34 +1355,50 @@ function optionalNonNegativeNumber(value: unknown): number | undefined {
 export async function chatWithOrion(
   request: ChatRequest,
   signal?: AbortSignal,
+  editorActionGrant?: EditorActionGrant,
 ): Promise<ChatResult> {
+  requireNativeEditorAction(editorActionGrant);
   if (!request.prompt.trim()) {
     throw new Error("Ask Orion a question first.");
   }
+  const suggestionContext = request.mode === "chat-suggestions" ? parseChatSuggestionContext(request.suggestionContext) : undefined;
+  const queueKey = suggestionContext ? "chat-suggestions" : "chat";
   let result: ChatResult;
   if (isTauriRuntime()) {
     const value = await invokeTauri<unknown>(
       "chat",
-      { request },
-      { queueKey: "chat", signal },
-    );
-    result = parseChatResult(value, request.mode === "chat-reading");
+      { request, ...(editorActionGrant ? { editorActionGrant } : {}) },
+      { queueKey, signal },
+    ).catch((error: unknown) => {
+      // Native Result<_, String> rejects with a string. Preserve that actionable
+      // message for the same Chat/voice error path used by browser providers.
+      throw typeof error === "string" ? new Error(error) : error;
+    });
+    result = suggestionContext
+      ? parseChatSuggestionResult({ suggestions: isRecord(value) ? value.suggestions : undefined }, suggestionContext)
+      : parseChatResult(value, request.mode === "chat-reading", chatRequestAllowsEdits(request));
   } else if (aiProviderForModel(request.model) === "anthropic") {
     result = await runBrowserProviderCall(
       "anthropic",
       () => chatInBrowserWithAnthropic(request, requireBrowserAnthropicApiKey()),
-      { queueKey: "chat", signal },
+      { queueKey, signal },
     );
   } else {
     result = await runBrowserProviderCall(
       "openai",
       () => chatInBrowser(request, requireBrowserApiKey()),
-      { queueKey: "chat", signal },
+      { queueKey, signal },
     );
   }
-  return chatRequestAllowsNoteActions(request)
-    ? result
-    : { reply: result.reply, ...(result.readRequests ? { readRequests: result.readRequests } : {}) };
+  if (suggestionContext) return { reply: "", suggestions: result.suggestions };
+  return { reply: result.reply,
+    ...(result.readRequests ? { readRequests: result.readRequests } : {}),
+    ...(result.checkpoint ? { checkpoint: result.checkpoint } : {}),
+    ...(chatRequestAllowsNoteActions(request) && result.noteActions ? { noteActions: result.noteActions } : {}),
+    ...(chatRequestAllowsEdits(request) && result.editIntent ? { editIntent: result.editIntent } : {}),
+    ...(chatRequestAllowsEdits(request) && result.noteEdits ? { noteEdits: result.noteEdits } : {}),
+    ...(chatRequestAllowsEdits(request) && result.noteRewrite !== undefined ? { noteRewrite: result.noteRewrite } : {}),
+  };
 }
 
 export async function exportMarkdown(
@@ -1733,7 +1769,7 @@ async function chatInBrowser(
   const body: Record<string, unknown> = {
     model: request.model || "gpt-5.6-sol",
     store: false,
-    max_output_tokens: inlineWriting || allowNoteActions ? 12_000 : 6_000,
+    max_output_tokens: request.mode === "chat-suggestions" ? 6_000 : inlineWriting || allowNoteActions || chatRequestAllowsEdits(request) ? 12_000 : 6_000,
     instructions: chatProviderInstructions(request),
     input: JSON.stringify(chatProviderPayload(request)),
     text: {
@@ -1765,7 +1801,9 @@ async function chatInBrowser(
   const data = (await response.json()) as OpenAIResponse;
   const outputText = extractBrowserOutputText(data, operation);
   try {
-    return parseChatResult(JSON.parse(outputText) as unknown, request.mode === "chat-reading");
+    return request.mode === "chat-suggestions"
+      ? parseChatSuggestionResult(JSON.parse(outputText) as unknown, parseChatSuggestionContext(request.suggestionContext))
+      : parseChatResult(JSON.parse(outputText) as unknown, request.mode === "chat-reading", chatRequestAllowsEdits(request));
   } catch (error) {
     if (error instanceof SyntaxError) {
       throw new Error(
@@ -1860,7 +1898,7 @@ async function chatInBrowserWithAnthropic(
   }
   const body = {
     model: request.model || "claude-sonnet-5",
-    max_tokens: inlineWriting || allowNoteActions ? 12_000 : 6_000,
+    max_tokens: request.mode === "chat-suggestions" ? 6_000 : inlineWriting || allowNoteActions || chatRequestAllowsEdits(request) ? 12_000 : 6_000,
     system: chatProviderInstructions(request),
     messages: [
       {
@@ -1881,7 +1919,9 @@ async function chatInBrowserWithAnthropic(
     operation,
   );
   try {
-    return parseChatResult(JSON.parse(outputText) as unknown, request.mode === "chat-reading");
+    return request.mode === "chat-suggestions"
+      ? parseChatSuggestionResult(JSON.parse(outputText) as unknown, parseChatSuggestionContext(request.suggestionContext))
+      : parseChatResult(JSON.parse(outputText) as unknown, request.mode === "chat-reading", chatRequestAllowsEdits(request));
   } catch (error) {
     if (error instanceof SyntaxError) {
       throw new Error(
@@ -2682,11 +2722,11 @@ function parseOrganizeResult(value: unknown): OrganizeContentResult {
   return { notes, wikiArticles, concepts, suggestedConnections };
 }
 
-export function parseChatResult(value: unknown, reading = false): ChatResult {
+export function parseChatResult(value: unknown, reading = false, editing = false): ChatResult {
   if (
     !isRecord(value) ||
     Object.keys(value).some(
-      (key) => key !== "reply" && key !== "noteActions" && !(reading && key === "readRequests"),
+      (key) => key !== "reply" && key !== "noteActions" && !(reading && (key === "readRequests" || key === "checkpoint" || key === "noteEdits" || key === "noteRewrite" || key === "editIntent")),
     ) ||
     typeof value.reply !== "string" ||
     (!reading && !value.reply.trim())
@@ -2697,10 +2737,17 @@ export function parseChatResult(value: unknown, reading = false): ChatResult {
   if (reading && ([...value.reply].length > 6_000 || (!readRequests?.length && !value.reply.trim()))) {
     throw new Error("Chat returned an unexpected response.");
   }
-  if (readRequests?.length) return { reply: "", readRequests };
+  const editIntent = editing ? parseChatEditIntent(value.editIntent) : undefined;
+  const checkpoint = reading ? parseChatReadingFinding(value.checkpoint) : undefined;
+  if (readRequests?.length) return { reply: "", readRequests, ...(checkpoint ? { checkpoint } : {}), ...(editIntent ? { editIntent } : {}) };
   const noteActions = normalizeChatNoteActions(value.noteActions);
+  const noteEdits = editing ? parseChatNoteEdits(value.noteEdits) : [];
+  const noteRewrite = editing ? parseChatRewrite(value.noteRewrite) : undefined;
   return {
     reply: value.reply,
+    ...(editIntent ? { editIntent } : {}),
+    ...(noteEdits.length ? { noteEdits } : {}),
+    ...(noteRewrite !== undefined ? { noteRewrite } : {}),
     ...(noteActions.length > 0 ? { noteActions } : {}),
     ...(readRequests ? { readRequests } : {}),
   };
@@ -3036,7 +3083,7 @@ const CHAT_INSTRUCTIONS = [
 
 const CHAT_NOTE_ACTION_INSTRUCTIONS = [
   "The host verified that the user explicitly asked to create one or more notes. Include up to three complete creation-only noteActions. Each accepted action becomes a real permanent editable note in the active Space immediately.",
-  "Do not propose updates, deletions, or cross-Space writes. Do not claim a note was created unless its action is present. Keep created notes focused, preserve uncertainty, use ordinary Markdown, never invent source citations, and do not duplicate tasks merely because related material contains them.",
+  "noteActions cannot contain updates, deletions, or cross-Space writes. Do not claim a note was created unless its action is present. Keep created notes focused, preserve uncertainty, use ordinary Markdown, never invent source citations, and do not duplicate tasks merely because related material contains them.",
 ].join("\n\n");
 
 const CHAT_NO_WRITE_INSTRUCTIONS =
@@ -3110,6 +3157,7 @@ const INLINE_WRITING_RESULT_SCHEMA = {
 function chatRequestAllowsNoteActions(request: ChatRequest): boolean {
   return (
     request.mode !== "inline-writing" &&
+    request.mode !== "chat-suggestions" &&
     request.allowNoteActions === true &&
     chatPromptAllowsNoteCreation(request.prompt)
   );
@@ -3125,27 +3173,40 @@ function chatInstructions(allowNoteActions: boolean): string {
 }
 
 function chatProviderInstructions(request: ChatRequest): string {
+  if (request.mode === "chat-suggestions") return CHAT_SUGGESTIONS_INSTRUCTIONS;
   if (request.mode === "inline-writing") return INLINE_WRITING_INSTRUCTIONS;
   const allowed = chatRequestAllowsNoteActions(request);
   if (request.mode !== "chat-reading") return chatInstructions(allowed);
   return [CHAT_READING_INSTRUCTIONS, allowed
     ? `${CHAT_NOTE_ACTION_INSTRUCTIONS}\nOnly the final answer may contain noteActions. Reading responses must return an empty noteActions array.`
-    : "No note write is authorized. Do not return noteActions or claim to have created or changed notes."].join("\n\n");
+    : chatRequestAllowsEdits(request)
+      ? "No new note creation is authorized. Do not return noteActions or claim to have created notes."
+      : "No note write is authorized. Do not return noteActions or claim to have created notes.",
+    chatRequestAllowsEdits(request) ? CHAT_EDIT_INSTRUCTIONS : "No text edit is authorized. Do not return noteEdits or claim to have changed a note."].join("\n\n");
 }
 
 function chatResponseSchema(request: ChatRequest): Record<string, unknown> {
+  if (request.mode === "chat-suggestions") return CHAT_SUGGESTIONS_SCHEMA;
   if (request.mode === "inline-writing") return INLINE_WRITING_RESULT_SCHEMA;
   const base = chatRequestAllowsNoteActions(request) ? CHAT_RESULT_SCHEMA : CHAT_REPLY_ONLY_RESULT_SCHEMA;
   const schema = { ...base, required: [...base.required] as string[], properties: { ...base.properties } as Record<string, unknown> };
   if (request.mode === "chat-reading") {
     schema.properties.reply = { type: "string", maxLength: 6_000 };
     schema.properties.readRequests = CHAT_READ_REQUESTS_SCHEMA;
-    schema.required.push("readRequests");
+    schema.properties.checkpoint = CHAT_READING_CHECKPOINT_SCHEMA;
+    schema.required.push("readRequests", "checkpoint");
+    if (chatRequestAllowsEdits(request)) {
+      schema.properties.editIntent = CHAT_EDIT_INTENT_SCHEMA;
+      schema.properties.noteEdits = CHAT_EDIT_SCHEMA;
+      schema.properties.noteRewrite = CHAT_REWRITE_SCHEMA;
+      schema.required.push("editIntent", "noteEdits", "noteRewrite");
+    }
   }
   return schema;
 }
 
 function chatProviderPayload(request: ChatRequest): Record<string, unknown> {
+  if (request.mode === "chat-suggestions") return { suggestionContext: parseChatSuggestionContext(request.suggestionContext) };
   const base = { question: request.prompt, workspaceName: request.workspaceName, conversation: request.history };
   return request.mode === "chat-reading"
     ? { ...base, readingContext: parseChatReadingContext(request.readingContext) }

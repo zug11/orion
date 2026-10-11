@@ -1,0 +1,423 @@
+[
+  {
+    "request": {
+      "operation": "get",
+      "space_id": "space",
+      "voice_target_id": "target",
+      "work_order_id": "a",
+      "expected_revision": 1,
+      "task_view": "working",
+      "max_chars": 700
+    },
+    "result": {
+      "spaceId": "space",
+      "voiceTargetId": "target",
+      "taskView": "working",
+      "workOrder": {
+        "id": "a",
+        "revision": 1,
+        "state": "completed",
+        "taskView": "working",
+        "subject": "Research alpha 😀",
+        "subjectTruncated": false,
+        "stage": "completed",
+        "current": true,
+        "checkpointSequence": 0,
+        "savedNoteIds": [],
+        "historyWithheld": false,
+        "referenceOnly": true,
+        "findings": [],
+        "decisions": [],
+        "openQuestions": [],
+        "nextSteps": [],
+        "completedOperations": [
+          {
+            "kind": "search"
+          },
+          {
+            "kind": "note-full",
+            "entityId": "n"
+          }
+        ],
+        "omissions": {
+          "findings": 0,
+          "decisions": 0,
+          "openQuestions": 0,
+          "nextSteps": 0,
+          "completedOperations": 0
+        },
+        "result": {
+          "text": {
+            "fragments": [
+              {
+                "from": 0,
+                "to": 177,
+                "text": "😀 A finding with exact evidence. 😀 A finding with exact evidence. 😀 A finding with exact evidence. 😀 A finding with exact evidence. 😀 A finding with exact evidence. 😀 A fi"
+              },
+              {
+                "from": 360,
+                "to": 535,
+                "text": "act evidence. 😀 A finding with exact evidence. 😀 A finding with exact evidence. 😀 A finding with exact evidence. 😀 A finding with exact evidence.  [1](#orion-evidence-e1)."
+              }
+            ],
+            "complete": false,
+            "omittedChars": 178
+          },
+          "evidence": [
+            {
+              "id": "e1",
+              "kind": "note",
+              "entityId": "n",
+              "title": "Exact 😀 title",
+              "version": "ad1718444ea7d9c0",
+              "start": 0,
+              "end": 24,
+              "text": "Alpha 😀 is supported.\n\n",
+              "offsetUnit": "utf16",
+              "complete": true,
+              "omittedChars": 0
+            }
+          ],
+          "coverage": {
+            "availableNotes": 1,
+            "availableSources": 0,
+            "openedNotes": 1,
+            "openedSources": 0,
+            "searches": 1,
+            "limited": false
+          },
+          "omittedEvidence": 0
+        },
+        "controlVersion": "control"
+      }
+    }
+  },
+  {
+    "request": {
+      "operation": "get",
+      "space_id": "space",
+      "voice_target_id": "target",
+      "work_order_id": "history",
+      "expected_revision": 1,
+      "task_view": "history",
+      "max_chars": 700
+    },
+    "result": {
+      "spaceId": "space",
+      "voiceTargetId": "target",
+      "taskView": "history",
+      "workOrder": {
+        "id": "history",
+        "revision": 1,
+        "state": "completed",
+        "taskView": "history",
+        "subject": "Research completed task history",
+        "subjectTruncated": false,
+        "stage": "completed",
+        "current": true,
+        "checkpointSequence": 0,
+        "savedNoteIds": [],
+        "historyWithheld": false,
+        "referenceOnly": true,
+        "findings": [],
+        "decisions": [],
+        "openQuestions": [],
+        "nextSteps": [],
+        "completedOperations": [
+          {
+            "kind": "search"
+          },
+          {
+            "kind": "note-full",
+            "entityId": "n"
+          }
+        ],
+        "omissions": {
+          "findings": 0,
+          "decisions": 0,
+          "openQuestions": 0,
+          "nextSteps": 0,
+          "completedOperations": 0
+        },
+        "result": {
+          "text": {
+            "fragments": [
+              {
+                "from": 0,
+                "to": 174,
+                "text": "😀 A finding with exact evidence. 😀 A finding with exact evidence. 😀 A finding with exact evidence. 😀 A finding with exact evidence. 😀 A finding with exact evidence. 😀 A"
+              },
+              {
+                "from": 364,
+                "to": 535,
+                "text": "evidence. 😀 A finding with exact evidence. 😀 A finding with exact evidence. 😀 A finding with exact evidence. 😀 A finding with exact evidence.  [1](#orion-evidence-e1)."
+              }
+            ],
+            "complete": false,
+            "omittedChars": 185
+          },
+          "evidence": [
+            {
+              "id": "e1",
+              "kind": "note",
+              "entityId": "n",
+              "title": "Exact 😀 title",
+              "version": "ad1718444ea7d9c0",
+              "start": 0,
+              "end": 51,
+              "text": "Alpha 😀 is supported.\n\n- [x] PRIVATE HISTORY EVENT",
+              "offsetUnit": "utf16",
+              "complete": true,
+              "omittedChars": 0
+            }
+          ],
+          "coverage": {
+            "availableNotes": 1,
+            "availableSources": 0,
+            "openedNotes": 1,
+            "openedSources": 0,
+            "searches": 1,
+            "limited": false
+          },
+          "omittedEvidence": 0
+        },
+        "controlVersion": "control"
+      }
+    }
+  },
+  {
+    "request": {
+      "operation": "get",
+      "space_id": "space",
+      "voice_target_id": "target",
+      "work_order_id": "history",
+      "expected_revision": 1,
+      "task_view": "working",
+      "max_chars": 700
+    },
+    "result": {
+      "spaceId": "space",
+      "voiceTargetId": "target",
+      "taskView": "working",
+      "workOrder": {
+        "id": "history",
+        "revision": 1,
+        "state": "completed",
+        "taskView": "history",
+        "subject": "History research",
+        "subjectTruncated": false,
+        "stage": "completed",
+        "current": true,
+        "checkpointSequence": 0,
+        "savedNoteIds": [],
+        "historyWithheld": true,
+        "referenceOnly": true,
+        "findings": [],
+        "decisions": [],
+        "openQuestions": [],
+        "nextSteps": [],
+        "completedOperations": [],
+        "omissions": {
+          "findings": 0,
+          "decisions": 0,
+          "openQuestions": 0,
+          "nextSteps": 0,
+          "completedOperations": 2
+        },
+        "withheld": "history",
+        "controlVersion": "control"
+      }
+    }
+  },
+  {
+    "request": {
+      "operation": "get",
+      "space_id": "space",
+      "voice_target_id": "target",
+      "work_order_id": "a",
+      "expected_revision": 1,
+      "task_view": "working",
+      "max_chars": 700
+    },
+    "result": {
+      "spaceId": "space",
+      "voiceTargetId": "target",
+      "taskView": "working",
+      "workOrder": {
+        "id": "a",
+        "revision": 1,
+        "state": "completed",
+        "taskView": "working",
+        "subject": "Stale research",
+        "subjectTruncated": false,
+        "stage": "completed",
+        "current": false,
+        "checkpointSequence": 0,
+        "savedNoteIds": [],
+        "historyWithheld": false,
+        "referenceOnly": true,
+        "findings": [],
+        "decisions": [],
+        "openQuestions": [],
+        "nextSteps": [],
+        "completedOperations": [],
+        "omissions": {
+          "findings": 0,
+          "decisions": 0,
+          "openQuestions": 0,
+          "nextSteps": 0,
+          "completedOperations": 2
+        },
+        "withheld": "stale",
+        "controlVersion": "control"
+      }
+    }
+  },
+  {
+    "request": {
+      "operation": "get",
+      "space_id": "space",
+      "voice_target_id": "target",
+      "work_order_id": "a",
+      "expected_revision": 1,
+      "task_view": "working",
+      "max_chars": 1
+    },
+    "result": {
+      "spaceId": "space",
+      "voiceTargetId": "target",
+      "taskView": "working",
+      "workOrder": {
+        "id": "a",
+        "revision": 1,
+        "state": "completed",
+        "taskView": "working",
+        "subject": "R",
+        "subjectTruncated": true,
+        "stage": "completed",
+        "current": true,
+        "checkpointSequence": 0,
+        "savedNoteIds": [],
+        "historyWithheld": false,
+        "referenceOnly": true,
+        "findings": [],
+        "decisions": [],
+        "openQuestions": [],
+        "nextSteps": [],
+        "completedOperations": [
+          {
+            "kind": "search"
+          },
+          {
+            "kind": "note-full",
+            "entityId": "n"
+          }
+        ],
+        "omissions": {
+          "findings": 0,
+          "decisions": 0,
+          "openQuestions": 0,
+          "nextSteps": 0,
+          "completedOperations": 0
+        },
+        "result": {
+          "text": {
+            "fragments": [],
+            "complete": false,
+            "omittedChars": 520
+          },
+          "evidence": [],
+          "coverage": {
+            "availableNotes": 1,
+            "availableSources": 0,
+            "openedNotes": 1,
+            "openedSources": 0,
+            "searches": 1,
+            "limited": false
+          },
+          "omittedEvidence": 1
+        },
+        "controlVersion": "control"
+      }
+    }
+  },
+  {
+    "request": {
+      "operation": "get",
+      "space_id": "space",
+      "voice_target_id": "target",
+      "work_order_id": "a",
+      "expected_revision": 1,
+      "task_view": "working",
+      "max_chars": 17
+    },
+    "result": {
+      "spaceId": "space",
+      "voiceTargetId": "target",
+      "taskView": "working",
+      "workOrder": {
+        "id": "a",
+        "revision": 1,
+        "state": "completed",
+        "taskView": "working",
+        "subject": "Re",
+        "subjectTruncated": true,
+        "stage": "completed",
+        "current": true,
+        "checkpointSequence": 0,
+        "savedNoteIds": [],
+        "historyWithheld": false,
+        "referenceOnly": true,
+        "findings": [],
+        "decisions": [],
+        "openQuestions": [],
+        "nextSteps": [],
+        "completedOperations": [
+          {
+            "kind": "search"
+          },
+          {
+            "kind": "note-full",
+            "entityId": "n"
+          }
+        ],
+        "omissions": {
+          "findings": 0,
+          "decisions": 0,
+          "openQuestions": 0,
+          "nextSteps": 0,
+          "completedOperations": 0
+        },
+        "result": {
+          "text": {
+            "fragments": [
+              {
+                "from": 0,
+                "to": 5,
+                "text": "😀 A "
+              },
+              {
+                "from": 531,
+                "to": 535,
+                "text": "e1)."
+              }
+            ],
+            "complete": false,
+            "omittedChars": 512
+          },
+          "evidence": [],
+          "coverage": {
+            "availableNotes": 1,
+            "availableSources": 0,
+            "openedNotes": 1,
+            "openedSources": 0,
+            "searches": 1,
+            "limited": false
+          },
+          "omittedEvidence": 1
+        },
+        "controlVersion": "control"
+      }
+    }
+  }
+]

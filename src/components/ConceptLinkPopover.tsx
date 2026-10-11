@@ -1,4 +1,4 @@
-import { Check, FileText, Link2, PenLine, Search, X } from "../lib/icons";
+import { ArrowLeft, Check, ExternalLink, FileText, Link2, PenLine, Search, X } from "../lib/icons";
 import {
   useEffect,
   useId,
@@ -14,11 +14,14 @@ import {
 } from "../lib/concepts";
 import { linkTitleConflict } from "../lib/linkTitle";
 import { isLinkedArticlePlaceholder } from "../lib/linkedArticle";
+import { isPotentialExternalLink, normalizeExternalLink } from "../lib/externalLinks";
 import type { Concept, Note } from "../types";
 import type { ConceptLinkSelectionMode } from "./editor/conceptLinkSelection";
 
 interface ConceptLinkPopoverProps {
   initialPhrase: string;
+  initialHref?: string;
+  initialNoteId?: string;
   selectedText?: string;
   selectionMode?: ConceptLinkSelectionMode;
   initialDestinationIds: readonly string[];
@@ -30,6 +33,9 @@ interface ConceptLinkPopoverProps {
   onGenerateTitle?: (selectedContext: string, signal?: AbortSignal) => Promise<string>;
   onGeneratingChange?: (generating: boolean) => void;
   onCancel: () => void;
+  onExternalLink?: (url: string) => void;
+  onOpenExternalLink?: (url: string) => void;
+  onNoteLink?: (noteId: string) => void;
   onSubmit: (
     phrase: string,
     destinationIds: string[],
@@ -42,6 +48,8 @@ interface ConceptLinkPopoverProps {
 
 export function ConceptLinkPopover({
   initialPhrase,
+  initialHref = "",
+  initialNoteId,
   selectedText = "",
   selectionMode = "none",
   initialDestinationIds,
@@ -53,16 +61,23 @@ export function ConceptLinkPopover({
   onGenerateTitle,
   onGeneratingChange,
   onCancel,
+  onExternalLink,
+  onOpenExternalLink,
+  onNoteLink,
   onSubmit,
 }: ConceptLinkPopoverProps) {
   const phraseId = useId();
   const phraseInputRef = useRef<HTMLInputElement>(null);
+  const destinationInputRef = useRef<HTMLInputElement>(null);
+  const destinationListRef = useRef<HTMLDivElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const titleRequestRef = useRef(0);
   const titlePendingRef = useRef(false);
   const titleAbortRef = useRef<AbortController | null>(null);
   const [phrase, setPhrase] = useState(initialPhrase);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialHref);
+  const [view, setView] = useState<"destination" | "article">("destination");
+  const [destinationError, setDestinationError] = useState("");
   const [destinationIds, setDestinationIds] = useState(
     () => new Set(initialDestinationIds),
   );
@@ -115,10 +130,15 @@ export function ConceptLinkPopover({
           : "Create blank article";
   const titleGuidanceId = `${phraseId}-guidance`;
   const titleErrorId = `${phraseId}-error`;
+  const externalHref = normalizeExternalLink(query);
+  const initialExternalHref = normalizeExternalLink(initialHref);
+  const looksLikeUrl = isPotentialExternalLink(query);
   const visibleNotes = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     return [...notes]
       .sort((left, right) => {
+        if (left.id === initialNoteId) return -1;
+        if (right.id === initialNoteId) return 1;
         if (left.id === currentNoteId) return -1;
         if (right.id === currentNoteId) return 1;
         return left.title.localeCompare(right.title);
@@ -131,14 +151,19 @@ export function ConceptLinkPopover({
           : true,
       )
       .slice(0, 7);
-  }, [currentNoteId, notes, query]);
+  }, [currentNoteId, initialNoteId, notes, query]);
 
   useEffect(() => {
+    if (view === "destination") {
+      destinationInputRef.current?.focus();
+      if (initialHref) destinationInputRef.current?.select();
+      return;
+    }
     phraseInputRef.current?.focus();
     if (initialPhrase) {
       phraseInputRef.current?.select();
     }
-  }, [initialPhrase]);
+  }, [initialPhrase, initialHref, view]);
 
   useEffect(
     () => () => {
@@ -164,6 +189,18 @@ export function ConceptLinkPopover({
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (view === "destination") {
+      if (externalHref && onExternalLink) {
+        try {
+          onExternalLink(externalHref);
+        } catch (error) {
+          setDestinationError(error instanceof Error ? error.message : String(error));
+        }
+      } else if (looksLikeUrl) {
+        setDestinationError("Enter a valid http:// or https:// web address.");
+      }
+      return;
+    }
     const normalizedPhrase = resolvedPhrase.replace(/\s+/g, " ");
     if (isLinkablePhrase(normalizedPhrase)) {
       try {
@@ -250,6 +287,30 @@ export function ConceptLinkPopover({
     if (event.key === "Escape") {
       event.preventDefault();
       cancel();
+      return;
+    }
+    if (view === "destination" && !looksLikeUrl && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      const buttons = [...(destinationListRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
+      if (!buttons.length) return;
+      const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      if (document.activeElement !== destinationInputRef.current && current === -1) return;
+      event.preventDefault();
+      const next = current === -1
+        ? event.key === "ArrowDown" ? 0 : buttons.length - 1
+        : (current + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+      buttons[next]?.focus();
+    }
+  }
+
+  function linkNote(note: Note) {
+    try {
+      if (onNoteLink) {
+        onNoteLink(note.id);
+      } else {
+        onSubmit(isLinkablePhrase(resolvedPhrase) ? resolvedPhrase : note.title, [note.id], { articleMode: "blank" });
+      }
+    } catch (error) {
+      setDestinationError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -257,7 +318,7 @@ export function ConceptLinkPopover({
     <form
       className={`concept-link-popover${
         selectionMode === "context" ? " context-selection" : ""
-      }`}
+      }${view === "destination" ? " concept-link-popover--destination" : ""}`}
       role="dialog"
       aria-modal="false"
       aria-labelledby={`${phraseId}-title`}
@@ -266,20 +327,28 @@ export function ConceptLinkPopover({
       onKeyDown={handleKeyDown}
     >
       <div className="concept-link-popover__head">
-        <span className="concept-link-popover__icon">
+        {view === "article" ? <button
+          type="button"
+          onClick={() => {
+            setQuery(initialHref);
+            setView("destination");
+          }}
+          disabled={generatingTitle}
+          aria-label="Back to link destinations"
+        ><ArrowLeft size={15} /></button> : <span className="concept-link-popover__icon">
           <Link2 size={15} />
-        </span>
+        </span>}
         <span>
           <strong id={`${phraseId}-title`}>
-            {selectionMode === "context"
+            {view === "destination" ? "Link" : selectionMode === "context"
               ? "Link selected context"
-              : "Teach Orion a link"}
+              : "Create a linked article"}
           </strong>
-          <small>
+          {view === "article" ? <small>
             {selectionMode === "context"
               ? "The selection stays untouched; only its page title becomes a link."
               : "Create its named page, then Orion will recognize this phrase everywhere it appears."}
-          </small>
+          </small> : null}
         </span>
         <button
           type="button"
@@ -290,6 +359,67 @@ export function ConceptLinkPopover({
         </button>
       </div>
 
+      {view === "destination" ? <>
+        <label className="concept-link-search concept-link-search--destination">
+          <Search size={14} />
+          <input
+            ref={destinationInputRef}
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setDestinationError("");
+            }}
+            placeholder="Search notes or paste a URL"
+            aria-label="Search notes or paste a URL"
+            aria-invalid={destinationError ? true : undefined}
+            aria-describedby={destinationError ? `${phraseId}-destination-error` : undefined}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </label>
+        {destinationError ? <p className="concept-link-field__error" id={`${phraseId}-destination-error`} role="alert">
+          {destinationError}
+        </p> : null}
+        {looksLikeUrl ? <div className="concept-link-web-destination">
+          {externalHref ? <small>{externalHref}</small> : <small>Use a complete http:// or https:// web address.</small>}
+          <div className="concept-link-popover__actions">
+            {initialExternalHref && onOpenExternalLink ? <button
+              type="button"
+              className="button compact"
+              aria-label="Open link in browser"
+              title="Open link in browser"
+              onClick={() => onOpenExternalLink(initialExternalHref)}
+            ><ExternalLink size={13} /> Open</button> : null}
+            <button type="submit" className="button primary compact" disabled={!externalHref || !onExternalLink}>
+              {initialExternalHref ? "Update link" : "Add web link"}
+            </button>
+          </div>
+        </div> : <>
+          <div ref={destinationListRef} className="concept-link-note-list" aria-label="Notes in this Space">
+            {visibleNotes.map((note) => <button
+              type="button"
+              key={note.id}
+              aria-label={`Link to ${note.title}`}
+              className={destinationIds.has(note.id) || initialNoteId === note.id ? "selected" : ""}
+              aria-current={initialNoteId === note.id ? "true" : undefined}
+              onClick={() => linkNote(note)}
+            >
+              <i style={{ background: note.color ?? "#8798ff" }} />
+              <span><strong>{note.title}</strong><small>{note.id === currentNoteId ? "This note" : note.summary}</small></span>
+              {destinationIds.has(note.id) || initialNoteId === note.id ? <b aria-hidden="true"><Check size={12} /></b> : null}
+            </button>)}
+            {visibleNotes.length === 0 ? <p className="concept-link-empty">No matching notes in this Space.</p> : null}
+          </div>
+          <button type="button" className="concept-link-create-article" onClick={() => {
+            if (isLinkablePhrase(query.trim())) setPhrase(query.trim());
+            setQuery("");
+            setView("article");
+          }}>
+            <FileText size={15} />
+            {destinationIds.size > 0 ? "Edit linked article or destinations" : "Create a linked article"}
+          </button>
+        </>}
+      </> : <>
       <label className="concept-link-field" htmlFor={phraseId}>
         <span>
           Page title
@@ -544,6 +674,7 @@ export function ConceptLinkPopover({
           {submitLabel}
         </button>
       </div>
+      </>}
     </form>
   );
 }

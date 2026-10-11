@@ -13,9 +13,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.4.7-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.5.0-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
   ·
-  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.4.7.m-Apple-Silicon.dmg">Whisper Medium edition</a>
+  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.5.0.m-Apple-Silicon.dmg">Whisper Medium edition</a>
   ·
   <a href="#the-orchestration-topology">How it works</a>
   ·
@@ -24,7 +24,7 @@
   <a href="#local-first-by-construction">Privacy</a>
 </p>
 
-> Orion 0.4.7 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
+> Orion 0.5.0 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
 
 ## Knowledge work should produce knowledge, not another inbox
 
@@ -39,6 +39,7 @@ The result is a personal wiki that gets more coherent over time:
 - **Links have destinations.** A durable phrase resolves to one canonical page inside its Space.
 - **Notes stay ordinary.** They are permanent, editable, portable Markdown from the moment they are created.
 - **Projects stay separate.** Spaces are hard boundaries for notes, sources, concepts, Chat, navigation, and AI context.
+- **Chat beside your writing.** A quiet glass circle in the bottom-right opens your Space conversation without leaving the document. It appears when the selected AI provider is configured, without an AI toggle, and stays hidden during Flow. Collapse it or expand into full Chat without losing your draft or pending reply. An attached-note picker makes the reading and editing target explicit; Orion searches, follows connections and reads exact passages before citing them. Stop interrupts the response. Ask naturally: Orion infers whether to answer in Chat, change specific passages, or revise the whole attached note. There is no editing-mode picker. **Review in note** shows highlighted replacements and gray additions in the actual editor. **Accept changes** saves through normal autosave with one Undo; **Discard** keeps the original. Existing chat replies also offer **Use in note**. Newer typing invalidates old suggestions. Creating notes still requires an explicit request.
 - **Chat reads as it goes.** Chat uses the Space hierarchy and compact note directories to find promising material, searches note and source bodies, then opens exact passages and follows connections as needed. Replies can cite the passages actually read; click a citation to inspect it or open the original item. Reading is bounded, can be stopped, and reports partial coverage. Chat can create notes only when explicitly asked. Created notes and **Keep as note** retain exact quoted passages and source links, including when an original later changes or is removed. This uses the selected OpenAI or Anthropic model and may make several requests for a question.
 - **Search reaches the original text.** Search finds phrases and relevant combinations of words throughout note bodies and preserved sources. Filter Notes, Sources, or Concepts, see highlighted matches, and jump to the passage. Choose **Ask AI** at the right of the search field for a cited answer from the current Space. Switch between Matches and Answer without repeating the request; ordinary search stays local and works without a key.
 - **AI stays optional.** Manual organization and the entire local knowledge layer work without OpenAI or Anthropic.
@@ -82,6 +83,17 @@ decoded audio; longer material can be split into separate files.
 **Settings → Intelligence** includes **GPT-6 Astra** for complex research and
 synthesis through your OpenAI connection, with Low through Extra high reasoning.
 
+## Orion 0.5.0
+
+Version 0.5.0 brings selection-based AI writing and links, contextual Chat
+suggestions, and Space voice with independent research workers and an animated
+voice constellation. It also adds guarded connector actions for the current
+editor, long-note reading, and import and export fidelity improvements. Both
+Whisper Small and Medium editions contain the same application features.
+See the [0.5.0 release notes](releases/0.5.0.md) for details, verification and the
+remaining live-voice acceptance check. The earlier 0.4.8 builds were local only;
+0.5.0 includes their changes.
+
 ## Orion 0.4.7
 
 Version 0.4.7 packages the current editor, search, export and appearance work in
@@ -90,6 +102,26 @@ frosted native glass surface, with spacing between control groups instead of
 vertical dividing lines. See [the 0.4.7 release notes](releases/0.4.7.md) for
 the included changes and verification details. Both installers are Developer ID
 signed, Apple notarized and stapled, and pass Gatekeeper.
+
+## Writing sessions
+
+The editor's **clock** button offers two local writing modes:
+
+- **Timer** sets aside 1–180 minutes for ordinary writing. Pause, resume, or stop
+  whenever you need; the note saves as usual. The timer continues while you
+  navigate within that window.
+- **Flow** keeps you in the same rich-text editor and starts a new passage at
+  the end of the note. Timing begins with your first words.
+  Choose a 5, 10, or 20-second inactivity limit. When you stop writing, the text
+  gradually dims, then disappears permanently at that limit. Keep writing to
+  restore it before expiry. **Stop and keep** retains the passage early;
+  completing the session timer also keeps it, including its formatting.
+
+Only the new Flow passage is at risk; existing note content stays intact.
+All controls stay in the toolbar, without a modal. Unfinished Flow passages are
+not autosaved or recoverable after expiry, leaving the editor, or closing Orion.
+Kept passages become ordinary editable note text. Both modes work offline
+without an API key. These changes are included in both 0.5.0 editions.
 
 ## Writing and narration in 0.4.6
 
@@ -220,9 +252,15 @@ There is no Markdown mode and no read/write split. Click **Edit**, write with a 
 
 While editing a note, the microphone in the sticky writing toolbar records dictation and inserts the transcript at the preserved text cursor. The control remains available as the note scrolls. Recording and transcription stay on-device; the temporary M4A is deleted when bundled Whisper finishes.
 
-The ordinary `0.4.7` download bundles Whisper Small and processes two-minute segments. The `0.4.7.m` download bundles Whisper Medium, loads it once per dictation, and transcribes overlapping 30-second windows in the background. Both keep all generated text hidden until you press Stop, and neither imposes a fixed recording-duration cap.
+The ordinary `0.5.0` download bundles Whisper Small and processes two-minute segments. The `0.5.0.m` download bundles Whisper Medium, loads it once per dictation, and transcribes overlapping 30-second windows in the background. Both keep all generated text hidden until you press Stop, and neither imposes a fixed recording-duration cap.
 
-Inline AI writing is deliberately non-destructive. Continue at the caret or select a passage to Rewrite, Clarify, Tighten, Simplify, Expand, or Enrich from the active Space. A proposal is never saved until you accept it, and acceptance is one ordinary Undo step. An OpenAI key also enables selected-passage image generation. Choose **Fast** (Flare) or **Detailed** (Sunburst); image bytes remain transient until accepted.
+AI actions are available when their provider keys are configured, without an editor AI toggle. Type `/write` or choose **More → Write with AI** to open a compact frosted composer at your captured cursor. Choose **Sentence**, **Paragraph**, or **Section**, optionally add a direction, then press **Write**. Leave the direction blank to continue from that cursor. Escape or Cancel returns you to writing; merely selecting text or opening the composer makes no AI request.
+
+Selecting a passage puts **Rewrite**, **Generate image**, and **Link** beside it. Rewrite accepts an optional direction and offers Clarify, Tighten, Simplify, Expand, or Enrich from the active Space. Proposals remain unsaved until you accept them, Discard preserves the original, and one ordinary Undo reverses acceptance. Writing and rewriting use the selected provider's key; image generation needs both that planning provider and OpenAI rendering configured. Missing-key explanations apply to the requested action. Choose **Fast** (Flare) or **Detailed** (Sunburst) for images; their bytes remain transient until accepted. Cancel prevents queued work and discards late output; a provider request already in flight may still complete and incur usage.
+
+**Link** works without any API key. Select words and use **Search notes or paste a URL** to link to a note in this Space or a web address while keeping the wording unchanged. **Create a linked article** retains the existing blank-page and AI article options in the same composer. The toolbar and Cmd+K open it too. Web links persist through the normal Markdown save path; while editing, use **Open** in the Link composer or Cmd-click to open the default browser. Ordinary clicks keep the text editable.
+
+The live input composers share a frosted HTML treatment, while the toolbar and More keep their native Liquid Glass surface.
 
 Illustrations can use **Selection only** or **Related Space**, independently of image quality. Related Space searches for relevant passages, reads independent questions in parallel, follows important gaps and compresses the findings into a grounded visual brief. It adapts to useful evidence rather than reading a fixed quota of notes. Selection only sends the highlighted passage and your optional direction; it excludes the note title and surrounding Space material. The initial choice follows your existing AI-context setting, and you can override it for one image.
 
@@ -351,10 +389,25 @@ Export the open note, one visible link hop, or an entire Space as:
 
 Word exports use a clean document layout: free image placement and note frames
 flow into regular Word content. Document and paragraph margins become editable
-Word indents. DOCX imports preserve semantic formatting and
-convert embedded pictures to their descriptive alt text. Import Studio and MCP
-use the same importer. DOCX import does not restore Orion's margin settings;
+Word indents. DOCX imports preserve semantic formatting, literal text and code,
+including tables without a header. Embedded pictures become descriptions with
+a warning; complex tables use a readable fallback. Import Studio and MCP
+use the same bounded importer. DOCX import does not restore Orion's margin settings;
 Markdown round trips preserve them.
+
+HTML imports retain headings, emphasis, code, lists/tasks, quotes,
+safe web links and simple tables as editable note content. Images become
+descriptions; styling, active content and remote assets are not imported.
+Complex structures use readable text with a warning. The full semantic
+extraction remains in Sources even when the editable note needs a shorter
+excerpt. This preserves extracted content, not the original HTML file or page
+layout.
+
+Code preserves literal backticks and spacing through saving and reopening,
+including table cells containing backslashes and pipes. Imported source
+citations can attach to an existing source in the same Space, updating the
+note and source relationship together; they never fetch or import a missing
+citation target.
 
 Web and Word exports include only the selected notes and safe citation attribution. They exclude raw source bodies, Chat, settings, provider keys, import state, and every other Space.
 
@@ -500,8 +553,9 @@ Enable **Settings → Connections → Orion workflows**, select allowed Spaces,
 and independently allow API use and workflow writes. Older libraries start with
 these workflows disabled. The existing direct read/write tools keep their access.
 
-The expanded MCP surface has **44 tools**: 30 local library tools and fourteen
-workflow/capability/job tools. It can build local evidence packets; research,
+The expanded MCP surface has **55 tools**: 30 local library tools, fourteen
+workflow/capability/job tools, three edit-review tools, one active-editor-context
+reader, three existing voice work-order tools and four selected-editor-action tools. It can build local evidence packets; research,
 compare, review, find gaps, or prepare briefs using Orion's configured AI;
 process text, files, webpages, and YouTube through the full import flow;
 reprocess preserved sources without duplicate provenance; generate notes,
@@ -516,23 +570,57 @@ adaptive exact-passage retrieval; `orion_export_word` prepares a Word document
 without AI and asks for its destination in the native Save As dialog. The private app connection requires no hosted endpoint or separate daemon.
 See [the workflow contract](docs/mcp-intelligence.md) for bounds and behavior.
 
+External assistants can also propose focused edits or a rewrite in a specific
+open note. Orion shows its ordinary highlighted review with Accept changes and
+Discard; submitting a proposal does not change the note. This review waits
+independently of research. Its receipt distinguishes acceptance in the editor
+from successful saving. Direct local MCP writers retain their immediate-write
+behavior; review requests never silently fall back to those writers.
+
+External assistants can read the selected passage or cursor in an exact open-note
+window with `orion_get_editor_context`. This includes unsaved text and needs only
+an enabled workflow connection and permission for that Space. It returns a bounded
+reference with explicit local version and coordinate system; it never grants edit
+authority, reads surrounding prose, or starts voice. Completed tasks are hidden
+unless history is explicitly requested.
+
+A separate four-tool lane captures the real rich-editor target for inline Write,
+Rewrite or image generation, then starts that exact captured action on request.
+It uses the configured provider and ordinary in-note preview with Accept/Discard
+and one Undo. Capturing is local and makes no provider call; both capture and start require
+AI and write grants for the exact Space. No caller supplies replacement ranges,
+selects a model, or accepts the preview. Receipts distinguish generation, review,
+acceptance in the editor and native-verified saving. These source capabilities
+need the matching running app and connector; an older installed copy does not
+acquire them automatically.
+
 Twenty-one additional local tools provide exact source passages and note sections,
 batched note reads, concept and link-path navigation, provenance tracing, tags,
 Markdown tasks, duplicate detection, integrity checks, and recent changes.
 Version-guarded text edits and atomic metadata batches reject stale targets
 before saving. These tools work with Orion closed and use no provider account.
 MCP can also create movable writing blocks and the content of slash commands—
-headings, tasks, lists, tables, code, note links, excerpts, and existing images—
+headings, tasks, lists, tables, code, web/note links, excerpts, and existing images—
 through `orion_apply_note_command`. The result uses the same portable format as
 the editor and remains editable when reopened. Every command checks the current
 note version and exact Space before saving.
+Structured layout commands also support paragraph justification/indents,
+document margins, existing managed-image placement/captions and table geometry.
+Tables have structured cell, row, column and dimension operations with exact
+anchors and guards against unintended content removal. These commands retain
+the same Space and version checks.
+Explicit inline commands apply/remove bold, italic, strikethrough or code inside
+ordinary paragraphs/headings, and remove an explicit web/note/concept link while
+preserving its label. They reject partial Markdown syntax and retain unrelated
+formatting. Source citations and automatic concept decoration have separate
+semantics and are not changed by unlinking.
 See [all 21 tools and their contracts](docs/mcp-library-tools.md).
 
 ## Download
 
-[**Download Orion 0.4.7 for Apple Silicon**](https://github.com/zug11/orion/releases/latest/download/Orion-0.4.7-Apple-Silicon.dmg)
+[**Download Orion 0.5.0 for Apple Silicon**](https://github.com/zug11/orion/releases/latest/download/Orion-0.5.0-Apple-Silicon.dmg)
 
-[**Download Orion 0.4.7 with Whisper Medium**](https://github.com/zug11/orion/releases/latest/download/Orion-0.4.7.m-Apple-Silicon.dmg)
+[**Download Orion 0.5.0 with Whisper Medium**](https://github.com/zug11/orion/releases/latest/download/Orion-0.5.0.m-Apple-Silicon.dmg)
 
 The standard installer includes Whisper Small. The larger Medium edition includes Whisper Medium and its persistent dictation worker. Both contain the same app features, two-tone shader picker, Claude connector, and Codex plugin.
 
@@ -601,7 +689,7 @@ Browser preview is a renderer-development convenience, not Orion's desktop secur
 | `cargo test --manifest-path src-tauri/Cargo.toml` | Run Rust host tests |
 | `cargo test --manifest-path src-tauri/mcp-server/Cargo.toml` | Run MCP server tests |
 
-Native bundles are written below `src-tauri/target/release/bundle/`. Public release packaging additionally requires Developer ID signing and notarization. Use `./script/package_release.sh 0.4.7` for Small and `ORION_WHISPER_MODEL=medium ./script/package_release.sh 0.4.7.m` for Medium rather than treating a local ad-hoc build as a distributable release.
+Native bundles are written below `src-tauri/target/release/bundle/`. Public release packaging additionally requires Developer ID signing and notarization. Use `./script/package_release.sh 0.5.0` for Small and `ORION_WHISPER_MODEL=medium ./script/package_release.sh 0.5.0.m` for Medium rather than treating a local ad-hoc build as a distributable release.
 
 ## Architecture
 
@@ -678,3 +766,102 @@ Contributors should read [AGENTS.md](AGENTS.md) before changing Orion. It is the
 Short text selections can opt into **Generate title with AI** in the link composer.
 Orion names the destination before creating the article; the selected prose stays
 intact, with a different linked title inserted above its containing block.
+
+### Talk to Space and agent working context
+
+Chat and voice research can request a whole note or source in one bounded read,
+including long drafts around 18,000 words when they fit the text budget. The reader
+retains exact passages from beginning to end and reports any missing ranges; larger
+documents remain explicitly partial. Detailed text stays in the research worker,
+while voice receives compact findings and references.
+
+Each voice work order sends the original spoken request through the same Chat
+reading and edit flow, with recent conversation for follow-ups. There is no
+separate research planner rewriting it into a different question. Independent
+work orders keep this work parallel; saves still require explicit authority and
+existing-note changes still require review. Provider failures retain their actual
+error message in the request's status.
+
+Chat's audio-wave button occupies the send position while the composer is empty;
+typing replaces it with the send arrow. **Talk to Space** starts an optional online voice conversation using
+an OpenAI key. Voice starts with a bounded excerpt of the open note and can
+retrieve further notes and sources in the same Space, delegate independent
+research questions, and keep listening while research runs. During a call the
+same composer button becomes a square **Stop voice** control. Stop immediately
+releases the microphone and ends playback; **Cancel research** remains separate. References and
+partial coverage remain available on screen. Explicit save requests create normal
+notes, with confirmation after disk persistence; editing opens the existing note
+review with Accept changes, Discard and Undo. Voice and research incur API usage.
+
+The sidebar also starts voice without leaving your note. A glass pill follows
+you through notes and views in the same Space and window, with microphone mute,
+end call, Chat and an expandable work summary. Collapsing Chat keeps the call;
+changing Space ends it. Dictation into a note remains a separate control.
+
+The central orb follows the main voice, while worker orbs represent actual
+assignments. Small update beads and a receiving reaction mark useful findings;
+finished work settles and becomes available for its own conversation. Select a
+finished worker to discuss its retained evidence, then return to the centre.
+Switching opens a fresh voice connection and may incur connection latency and
+additional session usage. New research from that worker returns the conversation
+to the centre until it finishes. Dragging a running worker into the small swarm
+cancels only that research; dismissing a finished one keeps its findings in the
+work list. Listening and speaking gestures follow measured input and playback.
+
+Workers can report a cited intermediate finding and continue investigating.
+Their local checkpoint retains evidence, source versions, completed reads,
+public decisions, unresolved questions and next steps across calls. Corrections
+reuse still-current work and re-read changed sources. This is retained task
+memory, without a claim to hidden model reasoning. The voice is instructed to
+engage with your idea immediately, then bring new evidence into the developing
+discussion with clear source cues. Live timing remains a separate acceptance
+check from the automated tests.
+
+Chat's welcome suggestions are generated from actual passages in the current
+Space and attached note. Orion looks for a specific question, connection or next
+step worth pursuing in that material. The compact panel shows up to two ideas;
+full Chat shows up to four. The small refresh control asks for fresh ideas.
+Generation uses your selected AI provider and incurs API usage; reopening
+unchanged context reuses the current set. Ideas update as the context changes,
+omit completed tasks, and stay out of the way while you type or talk. An empty
+Space waits for content, and unavailable suggestions never fall back to canned
+prompts. Choosing one puts that exact prompt in the composer for you to adjust
+and send. Editing suggestions keep their original note target if you navigate
+before sending; all changes still use the usual review and acceptance.
+
+Voice research now uses identifiable work orders. Ordinary conversation leaves
+them running; a new assignment can run alongside earlier work. Name a request
+to cancel or correct it, or use its compact Cancel control. Ambiguous references
+receive one clarification question. Spoken turns are interpreted in order while
+up to three research calls run in parallel across at most six active requests.
+Completed findings use transcript activity to find a quiet interval, with a
+12-second cap on offering commentary to the voice so background noise or unrelated
+routing cannot hold it indefinitely. Pending corrections resolve before their old
+findings can be offered. Explicit spoken assignments start independent work orders even when a provider
+delegation is late or absent. Closely spaced new requests keep separate IDs; late
+delegation events cannot restart them. The voice still chooses when to speak; a transport send
+does not prove audible delivery. References remain available on screen. Manual reconnect restores bounded
+conversation, assignments and save receipts without repeating work or saves.
+During a call, note passages update on navigation rather than every typing pause,
+and work orders send only changed fields. Actual provider context-window usage
+reduces optional updates near capacity and prompts one compact continuity
+checkpoint. A disconnected call offers **Reconnect voice** without clearing a
+typed Chat draft or restarting existing research.
+These behaviors have automated coverage; a live microphone/provider test is
+still required to establish the quality of conversational timing and heard save
+confirmations.
+
+Agent reads now hide completed to-dos and their cached summaries by default,
+including follow-up note/source reads. Original text stays stored and exact edits
+retain original versions and line numbers. MCP callers can request a scoped
+`task_view: "history"` when completed work matters. Task listing still defaults to
+open items. See [voice and working-context boundaries](docs/space-voice-and-working-context.md)
+for privacy, recovery and verification details.
+
+The editor's AI writing, illustration and page-naming requests also omit completed
+work from their surrounding and related context. If a selection or writing cursor
+is inside a checked task, Orion asks you to select unfinished text or explicitly
+include completed tasks in that request's instructions. It never rewrites a
+filtered selection and silently drops its hidden tasks. Manual page naming and
+local links remain available; generated writing still requires acceptance, with
+one Undo restoring the original.

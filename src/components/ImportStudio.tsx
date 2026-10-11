@@ -51,7 +51,8 @@ import {
   transcribeYouTube,
 } from "../lib/storage";
 import { partitionImportSourcesForSynthesis } from "../lib/importBatching";
-import { stripMarkdownComments } from "../lib/markdown";
+import { importNoteExcerpt, IMPORT_NOTE_TRUNCATION_NOTICE } from "../lib/importNoteExcerpt";
+import { restoreMarkdownFrontmatter, splitMarkdownFrontmatter, stripMarkdownComments } from "../lib/markdown";
 import {
   buildCompactOrganizerContext,
   mergeGeneratedOrganizerArticles,
@@ -110,7 +111,6 @@ import { runAutomaticKnowledgeImport } from "../lib/knowledgeOrchestration/autom
 const MAX_FILES = 12;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_AI_CHARS_PER_SOURCE = 60_000;
-const MAX_MANUAL_CHARS_PER_SOURCE = 200_000;
 const MAX_TOTAL_GENERATED_NOTES = 30;
 const MAX_IMPORT_GUIDANCE_CHARS = 2_000;
 // The legacy organizer's 2,000-character task also includes Orion's import rules.
@@ -683,13 +683,17 @@ function manualSummary(text: string): string {
 }
 
 function manualOrganizedNote(parsed: ParsedImport): OrganizedNote {
-  const body = parsed.text.slice(0, MAX_MANUAL_CHARS_PER_SOURCE).trim();
-  const needsHeading = !/^#\s+/m.test(body);
+  const excerpt = importNoteExcerpt(parsed.text);
+  const body = excerpt.text.trim();
+  const document = splitMarkdownFrontmatter(body);
+  const needsHeading = !/^#\s+/m.test(document.content);
 
   return {
     title: parsed.title || "Untitled import",
     summary: manualSummary(body),
-    body: `${needsHeading ? `# ${parsed.title}\n\n` : ""}${body}`.trim(),
+    body: restoreMarkdownFrontmatter(document.prefix,
+      [needsHeading ? `# ${parsed.title}` : "", document.content,
+        excerpt.truncated ? IMPORT_NOTE_TRUNCATION_NOTICE : ""].filter(Boolean).join("\n\n")),
     tags: unique(["imported", parsed.format]),
     aliases: [],
     links: [],
@@ -1171,6 +1175,7 @@ export function buildImportPayload(
     sources,
     concepts: vocabulary.concepts,
     relationships,
+    baseSnapshotVersion: stableSnapshotVersion(snapshot),
   };
 }
 

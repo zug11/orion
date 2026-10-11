@@ -7,6 +7,8 @@ import type {
   Note,
 } from "../types";
 import { truncateUnicode } from "./text";
+import { projectEditorAIContext, type EditorAIWorkingContext } from "./editorAIWorkingContext";
+import type { EditorActionGrant } from "./assistant/editorActionHost";
 
 export const AI_WRITING_ACTIONS = [
   "continue",
@@ -32,6 +34,8 @@ export interface AIWritingCaretContext {
 }
 
 export interface AIWritingRequestInput {
+  /** Native-issued external operation authority; never included in model context. */
+  editorActionGrant?: EditorActionGrant;
   action: AIWritingAction;
   /** Continue defaults to a paragraph. Other actions preserve their natural scale. */
   length?: AIWritingLength;
@@ -45,6 +49,8 @@ export interface AIWritingRequestInput {
   /** Plain-text selection, used when a Markdown slice is unavailable. */
   selectedText?: string;
   caretContext?: AIWritingCaretContext;
+  /** Local rich-document projection; never used as the editor replacement. */
+  workingContext?: EditorAIWorkingContext;
 }
 
 const ACTION_LABELS: Record<AIWritingAction, string> = {
@@ -113,6 +119,16 @@ export function buildAIWritingRequest(
   assertAction(input.action);
   const length = input.length ?? "paragraph";
   assertLength(length);
+
+  const projected = projectEditorAIContext(snapshot, {
+    ...input, beforeMarkdown: input.caretContext?.beforeMarkdown,
+    afterMarkdown: input.caretContext?.afterMarkdown,
+  }, input.action === "continue" ? "write" : "rewrite");
+  snapshot = projected.snapshot;
+  input = { ...projected.input, caretContext: {
+    beforeMarkdown: projected.input.beforeMarkdown,
+    afterMarkdown: projected.input.afterMarkdown,
+  } };
 
   const origin = snapshot.notes.find((note) => note.id === input.originNoteId);
   if (!origin) {

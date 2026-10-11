@@ -14,9 +14,12 @@ import { TableToolbar } from "./editor/TablePicker";
 import { useMenuHeight } from "./editor/useMenuHeight";
 import { AlignJustify } from "../lib/icons";
 import { toggleNoteJustification } from "./editor/NoteTextAlignment";
+import { WritingSessionControl } from "./editor/WritingSessionControl";
+import { getInlineFlow } from "./editor/FlowWriting";
 import "./editor/EditorExperience.css";
 
 interface EditorToolbarProps {
+  writingSessionDisabled?: boolean;
   marginsVisible?: boolean;
   onToggleMargins?: () => void;
   blockControls?: boolean;
@@ -41,11 +44,9 @@ interface EditorToolbarProps {
     sessionId: string,
     transcript: string,
   ) => Promise<void>;
-  aiWritingAvailable?: boolean;
-  aiWritingActive?: boolean;
   aiWritingBusy?: boolean;
-  aiProviderName?: string;
-  onToggleAIWriting?: () => void;
+  aiWritingUnavailableReason?: string;
+  onOpenAIWriting?: () => void;
   onAnnounce?: (message: string) => void;
 }
 
@@ -57,13 +58,13 @@ interface EditorToolbarProps {
   }
 
 export function EditorToolbar({
+  writingSessionDisabled = false,
   marginsVisible = false, onToggleMargins,
   blockControls = false, onToggleBlockControls,
   noteTypeface = "sans", onNoteTypefaceChange, editor, concepts, onOpenLink, onUnlink,
   citationAvailable, onOpenCitation, onOpenExcerpt, onOpenTable, onInsertImages, imageBusy = false,
   noteId, onVoiceMemoSessionStart, onVoiceMemoSessionEnd, onTranscribeVoiceMemo, onCompleteVoiceMemo,
-  aiWritingAvailable = false, aiWritingActive = false, aiWritingBusy = false,
-  aiProviderName = "AI", onToggleAIWriting, onAnnounce,
+  aiWritingBusy = false, aiWritingUnavailableReason, onOpenAIWriting, onAnnounce,
 }: EditorToolbarProps) {
   const toolbarRef = useRef<HTMLDivElement>(null);
   const moreRef = useRef<HTMLDivElement>(null);
@@ -82,6 +83,7 @@ export function EditorToolbar({
     const href = String(current.getAttributes("link").href ?? "");
     const conceptId = href.startsWith("orion-concept://") ? href.slice("orion-concept://".length) : !href && selectedText ? findConceptByPhrase(concepts,selectedText)?.id : undefined;
     return {
+      flowActive: Boolean(getInlineFlow(current)),
       context: current.isActive("image") ? "image" : current.isActive("table") ? "table" : "text",
       heading: current.isActive("heading") ? Number(current.getAttributes("heading").level) : 0,
       bold:current.isActive("bold"),italic:current.isActive("italic"),strike:current.isActive("strike"),code:current.isActive("code"),
@@ -95,12 +97,13 @@ export function EditorToolbar({
   useEffect(() => {
     if (!toolbarRef.current || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(([entry]) => {
-      setCompact(entry.contentRect.width < 700);
-      setNarrow(entry.contentRect.width < 570);
-      setCramped(entry.contentRect.width < 430);
+      const width = entry.contentRect.width - (state.flowActive ? 100 : 0);
+      setCompact(width < 700);
+      setNarrow(width < 570);
+      setCramped(width < 430);
     });
     observer.observe(toolbarRef.current); return () => observer.disconnect();
-  },[]);
+  },[state.flowActive]);
   useEffect(() => { setMore(false); },[state.context, editor]);
   useEffect(() => {
     if (!more) return;
@@ -163,6 +166,12 @@ export function EditorToolbar({
           }}>
             {compact&&fontPicker}
             <HeadingPicker editor={editor} level={state.heading} onChoose={() => setMore(false)}/>
+            {onOpenAIWriting && <button type="button" role="menuitem" aria-label="Write with AI"
+              title={aiWritingUnavailableReason ?? "Write at the current cursor"}
+              className={aiWritingUnavailableReason ? "is-unavailable" : undefined}
+              onMouseDown={event => event.preventDefault()} onClick={() => { setMore(false); onOpenAIWriting(); }}>
+              <span className="editor-menu-icon" aria-hidden="true"><AIWritingMark size={16}/></span><span>Write with AI</span>
+            </button>}
             {renderBlockControl(() => setMore(false))}
             {cramped&&<Tool menu label="Italic" action={()=>editor.chain().focus().toggleItalic().run()}><Italic size={15}/></Tool>}
             {compact&&<Tool menu label="Justify text" active={state.justified} action={()=>toggleNoteJustification(editor)}><AlignJustify size={15}/></Tool>}
@@ -219,15 +228,10 @@ export function EditorToolbar({
     </div>
     <input ref={imageInputRef} className="sr-only" type="file" accept={NOTE_IMAGE_ACCEPT} multiple tabIndex={-1} aria-hidden="true"
       onChange={event=>{const files=Array.from(event.currentTarget.files??[]);event.currentTarget.value="";if(files.length)onInsertImages?.(files);}}/>
-    {noteId&&onTranscribeVoiceMemo&&onCompleteVoiceMemo&&<div className="editor-toolbar-dictation" role="group" aria-label="Dictation" hidden={!textContext}>
+    {noteId&&onTranscribeVoiceMemo&&onCompleteVoiceMemo&&<div className="editor-toolbar-dictation" role="group" aria-label="Dictation" hidden={!textContext || state.flowActive}>
       <VoiceMemoButton noteId={noteId} onSessionStart={onVoiceMemoSessionStart} onSessionEnd={onVoiceMemoSessionEnd} onTranscribe={onTranscribeVoiceMemo} onComplete={onCompleteVoiceMemo}/>
     </div>}
-    <div className="editor-toolbar-ai" role="group" aria-label="AI tools" hidden={!textContext}>
-      <button type="button" className={`${aiWritingActive?"active ":""}ai-writing-toggle${aiWritingAvailable?"":" is-unavailable"}`}
-        aria-label={aiWritingActive?"Turn off AI tools":"Turn on AI tools"} aria-pressed={aiWritingActive} aria-disabled={!aiWritingAvailable}
-        title={aiWritingAvailable?"AI tools: write, rewrite and generate images":`Add an ${aiProviderName} key in Settings to use AI tools`}
-        onMouseDown={event=>event.preventDefault()} onClick={onToggleAIWriting}><AIWritingMark size={17}/></button>
-    </div>
+    <WritingSessionControl editor={editor} flowDisabled={writingSessionDisabled || aiWritingBusy || imageBusy} onAnnounce={onAnnounce}/>
     <div className="editor-toolbar-history" role="group" aria-label="Editing history" inert={aiWritingBusy?true:undefined}>
       <Tool label="Undo" disabled={!state.canUndo} action={()=>editor.chain().focus().undo().run()}><Undo2 size={14}/></Tool>
       <Tool label="Redo" disabled={!state.canRedo} action={()=>editor.chain().focus().redo().run()}><Redo2 size={14}/></Tool>

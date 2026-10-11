@@ -338,35 +338,37 @@ describe("EditorToolbar", () => {
     );
   });
 
-  it("toggles AI writing without changing the editor selection or document", () => {
+  it("opens Write from More without an AI toggle or changing the captured cursor", () => {
     const editor = createEditor();
     editor.commands.setTextSelection({ from: 1, to: 6 });
     const beforeSelection = editor.state.selection.toJSON();
     const beforeMarkdown = editor.getMarkdown();
-    const onToggleAIWriting = vi.fn();
-    render(
-      <EditorToolbar
-        editor={editor}
-        concepts={[]}
-        onOpenLink={vi.fn()}
-        onUnlink={vi.fn()}
-        citationAvailable={false}
-        onOpenCitation={vi.fn()}
-        aiWritingAvailable
-        onToggleAIWriting={onToggleAIWriting}
-      />,
-    );
-
-    const toggle = screen.getByRole("button", { name: "Turn on AI tools" });
-    expect(toggle).toHaveTextContent(/^$/);
-    expect(toggle).toHaveAttribute("title", "AI tools: write, rewrite and generate images");
-    expect(toggle.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
-    fireEvent.mouseDown(toggle);
-    fireEvent.click(toggle);
-
-    expect(onToggleAIWriting).toHaveBeenCalledOnce();
+    const onOpenAIWriting = vi.fn();
+    render(<EditorToolbar editor={editor} concepts={[]} onOpenLink={vi.fn()} onUnlink={vi.fn()}
+      citationAvailable={false} onOpenCitation={vi.fn()} onOpenAIWriting={onOpenAIWriting}/>);
+    expect(screen.queryByRole("button", { name: /Turn (?:on|off) AI tools/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "AI tools" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "More formatting" }));
+    const write = screen.getByRole("menuitem", { name: "Write with AI" });
+    expect(write).toHaveAttribute("title", "Write at the current cursor");
+    fireEvent.mouseDown(write);
+    fireEvent.click(write);
+    expect(onOpenAIWriting).toHaveBeenCalledOnce();
     expect(editor.state.selection.toJSON()).toEqual(beforeSelection);
     expect(editor.getMarkdown()).toBe(beforeMarkdown);
+    expect(screen.queryByRole("menu", { name: "More formatting" })).not.toBeInTheDocument();
+  });
+
+  it("keeps Write discoverable with an action-specific missing-key explanation", () => {
+    const onOpenAIWriting = vi.fn();
+    render(<EditorToolbar editor={createEditor()} concepts={[]} onOpenLink={vi.fn()} onUnlink={vi.fn()}
+      citationAvailable={false} onOpenCitation={vi.fn()} onOpenAIWriting={onOpenAIWriting}
+      aiWritingUnavailableReason="Add an Anthropic key in Settings to write."/>);
+    fireEvent.click(screen.getByRole("button", { name: "More formatting" }));
+    const write = screen.getByRole("menuitem", { name: "Write with AI" });
+    expect(write).toHaveAttribute("title", "Add an Anthropic key in Settings to write.");
+    fireEvent.click(write);
+    expect(onOpenAIWriting).toHaveBeenCalledOnce();
   });
 
   it("opens a raster image picker and returns every selected image", () => {

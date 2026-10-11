@@ -1,0 +1,35 @@
+{
+  "sessionId": "action_jnQqj-adIO9LdDEK1pY2",
+  "id": "action-2",
+  "targetId": "target-1",
+  "capture": {
+    "documentVersion": "editor-doc_Ye2tfkMvHwj0PW_2",
+    "selectionVersion": "editor-selection_CpFp06VT7TSDi90Z",
+    "selection": {
+      "coordinateSystem": "prosemirror",
+      "from": 169,
+      "to": 217
+    },
+    "effectiveTarget": {
+      "coordinateSystem": "prosemirror",
+      "from": 169,
+      "to": 217
+    },
+    "baseNote": {
+      "id": "draft",
+      "title": "The keeper’s letter",
+      "slug": "draft",
+      "body": "---\ntitle: The keeper’s letter\n---\n\nThe keeper watched the sea. Her compass 🧭 was still.\n\n- [x] PRIVATEDONEMARKER The old lighthouse debt is settled.\n  - [ ] PRIVATECHILDMARKER is inside the completed item.\n- [ ] Open sibling: follow the keeper along the coast.\n\nThe letter was still warm.",
+      "summary": "PRIVATEDONEMARKER stale summary",
+      "kind": "article",
+      "status": "ready",
+      "aliases": [],
+      "tags": [],
+      "conceptIds": [],
+      "sourceIds": [],
+      "createdAt": "2026-10-11T12:00:00.000Z",
+      "updatedAt": "2026-10-11T12:00:00.000Z"
+    },
+    "capturedBody": "---\ntitle: The keeper’s letter\n---\n\nThe keeper watched the sea. Her compass 🧭 was still.\n\n- [x] PRIVATEDONEMARKER The old lighthouse debt is settled.\n  - [ ] PRIVATECHILDMARKER is inside the completed item.\n- [ ] Open sibling: follow the keeper along the coast.\n\nThe letter was still warm."
+  }
+}

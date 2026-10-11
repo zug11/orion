@@ -15,9 +15,9 @@ import type { AIImageContextMode, AIImageQuality, ImageGenerationProgress } from
 import {
   Check,
   ChevronDown,
-  ChevronUp,
   Image,
   LoaderCircle,
+  Link2,
   RefreshCw,
   X,
 } from "../lib/icons";
@@ -33,7 +33,13 @@ export interface AIWritingControlPosition {
 }
 
 interface AIWritingControlsProps {
-  active: boolean;
+  active?: boolean;
+  writeComposerOpen?: boolean;
+  onCloseWriteComposer?: (restoreFocus?: boolean) => void;
+  onComposerActiveChange?: (active: boolean) => void;
+  onOpenLink?: () => void;
+  writingUnavailableReason?: string;
+  imageUnavailableReason?: string;
   suspended: boolean;
   phase: AIWritingPhase;
   hasSelection: boolean;
@@ -47,6 +53,7 @@ interface AIWritingControlsProps {
   imageContextPartial?: boolean;
   imageContextNotice?: string;
   imageInsertionRetry?: boolean;
+  retryAvailable?: boolean;
   operationKind?: "writing" | "image";
   onRequest: (
     action: AIWritingAction,
@@ -104,7 +111,13 @@ const CONTINUE_AMOUNTS: readonly {
 ];
 
 export function AIWritingControls({
-  active,
+  active = true,
+  writeComposerOpen = false,
+  onCloseWriteComposer,
+  onComposerActiveChange,
+  onOpenLink,
+  writingUnavailableReason = "Add a key for the selected writing provider in Settings to write and rewrite.",
+  imageUnavailableReason = "Add an OpenAI key and configure the selected planning provider in Settings to generate images.",
   suspended,
   phase,
   hasSelection,
@@ -118,6 +131,7 @@ export function AIWritingControls({
   imageContextPartial = false,
   imageContextNotice,
   imageInsertionRetry = false,
+  retryAvailable = true,
   operationKind = "writing",
   onRequest,
   onAccept,
@@ -128,7 +142,11 @@ export function AIWritingControls({
   const [selectionPanel, setSelectionPanel] = useState<
     "rewrite" | "image" | "menu" | null
   >(null);
-  const [continuePanelOpen, setContinuePanelOpen] = useState(false);
+  useEffect(() => {
+    onComposerActiveChange?.(selectionPanel !== null);
+    return () => onComposerActiveChange?.(false);
+  }, [selectionPanel, onComposerActiveChange]);
+  const [unavailableNotice, setUnavailableNotice] = useState<string>();
   const [continueLength, setContinueLength] =
     useState<AIWritingLength>("paragraph");
   const [continueInstruction, setContinueInstruction] = useState("");
@@ -144,10 +162,10 @@ export function AIWritingControls({
   const rewriteInputRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLTextAreaElement>(null);
   const continueAmountRef = useRef<HTMLInputElement>(null);
+  const writeComposerRef = useRef<HTMLFormElement>(null);
   const rewriteMainRef = useRef<HTMLButtonElement>(null);
   const rewriteToggleRef = useRef<HTMLButtonElement>(null);
   const imageButtonRef = useRef<HTMLButtonElement>(null);
-  const continueToggleRef = useRef<HTMLButtonElement>(null);
   const actionMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -173,7 +191,7 @@ export function AIWritingControls({
   useEffect(() => {
     if (!active || suspended || phase !== "idle") {
       setSelectionPanel(null);
-      setContinuePanelOpen(false);
+      setUnavailableNotice(undefined);
     }
     if (!active) {
       setContinueLength("paragraph");
@@ -187,8 +205,14 @@ export function AIWritingControls({
 
   useEffect(() => {
     setSelectionPanel(null);
-    setContinuePanelOpen(false);
+    setUnavailableNotice(undefined);
   }, [hasSelection]);
+
+  useEffect(() => {
+    if (!writeComposerOpen) return;
+    setSelectionPanel(null);
+    setUnavailableNotice(undefined);
+  }, [writeComposerOpen]);
 
   useEffect(() => {
     if (selectionPanel !== "rewrite") return;
@@ -207,12 +231,23 @@ export function AIWritingControls({
   }, [selectionPanel]);
 
   useEffect(() => {
-    if (!continuePanelOpen) return;
+    if (!writeComposerOpen || suspended || phase !== "idle") return;
     const frame = window.requestAnimationFrame(() =>
       continueAmountRef.current?.focus({ preventScroll: true }),
     );
     return () => window.cancelAnimationFrame(frame);
-  }, [continuePanelOpen]);
+  }, [writeComposerOpen, suspended, phase]);
+
+  useEffect(() => {
+    if (!writeComposerOpen || suspended || phase !== "idle") return;
+    const dismiss = (event: PointerEvent) => {
+      if (!writeComposerRef.current?.contains(event.target as Node)) {
+        onCloseWriteComposer?.(false);
+      }
+    };
+    document.addEventListener("pointerdown", dismiss);
+    return () => document.removeEventListener("pointerdown", dismiss);
+  }, [writeComposerOpen, suspended, phase, onCloseWriteComposer]);
 
   useEffect(() => {
     if (selectionPanel !== "menu") return;
@@ -244,10 +279,10 @@ export function AIWritingControls({
   };
   const dockStyle = positionStyle(dockPosition);
   const showSelectionControl =
-    phase === "idle" && hasSelection && selectionPosition.visible;
+    phase === "idle" && !writeComposerOpen && hasSelection && selectionPosition.visible;
   const showDock =
     dockPosition.visible &&
-    (phase !== "idle" || (!hasSelection && writingAvailable));
+    (phase !== "idle" || writeComposerOpen);
   const continueAmountIndex = Math.max(
     0,
     CONTINUE_AMOUNTS.findIndex((item) => item.value === continueLength),
@@ -263,14 +298,23 @@ export function AIWritingControls({
     length: AIWritingLength,
     instruction: string,
   ) {
+    if (!writingAvailable) {
+      setUnavailableNotice(writingUnavailableReason);
+      return;
+    }
     setSelectionPanel(null);
-    setContinuePanelOpen(false);
+    setUnavailableNotice(undefined);
     setContinueInstruction("");
     setRewriteInstruction("");
     onRequest(action, length, instruction.trim());
+    if (writeComposerOpen) onCloseWriteComposer?.(false);
   }
 
   function startImageRequest() {
+    if (!imageGenerationAvailable) {
+      setUnavailableNotice(imageUnavailableReason);
+      return;
+    }
     const instruction = imageInstruction.trim();
     setSelectionPanel(null);
     setImageInstruction("");
@@ -294,11 +338,9 @@ export function AIWritingControls({
     );
   }
 
-  function closeContinuePanel() {
-    setContinuePanelOpen(false);
-    window.requestAnimationFrame(() =>
-      continueToggleRef.current?.focus({ preventScroll: true }),
-    );
+  function closeWriteComposer() {
+    setUnavailableNotice(undefined);
+    onCloseWriteComposer?.(true);
   }
 
   return (
@@ -311,7 +353,7 @@ export function AIWritingControls({
           style={selectionStyle}
           data-testid="ai-writing-selection-control"
           role="group"
-          aria-label="AI tools for selected text"
+          aria-label="Actions for selected text"
         >
           {selectionPanel === "rewrite" ? (
             <form
@@ -493,48 +535,59 @@ export function AIWritingControls({
             </div>
           ) : (
             <div className="ai-writing-selection-actions">
-              {writingAvailable ? (
-                <div className="ai-writing-split-button">
-                  <button
-                    ref={rewriteMainRef}
-                    type="button"
-                    className="ai-writing-split-button__main"
-                    aria-haspopup="dialog"
-                    onMouseDown={preserveEditorSelection}
-                    onClick={() => setSelectionPanel("rewrite")}
-                  >
-                    Rewrite
-                  </button>
-                  <button
-                    ref={rewriteToggleRef}
-                    type="button"
-                    className="ai-writing-split-button__toggle"
-                    aria-label="Choose rewrite action"
-                    aria-haspopup="menu"
-                    aria-expanded={false}
-                    onMouseDown={preserveEditorSelection}
-                    onClick={() => setSelectionPanel("menu")}
-                  >
-                    <ChevronDown size={13} />
-                  </button>
-                </div>
-              ) : null}
-              {imageGenerationAvailable ? (
+              <div className="ai-writing-split-button">
                 <button
-                  ref={imageButtonRef}
+                  ref={rewriteMainRef}
                   type="button"
-                  className="ai-writing-image-button"
-                  aria-label="Generate image from selected text"
-                  title="Generate an image from this passage and its Space context"
+                  className="ai-writing-split-button__main"
+                  aria-haspopup={writingAvailable ? "dialog" : undefined}
+                  aria-disabled={!writingAvailable}
+                  title={writingAvailable ? "Rewrite selected text" : writingUnavailableReason}
                   onMouseDown={preserveEditorSelection}
-                  onClick={() => setSelectionPanel("image")}
+                  onClick={() => {
+                    if (!writingAvailable) setUnavailableNotice(writingUnavailableReason);
+                    else { setUnavailableNotice(undefined); setSelectionPanel("rewrite"); }
+                  }}
                 >
-                  <Image size={13} />
-                  <span>Generate image</span>
+                  Rewrite
                 </button>
-              ) : null}
+                {writingAvailable ? <button
+                  ref={rewriteToggleRef}
+                  type="button"
+                  className="ai-writing-split-button__toggle"
+                  aria-label="Choose rewrite action"
+                  aria-haspopup="menu"
+                  aria-expanded={false}
+                  onMouseDown={preserveEditorSelection}
+                  onClick={() => { setUnavailableNotice(undefined); setSelectionPanel("menu"); }}
+                >
+                  <ChevronDown size={13} />
+                </button> : null}
+              </div>
+              <button
+                ref={imageButtonRef}
+                type="button"
+                className="ai-writing-image-button"
+                aria-label="Generate image from selected text"
+                aria-disabled={!imageGenerationAvailable}
+                title={imageGenerationAvailable ? "Generate an image from this passage and its Space context" : imageUnavailableReason}
+                onMouseDown={preserveEditorSelection}
+                onClick={() => {
+                  if (!imageGenerationAvailable) setUnavailableNotice(imageUnavailableReason);
+                  else { setUnavailableNotice(undefined); setSelectionPanel("image"); }
+                }}
+              >
+                <Image size={13} />
+                <span>Generate image</span>
+              </button>
+              <button type="button" className="ai-writing-link-button" title="Link selected text"
+                aria-label="Link selected text" onMouseDown={preserveEditorSelection}
+                onClick={() => { setUnavailableNotice(undefined); onOpenLink?.(); }}>
+                <Link2 size={13} /><span>Link</span>
+              </button>
             </div>
           )}
+          {unavailableNotice ? <p className="ai-writing-unavailable-notice" role="status">{unavailableNotice}</p> : null}
         </div>
       ) : null}
 
@@ -549,108 +602,68 @@ export function AIWritingControls({
           data-testid="ai-writing-dock"
         >
           {phase === "idle" ? (
-            <>
-              {continuePanelOpen ? (
-                <div
-                  className="ai-writing-continue-composer"
-                  role="dialog"
-                  aria-label="Continue writing options"
-                  onKeyDown={(event) => {
-                    if (event.key !== "Escape") return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    closeContinuePanel();
-                  }}
-                >
-                  <div className="ai-writing-amount-control">
-                    <div className="ai-writing-amount-control__heading">
-                      <label htmlFor="ai-writing-continue-amount">
-                        Amount of text
-                      </label>
-                      <output htmlFor="ai-writing-continue-amount">
-                        {continueAmountLabel}
-                      </output>
-                    </div>
-                    <input
-                      ref={continueAmountRef}
-                      id="ai-writing-continue-amount"
-                      type="range"
-                      min={0}
-                      max={CONTINUE_AMOUNTS.length - 1}
-                      step={1}
-                      value={continueAmountIndex}
-                      aria-valuetext={continueAmountLabel}
-                      onChange={(event) => {
-                        const amount =
-                          CONTINUE_AMOUNTS[Number(event.target.value)];
-                        if (amount) setContinueLength(amount.value);
-                      }}
-                    />
-                    <div
-                      className="ai-writing-amount-control__scale"
-                      aria-hidden="true"
-                    >
-                      <span>Less</span>
-                      <span>More</span>
-                    </div>
-                  </div>
-                  <label htmlFor="ai-writing-continue-instruction">
-                    <span>Custom instructions</span>
-                    <small>Optional</small>
-                  </label>
-                  <textarea
-                    id="ai-writing-continue-instruction"
-                    value={continueInstruction}
-                    maxLength={1_250}
-                    rows={2}
-                    placeholder="Add a direction for what comes next…"
-                    onChange={(event) =>
-                      setContinueInstruction(event.target.value)
-                    }
-                  />
+            <form
+              ref={writeComposerRef}
+              className="ai-writing-continue-composer ai-writing-write-composer"
+              role="dialog"
+              aria-label="Write with AI"
+              onSubmit={(event) => {
+                event.preventDefault();
+                startRequest("continue", continueLength, continueInstruction);
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Escape") return;
+                event.preventDefault();
+                event.stopPropagation();
+                closeWriteComposer();
+              }}
+            >
+              <div className="ai-writing-amount-control">
+                <div className="ai-writing-amount-control__heading">
+                  <label htmlFor="ai-writing-continue-amount">Amount of text</label>
+                  <output htmlFor="ai-writing-continue-amount">{continueAmountLabel}</output>
                 </div>
-              ) : null}
-              <div className="ai-writing-split-button">
-                <button
-                  type="button"
-                  className="ai-writing-split-button__main"
-                  onMouseDown={preserveEditorSelection}
-                  onClick={() =>
-                    startRequest(
-                      "continue",
-                      continueLength,
-                      continueInstruction,
-                    )
-                  }
-                >
-                  Continue
-                </button>
-                <button
-                  ref={continueToggleRef}
-                  type="button"
-                  className="ai-writing-split-button__toggle"
-                  aria-label="Continue writing options"
-                  aria-haspopup="dialog"
-                  aria-expanded={continuePanelOpen}
-                  onMouseDown={preserveEditorSelection}
-                  onClick={() => {
-                    if (continuePanelOpen) {
-                      closeContinuePanel();
-                    } else {
-                      setContinuePanelOpen(true);
-                    }
+                <input
+                  ref={continueAmountRef}
+                  id="ai-writing-continue-amount"
+                  type="range"
+                  min={0}
+                  max={CONTINUE_AMOUNTS.length - 1}
+                  step={1}
+                  value={continueAmountIndex}
+                  aria-valuetext={continueAmountLabel}
+                  onChange={(event) => {
+                    const amount = CONTINUE_AMOUNTS[Number(event.target.value)];
+                    if (amount) setContinueLength(amount.value);
                   }}
-                >
-                  <ChevronUp size={13} />
-                </button>
+                />
+                <div className="ai-writing-amount-control__scale" aria-hidden="true">
+                  <span>Less</span><span>More</span>
+                </div>
               </div>
-            </>
+              <label htmlFor="ai-writing-continue-instruction">
+                <span>Custom instructions</span><small>Optional</small>
+              </label>
+              <textarea
+                id="ai-writing-continue-instruction"
+                value={continueInstruction}
+                maxLength={1_250}
+                rows={2}
+                placeholder="Leave blank to write from your cursor…"
+                onChange={(event) => setContinueInstruction(event.target.value)}
+              />
+              {!writingAvailable ? <p className="ai-writing-unavailable-notice" role="status">{writingUnavailableReason}</p> : null}
+              <div className="ai-writing-write-composer__actions">
+                <button type="button" className="ai-writing-text-button" onClick={closeWriteComposer}>Cancel</button>
+                <button type="submit" className="ai-writing-primary-button" disabled={!writingAvailable}>Write</button>
+              </div>
+            </form>
           ) : phase === "generating" || phase === "saving" ? (
             <div className="ai-writing-dock__state">
               <LoaderCircle className="ai-writing-spinner" size={14} />
               <span className="ai-writing-dock__progress">
                 {phase === "saving"
-                  ? "Adding image…"
+                  ? operationKind === "image" ? "Adding image…" : "Accepting…"
                   : operationKind === "image"
                     ? <>{imageProgress?.message ?? "Preparing image…"}{imageProgress?.stage === "read" && imageProgress.totalBranches
                       ? ` · ${imageProgress.completedBranches ?? 0} of ${imageProgress.totalBranches}` : ""}</>
@@ -698,7 +711,7 @@ export function AIWritingControls({
               >
                 <Check size={15} />
               </button>
-              <button
+              {retryAvailable ? <button
                 type="button"
                 aria-label={
                   operationKind === "image"
@@ -709,7 +722,7 @@ export function AIWritingControls({
                 onClick={onRetry}
               >
                 <RefreshCw size={14} />
-              </button>
+              </button> : null}
               <button
                 type="button"
                 className="discard"
@@ -727,13 +740,13 @@ export function AIWritingControls({
             </>
           ) : (
             <>
-              <p className="ai-writing-dock__error">{error}</p>
+              <p className="ai-writing-dock__error">{error}{!retryAvailable ? " Ask your assistant to capture this passage again and start a new request." : ""}</p>
               <div
                 className="ai-writing-dock__state ai-writing-dock__preview-actions"
                 role="group"
                 aria-label="AI writing error"
               >
-                <button
+                {retryAvailable ? <button
                   type="button"
                   aria-label={
                   operationKind === "image"
@@ -744,7 +757,7 @@ export function AIWritingControls({
                   onClick={onRetry}
                 >
                   <RefreshCw size={14} />
-                </button>
+                </button> : null}
                 <button
                   type="button"
                   className="discard"

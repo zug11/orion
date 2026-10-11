@@ -4,6 +4,7 @@ import TaskItem from "@tiptap/extension-task-item";
 import { JUSTIFY_MARKER } from "../../lib/noteTextAlignment";
 import { parseNoteExcerptTitle } from "../../lib/noteExcerpts";
 import { normalizeNoteMargin, paragraphMarginsMarker, parseParagraphMarginsMarker } from "../../lib/noteMargins";
+import { serializeFencedCode } from "../../lib/noteCodeSerialization";
 
 /** List parsers construct paragraphs directly, so track their parsed inline content too. */
 function withAlignmentParsing(extension: Node) {
@@ -34,7 +35,13 @@ function withAlignmentParsing(extension: Node) {
           }
         }
         if (!Object.keys(attrs).length) return helpers.parseInline(tokens);
-        const content = helpers.parseInline(clean);
+        // Paragraph's own blank-marker check sees the original tokens, which
+        // still include our formatting comments. Recognize only the unescaped
+        // marker after removing those comments; literal &amp;nbsp; and code
+        // must retain their text rather than becoming blank paragraphs.
+        const explicitBlank = extension.name !== "heading" && clean.length === 1 && clean[0].type === "text"
+          && ["&nbsp;", "\u00a0"].includes(clean[0].raw ?? clean[0].text ?? "");
+        const content = explicitBlank ? [] : helpers.parseInline(clean);
         formatting.set(content, attrs);
         return content;
       } });
@@ -71,6 +78,11 @@ function marginAttribute(side: "left" | "right") {
 export const NoteStarterKit = StarterKit.extend({
   addExtensions() {
     return (this.parent?.() ?? []).map((extension) => {
+      if (extension instanceof Node && extension.name === "codeBlock") return extension.extend({
+        renderMarkdown(node, helpers) {
+          return serializeFencedCode(helpers.renderChildren(node.content ?? []), String(node.attrs?.language ?? ""));
+        },
+      });
       if (extension instanceof Node && ["paragraph", "heading"].includes(extension.name)) {
         return withAlignmentParsing(extension.extend({
           addAttributes() {
@@ -86,7 +98,11 @@ export const NoteStarterKit = StarterKit.extend({
             const markers = [node.attrs?.textAlign === "justify" ? JUSTIFY_MARKER : "", paragraphMarginsMarker({
               left: normalizeNoteMargin(node.attrs?.marginLeft), right: normalizeNoteMargin(node.attrs?.marginRight),
             })].filter(Boolean);
-            return markers.length && content.trim() ? `${content.trimEnd()} ${markers.join(" ")}` : content;
+            // An ordinary first blank serializes to whitespace alone, which
+            // cannot carry paragraph attributes. Use the same portable marker
+            // as subsequent blanks whenever this paragraph has formatting.
+            const formattedContent = extension.name === "paragraph" && !node.content?.length ? "&nbsp;" : content;
+            return markers.length && formattedContent.trim() ? `${formattedContent.trimEnd()} ${markers.join(" ")}` : content;
           },
         }));
       }

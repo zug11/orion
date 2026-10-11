@@ -4,14 +4,14 @@ import type { KnowledgeAssignmentDriver } from "../knowledgeOrchestration/servic
 import type { organizeWithAI } from "../storage";
 import type { buildImportPayload } from "../../components/ImportStudio";
 
-export interface ContextInput { query: string; note_ids?: string[]; source_ids?: string[]; depth?: "standard" | "deep" }
+export interface ContextInput { task_view?: import("../taskWorkingView").TaskView; query: string; note_ids?: string[]; source_ids?: string[]; depth?: "standard" | "deep" }
 export interface ResearchInput extends Omit<ContextInput, "query"> {
   question: string; material?: string; mode?: "answer" | "compare" | "gaps" | "review" | "brief"; previous_job_id?: string;
 }
 export type ImportInput = { kind: "text"; title: string; text: string } | { kind: "file"; path: string } | { kind: "url"; url: string };
 export type AssistantRequest = { space_id: string; request_id: string } & (
   | { operation: "context"; input: ContextInput }
-  | { operation: "search"; input: { query: string } }
+  | { operation: "search"; input: { query: string; task_view?: import("../taskWorkingView").TaskView } }
   | { operation: "export"; input: { scope: "note" | "linked" | "space"; note_id?: string } }
   | { operation: "research"; input: ResearchInput }
   | { operation: "import"; input: { inputs: ImportInput[]; guidance?: string; mode?: "ai" | "local" } }

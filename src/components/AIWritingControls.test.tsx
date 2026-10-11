@@ -13,6 +13,10 @@ function renderControls(options: {
   phase?: AIWritingPhase;
   hasSelection?: boolean;
   suspended?: boolean;
+  writeComposerOpen?: boolean;
+  writingAvailable?: boolean;
+  writingUnavailableReason?: string;
+  imageUnavailableReason?: string;
   onRequest?: ControlProps["onRequest"];
   onAccept?: ControlProps["onAccept"];
   onRetry?: ControlProps["onRetry"];
@@ -29,12 +33,20 @@ function renderControls(options: {
     onAccept: options.onAccept ?? vi.fn<ControlProps["onAccept"]>(),
     onRetry: options.onRetry ?? vi.fn<ControlProps["onRetry"]>(),
     onDiscard: options.onDiscard ?? vi.fn<ControlProps["onDiscard"]>(),
+    onCloseWriteComposer: vi.fn<NonNullable<ControlProps["onCloseWriteComposer"]>>(),
+    onOpenLink: vi.fn<NonNullable<ControlProps["onOpenLink"]>>(),
     onRequestImage:
       options.onRequestImage ?? vi.fn<NonNullable<ControlProps["onRequestImage"]>>(),
   };
   const view = render(
     <AIWritingControls
       active
+      writeComposerOpen={options.writeComposerOpen}
+      onCloseWriteComposer={callbacks.onCloseWriteComposer}
+      onOpenLink={callbacks.onOpenLink}
+      writingAvailable={options.writingAvailable}
+      writingUnavailableReason={options.writingUnavailableReason}
+      imageUnavailableReason={options.imageUnavailableReason}
       suspended={options.suspended ?? false}
       phase={options.phase ?? "idle"}
       hasSelection={options.hasSelection ?? false}
@@ -56,20 +68,19 @@ function renderControls(options: {
 }
 
 describe("AIWritingControls", () => {
-  it("keeps Continue at the bottom and opens only amount and instruction options", async () => {
-    const { onRequest } = renderControls();
+  it("keeps the idle cursor free of persistent AI controls", () => {
+    const { onRequest, onRequestImage } = renderControls();
+    expect(screen.queryByTestId("ai-writing-dock")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Continue" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Write with AI" })).not.toBeInTheDocument();
+    expect(onRequest).not.toHaveBeenCalled();
+    expect(onRequestImage).not.toHaveBeenCalled();
+  });
 
-    expect(screen.getByRole("button", { name: "Continue" })).toBeVisible();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Continue writing options" }),
-    );
-
-    const dialog = screen.getByRole("dialog", {
-      name: "Continue writing options",
-    });
-    const amount = within(dialog).getByRole("slider", {
-      name: "Amount of text",
-    });
+  it("opens the requested Write composer with semantic amounts and optional direction", async () => {
+    const { onRequest, onCloseWriteComposer } = renderControls({ writeComposerOpen: true });
+    const dialog = screen.getByRole("dialog", { name: "Write with AI" });
+    const amount = within(dialog).getByRole("slider", { name: "Amount of text" });
     await waitFor(() => expect(amount).toHaveFocus());
     expect(amount).toHaveAttribute("min", "0");
     expect(amount).toHaveAttribute("max", "2");
@@ -80,64 +91,71 @@ describe("AIWritingControls", () => {
     expect(amount).toHaveAttribute("aria-valuetext", "Sentence");
     fireEvent.change(amount, { target: { value: "2" } });
     expect(amount).toHaveAttribute("aria-valuetext", "Section");
-    fireEvent.change(
-      within(dialog).getByRole("textbox", {
-        name: /^Custom instructions/,
-      }),
-      {
-        target: { value: "End on a concrete implication." },
-      },
-    );
-    expect(
-      within(dialog).queryByRole("button", { name: "Continue" }),
-    ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-    expect(onRequest).toHaveBeenCalledWith(
-      "continue",
-      "section",
-      "End on a concrete implication.",
-    );
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Continue writing options" }),
-    );
-    await waitFor(() =>
-      expect(
-        screen.getByPlaceholderText("Add a direction for what comes next…"),
-      ).toHaveValue(""),
-    );
+    const instruction = within(dialog).getByRole("textbox", { name: /^Custom instructions/ });
+    fireEvent.change(instruction, { target: { value: "End on a concrete implication." } });
+    expect(onRequest).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("button", { name: "Write" })).toHaveLength(1);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Write" }));
+    expect(onRequest).toHaveBeenCalledWith("continue", "section", "End on a concrete implication.");
+    expect(onCloseWriteComposer).toHaveBeenCalledWith(false);
+    expect(instruction).toHaveValue("");
   });
 
-  it("closes Continue options from the slider and returns focus to the chevron", async () => {
-    renderControls();
-    const toggle = screen.getByRole("button", {
-      name: "Continue writing options",
-    });
-    fireEvent.click(toggle);
+  it("supports writing at the captured cursor with an empty instruction", () => {
+    const { onRequest } = renderControls({ writeComposerOpen: true });
+    fireEvent.click(screen.getByRole("button", { name: "Write" }));
+    expect(onRequest).toHaveBeenCalledWith("continue", "paragraph", "");
+  });
+
+  it("dismisses Write with restored focus for Escape or Cancel, and preserves outside click focus", async () => {
+    const { onCloseWriteComposer, onRequest } = renderControls({ writeComposerOpen: true });
     const slider = screen.getByRole("slider", { name: "Amount of text" });
     await waitFor(() => expect(slider).toHaveFocus());
-
+    fireEvent.keyDown(slider, { key: "ArrowRight" });
+    expect(onCloseWriteComposer).not.toHaveBeenCalled();
+    fireEvent.pointerDown(slider);
+    expect(onCloseWriteComposer).not.toHaveBeenCalled();
     fireEvent.keyDown(slider, { key: "Escape" });
-
-    expect(
-      screen.queryByRole("dialog", { name: "Continue writing options" }),
-    ).not.toBeInTheDocument();
-    await waitFor(() => expect(toggle).toHaveFocus());
-
-    fireEvent.click(toggle);
-    const reopenedSlider = screen.getByRole("slider", {
-      name: "Amount of text",
-    });
-    await waitFor(() => expect(reopenedSlider).toHaveFocus());
-    fireEvent.click(toggle);
-    expect(
-      screen.queryByRole("dialog", { name: "Continue writing options" }),
-    ).not.toBeInTheDocument();
-    await waitFor(() => expect(toggle).toHaveFocus());
+    expect(onCloseWriteComposer).toHaveBeenLastCalledWith(true);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onCloseWriteComposer).toHaveBeenLastCalledWith(true);
+    fireEvent.pointerDown(document.body);
+    expect(onCloseWriteComposer).toHaveBeenLastCalledWith(false);
+    expect(onRequest).not.toHaveBeenCalled();
   });
 
-  it("replaces Continue with Rewrite for a selection and supports a blank custom direction", () => {
+  it("keeps local Link available and explains each unavailable AI action without requesting anything", () => {
+    const callbacks = renderControls({
+      hasSelection: true, writingAvailable: false, imageGenerationAvailable: false,
+      writingUnavailableReason: "Add your Anthropic key to rewrite.",
+      imageUnavailableReason: "Add OpenAI and Anthropic keys to generate images.",
+    });
+    expect(callbacks.onRequest).not.toHaveBeenCalled();
+    expect(callbacks.onRequestImage).not.toHaveBeenCalled();
+    const rewrite = screen.getByRole("button", { name: "Rewrite" });
+    const image = screen.getByRole("button", { name: "Generate image from selected text" });
+    expect(rewrite).toHaveAttribute("aria-disabled", "true");
+    expect(image).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(rewrite);
+    expect(screen.getByRole("status")).toHaveTextContent("Add your Anthropic key to rewrite.");
+    fireEvent.click(image);
+    expect(screen.getByRole("status")).toHaveTextContent("Add OpenAI and Anthropic keys to generate images.");
+    fireEvent.click(screen.getByRole("button", { name: "Link selected text" }));
+    expect(callbacks.onOpenLink).toHaveBeenCalledOnce();
+    expect(callbacks.onRequest).not.toHaveBeenCalled();
+    expect(callbacks.onRequestImage).not.toHaveBeenCalled();
+  });
+
+  it("explains a missing writing key without enabling a Write request", () => {
+    const { onRequest } = renderControls({ writeComposerOpen: true, writingAvailable: false,
+      writingUnavailableReason: "Add your Anthropic key to write." });
+    expect(screen.getByText("Add your Anthropic key to write.")).toHaveAttribute("role", "status");
+    expect(screen.getByRole("button", { name: "Write" })).toBeDisabled();
+    fireEvent.submit(screen.getByRole("dialog", { name: "Write with AI" }));
+    expect(onRequest).not.toHaveBeenCalled();
+  });
+
+  it("offers Rewrite for a selection and supports a blank custom direction", () => {
     const { onRequest } = renderControls({ hasSelection: true });
 
     expect(screen.queryByRole("button", { name: "Continue" })).not.toBeInTheDocument();
@@ -178,7 +196,7 @@ describe("AIWritingControls", () => {
       imageGenerationAvailable: true,
     });
 
-    expect(screen.getByRole("group", { name: "AI tools for selected text" })).toBeVisible();
+    expect(screen.getByRole("group", { name: "Actions for selected text" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Generate image from selected text" }))
       .toHaveAttribute("title", "Generate an image from this passage and its Space context");
     expect(onRequestImage).not.toHaveBeenCalled();

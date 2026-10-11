@@ -3,9 +3,10 @@ import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileText, ListTodo, List, ListOrdered, Image, FileCode2, Link2, Quote, Sheet, Trash2, ChevronRight } from "../../lib/icons";
 import { getSlashMatch, matchingSlashItems, type SlashMatch, type SlashCommand } from "./slashCommands";
+import { AIWritingMark } from "../icons/AIWritingMark";
 import { BlocksMark } from "../icons/BlocksMark";
 
-export const slashCommandIcons = {heading:FileText,block:BlocksMark,todo:ListTodo,bullet:List,numbered:ListOrdered,divider:FileText,image:Image,code:FileCode2,link:Link2,excerpt:Quote,table:Sheet};
+export const slashCommandIcons = {write:AIWritingMark,heading:FileText,block:BlocksMark,todo:ListTodo,bullet:List,numbered:ListOrdered,divider:FileText,image:Image,code:FileCode2,link:Link2,excerpt:Quote,table:Sheet};
 export function SlashMenu({editor, suspended, onCommand}:{editor:Editor;suspended:boolean;onCommand:(command:SlashCommand,range:{from:number;to:number})=>void}) {
   const [match, setMatch] = useState<SlashMatch|null>(null);
   const [active,setActive] = useState(0);

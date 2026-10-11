@@ -1,3 +1,4 @@
+import { chatProposalBody, type ChatEditApplication, type ChatEditorChange } from "../lib/chatEdits";
 import { parseNoteExcerptTitle } from "../lib/noteExcerpts";
 import { requestNoteExcerptNavigation, consumeNoteExcerptNavigation, revealNoteExcerptPassage, clearNoteExcerptHighlight, NOTE_PASSAGE_NAVIGATION_EVENT } from "../lib/noteExcerptNavigation";
 import { noteTableHeaderInfo, noteTableLayoutAtLine, remarkNoteTableMetadata } from "../lib/noteTables";
@@ -42,8 +43,14 @@ import { parseNoteImageTitle, noteImageLayoutStyle, noteImageContentStyle } from
 import "./editor/EditorExperience.css";
 import type { RegisterWikiLinkInput } from "../lib/concepts";
 import type { AIWritingRequestInput } from "../lib/aiWriting";
+import type { EditorAILinkContext } from "../lib/editorAIWorkingContext";
 import type { AIImageProposal, AIImageRequestInput } from "../lib/aiImages";
-import type { AIImageGenerationCallbacks } from "./RichNoteEditor";
+import type { AIImageGenerationCallbacks, RichEditorContextState } from "./RichNoteEditor";
+import type { EditorActionHost } from "../lib/assistant/editorActionHost";
+import type { VoiceSelectionStore } from "../lib/voiceSelection";
+import { editorContextIdentity, type EditorCaptureState, type EditorSelectionSnapshot } from "../lib/editorSelectionContext";
+import type { EditorContextDocument } from "../lib/assistant/editorContext";
+import { useVoiceSelection } from "./useVoiceSelection";
 import {
   expandOrionWikiLinks,
   restoreMarkdownFrontmatter,
@@ -107,6 +114,14 @@ function withoutTaskMarker(children: ReactNode): ReactNode {
 }
 
 interface NoteViewProps {
+  voiceSelection?: VoiceSelectionStore;
+  chatEdit?: ChatEditApplication;
+  onChatEditComplete?: (id: string, error?: string, accepted?: boolean) => void;
+  onChatEditBeforeAccept?: (id: string) => Promise<void>;
+  onReviewReadinessChange?: (noteId: string, ready: (() => boolean) | null) => void;
+  onEditorContextChange?: (noteId: string, read: (() => EditorContextDocument) | null) => void;
+  onEditorActionHostChange?: (noteId: string, host: EditorActionHost | null) => void;
+  onFlowActiveChange?: (active: boolean) => void;
   initialEditing?: boolean;
   /** Window-local modes for this Space; these are navigation state, not note data. */
   editingModes?: Map<string, boolean>;
@@ -124,9 +139,10 @@ interface NoteViewProps {
   onDeleteNote: (noteId: string) => void;
   onFinishEditing?: (noteId: string) => void;
   onRegisterConcept: (input: RegisterWikiLinkInput) => string;
-  onGenerateLinkTitle?: (selectedContext: string, signal?: AbortSignal) => Promise<string>;
+  onGenerateLinkTitle?: (selectedContext: string, signal?: AbortSignal, context?: EditorAILinkContext) => Promise<string>;
   onGenerateAIWriting?: (
     input: Omit<AIWritingRequestInput, "originNoteId">,
+    signal?: AbortSignal,
   ) => Promise<string>;
   onGenerateAIImage?: (
     input: Omit<AIImageRequestInput, "originNoteId">,
@@ -148,6 +164,8 @@ interface NoteViewProps {
   onDisableConceptAutoLink: (conceptId: string) => void;
   aiArticleWritingEnabled?: boolean;
   aiImageGenerationEnabled?: boolean;
+  aiWritingUnavailableReason?: string;
+  aiImageUnavailableReason?: string;
   imageContextEnabled?: boolean;
   aiProviderName?: string;
 }
@@ -168,6 +186,14 @@ function safeUrl(url: string) {
 }
 
 export function NoteView({
+  voiceSelection,
+  chatEdit,
+  onChatEditComplete,
+  onChatEditBeforeAccept,
+  onReviewReadinessChange,
+  onEditorContextChange,
+  onEditorActionHostChange,
+  onFlowActiveChange,
   initialEditing = false,
   editingModes,
   noteTypeface = "sans",
@@ -196,6 +222,8 @@ export function NoteView({
   onDisableConceptAutoLink,
   aiArticleWritingEnabled = false,
   aiImageGenerationEnabled = false,
+  aiWritingUnavailableReason,
+  aiImageUnavailableReason,
   imageContextEnabled = false,
   aiProviderName,
 }: NoteViewProps) {
@@ -241,6 +269,58 @@ export function NoteView({
   const findScopeRef = useRef<HTMLElement>(null);
   const currentNoteRef = useRef(note);
   currentNoteRef.current = note;
+  const editorReviewReady = useRef<(() => boolean) | null>(null);
+  const richEditorContext = useRef<(() => RichEditorContextState) | null>(null);
+  const displayedNoteCache = useRef<{ base: Note; body: string; note: Note } | undefined>(undefined);
+  const emptyContextCache = useRef<{ note: Note; state: "none" | "unavailable"; reason?: EditorCaptureState["reason"]; snapshot: EditorSelectionSnapshot } | undefined>(undefined);
+  const noteReviewState = useRef({ editing, chatEdit });
+  noteReviewState.current = { editing, chatEdit };
+  const receiveEditorReviewReady = useCallback((ready: (() => boolean) | null) => { editorReviewReady.current = ready; }, []);
+  const receiveEditorContext = useCallback((read: (() => RichEditorContextState) | null) => { richEditorContext.current = read; }, []);
+  const receiveEditorActionHost = useCallback((host: EditorActionHost | null) => {
+    onEditorActionHostChange?.(note.id, host);
+  }, [note.id, onEditorActionHostChange]);
+  const displayedNote = () => {
+    const base = currentNoteRef.current;
+    const rich = noteReviewState.current.editing ? richEditorContext.current?.() : undefined;
+    // Initial editor presentation strips duplicate headings/frontmatter. That
+    // is not an authored revision of the raw note used by voice or MCP readers.
+    const body = rich?.authored ? rich.markdown : base.body;
+    if (body === base.body) return base;
+    const cached = displayedNoteCache.current;
+    if (cached?.base === base && cached.body === body) return cached.note;
+    const note = { ...base, body }; displayedNoteCache.current = { base, body, note }; return note;
+  };
+  const captureState = (): EditorCaptureState => noteReviewState.current.chatEdit
+    ? { available: false, reason: "preview" }
+    : noteReviewState.current.editing ? richEditorContext.current?.() ?? { available: false, reason: "not-ready" }
+      : { available: true };
+  const contextReader = useRef<() => EditorContextDocument>(() => ({ note, snapshot: { state: "none" } }));
+  contextReader.current = () => {
+    const current = displayedNote(), availability = captureState(), selected = voiceSelection?.getEditorSnapshot();
+    // Tiptap can become ready after the parent capture effect has run. A
+    // readiness-only snapshot must not remain sticky until the next user
+    // interaction; the synchronous editor getter is authoritative here. Never
+    // resurrect a passage or fabricate a caret while recovering readiness.
+    if (availability.available && selected?.state !== "unavailable" && selected?.noteId === current.id && selected.spaceId === voiceSelection?.spaceId) return { note: current, snapshot: selected };
+    const state = availability.available ? "none" : "unavailable", reason = availability.reason;
+    let cached = emptyContextCache.current;
+    if (!cached || cached.note !== current || cached.state !== state || cached.reason !== reason) {
+      cached = { note: current, state, reason, snapshot: { ...editorContextIdentity(current, voiceSelection?.spaceId ?? ""), state, ...(reason ? { reason } : {}) } };
+      emptyContextCache.current = cached;
+    }
+    return { note: current, snapshot: cached.snapshot };
+  };
+  useEffect(() => {
+    onReviewReadinessChange?.(note.id, () => !noteReviewState.current.chatEdit &&
+      (!noteReviewState.current.editing || Boolean(editorReviewReady.current?.())));
+    return () => onReviewReadinessChange?.(note.id, null);
+  }, [note.id, onReviewReadinessChange]);
+  useEffect(() => {
+    onEditorContextChange?.(note.id, () => contextReader.current());
+    return () => onEditorContextChange?.(note.id, null);
+  }, [note.id, onEditorContextChange]);
+  useVoiceSelection(findScopeRef, note, voiceSelection, voiceSelection?.spaceId, displayedNote, { state: captureState });
   const dirtyEditingRef = useRef(false);
   const [selectedPassageId, setSelectedPassageId] = useState<string | null>(null);
   const passageTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -276,6 +356,22 @@ export function NoteView({
     },
     [concepts, note.body, note.title, notes],
   );
+  const [chatEditorChange, setChatEditorChange] = useState<ChatEditorChange>();
+  const preparedChatEdit = useRef<string | null>(null);
+  useEffect(() => {
+    if (!chatEdit || chatEdit.proposal.noteId !== note.id || preparedChatEdit.current === chatEdit.id) return;
+    preparedChatEdit.current = chatEdit.id;
+    try {
+      if (note.body !== chatEdit.proposal.baseBody) throw new Error("This note has changed. Ask Chat to regenerate the edits.");
+      const next = splitMarkdownFrontmatter(chatProposalBody(chatEdit.proposal));
+      const nextMarkdown = restoreMarkdownFrontmatter(next.prefix, expandOrionWikiLinks(
+        stripDuplicateTitleHeading(stripOrionNoteMarkers(next.content), note.title), notes, concepts));
+      setChatEditorChange({ id: chatEdit.id, baseMarkdown: markdown, nextMarkdown, mode: chatEdit.proposal.mode });
+      setEditing(true);
+    } catch (error) {
+      onChatEditComplete?.(chatEdit.id, error instanceof Error ? error.message : String(error));
+    }
+  }, [chatEdit, note.id, note.body, note.title, notes, concepts, markdown, setEditing, onChatEditComplete]);
   const citationDocument = useMemo(
     () =>
       canonicalizeSourceCitations(
@@ -760,11 +856,11 @@ export function NoteView({
     if (editing) {
       dirtyEditingRef.current = true;
     }
-    onUpdateNote({
-      ...note,
-      ...patch,
-      updatedAt: new Date().toISOString(),
-    });
+    const next = { ...currentNoteRef.current, ...patch, updatedAt: new Date().toISOString() };
+    // Selection capture can run before React delivers the updated note prop.
+    // Bind it to the actual authored document, including the unsaved edit.
+    currentNoteRef.current = next;
+    onUpdateNote(next);
     setSavedPulse(true);
     if (savedPulseTimerRef.current !== null) {
       window.clearTimeout(savedPulseTimerRef.current);
@@ -1431,6 +1527,13 @@ export function NoteView({
             }
           >
             <RichNoteEditor
+              chatEdit={chatEdit?.id === chatEditorChange?.id ? chatEditorChange : undefined}
+              onChatEditComplete={onChatEditComplete}
+              onChatEditBeforeAccept={onChatEditBeforeAccept}
+              onReviewReadinessChange={receiveEditorReviewReady}
+              onEditorContextStateChange={receiveEditorContext}
+              onEditorActionHostChange={receiveEditorActionHost}
+              onFlowActiveChange={onFlowActiveChange}
               noteTypeface={noteTypeface}
               onNoteTypefaceChange={onNoteTypefaceChange}
               key={note.id}
@@ -1456,6 +1559,8 @@ export function NoteView({
               onFinishVoiceMemoSession={onFinishVoiceMemoSession}
               aiArticleWritingEnabled={aiArticleWritingEnabled}
               aiImageGenerationEnabled={aiImageGenerationEnabled}
+              aiWritingUnavailableReason={aiWritingUnavailableReason}
+              aiImageUnavailableReason={aiImageUnavailableReason}
               imageContextEnabled={imageContextEnabled}
               aiProviderName={aiProviderName}
               findQuery={findQuery}
@@ -1475,7 +1580,7 @@ export function NoteView({
           />
         ) : (
           <div className="note-prose" data-narration-text="body">
-            <div className="note-prose-content" style={noteMarginsStyle(marginDocument.margins)}>
+            <div className="note-prose-content" data-voice-note-body="reading" style={noteMarginsStyle(marginDocument.margins)}>
               {renderedMarkdown}
             </div>
             {selectedPassage && <CitedPassage evidence={selectedPassage} notes={notes} sources={sources}

@@ -332,7 +332,7 @@ class WordContentBuilder {
           ...(header || (wrapper?.getAttribute("data-banded") !== "false" && index % 2 === 1) ? { shading: { fill: header ? "E9EDF3" : "F6F7F9" } } : {}),
         }));
       }
-      tableRows.push(new TableRow({ children: cells, tableHeader: header }));
+      tableRows.push(new TableRow({ children: cells, ...(header ? { tableHeader: true } : {}) }));
     }
     return new Table({ rows: tableRows, width: { size: width, type: WidthType.DXA }, ...(options.bodyInset?.left ? { indent: { size: options.bodyInset.left, type: WidthType.DXA } } : {}), columnWidths, layout: TableLayoutType.FIXED, borders: { top: { style: BorderStyle.SINGLE, size: 4, color: "CBD1DB" }, bottom: { style: BorderStyle.SINGLE, size: 4, color: "CBD1DB" }, left: { style: BorderStyle.SINGLE, size: 4, color: "CBD1DB" }, right: { style: BorderStyle.SINGLE, size: 4, color: "CBD1DB" }, insideHorizontal: { style: BorderStyle.SINGLE, size: 4, color: "CBD1DB" }, insideVertical: { style: BorderStyle.SINGLE, size: 4, color: "CBD1DB" } } });
   }

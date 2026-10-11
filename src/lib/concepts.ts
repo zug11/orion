@@ -1,4 +1,5 @@
 import type { AppSnapshot, Concept, EntityId, Note } from "../types";
+import type { EditorAILinkContext } from "./editorAIWorkingContext";
 
 export const CONCEPT_COLORS = [
   "#8ea4ff",
@@ -28,6 +29,9 @@ export interface RegisterConceptPhraseInput {
   description?: string;
 }
 
+/** Internal receipt of this exact editor link transaction, never persisted. */
+export interface LinkedDocumentReceipt { body?: string }
+
 /**
  * The editor-level link request. An empty destination list asks Orion to
  * create or reuse the named canonical wiki article. Non-empty destinations
@@ -39,6 +43,9 @@ export interface RegisterWikiLinkInput {
   articleMode: "ai" | "blank";
   articleInstructions?: string;
   selectedContext?: string;
+  /** Transient provider projection; never part of the persisted link/note. */
+  editorContext?: EditorAILinkContext;
+  linkedDocument?: LinkedDocumentReceipt;
   description?: string;
 }
 

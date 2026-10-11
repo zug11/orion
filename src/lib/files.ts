@@ -1,4 +1,5 @@
-import { docxHtmlToMarkdown } from "./docxImport";
+import { parseDocxHtml } from "./docxImport";
+import { htmlToMarkdown } from "./htmlImport";
 import type {
   ImportDraft,
   ParsedImport,
@@ -141,7 +142,8 @@ export function parseTextImport(
       text = delimitedRowsToMarkdown(rows);
     }
   } else if (format === "html") {
-    const parsed = htmlToText(text);
+    const parsed = htmlToMarkdown(text);
+    warnings.push(...parsed.warnings);
     text = parsed.text;
     title = parsed.title || title;
     if (!text) {
@@ -754,6 +756,7 @@ async function parseDocx(file: File): Promise<ParsedImport> {
     styleMap: ["p[style-name='Title'] => h1:fresh", "p[style-name='Code'] => pre:fresh", "p[style-name='Quote'] => blockquote > p:fresh", "r[style-name='Inline code'] => code"],
     convertImage: mammoth.images.imgElement(async () => ({ src: "" })),
   });
+  const converted = parseDocxHtml(result.value);
   return {
     title: titleFromFileName(file.name),
     fileName: file.name,
@@ -762,62 +765,9 @@ async function parseDocx(file: File): Promise<ParsedImport> {
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     format: "docx",
     byteSize: file.size,
-    text: docxHtmlToMarkdown(result.value),
-    warnings: result.messages.map((message) => message.message),
+    text: converted.text,
+    warnings: [...new Set([...result.messages.map((message) => message.message), ...converted.warnings])],
   };
-}
-
-function htmlToText(html: string): { title: string; text: string } {
-  if (typeof DOMParser === "undefined") {
-    return {
-      title: "",
-      text: decodeBasicEntities(
-        html
-          .replace(/<(script|style|noscript|svg)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
-          .replace(/<\/?(?:p|div|section|article|h[1-6]|li|tr|br)\b[^>]*>/gi, "\n")
-          .replace(/<[^>]+>/g, " "),
-      )
-        .replace(/[ \t]+/g, " ")
-        .replace(/\n{3,}/g, "\n\n")
-        .trim(),
-    };
-  }
-
-  const document = new DOMParser().parseFromString(html, "text/html");
-  document
-    .querySelectorAll("script, style, noscript, svg, canvas, template")
-    .forEach((element) => element.remove());
-  const title = document.querySelector("title")?.textContent?.trim() ?? "";
-  const blocks: string[] = [];
-  const blockSelector =
-    "h1, h2, h3, h4, h5, h6, p, li, blockquote, pre, tr";
-  const elements = Array.from(document.body.querySelectorAll(blockSelector));
-
-  for (const element of elements) {
-    if (element.parentElement?.closest(blockSelector) !== null) {
-      const parentBlock = element.parentElement?.closest(blockSelector);
-      if (parentBlock && parentBlock !== element) {
-        continue;
-      }
-    }
-    const value = element.textContent?.replace(/\s+/g, " ").trim() ?? "";
-    if (!value) {
-      continue;
-    }
-    const tag = element.tagName.toLocaleLowerCase();
-    if (/^h[1-6]$/.test(tag)) {
-      blocks.push(`${"#".repeat(Number(tag[1]))} ${value}`);
-    } else if (tag === "li") {
-      blocks.push(`- ${value}`);
-    } else if (tag === "blockquote") {
-      blocks.push(`> ${value}`);
-    } else {
-      blocks.push(value);
-    }
-  }
-
-  const fallback = document.body.textContent?.replace(/\s+/g, " ").trim() ?? "";
-  return { title, text: (blocks.length > 0 ? blocks.join("\n\n") : fallback) };
 }
 
 function detectDelimiter(input: string): string {
@@ -901,33 +851,6 @@ function escapeMarkdownTableCell(value: string): string {
 
 function stripByteOrderMark(value: string): string {
   return value.replace(/^\uFEFF/, "");
-}
-
-function decodeBasicEntities(value: string): string {
-  const entities: Record<string, string> = {
-    amp: "&",
-    lt: "<",
-    gt: ">",
-    quot: '"',
-    apos: "'",
-    nbsp: " ",
-  };
-  return value.replace(
-    /&(#\d+|#x[\da-f]+|amp|lt|gt|quot|apos|nbsp);/gi,
-    (_, entity: string) => {
-      if (entity[0] === "#") {
-        const hexadecimal = entity[1].toLocaleLowerCase() === "x";
-        const codePoint = Number.parseInt(
-          entity.slice(hexadecimal ? 2 : 1),
-          hexadecimal ? 16 : 10,
-        );
-        return Number.isFinite(codePoint)
-          ? String.fromCodePoint(codePoint)
-          : _;
-      }
-      return entities[entity.toLocaleLowerCase()] ?? _;
-    },
-  );
 }
 
 function createId(): string {

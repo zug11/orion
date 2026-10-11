@@ -187,7 +187,6 @@ export function MarginsControl({ editor, disabled = false, onClose }: {
       onKeyUp={event => { if (adjustmentKeys.has(event.key) && gestureRef.current?.kind === "keyboard") finish(false); }}
       onBlur={() => { setFocusedSide(null); if (gestureRef.current?.kind === "keyboard") finish(false); }}>
       <span className="editor-ruler-marker-shape" aria-hidden="true"/>
-      <span className="editor-ruler-value" aria-hidden="true">{value === null ? "Mixed" : `${value}%`}</span>
     </button>;
   };
 

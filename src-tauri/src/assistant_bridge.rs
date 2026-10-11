@@ -62,9 +62,13 @@ struct Jobs {
 pub struct AssistantBridge {
     path: PathBuf,
     jobs: Arc<Mutex<Jobs>>,
+    pub(crate) reviews: crate::assistant_review::ReviewStore,
+    pub(crate) editor_actions: crate::assistant_editor_actions::EditorActionsStore,
+    pub(crate) editor_context: crate::assistant_editor_context::EditorContextStore,
+    pub(crate) voice_work_orders: crate::assistant_voice_work_orders::VoiceWorkOrdersStore,
 }
 
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -97,7 +101,7 @@ fn read_vault(path: &Path) -> Result<Value, String> {
     Ok(value)
 }
 
-fn space<'a>(vault: &'a Value, space_id: &str) -> Result<&'a Value, String> {
+pub(crate) fn space<'a>(vault: &'a Value, space_id: &str) -> Result<&'a Value, String> {
     let spaces = vault
         .get("spaces")
         .and_then(Value::as_array)
@@ -112,7 +116,7 @@ fn space<'a>(vault: &'a Value, space_id: &str) -> Result<&'a Value, String> {
     Ok(matches[0])
 }
 
-fn access(vault: &Value) -> Result<Access, String> {
+pub(crate) fn access(vault: &Value) -> Result<Access, String> {
     let active_id = vault
         .get("activeSpaceId")
         .and_then(Value::as_str)
@@ -170,6 +174,12 @@ fn policy(vault: &Value, request: &StartRequest) -> Result<Value, String> {
 impl AssistantBridge {
     pub fn new(path: PathBuf) -> Self {
         Self {
+            reviews: crate::assistant_review::ReviewStore::new(path.clone()),
+            editor_actions: crate::assistant_editor_actions::EditorActionsStore::new(path.clone()),
+            editor_context: crate::assistant_editor_context::EditorContextStore::new(path.clone()),
+            voice_work_orders: crate::assistant_voice_work_orders::VoiceWorkOrdersStore::new(
+                path.clone(),
+            ),
             path,
             jobs: Arc::new(Mutex::new(Jobs::default())),
         }
@@ -224,24 +234,74 @@ impl AssistantBridge {
     }
 
     pub fn handle(&self, method: &str, arguments: Value) -> Value {
+        if matches!(
+            method,
+            "editor_action_capture"
+                | "editor_action_start"
+                | "editor_action_get"
+                | "editor_action_cancel"
+        ) {
+            return match self.editor_actions.handle(method, arguments) {
+                Ok(result) => success(result),
+                Err(error) => failure("editor_action_error", error),
+            };
+        }
+        if matches!(
+            method,
+            "voice_list" | "voice_get" | "voice_control" | "voice_request_get"
+        ) {
+            return match self.voice_work_orders.handle(method, arguments) {
+                Ok(result) => success(result),
+                Err(error) => failure("voice_work_orders_error", error),
+            };
+        }
+        if matches!(method, "editor_context_request" | "editor_context_get") {
+            return match self.editor_context.handle(method, arguments) {
+                Ok(result) => success(result),
+                Err(error) => failure("editor_context_error", error),
+            };
+        }
+        if matches!(method, "review_submit" | "review_get" | "review_cancel") {
+            return match self.reviews.handle(method, arguments) {
+                Ok(result) => success(result),
+                Err(error) => failure("review_error", error),
+            };
+        }
         let result = (|| -> Result<Value, String> {
             let vault = read_vault(&self.path)?;
             let mut jobs = self.lock()?;
             Self::expire(&mut jobs);
             match method {
                 "capabilities" => {
+                    let reviews = self.reviews.capabilities()?;
+                    let editor = self.editor_context.capabilities()?;
+                    let editor_actions = self.editor_actions.capabilities()?;
+                    let voice = self.voice_work_orders.capabilities()?;
+                    let executor_available = jobs
+                        .renderer
+                        .as_ref()
+                        .is_some_and(|(_, seen)| seen.elapsed() <= RENDERER_LEASE);
                     let access = access(&vault)?;
                     let active_id = vault["activeSpaceId"].as_str().unwrap_or("");
                     let settings = &space(&vault, active_id)?["settings"];
                     Ok(json!({
                         "protocolVersion": protocol::BRIDGE_VERSION,
                         "appVersion": env!("CARGO_PKG_VERSION"),
-                        "available": jobs.renderer.as_ref().is_some_and(|(_, seen)| seen.elapsed() <= RENDERER_LEASE),
+                        "available": executor_available || editor_actions["editorActionTargets"].as_array().is_some_and(|targets| !targets.is_empty()) || editor["editorTargets"].as_array().is_some_and(|targets|!targets.is_empty()) || voice["voiceTargets"].as_array().is_some_and(|targets|!targets.is_empty()),
+                        "workflowExecutorAvailable": executor_available,
+                        "editorTargets": editor["editorTargets"],
+                        "editorContextLimits": editor["editorContextLimits"],
+                        "editorActionTargets": editor_actions["editorActionTargets"],
+                        "editorActionLimits": editor_actions["editorActionLimits"],
+                        "voiceTargets": voice["voiceTargets"],
+                        "voiceWorkOrderLimits": voice["voiceWorkOrderLimits"],
                         "access": access,
                         "model": settings.get("model"),
                         "reasoningEffort": settings.get("reasoningEffort"),
                         "existingNoteContextEnabled": settings.get("includeExistingNotesInAIContext"),
-                        "limits": {"queuedJobs":MAX_QUEUED,"retainedJobs":MAX_JOBS,"sourceInputs":12,"providerCalls":6},
+                        "reviewTargets": reviews["reviewTargets"],
+                        "reviewLimits": reviews["reviewLimits"],
+                        "limits": {"queuedJobs":MAX_QUEUED,"retainedJobs":MAX_JOBS,"sourceInputs":12,"providerCalls":6,"researchProviderCalls":7},
                         "operations":["context","research","search","export","import","reprocess","generate","develop_concept","enrich_knowledge","refresh_overview"],
                         "notice":"Orion executes workflows while open. AI uses Orion's configured provider account. Context/results returned here are also shared with the calling assistant."
                     }))
@@ -673,9 +733,16 @@ impl AssistantBridge {
             .persist(directory.join(protocol::BRIDGE_DESCRIPTOR))
             .map_err(|_| "Cannot publish the workflow descriptor.")?;
         let weak = Arc::downgrade(&self.jobs);
+        let reviews = self.reviews.clone();
+        let editor_context = self.editor_context.clone();
+        let editor_actions = self.editor_actions.clone();
+        let voice_work_orders = self.voice_work_orders.clone();
         let path = self.path.clone();
         std::thread::spawn(move || {
             while let Some(jobs) = weak.upgrade() {
+                editor_context.expire();
+                editor_actions.expire();
+                voice_work_orders.expire();
                 match listener.accept() {
                     Ok((mut stream, _)) => {
                         // macOS inherits the listener's nonblocking mode. Wait for
@@ -693,6 +760,10 @@ impl AssistantBridge {
                         let bridge = AssistantBridge {
                             path: path.clone(),
                             jobs,
+                            reviews: reviews.clone(),
+                            editor_context: editor_context.clone(),
+                            editor_actions: editor_actions.clone(),
+                            voice_work_orders: voice_work_orders.clone(),
                         };
                         let mut line = String::new();
                         let read = BufReader::new(
@@ -785,7 +856,7 @@ fn token_matches(left: &str, right: &str) -> bool {
 }
 
 #[cfg(unix)]
-fn random_token() -> Result<String, String> {
+pub(crate) fn random_token() -> Result<String, String> {
     let mut bytes = [0u8; 32];
     File::open("/dev/urandom")
         .and_then(|mut file| file.read_exact(&mut bytes))
@@ -793,7 +864,7 @@ fn random_token() -> Result<String, String> {
     Ok(bytes.iter().map(|value| format!("{value:02x}")).collect())
 }
 #[cfg(not(unix))]
-fn random_token() -> Result<String, String> {
+pub(crate) fn random_token() -> Result<String, String> {
     Err("Desktop workflows currently require macOS.".into())
 }
 
@@ -916,18 +987,18 @@ pub async fn assistant_read_input(
     if !metadata.is_file() || metadata.len() == 0 {
         return Err("Choose a nonempty regular file.".into());
     }
-    if crate::media_extension(&path).is_some() {
+    if crate::local_transcription::media_extension(&path).is_some() {
         let media_request_id =
             media_request_id.ok_or("The media import request identifier is missing.")?;
         let media_job = media_jobs.begin(window.label(), &media_request_id)?;
         let vault = read_vault(&bridge.path)?;
-        let config = crate::WhisperConfig {
+        let config = crate::local_transcription::WhisperConfig {
             language: space(&vault, &request.space_id)?["settings"]["whisperLanguage"]
                 .as_str()
                 .map(str::to_owned),
         };
-        let runtime = crate::bundled_transcription_runtime(&app)?;
-        let transcript = crate::transcribe_path_controlled(
+        let runtime = crate::local_transcription::bundled_transcription_runtime(&app)?;
+        let transcript = crate::local_transcription::transcribe_path_controlled(
             &runtime,
             &config,
             &path,

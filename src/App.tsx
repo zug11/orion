@@ -1,3 +1,7 @@
+import type { VoiceCommit, VoiceReceipt } from "./lib/voiceResearch";
+import { createVoicePresence } from "./lib/voicePresence";
+import { createVoiceSelectionStore } from "./lib/voiceSelection";
+import { validateChatEditTarget, type ChatEditApplication } from "./lib/chatEdits";
 import { runSpaceSearch } from "./lib/spaceSearch";
 import { normalizeSavedThemePalettes, normalizeActiveThemePaletteId } from "./lib/savedThemePalettes";
 import { playTrackedSpeech } from "./lib/trackedSpeech";
@@ -7,6 +11,11 @@ import { generateFromSpace } from "./lib/generatePipeline";
 import { flushSync } from "react-dom";
 import { invoke as invokeAssistantHost } from "@tauri-apps/api/core";
 import { startAssistantExecutor } from "./lib/assistant/executor";
+import { startExternalEditReviews, type ExternalEditReviews, type EditReviewTarget } from "./lib/assistant/editReviews";
+import { startEditorContextMailbox, type EditorContextDocument } from "./lib/assistant/editorContext";
+import { startEditorActionMailbox, type EditorActionMailbox } from "./lib/assistant/editorActions";
+import type { EditorActionHost } from "./lib/assistant/editorActionHost";
+import type { EditorAILinkContext } from "./lib/editorAIWorkingContext";
 import { composeWorkflowVault, rebaseCommittedWorkflow } from "./lib/assistant/commit";
 import type { AssistantJob } from "./lib/assistant/types";
 import { CheckCircle2, X } from "./lib/icons";
@@ -21,7 +30,7 @@ import {
   type SetStateAction,
 } from "react";
 import "./App.css";
-import { ChatView } from "./components/ChatView";
+import { ChatDock } from "./components/ChatDock";
 import { CommandPalette } from "./components/CommandPalette";
 import { ConnectionCanvas } from "./components/ConnectionCanvas";
 import { ContextPanel } from "./components/ContextPanel";
@@ -66,6 +75,7 @@ import {
   reconcileSnapshotConceptVocabulary,
   registerConceptPhrase,
   type RegisterWikiLinkInput,
+  type LinkedDocumentReceipt,
 } from "./lib/concepts";
 import {
   chatWithOrion,
@@ -99,14 +109,15 @@ import {
 import {
   applyChatResult,
   ChatRequestRegistry,
-  saveChatReplyAsNote,
 } from "./lib/chat";
 import { runChatReading } from "./lib/chatReading";
+import { keepChatReplyAsNote, prepareChatReplyEdit, type ChatNoteReceipt } from "./lib/chatNoteActions";
 import {
   applyLinkedArticleResult,
   buildLinkedArticleRequest,
   deleteLinkedArticleDraft,
   isLinkedArticlePlaceholder,
+  isLinkedArticleOriginCurrent,
   LinkedArticleRequestRegistry,
   linkedArticleProgressForElapsed,
   linkedArticleStageForProgress,
@@ -158,6 +169,7 @@ import {
   generateContextualNoteImage,
   type AIImageRequestInput,
 } from "./lib/aiImages";
+import { resolveEditorAICapabilities } from "./lib/editorAICapabilities";
 import type { AIImageGenerationCallbacks } from "./components/RichNoteEditor";
 import {
   applyWikiEnrichmentResult,
@@ -179,6 +191,7 @@ import { deleteSpaceFromVault } from "./lib/spaceDeletion";
 import { renameSpaceInVault } from "./lib/spaceNames";
 import {
   attachSourceToNoteInSnapshot,
+  reconcileImportedSourceCitations,
   deleteSourceFromSnapshot,
 } from "./lib/sourceDeletion";
 import { parseOrionNoteLink } from "./lib/orionLinks";
@@ -214,6 +227,7 @@ import {
 } from "./lib/navigation";
 import { useResolvedTheme } from "./lib/useResolvedTheme";
 import { useThemeIcon } from "./lib/useThemeIcon";
+import { resolveIconPalette } from "./lib/themeIcon";
 import { normalizeWindowGlass } from "./lib/windowGlass";
 import {
   buildWebExportDocument,
@@ -231,6 +245,7 @@ import { SaveConflictDialog } from "./components/SaveConflictDialog";
 import type {
   AppSnapshot,
   ChatResult,
+  ChatEditProposal,
   EntityId,
   Note,
   OrganizeContentResult,
@@ -283,6 +298,9 @@ function App() {
   const snapshot = useMemo(() =>
     (writingWindow ? vault.spaces.find((space) => space.workspace.id === windowLaunch.spaceId) : null)
       ?? activeSpace(vault), [vault, writingWindow, windowLaunch.spaceId]);
+  const voicePresence = useMemo(createVoicePresence, [snapshot.workspace.id]);
+  const voiceSelection = useMemo(() => createVoiceSelectionStore(snapshot.workspace.id), [snapshot.workspace.id]);
+  const [voiceToggleRequest, setVoiceToggleRequest] = useState(0);
   const { palette: resolvedThemePalette, glassStatus } = useResolvedTheme(
     snapshot.settings,
   );
@@ -315,6 +333,7 @@ function App() {
   const [closing, setClosing] = useState(false);
   const [persistenceEnabled, setPersistenceEnabled] = useState(false);
   const { mark: brandMarkSrc, message: themeIconMessage } = useThemeIcon(resolvedThemePalette, snapshot.settings.themeIcon, hydrated && persistenceEnabled);
+  const voicePalette = useMemo(() => resolveIconPalette(resolvedThemePalette), [resolvedThemePalette]);
   const [vaultLoadError, setVaultLoadError] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -332,6 +351,7 @@ function App() {
   const [chatBusySpaceIds, setChatBusySpaceIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [flowActive, setFlowActive] = useState(false);
   const [chatProgress, setChatProgress] = useState<Record<string, string>>({});
   const chatControllers = useRef(new Map<string, AbortController>());
   const [overviewBusySpaceIds, setOverviewBusySpaceIds] = useState<Set<string>>(
@@ -371,12 +391,49 @@ function App() {
   const openingWindow = useRef(false);
   const toastTimer = useRef<number | null>(null);
   const chatRequests = useRef(new ChatRequestRegistry());
-  const pendingChatNoteSaveNotices = useRef(
-    new Map<
-      string,
-      { workspaceId: string; messageId: string; noteId: string }
-    >(),
-  );
+  const [chatEdit, setChatEdit] = useState<ChatEditApplication>();
+  const externalEditReviews = useRef<ExternalEditReviews | null>(null);
+  const externalEditorActions = useRef<EditorActionMailbox | null>(null);
+  const editorActionHost = useRef<{ noteId: string; host: EditorActionHost } | null>(null);
+  const reviewReadiness = useRef<{ noteId: string; ready: () => boolean } | null>(null);
+  const editorContextReader = useRef<{ noteId: string; read: () => EditorContextDocument } | null>(null);
+  const blockedEditorContext = useRef<{ source: EditorContextDocument["snapshot"]; reason: "flow" | "preview"; snapshot: EditorContextDocument["snapshot"] } | null>(null);
+  const externalReviewTarget = useRef<EditReviewTarget | null>(null);
+  const chatEditRef = useRef(chatEdit);
+  chatEditRef.current = chatEdit;
+  const receiveReviewReadiness = useCallback((noteId: string, ready: (() => boolean) | null) => {
+    if (ready) reviewReadiness.current = { noteId, ready };
+    else if (reviewReadiness.current?.noteId === noteId) reviewReadiness.current = null;
+  }, []);
+  const receiveEditorContext = useCallback((noteId: string, read: (() => EditorContextDocument) | null) => {
+    if (read) editorContextReader.current = { noteId, read };
+    else if (editorContextReader.current?.noteId === noteId) editorContextReader.current = null;
+  }, []);
+  const receiveEditorActionHost = useCallback((noteId: string, host: EditorActionHost | null) => {
+    if (host) editorActionHost.current = { noteId, host };
+    else if (editorActionHost.current?.noteId === noteId) editorActionHost.current = null;
+  }, []);
+  const chatEditCompletion = useRef<{ id: string; resolve: (accepted: boolean) => void; reject: (error: Error) => void } | null>(null);
+  const completeChatEdit = useCallback((id: string, error?: string, accepted = true) => {
+    const external = externalEditReviews.current;
+    if (external?.owns(id)) {
+      // Acceptance follows the editor's ordinary onUpdateNote. Settle that queued
+      // React update before the receipt captures the actual note body.
+      if (accepted && !error) flushSync(() => setChatEdit(current => current?.id === id ? undefined : current));
+      else setChatEdit(current => current?.id === id ? undefined : current);
+      void external.complete(id, error, accepted);
+      return;
+    }
+    const completion = chatEditCompletion.current;
+    if (!completion || completion.id !== id) return;
+    chatEditCompletion.current = null;
+    setChatEdit(undefined);
+    if (error) completion.reject(new Error(error));
+    else completion.resolve(accepted);
+  }, []);
+
+  const chatNoteSaves = useRef(new Map<string, Promise<ChatNoteReceipt>>());
+  const chatNoteEdits = useRef(new Map<string, { spaceId: string; controller: AbortController; promise: Promise<ChatEditProposal> }>());
   const linkedArticleRequests = useRef(new LinkedArticleRequestRegistry());
   const wikiEnrichmentRequests = useRef(new Set<string>());
   const overviewRequests = useRef(new Map<string, string>());
@@ -420,6 +477,18 @@ function App() {
         : snapshot.notes.find((note) => note.id === snapshot.activeNoteId) ?? null,
     [writingWindow, vault, windowLaunch, snapshot.activeNoteId, snapshot.notes],
   );
+  externalReviewTarget.current = (writingWindow || screen === "note") && activeNote
+    ? { spaceId: snapshot.workspace.id, noteId: activeNote.id, ready: !flowActive }
+    : null;
+  const externalReviewsEnabled = snapshot.settings.assistantAccess.enabled && snapshot.settings.assistantAccess.allowWrites &&
+    snapshot.settings.assistantAccess.spaceIds.includes(snapshot.workspace.id);
+  const externalReviewsEnabledRef = useRef(externalReviewsEnabled);
+  externalReviewsEnabledRef.current = externalReviewsEnabled;
+  const externalEditorActionsEnabledRef = useRef(false);
+  externalEditorActionsEnabledRef.current = externalReviewsEnabled && snapshot.settings.assistantAccess.allowAI;
+  const editorContextEnabledRef = useRef(false);
+  editorContextEnabledRef.current = snapshot.settings.assistantAccess.enabled &&
+    snapshot.settings.assistantAccess.spaceIds.includes(snapshot.workspace.id);
   const selectedSource = useMemo(
     () =>
       snapshot.sources.find((source) => source.id === selectedSourceId) ?? null,
@@ -815,6 +884,85 @@ function App() {
       }),
     });
   }, [hydrated, persistenceEnabled, cancelSpaceOverviewRefresh, persistLatestVault]);
+
+  useEffect(() => {
+    if (!hydrated || !persistenceEnabled || !isTauriRuntime()) return;
+    const context = startEditorContextMailbox({
+      getCurrent: () => {
+        const target = externalReviewTarget.current, reader = editorContextReader.current;
+        if (!target || !reader || reader.noteId !== target.noteId || closingRef.current || !editorContextEnabledRef.current) return null;
+        const document = reader.read();
+        if (document.note.id !== target.noteId || document.snapshot.spaceId !== target.spaceId) return null;
+        if (!target.ready || chatEditRef.current) {
+          const reason = !target.ready ? "flow" : "preview";
+          if (blockedEditorContext.current?.source !== document.snapshot || blockedEditorContext.current.reason !== reason) {
+            blockedEditorContext.current = { source: document.snapshot, reason, snapshot: { state: "unavailable",
+              spaceId: target.spaceId, noteId: target.noteId, documentVersion: document.snapshot.documentVersion, reason } };
+          }
+          return { ...document, spaceId: target.spaceId, snapshot: blockedEditorContext.current.snapshot };
+        }
+        return { ...document, spaceId: target.spaceId };
+      },
+    });
+    return () => context.dispose();
+  }, [hydrated, persistenceEnabled]);
+
+  useEffect(() => {
+    if (!hydrated || !persistenceEnabled || !isTauriRuntime()) return;
+    const reviews = startExternalEditReviews({
+      getTarget: () => {
+        const target = externalReviewTarget.current;
+        if (!target || closingRef.current || !externalReviewsEnabledRef.current) return null;
+        return { ...target, ready: target.ready && !chatEditRef.current && !chatEditCompletion.current && !externalEditorActions.current?.busy() &&
+          reviewReadiness.current?.noteId === target.noteId && Boolean(reviewReadiness.current.ready()) };
+      },
+      getSpace: (spaceId) => vaultRef.current.spaces.find(space => space.workspace.id === spaceId),
+      flush: async () => {
+        if (saveTimer.current !== null) { window.clearTimeout(saveTimer.current); saveTimer.current = null; }
+        await queueSnapshotSave(vaultRef.current);
+      },
+      present: (application) => { chatEditRef.current = application; setChatEdit(application); },
+      close: (id) => {
+        if (chatEditRef.current?.id === id) chatEditRef.current = undefined;
+        setChatEdit(current => current?.id === id ? undefined : current);
+      },
+      getAcceptedBody: (delivery) => {
+        const note = vaultRef.current.spaces.find(space => space.workspace.id === delivery.spaceId)?.notes.find(note => note.id === delivery.noteId);
+        if (!note) throw new Error("The accepted note is no longer available. Its edit was not confirmed saved.");
+        return note.body;
+      },
+      onError: (message, accepted) => showToast(accepted ? "Changes accepted, save not confirmed" : "Edit review stopped",
+        accepted ? `${message} Your local edit remains available; check the save status before closing.` : message),
+    });
+    externalEditReviews.current = reviews;
+    return () => { reviews.dispose(); if (externalEditReviews.current === reviews) externalEditReviews.current = null; };
+  }, [hydrated, persistenceEnabled, queueSnapshotSave, showToast]);
+
+  useEffect(() => {
+    if (!hydrated || !persistenceEnabled || !isTauriRuntime()) return;
+    const mailbox = startEditorActionMailbox({
+      getCurrent: () => {
+        const target = externalReviewTarget.current, current = editorActionHost.current;
+        if (!target || !current || current.noteId !== target.noteId || closingRef.current || !externalEditorActionsEnabledRef.current) return null;
+        const baseNote = persistedVault.current?.spaces.find(space => space.workspace.id === target.spaceId)?.notes.find(note => note.id === target.noteId);
+        if (!baseNote) return null;
+        return { spaceId: target.spaceId, noteId: target.noteId, editor: current.host, baseNote,
+          ready: target.ready && !chatEditRef.current && !chatEditCompletion.current && !externalEditReviews.current?.busy() };
+      },
+      flushAccepted: async (spaceId, noteId, body) => {
+        // The editor has already emitted the normal authored update. Settle it;
+        // never write the receipt body back as a second application transaction.
+        flushSync(() => setVault(current => { vaultRef.current = current; return current; }));
+        const note = vaultRef.current.spaces.find(space => space.workspace.id === spaceId)?.notes.find(note => note.id === noteId);
+        if (!note || note.body !== body) throw new Error("The note changed after acceptance. Check its save status; the accepted edit remains local.");
+        if (saveTimer.current !== null) { window.clearTimeout(saveTimer.current); saveTimer.current = null; }
+        await queueSnapshotSave(vaultRef.current);
+      },
+      onError: (message, accepted) => showToast(accepted ? "Changes accepted, save not confirmed" : "Editor action stopped", message),
+    });
+    externalEditorActions.current = mailbox;
+    return () => { mailbox.dispose(); if (externalEditorActions.current === mailbox) externalEditorActions.current = null; };
+  }, [hydrated, persistenceEnabled, queueSnapshotSave, showToast]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2212,6 +2360,9 @@ function App() {
       phrase: string,
       instructions = "",
       selectedContext = "",
+      editorContext?: EditorAILinkContext,
+      originLinkConceptId?: string,
+      linkedDocument?: LinkedDocumentReceipt,
     ) => {
       const requestKey = `${workspace.workspace.id}:${articleId}`;
       const article = workspace.notes.find((note) => note.id === articleId);
@@ -2255,6 +2406,10 @@ function App() {
         originNoteId,
         title: phrase,
         originTitle: originNote.title,
+        originBody: originNote.body,
+        ...(editorContext ? { editorContext } : {}),
+        ...(originLinkConceptId ? { originLinkConceptId } : {}),
+        ...(linkedDocument ? { linkedDocument } : {}),
         progress: isSelectedAIConfigured(workspace.settings) ? 12 : 0,
         stage: isSelectedAIConfigured(workspace.settings)
           ? "gathering"
@@ -2341,6 +2496,7 @@ function App() {
               phrase,
               instructions,
               selectedContext,
+              editorContext,
             ),
             { onStart: markProviderStarted },
           ),
@@ -2356,6 +2512,10 @@ function App() {
         const liveArticle = liveSpace?.notes.find(
           (note) => note.id === articleId,
         );
+        const liveOrigin = liveSpace?.notes.find(note => note.id === originNoteId);
+        if (!liveOrigin || !isLinkedArticleOriginCurrent(liveOrigin, initialJob)) {
+          throw new Error("The source passage changed while Orion was writing. Select it again to create a current article.");
+        }
         if (
           !liveArticle ||
           !isLinkedArticlePlaceholder(liveArticle, phrase)
@@ -2380,9 +2540,11 @@ function App() {
             const currentArticle = space.notes.find(
               (note) => note.id === articleId,
             );
+            const currentOrigin = space.notes.find(note => note.id === originNoteId);
             if (
               !currentArticle ||
-              !isLinkedArticlePlaceholder(currentArticle, phrase)
+              !isLinkedArticlePlaceholder(currentArticle, phrase) ||
+              !currentOrigin || !isLinkedArticleOriginCurrent(currentOrigin, initialJob)
             ) {
               return space;
             }
@@ -2494,6 +2656,7 @@ function App() {
         !workspace ||
         !article ||
         !originNote ||
+        !isLinkedArticleOriginCurrent(originNote, job) ||
         !isLinkedArticlePlaceholder(article, job.title)
       ) {
         const message =
@@ -2523,6 +2686,9 @@ function App() {
         job.title,
         job.instructions,
         job.selectedContext,
+        job.editorContext,
+        job.originLinkConceptId,
+        job.linkedDocument,
       );
     },
     [generateLinkedArticle, showToast],
@@ -2772,6 +2938,13 @@ function App() {
       const shouldWriteWithAI =
         input.destinationNoteIds.length === 0 &&
         input.articleMode === "ai";
+      if (shouldWriteWithAI) {
+        // Check before creating a placeholder or registering the link. A manually
+        // named page still reads the captured passage when AI generation is on.
+        if (!input.editorContext) throw new Error("The live selection context is unavailable. Select the passage again before asking AI to write its linked article.");
+        buildLinkedArticleRequest(currentSnapshot, originNote, phrase,
+          input.articleInstructions, input.selectedContext, input.editorContext);
+      }
       const candidateArticle: Note = {
         id: `note-${nanoid(10)}`,
         title: phrase,
@@ -2862,6 +3035,9 @@ function App() {
             article.title,
             input.articleInstructions,
             input.selectedContext,
+            input.editorContext,
+            preview.conceptId,
+            input.linkedDocument,
           );
         }
       } else if (input.destinationNoteIds.length === 0) {
@@ -2881,6 +3057,7 @@ function App() {
       originNoteId: EntityId,
       selectedContext: string,
       signal?: AbortSignal,
+      editorContext?: EditorAILinkContext,
     ): Promise<string> => {
       return generateLinkTitleWithDeduplication(
         () => snapshotRef.current,
@@ -2888,6 +3065,7 @@ function App() {
         selectedContext,
         chatWithOrion,
         signal,
+        editorContext,
       );
     },
     [],
@@ -2897,14 +3075,19 @@ function App() {
     async (
       originNoteId: EntityId,
       input: Omit<AIWritingRequestInput, "originNoteId">,
+      signal?: AbortSignal,
     ): Promise<string> => {
       const currentSnapshot = snapshotRef.current;
+      const capability = resolveEditorAICapabilities(currentSnapshot.settings);
+      if (!capability.writingEnabled) throw new Error(capability.writingUnavailableReason);
       const workspaceId = currentSnapshot.workspace.id;
       const result = await chatWithOrion(
         buildAIWritingRequest(currentSnapshot, {
           ...input,
           originNoteId,
         }),
+        signal,
+        input.editorActionGrant,
       );
       if (snapshotRef.current.workspace.id !== workspaceId) {
         throw new Error(
@@ -2924,10 +3107,15 @@ function App() {
       callbacks?: AIImageGenerationCallbacks,
     ) => {
       const currentSnapshot = snapshotRef.current;
+      const capability = resolveEditorAICapabilities(currentSnapshot.settings);
+      if (!capability.imageGenerationEnabled) throw new Error(capability.imageUnavailableReason);
       return generateContextualNoteImage(currentSnapshot, {
         ...input,
         originNoteId,
-      }, { plan: planNoteImage, render: generateNoteImage }, {
+      }, {
+        plan: (request, requestSignal) => planNoteImage(request, requestSignal, input.editorActionGrant),
+        render: (prompt, requestSignal, quality) => generateNoteImage(prompt, requestSignal, quality, input.editorActionGrant),
+      }, {
         ...callbacks, signal, currentSnapshot: () => snapshotRef.current,
       });
     },
@@ -2973,8 +3161,31 @@ function App() {
     [setSnapshot, showToast],
   );
 
+  const reviewChatEdit = useCallback((proposal: ChatEditProposal): Promise<boolean> => {
+    try {
+      validateChatEditTarget(activeSpace(vaultRef.current), proposal);
+      if (chatEditCompletion.current || externalEditReviews.current?.busy() || externalEditorActions.current?.busy() || flowActive) throw new Error("Finish the current writing operation first.");
+      if (writingWindow && proposal.noteId !== windowLaunch.noteId) throw new Error("Open the target note in its writing window first.");
+      const id = `chat-edit-${nanoid(10)}`;
+      const completion = new Promise<boolean>((resolve, reject) => { chatEditCompletion.current = { id, resolve, reject }; });
+      if (!writingWindow && (screen !== "note" || activeNote?.id !== proposal.noteId)) openNote(proposal.noteId);
+      setChatEdit({ id, proposal });
+      return completion;
+    } catch (error) { return Promise.reject(error); }
+  }, [flowActive, writingWindow, windowLaunch.noteId, screen, activeNote?.id, openNote]);
+
+  useEffect(() => {
+    if (chatEdit && (snapshot.workspace.id !== chatEdit.proposal.spaceId || activeNote?.id !== chatEdit.proposal.noteId || (!writingWindow && screen !== "note"))) {
+      completeChatEdit(chatEdit.id, "The note was closed before the edit was applied.");
+    }
+  }, [chatEdit, snapshot.workspace.id, activeNote?.id, writingWindow, screen, completeChatEdit]);
+  useEffect(() => () => {
+    chatEditCompletion.current?.reject(new Error("The editor was closed."));
+    chatEditCompletion.current = null;
+  }, []);
+
   const sendChatMessage = useCallback(
-    async (prompt: string): Promise<ChatResult> => {
+    async (prompt: string, focusNoteId?: string): Promise<ChatResult> => {
       const workspaceId = vaultRef.current.activeSpaceId;
       const space = vaultRef.current.spaces.find(
         (candidate) => candidate.workspace.id === workspaceId,
@@ -3000,6 +3211,7 @@ function App() {
 
       try {
         const result = await runChatReading(space, prompt, chatWithOrion, {
+          focusNoteId,
           signal: controller.signal,
           currentSnapshot: () => chatRequests.current.isCurrent(token)
             ? vaultRef.current.spaces.find((candidate) => candidate.workspace.id === workspaceId)
@@ -3050,90 +3262,86 @@ function App() {
     [scheduleSpaceOverviewRefresh],
   );
 
-  const saveChatMessageAsNote = useCallback(
-    (messageId: string) => {
-      const current = activeSpace(vaultRef.current);
-      const workspaceId = current.workspace.id;
-      const pendingKey = `${workspaceId}:${messageId}`;
-      const message = current.studio.messages.find(
-        (candidate) =>
-          candidate.id === messageId && candidate.role === "assistant",
-      );
-      if (!message) return;
-      const existing = message.createdNoteIds
-        ?.map((id) => current.notes.find((note) => note.id === id))
-        .find((note): note is Note => Boolean(note));
-      if (existing) {
-        openNote(existing.id);
-        return;
-      }
-      if (pendingChatNoteSaveNotices.current.has(pendingKey)) return;
-
-      const now = new Date().toISOString();
-      const noteId = `note-${nanoid(10)}`;
-      if (saveChatReplyAsNote(current, messageId, now, noteId) === current) {
-        return;
-      }
-      pendingChatNoteSaveNotices.current.set(pendingKey, {
-        workspaceId,
-        messageId,
-        noteId,
-      });
-      setVault((currentVault) => {
-        const target = currentVault.spaces.find(
-          (space) => space.workspace.id === workspaceId,
-        );
-        if (!target) return currentVault;
-        const next = saveChatReplyAsNote(target, messageId, now, noteId);
-        if (next === target) return currentVault;
-        const marked = markSpaceOverviewStale(next);
-        return {
-          ...currentVault,
-          spaces: currentVault.spaces.map((space) =>
-            space.workspace.id === workspaceId ? marked : space,
-          ),
-          updatedAt: now,
-        };
-      });
-    },
-    [openNote],
-  );
-
-  useEffect(() => {
-    for (const [key, pending] of pendingChatNoteSaveNotices.current) {
-      const space = vault.spaces.find(
-        (candidate) => candidate.workspace.id === pending.workspaceId,
-      );
-      const landed = space?.notes.some(
-        (note) => note.id === pending.noteId,
-      );
-      if (landed) {
-        pendingChatNoteSaveNotices.current.delete(key);
-        scheduleSpaceOverviewRefresh(pending.workspaceId);
-        showToast("Note created", "The Chat reply is now an editable note.", {
-          label: "Open note",
-          run: () => {
-            const liveVault = vaultRef.current;
-            if (liveVault.activeSpaceId === pending.workspaceId) {
-              openNote(pending.noteId);
-              return;
-            }
-            switchSpace(pending.workspaceId);
-            window.setTimeout(() => openNote(pending.noteId), 0);
-          },
-        });
-        continue;
-      }
-      const message = space?.studio.messages.find(
-        (candidate) => candidate.id === pending.messageId,
-      );
-      if (!space || !message || message.createdNoteIds?.length) {
-        pendingChatNoteSaveNotices.current.delete(key);
-      }
+  const commitVoiceResult = useCallback(async (request: VoiceCommit): Promise<VoiceReceipt> => {
+    // A deterministic message ID is the idempotency receipt. Failed persistence
+    // can be retried without creating another note, including after reconnect.
+    const messageId = `${request.id}-assistant`;
+    const current = vaultRef.current.spaces.find(space => space.workspace.id === request.spaceId);
+    if (!current || vaultRef.current.activeSpaceId !== request.spaceId) throw new Error("The voice Space is no longer active.");
+    const existing = current.studio.messages.find(message => message.id === messageId);
+    if (!existing) {
+      if (stableSnapshotVersion(current) !== request.version) throw new Error("This Space changed. Ask again before saving the result.");
+      const now = new Date().toISOString(); let messageIndex = 0; let noteIndex = 0;
+      const next = markSpaceOverviewStale(applyChatResult(current, request.prompt, request.result, now,
+        () => messageIndex++ === 0 ? `${request.id}-user` : messageId,
+        () => `${request.id}-note-${++noteIndex}`));
+      if (!next.studio.messages.find(message => message.id === messageId)?.createdNoteIds?.length) throw new Error("No valid note was created. Nothing was saved.");
+      const updated = { ...vaultRef.current, spaces: vaultRef.current.spaces.map(space => space.workspace.id === request.spaceId ? next : space), updatedAt: now };
+      flushSync(() => { vaultRef.current = updated; setVault(updated); });
     }
-  }, [openNote, scheduleSpaceOverviewRefresh, showToast, switchSpace, vault]);
+    await queueSnapshotSave(vaultRef.current);
+    const saved = persistedVault.current?.spaces.find(space => space.workspace.id === request.spaceId);
+    const ids = saved?.studio.messages.find(message => message.id === messageId)?.createdNoteIds ?? [];
+    const notes = ids.flatMap(id => saved?.notes.find(note => note.id === id) ?? []);
+    if (!notes.length || notes.length !== ids.length) throw new Error("The save could not be verified. Your result remains available here.");
+    scheduleSpaceOverviewRefresh(request.spaceId);
+    return { savedNoteIds: notes.map(note => note.id), savedTitles: notes.map(note => note.title) };
+  }, [queueSnapshotSave, scheduleSpaceOverviewRefresh]);
+
+  const useChatReplyInNote = useCallback((messageId: string, noteId: string, onProgress: (message: string) => void): Promise<ChatEditProposal> => {
+    const space = activeSpace(vaultRef.current);
+    const spaceId = space.workspace.id;
+    const key = `${spaceId}:${messageId}:${noteId}`;
+    const existing = chatNoteEdits.current.get(key);
+    if (existing) return existing.promise;
+    const message = space.studio.messages.find(item => item.id === messageId && item.role === "assistant");
+    const controller = new AbortController();
+    const promise = prepareChatReplyEdit(space, messageId, noteId, chatWithOrion, {
+      signal: controller.signal,
+      onProgress,
+      currentSnapshot: () => {
+        const current = vaultRef.current.spaces.find(item => item.workspace.id === spaceId);
+        // New chat or removal of this reply revokes the original request.
+        return current?.studio.messages.some(item => item.id === messageId && item.content === message?.content) ? current : undefined;
+      },
+    }).finally(() => { chatNoteEdits.current.delete(key); });
+    chatNoteEdits.current.set(key, { spaceId, controller, promise });
+    return promise;
+  }, []);
+
+  const saveChatMessageAsNote = useCallback((messageId: string): Promise<ChatNoteReceipt> => {
+    const workspaceId = vaultRef.current.activeSpaceId;
+    const key = `${workspaceId}:${messageId}`;
+    const existing = chatNoteSaves.current.get(key);
+    if (existing) return existing;
+    const promise = keepChatReplyAsNote(messageId, {
+      currentSnapshot: () => vaultRef.current.spaces.find(space => space.workspace.id === workspaceId),
+      updateSnapshot: next => {
+        const marked = markSpaceOverviewStale(next);
+        const updated = { ...vaultRef.current, spaces: vaultRef.current.spaces.map(space => space.workspace.id === workspaceId ? marked : space), updatedAt: next.updatedAt };
+        flushSync(() => { vaultRef.current = updated; setVault(updated); });
+      },
+      persist: () => queueSnapshotSave(vaultRef.current),
+      persistedSnapshot: () => persistedVault.current?.spaces.find(space => space.workspace.id === workspaceId),
+      createNoteId: () => `note-${nanoid(10)}`,
+      now: () => new Date().toISOString(),
+    }).then(receipt => {
+      scheduleSpaceOverviewRefresh(workspaceId);
+      return receipt;
+    }).finally(() => { chatNoteSaves.current.delete(key); });
+    chatNoteSaves.current.set(key, promise);
+    return promise;
+  }, [queueSnapshotSave, scheduleSpaceOverviewRefresh]);
+
+  useEffect(() => () => {
+    for (const action of chatNoteEdits.current.values()) action.controller.abort(new Error("The window was closed."));
+  }, []);
 
   const clearChat = useCallback(() => {
+    for (const action of chatNoteEdits.current.values()) {
+      if (action.spaceId === vaultRef.current.activeSpaceId) action.controller.abort(new Error("This Chat was cleared."));
+    }
+    if (chatEditCompletion.current) completeChatEdit(chatEditCompletion.current.id, undefined, false);
     chatControllers.current.get(vaultRef.current.activeSpaceId)?.abort();
     chatRequests.current.invalidate(vaultRef.current.activeSpaceId);
     const now = new Date().toISOString();
@@ -3187,7 +3395,7 @@ function App() {
           notes,
           [...conceptMap.values()],
         );
-        return markSpaceOverviewStale({
+        return reconcileImportedSourceCitations(current, markSpaceOverviewStale({
           ...current,
           notes: vocabulary.notes,
           sources: [...payload.sources, ...current.sources],
@@ -3198,7 +3406,7 @@ function App() {
           ],
           activeNoteId: firstNoteId ?? current.activeNoteId,
           updatedAt: new Date().toISOString(),
-        });
+        }), [...importedNoteIds]);
       });
       scheduleSpaceOverviewRefresh(workspaceId);
       if (firstNoteId) openNote(firstNoteId);
@@ -3701,8 +3909,18 @@ function App() {
       </div>;
     }
     if ((writingWindow || screen === "note") && activeNote) {
+      const editorAI = resolveEditorAICapabilities(snapshot.settings);
       return (
         <NoteView
+          voiceSelection={voiceSelection}
+          chatEdit={chatEdit?.proposal.spaceId === snapshot.workspace.id ? chatEdit : undefined}
+          onChatEditComplete={completeChatEdit}
+          onChatEditBeforeAccept={chatEdit && externalEditReviews.current?.owns(chatEdit.id)
+            ? (id) => externalEditReviews.current!.beforeAccept(id) : undefined}
+          onReviewReadinessChange={receiveReviewReadiness}
+          onEditorContextChange={receiveEditorContext}
+          onEditorActionHostChange={receiveEditorActionHost}
+          onFlowActiveChange={setFlowActive}
           initialEditing={writingWindow}
           editingModes={spaceEditingModes}
           noteTypeface={snapshot.settings.noteTypeface}
@@ -3725,18 +3943,20 @@ function App() {
           onRegisterConcept={(input) =>
             registerLinkConcept(input, activeNote.id)
           }
-          onGenerateLinkTitle={(selectedContext, signal) =>
-            generateLinkTitle(activeNote.id, selectedContext, signal)
+          onGenerateLinkTitle={(selectedContext, signal, context) =>
+            generateLinkTitle(activeNote.id, selectedContext, signal, context)
           }
-          onGenerateAIWriting={(input) =>
-            generateAIWriting(activeNote.id, input)
+          onGenerateAIWriting={(input, signal) =>
+            generateAIWriting(activeNote.id, input, signal)
           }
           onGenerateAIImage={(input, signal, callbacks) =>
             generateAIImage(activeNote.id, input, signal, callbacks)
           }
           onDisableConceptAutoLink={disableConceptAutoLink}
-          aiArticleWritingEnabled={isSelectedAIConfigured(snapshot.settings)}
-          aiImageGenerationEnabled={snapshot.settings.apiKeyConfigured}
+          aiArticleWritingEnabled={editorAI.writingEnabled}
+          aiImageGenerationEnabled={editorAI.imageGenerationEnabled}
+          aiWritingUnavailableReason={editorAI.writingUnavailableReason}
+          aiImageUnavailableReason={editorAI.imageUnavailableReason}
           imageContextEnabled={snapshot.settings.includeExistingNotesInAIContext}
           aiProviderName={selectedAIProviderName(snapshot.settings)}
           onSpeakNote={speakNoteText}
@@ -3770,23 +3990,7 @@ function App() {
         />
       );
     }
-    if (screen === "chat") {
-      return (
-        <ChatView
-          key={snapshot.workspace.id}
-          snapshot={snapshot}
-          busy={chatBusySpaceIds.has(snapshot.workspace.id)}
-          progress={chatProgress[snapshot.workspace.id]}
-          onCancel={() => chatControllers.current.get(snapshot.workspace.id)?.abort(new Error("Chat was stopped. Your message is ready to send again."))}
-          onSend={sendChatMessage}
-          onClear={clearChat}
-          onOpenNote={openNote}
-          onOpenSource={setSelectedSourceId}
-          onSaveReply={saveChatMessageAsNote}
-          onOpenSettings={() => openView("settings")}
-        />
-      );
-    }
+    if (screen === "chat") return null;
     if (screen === "settings") {
       return (
         <SettingsView
@@ -3855,6 +4059,9 @@ function App() {
       data-note-typeface={snapshot.settings.noteTypeface === "serif" ? "serif" : "sans"}
     >
       {!writingWindow && <Sidebar
+        voicePresence={voicePresence}
+        voicePalette={voicePalette}
+        onStartVoice={snapshot.settings.apiKeyConfigured && !flowActive ? () => setVoiceToggleRequest(value => value + 1) : undefined}
         brandMarkSrc={brandMarkSrc}
         view={screen === "note" ? "notes" : screen}
         notes={snapshot.notes}
@@ -3932,6 +4139,31 @@ function App() {
         />}
         <main ref={workspaceContentRef} className="workspace-content">
           {renderScreen()}
+          <ChatDock
+            key={snapshot.workspace.id}
+            voicePresence={voicePresence}
+            voiceSelection={voiceSelection}
+            voicePalette={voicePalette}
+            voiceToggleRequest={voiceToggleRequest}
+            snapshot={snapshot}
+            fullPage={screen === "chat"}
+            allowExpand={!writingWindow}
+            flowActive={flowActive}
+            focusNoteId={writingWindow || screen === "note" ? activeNote?.id : undefined}
+            onExpand={() => openView("chat")}
+            busy={chatBusySpaceIds.has(snapshot.workspace.id)}
+            progress={chatProgress[snapshot.workspace.id]}
+            onCancel={() => chatControllers.current.get(snapshot.workspace.id)?.abort(new Error("Chat was stopped. Your message is ready to send again."))}
+            onSend={sendChatMessage}
+            onUseReply={useChatReplyInNote}
+            onVoiceCommit={commitVoiceResult}
+            onReviewEdit={reviewChatEdit}
+            onClear={clearChat}
+            onOpenNote={openNote}
+            onOpenSource={setSelectedSourceId}
+            onSaveReply={saveChatMessageAsNote}
+            onOpenSettings={() => openView("settings")}
+          />
         </main>
       </div>
       {!connectionConcept && contextOpen && screen === "note" && (

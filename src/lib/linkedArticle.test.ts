@@ -9,12 +9,15 @@ import {
   buildLinkedArticleRequest,
   deleteLinkedArticleDraft,
   isLinkedArticlePlaceholder,
+  isLinkedArticleOriginCurrent,
   LinkedArticleRequestRegistry,
   linkedArticleProgressForElapsed,
   linkedArticleStageForProgress,
   waitForLinkedArticle,
   type LinkedArticleJob,
 } from "./linkedArticle";
+import { workingTaskText } from "./taskWorkingView";
+import type { EditorAILinkContext } from "./editorAIWorkingContext";
 
 const NOW = "2026-07-29T01:00:00.000Z";
 
@@ -37,6 +40,92 @@ function makeOrigin(): Note {
 }
 
 describe("linked article generation", () => {
+  function capture(documentMarkdown: string, selectedText = "SQL", touches = false): EditorAILinkContext {
+    return { documentMarkdown, workingContext: {
+      documentMarkdown: workingTaskText(documentMarkdown), selectedMarkdown: selectedText,
+      selectedText, beforeMarkdown: "", afterMarkdown: "", selectionTouchesCompleted: touches,
+      caretInsideCompleted: false,
+    } };
+  }
+
+  it("projects live origin, direct sources and compact organizer derivatives before generation without mutating authored data", () => {
+    const snapshot = createEmptySnapshot("Data systems", NOW, "space-data");
+    const origin = { ...makeOrigin(), summary: "ORIGIN_SECRET cached summary." };
+    const live = `${origin.body}\n\n- [x] ORIGIN_SECRET completed task\n- [ ] Visible next step`;
+    snapshot.notes = [origin, { ...makeOrigin(), id: "related", title: "SQL related", summary: "RELATED_SECRET cached summary.",
+      body: "SQL visible evidence.\n\n- [x] RELATED_SECRET done" }];
+    snapshot.sources = [{ id: "source-lecture", title: "Lecture", kind: "text", importedAt: NOW,
+      noteIds: [origin.id], text: "SQL source evidence.\n\n- [x] SOURCE_SECRET closed item" }];
+    snapshot.settings.includeExistingNotesInAIContext = true;
+    snapshot.relationships = [{ id: "r", fromNoteId: origin.id, toNoteId: "related", kind: "related", strength: 0.8, label: "related", context: "RELATION_SECRET" }];
+    const editorContext = capture(live);
+    const before = JSON.stringify({ snapshot, editorContext });
+    const request = buildLinkedArticleRequest(snapshot, origin, "SQL", "", "SQL", editorContext);
+    const wire = JSON.stringify(request);
+    for (const secret of ["ORIGIN_SECRET", "RELATED_SECRET", "SOURCE_SECRET", "RELATION_SECRET"]) expect(wire).not.toContain(secret);
+    expect(wire).toContain("Visible next step");
+    expect(wire).toContain("SQL source evidence");
+    expect(wire).toContain("SQL visible evidence");
+    expect(JSON.stringify({ snapshot, editorContext })).toBe(before);
+  });
+
+  it("rejects partial checked selections even for a manually named article, and only the current instruction can allow history", () => {
+    const snapshot = createEmptySnapshot("Data systems", NOW, "space-data");
+    const origin = makeOrigin(); snapshot.notes = [origin];
+    const live = `${origin.body}\n\n- [x] HIDDEN_SELECTION completed work`;
+    const editorContext = capture(live, "HIDDEN_SELECTION", true);
+    expect(() => buildLinkedArticleRequest(snapshot, origin, "A manually supplied title", "", "HIDDEN_SELECTION", editorContext)).toThrow(/completed work/);
+    const history = buildLinkedArticleRequest(snapshot, origin, "A manually supplied title", "Include completed tasks in this article.", "HIDDEN_SELECTION", editorContext);
+    expect(history.content).toContain(live);
+    expect(history.content).toContain("Selected context for this link");
+    expect(history.content).toContain("HIDDEN_SELECTION");
+    expect(() => buildLinkedArticleRequest(snapshot, origin, "Include completed tasks", "", "Include completed tasks", editorContext)).toThrow(/completed work/);
+  });
+
+  it("fails closed for raw partial selected context whose completed-task boundary was lost", () => {
+    const snapshot = createEmptySnapshot("Data systems", NOW, "space-data");
+    const origin = { ...makeOrigin(), body: "- [x] HIDDEN_SELECTION\n- [ ] Visible task" }; snapshot.notes = [origin];
+    expect(() => buildLinkedArticleRequest(snapshot, origin, "Named page", "", "HIDDEN_SELECTION")).toThrow(/boundary.*unavailable/);
+    expect(buildLinkedArticleRequest(snapshot, origin, "Named page").content).not.toContain("HIDDEN_SELECTION");
+  });
+
+  it("reprojects current related knowledge on retry while preserving the captured selection", () => {
+    const snapshot = createEmptySnapshot("Data systems", NOW, "space-data");
+    const origin = makeOrigin(), editorContext = capture(origin.body);
+    const related = { ...makeOrigin(), id: "related", title: "SQL next steps", summary: "NEWLY_COMPLETED task summary", body: "- [ ] NEWLY_COMPLETED" };
+    snapshot.notes = [origin, related]; snapshot.settings.includeExistingNotesInAIContext = true;
+    expect(JSON.stringify(buildLinkedArticleRequest(snapshot, origin, "SQL", "", "SQL", editorContext))).toContain("NEWLY_COMPLETED");
+    const retry = { ...snapshot, notes: [origin, { ...related, body: "- [x] NEWLY_COMPLETED" }] };
+    expect(JSON.stringify(buildLinkedArticleRequest(retry, origin, "SQL", "", "SQL", editorContext))).not.toContain("NEWLY_COMPLETED");
+    expect(editorContext.documentMarkdown).toBe(origin.body);
+  });
+
+  it("allows only its own exact link-mark addition across retries and rejects authored changes or new completion", () => {
+    const origin = { ...makeOrigin(), body: "- [ ] Learn SQL today." };
+    const binding = { originBody: "Saved earlier draft", editorContext: capture(origin.body), originLinkConceptId: "concept_sql" };
+    expect(isLinkedArticleOriginCurrent(origin, binding)).toBe(true);
+    expect(isLinkedArticleOriginCurrent({ ...origin, body: "- [ ] Learn [SQL](orion-concept://concept_sql) today." }, binding)).toBe(true);
+    for (const body of ["- [x] Learn [SQL](orion-concept://concept_sql) today.", "- [ ] Learn [SQL](orion-concept://another) today.",
+      "- [ ] Learn **[SQL](orion-concept://concept_sql)** today.", "- [ ] Learn [SQL](orion-concept://concept_sql) tomorrow."]) {
+      expect(isLinkedArticleOriginCurrent({ ...origin, body }, binding)).toBe(false);
+    }
+    expect(isLinkedArticleOriginCurrent({ ...origin, body: "!SQL" }, { ...binding, originBody: "![SQL](orion-concept://concept_sql)", editorContext: undefined })).toBe(false);
+  });
+
+  it("uses the exact host link receipt for a contextual inserted paragraph without accepting later prose or checkbox changes", () => {
+    const origin = { ...makeOrigin(), body: "First passage.\n\n- [ ] A second passage." };
+    const linkedDocument: { body?: string } = {};
+    const binding = { originBody: origin.body, editorContext: capture(origin.body), linkedDocument };
+    const linked = "[SQL](orion-concept://concept_sql)\n\n" + origin.body;
+    expect(isLinkedArticleOriginCurrent({ ...origin, body: linked }, binding)).toBe(false);
+    // RichNoteEditor records this only after its own successful transaction.
+    linkedDocument.body = linked;
+    expect(isLinkedArticleOriginCurrent({ ...origin, body: linked }, binding)).toBe(true);
+    expect(isLinkedArticleOriginCurrent({ ...origin, body: linked.replace("[ ]", "[x]") }, binding)).toBe(false);
+    expect(isLinkedArticleOriginCurrent({ ...origin, body: linked + "\n\nNew prose." }, binding)).toBe(false);
+    expect(isLinkedArticleOriginCurrent({ ...origin, body: linked.replace("concept_sql", "concept_other") }, binding)).toBe(false);
+  });
+
   it("grounds the AI request in the origin note, direct source, and Space", () => {
     const snapshot = createEmptySnapshot(
       "Data systems",

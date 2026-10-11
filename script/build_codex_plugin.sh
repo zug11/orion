@@ -149,6 +149,11 @@ cp -R "$PLUGIN_SOURCE" "$STAGED_PLUGIN"
 mkdir -p "$STAGED_PLUGIN/server"
 cp "$MCP_BINARY" "$STAGED_BINARY"
 chmod 755 "$STAGED_BINARY"
+cp "$RESOURCE_PARENT/MCP_THIRD_PARTY_NOTICES.md" "$STAGED_PLUGIN/MCP_THIRD_PARTY_NOTICES.md"
+mkdir -p "$STAGED_PLUGIN/licenses"
+for notice in pulldown-cmark-LICENSE unicase-LICENSE-MIT; do
+  cp "$RESOURCE_PARENT/licenses/$notice" "$STAGED_PLUGIN/licenses/$notice"
+done
 
 cat > "$STAGED_ROOT/.agents/plugins/marketplace.json" <<'EOF'
 {
@@ -183,7 +188,7 @@ codesign --verify --strict --verbose=2 "$STAGED_BINARY"
 
 run_official_validators "$STAGED_PLUGIN"
 node "$ROOT_DIR/script/test_mcp_connector.mjs" \
-  "$STAGED_BINARY" "$FIXTURE_VAULT" "$STAGED_PLUGIN/.mcp.json"
+  "$STAGED_BINARY" "$FIXTURE_VAULT" "$ROOT_DIR/mcp/orion-claude/manifest.json"
 node "$ROOT_DIR/script/test_codex_plugin.mjs" "$STAGED_ROOT" "$FIXTURE_VAULT"
 
 (
@@ -193,6 +198,12 @@ node "$ROOT_DIR/script/test_codex_plugin.mjs" "$STAGED_ROOT" "$FIXTURE_VAULT"
 /usr/bin/unzip -tq "$STAGED_ZIP"
 mkdir -p "$VERIFICATION_DIR"
 /usr/bin/unzip -q "$STAGED_ZIP" -d "$VERIFICATION_DIR"
+cmp "$RESOURCE_PARENT/MCP_THIRD_PARTY_NOTICES.md" \
+  "$VERIFICATION_DIR/Orion-Codex-Plugin/plugins/orion/MCP_THIRD_PARTY_NOTICES.md"
+for notice in pulldown-cmark-LICENSE unicase-LICENSE-MIT; do
+  cmp "$RESOURCE_PARENT/licenses/$notice" \
+    "$VERIFICATION_DIR/Orion-Codex-Plugin/plugins/orion/licenses/$notice"
+done
 node "$ROOT_DIR/script/test_codex_plugin.mjs" \
   "$VERIFICATION_DIR/Orion-Codex-Plugin" "$FIXTURE_VAULT"
 node "$ROOT_DIR/script/test_mcp_workflows.mjs" \

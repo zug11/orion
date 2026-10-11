@@ -1,0 +1,23 @@
+{
+  "submissions": [
+    {
+      "name": "Orion-0.4.8-Apple-Silicon.dmg",
+      "status": "Accepted",
+      "id": "b96edcb1-89de-4da0-95a0-1ef532960967",
+      "createdDate": "2026-10-09T09:44:46.584Z",
+      "acceptanceEvidence": "notarytool history reported Accepted; canonical package command exited 0; stapler validation and independent DMG/app Gatekeeper checks passed"
+    },
+    {
+      "name": "Orion-0.4.8.m-Apple-Silicon.dmg",
+      "status": "Accepted",
+      "id": "c01fc820-31d2-4267-9b97-0b907af8ada3",
+      "createdDate": "2026-10-09T09:49:27.508Z",
+      "acceptanceEvidence": "submission ID/date read with notarytool info; canonical package command exited 0 after requiring status Accepted; stapler validation and independent DMG/app Gatekeeper checks passed"
+    }
+  ],
+  "recordedAt": "2026-10-09T10:01:56.867235+00:00",
+  "postBuildHistoryRefresh": {
+    "status": "unavailable",
+    "message": "A subsequent notarytool history/info call reported no Keychain item for orion-notary. Both already-running package commands had completed successfully; the final stapled artifacts independently passed verification."
+  }
+}

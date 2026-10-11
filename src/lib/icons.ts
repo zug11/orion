@@ -55,6 +55,7 @@ export { default as LoaderCircle } from "lucide-react/dist/esm/icons/loader-circ
 export { default as LockKeyhole } from "lucide-react/dist/esm/icons/lock-keyhole.mjs";
 export { default as Menu } from "lucide-react/dist/esm/icons/menu.mjs";
 export { default as Maximize2 } from "lucide-react/dist/esm/icons/maximize-2.mjs";
+export { default as Minus } from "lucide-react/dist/esm/icons/minus.mjs";
 export { default as MessageCircle } from "lucide-react/dist/esm/icons/message-circle.mjs";
 export { default as Minimize2 } from "lucide-react/dist/esm/icons/minimize-2.mjs";
 export { default as Mic2 } from "lucide-react/dist/esm/icons/mic-2.mjs";

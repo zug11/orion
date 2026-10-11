@@ -1,9 +1,11 @@
-import type { ChatCoverage, ChatEvidence, ChatReadRequest } from "../types";
+import type { ChatCoverage, ChatEvidence, ChatReadRequest, ChatReadingFinding } from "../types";
 import protocol from "./chatReadingProtocol.json";
 
 export const CHAT_READING_INSTRUCTIONS = protocol.instructions;
 export const CHAT_READ_REQUESTS_SCHEMA = protocol.requestsSchema;
-export const MAX_CHAT_READING_CONTEXT_BYTES = 96_000;
+export const CHAT_READING_CHECKPOINT_SCHEMA = protocol.checkpointSchema;
+export const MAX_CHAT_READING_CONTEXT_BYTES = protocol.maxContextBytes;
+export const MAX_CHAT_READING_EVIDENCE = protocol.maxReadingEvidence;
 export const MAX_CHAT_EVIDENCE = 12;
 export const MAX_CHAT_PASSAGE_CHARS = 3_000;
 
@@ -11,10 +13,22 @@ function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+export function parseChatReadingFinding(value: unknown): ChatReadingFinding | undefined {
+  if (value == null) return undefined;
+  const strings = (items: unknown, count: number, width: number) => Array.isArray(items) && items.length <= count &&
+    items.every(item => typeof item === "string" && [...item].length <= width);
+  if (!record(value) || Object.keys(value).sort().join(",") !== "decisions,finding,openQuestions" ||
+      typeof value.finding !== "string" || [...value.finding].length > 1_200 ||
+      !strings(value.decisions, 4, 240) || !strings(value.openQuestions, 4, 240)) {
+    throw new Error("Chat returned an invalid research checkpoint.");
+  }
+  return value as unknown as ChatReadingFinding;
+}
+
 export function parseChatReadRequests(value: unknown): ChatReadRequest[] {
   if (!Array.isArray(value) || value.length > 4 || value.some((item) =>
     !record(item) || Object.keys(item).sort().join(",") !== "id,kind,query,start" ||
-    !["search", "cluster", "note", "source", "related"].includes(String(item.kind)) ||
+    !["search", "cluster", "note", "source", "note-full", "source-full", "related"].includes(String(item.kind)) ||
     typeof item.id !== "string" || [...item.id].length > 200 ||
     typeof item.query !== "string" || [...item.query].length > 600 ||
     (item.start !== null && (!Number.isSafeInteger(item.start) || Number(item.start) < 0 || Number(item.start) > 1_000_000_000)) ||
@@ -29,7 +43,7 @@ export function parseChatReadingContext(value: string | undefined): Record<strin
   }
   const parsed: unknown = JSON.parse(value);
   if (!record(parsed) || typeof parsed.finalizing !== "boolean" ||
-    !Array.isArray(parsed.evidence) || parsed.evidence.length > MAX_CHAT_EVIDENCE) {
+    !Array.isArray(parsed.evidence) || parsed.evidence.length > MAX_CHAT_READING_EVIDENCE) {
     throw new Error("Chat received an invalid reading packet.");
   }
   return parsed;

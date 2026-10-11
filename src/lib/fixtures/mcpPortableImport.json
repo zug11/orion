@@ -1,0 +1,348 @@
+{
+  "spaceId": "space-alpha",
+  "note": {
+    "aliases": [
+      "Contract First"
+    ],
+    "body": "<!-- orion-document-margins:v1 8 11 -->\n\n# Overview\né😀 verified evidence\n## Actions\n- [x] Read beta\n[Beta](orion-note://knowledge-b)\n\n[One append\\.](https://example.com/reference%29a?first=1&second=2#source)\n\n<!-- orion-block:v1 -->\n## Search review\n\nKeep the reading surface calm. <!-- orion-text:v1 justify --> <!-- orion-paragraph-margins:v1 4 6 -->\n\n- [ ] Check keyboard navigation\n- [x] Keep citations close\n\n<!-- orion-table:v1 {\"banded\":false,\"columns\":[127,220],\"header\":true,\"width\":74} -->\n| Area | Decision |\n| --- | --- |\n| **Search** | Ask AI on the right |\n| Answers | A clear reading view |\n\n![Existing diagram](orion-image://localhost/image_Abc-123456789 \"orion-image-layout:v1:%7B%22alignment%22%3A%22left%22%2C%22caption%22%3A%22A%20preserved%20caf%C3%A9%20%F0%9F%AA%90%20caption%22%2C%22gap%22%3A18%2C%22offsetY%22%3A97%2C%22placement%22%3A%22wrap%22%2C%22showCaption%22%3Atrue%2C%22title%22%3A%22Existing%20diagram%22%2C%22widthPercent%22%3A37%2C%22xPercent%22%3A24.5%7D\")\n<!-- /orion-block -->\n\n[Supporting note](orion-note://knowledge-b)\n\n[Read \\[more\\] \\*now\\*](https://xn--r8jz45g.jp/%E6%96%87)\n\n> A focused search view keeps the answer readable and the evidence close\\.\n>\n> [Contract Beta](orion-note://knowledge-b \"orion-excerpt:v2:%7B%22noteId%22%3A%22knowledge-b%22%2C%22passages%22%3A%5B%7B%22text%22%3A%22A%20focused%20search%20view%20keeps%20the%20answer%20readable%20and%20the%20evidence%20close.%22%7D%5D%7D\")",
+    "conceptIds": [
+      "knowledge-concept"
+    ],
+    "createdAt": "2026-09-05T00:00:00Z",
+    "id": "knowledge-a",
+    "kind": "article",
+    "pinned": true,
+    "slug": "knowledge-a",
+    "sourceIds": [
+      "knowledge-source"
+    ],
+    "status": "ready",
+    "summary": "",
+    "tags": [
+      "updated-contract"
+    ],
+    "title": "Contract Alpha",
+    "updatedAt": "2026-10-11T06:32:43.828806Z"
+  },
+  "sourceNote": {
+    "aliases": [],
+    "body": "# Beta\n[Gamma](orion-note://knowledge-c)\n\nA focused search view keeps the answer readable and the evidence close.\n",
+    "conceptIds": [],
+    "createdAt": "2026-09-05T00:00:00Z",
+    "id": "knowledge-b",
+    "kind": "article",
+    "pinned": true,
+    "slug": "knowledge-b",
+    "sourceIds": [
+      "knowledge-source"
+    ],
+    "status": "ready",
+    "summary": "",
+    "tags": [
+      "updated-contract"
+    ],
+    "title": "Contract Beta",
+    "updatedAt": "2026-10-11T06:32:43.828806Z"
+  },
+  "tableStates": [
+    {
+      "name": "edited cells",
+      "markdown": "<!-- orion-table:v1 {\"banded\":false,\"columns\":[127,220,null],\"header\":true,\"width\":74} -->\n| Area | Decision | Extra |\n| --- | --- | --- |\n| **Search** | Ask AI on the right |  |\n| Answers | A clear reading view |  |\n| Temporary \\*literal\\* | Remove explicitly | An exact café 🧭 cell<br>Second line |",
+      "rows": 4,
+      "columns": 3,
+      "header": true,
+      "text": "An exact café 🧭 cell"
+    },
+    {
+      "name": "headerless blank real row",
+      "markdown": "<!-- orion-table:v1 {\"banded\":false,\"columns\":[127,220],\"header\":false,\"width\":74} -->\n| | |\n| --- | --- |\n| | |\n| Area | Decision |\n| **Search** | Ask AI on the right |\n| Answers | A clear reading view |",
+      "rows": 4,
+      "columns": 2,
+      "header": false,
+      "firstRowEmpty": true,
+      "text": "AreaDecision"
+    }
+  ],
+  "inlineStates": [
+    {
+      "name": "bold apply",
+      "markdown": "A **careful** thought.",
+      "text": "careful",
+      "marks": [
+        "bold"
+      ]
+    },
+    {
+      "name": "italic apply",
+      "markdown": "A *careful* thought.",
+      "text": "careful",
+      "marks": [
+        "italic"
+      ]
+    },
+    {
+      "name": "strike apply",
+      "markdown": "A ~~careful~~ thought.",
+      "text": "careful",
+      "marks": [
+        "strike"
+      ]
+    },
+    {
+      "name": "bold remove",
+      "markdown": "A careful thought.",
+      "text": "careful",
+      "marks": []
+    },
+    {
+      "name": "nested bold remove",
+      "markdown": "A *careful* thought.",
+      "text": "careful",
+      "marks": [
+        "italic"
+      ]
+    },
+    {
+      "name": "nested italic remove",
+      "markdown": "A **careful** thought.",
+      "text": "careful",
+      "marks": [
+        "bold"
+      ]
+    },
+    {
+      "name": "nested strike remove",
+      "markdown": "A **careful** thought.",
+      "text": "careful",
+      "marks": [
+        "bold"
+      ]
+    },
+    {
+      "name": "nested apply",
+      "markdown": "A ***careful*** thought.",
+      "text": "careful",
+      "marks": [
+        "bold",
+        "italic"
+      ]
+    },
+    {
+      "name": "code literal apply",
+      "markdown": "A `*literal*` thought.",
+      "text": "*literal*",
+      "marks": [
+        "code"
+      ]
+    },
+    {
+      "name": "code literal remove",
+      "markdown": "A \\*literal\\* thought.",
+      "text": "*literal*",
+      "marks": []
+    },
+    {
+      "name": "backticks in code",
+      "markdown": "A ``tick ` here``.",
+      "text": "tick ` here",
+      "marks": [
+        "code"
+      ]
+    },
+    {
+      "name": "Unicode and entity",
+      "markdown": "A **café 🧭 &amp;** thought.",
+      "text": "café 🧭 &",
+      "marks": [
+        "bold"
+      ]
+    },
+    {
+      "name": "literal blank spelling",
+      "markdown": "A **&amp;nbsp;** spelling.",
+      "text": "&nbsp;",
+      "marks": [
+        "bold"
+      ]
+    },
+    {
+      "name": "preserved explicit link",
+      "markdown": "A [Beta](https://example.com) thought.",
+      "text": "Beta",
+      "marks": [
+        "link"
+      ],
+      "href": "https://example.com"
+    },
+    {
+      "name": "unlink formatted note label",
+      "markdown": "Read **Beta**.",
+      "text": "Beta",
+      "marks": [
+        "bold"
+      ]
+    },
+    {
+      "name": "unlink formatted web label",
+      "markdown": "Read *Beta*.",
+      "text": "Beta",
+      "marks": [
+        "italic"
+      ]
+    },
+    {
+      "name": "heading in framed prose",
+      "markdown": "<!-- orion-block:v1 -->\r\n\r\n## A **careful** thought.\r\n\r\n<!-- /orion-block -->",
+      "text": "careful",
+      "marks": [
+        "bold"
+      ]
+    },
+    {
+      "name": "leading code whitespace",
+      "markdown": "A` careful` thought.",
+      "text": " careful",
+      "marks": [
+        "code"
+      ]
+    },
+    {
+      "name": "trailing code whitespace",
+      "markdown": "A `careful `thought.",
+      "text": "careful ",
+      "marks": [
+        "code"
+      ]
+    },
+    {
+      "name": "leading code tab",
+      "markdown": "A`\tcareful` thought.",
+      "text": "\tcareful",
+      "marks": [
+        "code"
+      ]
+    },
+    {
+      "name": "trailing code tab",
+      "markdown": "A `careful\t`thought.",
+      "text": "careful\t",
+      "marks": [
+        "code"
+      ]
+    }
+  ],
+  "citationStates": [
+    {
+      "name": "one citation",
+      "markdown": "A café 🧭 claim [1](orion-source://citation-source). Another point.\n\n## References\n\n1. [Evidence \\[one\\] \\\\ café](orion-source://citation-source)",
+      "sourceIds": [
+        "citation-source"
+      ]
+    },
+    {
+      "name": "repeated source",
+      "markdown": "A café 🧭 claim [1](orion-source://citation-source). Another point [1](orion-source://citation-source).\n\n## References\n\n1. [Evidence \\[one\\] \\\\ café](orion-source://citation-source)",
+      "sourceIds": [
+        "citation-source"
+      ]
+    },
+    {
+      "name": "first appearance renumber",
+      "markdown": "[1](orion-source://citation-second) A café 🧭 claim [2](orion-source://citation-source). Another point [2](orion-source://citation-source).\n\n## References\n\n1. [Second evidence](orion-source://citation-second)\n2. [Evidence \\[one\\] \\\\ café](orion-source://citation-source)",
+      "sourceIds": [
+        "citation-source",
+        "citation-second"
+      ]
+    },
+    {
+      "name": "remove one marker",
+      "markdown": "[1](orion-source://citation-second) A café 🧭 claim. Another point [2](orion-source://citation-source).\n\n## References\n\n1. [Second evidence](orion-source://citation-second)\n2. [Evidence \\[one\\] \\\\ café](orion-source://citation-source)",
+      "sourceIds": [
+        "citation-source",
+        "citation-second"
+      ]
+    },
+    {
+      "name": "remove first source and renumber",
+      "markdown": " A café 🧭 claim. Another point [1](orion-source://citation-source).\n\n## References\n\n1. [Evidence \\[one\\] \\\\ café](orion-source://citation-source)",
+      "sourceIds": [
+        "citation-source",
+        "citation-second"
+      ]
+    },
+    {
+      "name": "remove final marker retains provenance",
+      "markdown": " A café 🧭 claim. Another point.",
+      "sourceIds": [
+        "citation-source",
+        "citation-second"
+      ]
+    },
+    {
+      "name": "authored numeric label and References",
+      "markdown": "Year 2024.\n\n## References\n\nAn authored essay section.",
+      "sourceIds": []
+    },
+    {
+      "name": "remove authored formatted label",
+      "markdown": "Read **bold** and *italic* with \\[brackets\\] and \\` tick.",
+      "sourceIds": []
+    },
+    {
+      "name": "protected CRLF and frontmatter",
+      "markdown": "---\r\nprivate: '[literal](orion-source://hidden)'\r\n---\r\n\r\n<!-- orion-block:v1 -->\r\n\r\nA claim [1](orion-source://citation-source). <!-- orion-paragraph-margins:v1 4 6 -->\r\n\r\n`[code](orion-source://citation-source)`\r\n\r\n~~~md\r\n[example](orion-source://citation-source)\r\n~~~\r\n\r\n<!-- /orion-block -->\n\n## References\n\n1. [Evidence \\[one\\] \\\\ café](orion-source://citation-source)",
+      "sourceIds": [
+        "citation-source"
+      ]
+    },
+    {
+      "name": "exact Unicode ID and title whitespace",
+      "markdown": "A Unicode claim [1](orion-source://citation-証拠).\n\n## References\n\n1. [Unicode evidence](orion-source://citation-証拠)",
+      "sourceIds": [
+        "citation-証拠"
+      ]
+    }
+  ],
+  "citationSources": [
+    {
+      "future": {
+        "preserved": true
+      },
+      "id": "citation-source",
+      "importedAt": "2026-09-05T00:00:00Z",
+      "kind": "text",
+      "noteIds": [
+        "citation-primary",
+        "citation-protected"
+      ],
+      "text": "Exact original evidence.",
+      "title": "Evidence [one] \\ café"
+    },
+    {
+      "future": {
+        "preserved": [
+          1,
+          2
+        ]
+      },
+      "id": "citation-second",
+      "importedAt": "2026-09-05T00:00:00Z",
+      "kind": "text",
+      "noteIds": [
+        "citation-primary"
+      ],
+      "text": "Another exact source.",
+      "title": "Second evidence"
+    },
+    {
+      "id": "citation-証拠",
+      "importedAt": "2026-09-05T00:00:00Z",
+      "kind": "text",
+      "noteIds": [
+        "citation-unicode"
+      ],
+      "text": "Unicode evidence.",
+      "title": "﻿Unicode evidence﻿"
+    }
+  ]
+}

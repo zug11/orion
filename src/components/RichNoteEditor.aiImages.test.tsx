@@ -38,7 +38,6 @@ async function fixture(onGenerateAIImage: ImageRequest) {
   vi.spyOn(editor.view, "coordsAtPos").mockReturnValue({ left: 280, right: 360, top: 200, bottom: 220 });
   await waitFor(() => expect(editor.isFocused).toBe(true));
   act(() => { editor.commands.setTextSelection({ from: 1, to: 10 }); });
-  fireEvent.click(screen.getByRole("button", { name: "Turn on AI tools" }));
   fireEvent.click(await screen.findByRole("button", { name: "Generate image from selected text" }));
   fireEvent.click(screen.getByRole("radio", { name: "Fast" }));
   fireEvent.click(screen.getByRole("button", { name: "Generate" }));

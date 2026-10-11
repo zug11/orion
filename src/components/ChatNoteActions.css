@@ -1,0 +1,18 @@
+.chat-note-actions__status {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.chat-note-actions__status button {
+  flex: 0 0 auto;
+  padding: 2px 0;
+  border: 0;
+  color: var(--text);
+  background: transparent;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}

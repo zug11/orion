@@ -2,6 +2,10 @@ import type { AppSnapshot, GeneratedNoteImage } from "../types";
 import { spaceNoteVersion, stableKnowledgeHash } from "./spaceKnowledge";
 import { truncateUnicode } from "./text";
 import { ImageSearchIndex, type ImageEvidence } from "./imageContextSearch";
+import { sourceEvidenceVersion } from "./evidenceVersions";
+import { visibleTaskPassages, workingTaskText, type TaskView } from "./taskWorkingView";
+import { projectEditorAIContext, type EditorAIWorkingContext } from "./editorAIWorkingContext";
+import type { EditorActionGrant } from "./assistant/editorActionHost";
 import {
   parseImagePlanningContext, parseImagePlanningResult,
   type ImagePlanningRequest, type ImagePlanningResult, type ImagePlanningStage,
@@ -14,6 +18,8 @@ export const MAX_AI_IMAGE_SELECTION_CHARS = 32_000;
 export type AIImageQuality = "fast" | "detailed";
 export type AIImageContextMode = "selection" | "space";
 export interface AIImageRequestInput {
+  /** Native-issued external operation authority, separate from image instructions. */
+  editorActionGrant?: EditorActionGrant;
   originNoteId: string;
   selectedMarkdown?: string;
   selectedText?: string;
@@ -23,6 +29,7 @@ export interface AIImageRequestInput {
   afterMarkdown?: string;
   quality?: AIImageQuality;
   contextMode?: AIImageContextMode;
+  workingContext?: EditorAIWorkingContext;
 }
 export interface AIImagePrompt { prompt: string; alt: string }
 export interface AIImageProposal extends GeneratedNoteImage { alt: string; contextNotice?: string }
@@ -71,6 +78,8 @@ export class ImageGenerationSession {
   search?: ImageSearchPlan;
   branches: Branch[] = [];
   evidence = new Map<string, ImageEvidence>();
+  /** Original unfiltered versions stay local; masking must not weaken freshness. */
+  evidenceVersions = new Map<string, string>();
   merges = new Map<string, ImageResearchFinding>();
   research?: ImageResearchFinding;
   brief?: ImageVisualPlan;
@@ -85,6 +94,7 @@ export class ImageGenerationSession {
     this.search = undefined;
     this.branches = [];
     this.evidence.clear();
+    this.evidenceVersions.clear();
     this.merges.clear();
     this.research = undefined;
     this.brief = undefined;
@@ -95,10 +105,11 @@ export class ImageGenerationSession {
 }
 interface SharedIndex { index: ImageSearchIndex; tail: Promise<void> }
 const indexes = new Map<string, SharedIndex>();
-function indexFor(spaceId: string): SharedIndex {
-  const index = indexes.get(spaceId) ?? { index: new ImageSearchIndex(), tail: Promise.resolve() };
-  indexes.delete(spaceId);
-  indexes.set(spaceId, index);
+function indexFor(spaceId: string, taskView: TaskView): SharedIndex {
+  const key = JSON.stringify([spaceId, taskView]);
+  const index = indexes.get(key) ?? { index: new ImageSearchIndex(), tail: Promise.resolve() };
+  indexes.delete(key);
+  indexes.set(key, index);
   // Evicted active requests retain their own reference until they finish.
   while (indexes.size > 3) indexes.delete(indexes.keys().next().value!);
   return index;
@@ -124,6 +135,10 @@ function contextEnabled(snapshot: AppSnapshot, input: AIImageRequestInput) {
   return input.contextMode === "space" || (input.contextMode === undefined && snapshot.settings.includeExistingNotesInAIContext);
 }
 export function buildAIImagePrompt(snapshot: AppSnapshot, input: AIImageRequestInput, plan: ImageVisualPlan): AIImagePrompt {
+  const projected = projectEditorAIContext(snapshot, input, "image");
+  return buildProjectedAIImagePrompt(projected.snapshot, projected.input, plan);
+}
+function buildProjectedAIImagePrompt(snapshot: AppSnapshot, input: AIImageRequestInput, plan: ImageVisualPlan): AIImagePrompt {
   const { origin, selected, instruction } = selection(snapshot, input);
   const validated = parseImagePlanningResult(plan, "compose") as ImageVisualPlan;
   const enabled = contextEnabled(snapshot, input);
@@ -157,19 +172,38 @@ export async function generateContextualNoteImage(
   drivers: ImageDrivers,
   options: { signal?: AbortSignal; currentSnapshot?: () => AppSnapshot; session?: ImageGenerationSession; onProgress?: (progress: ImageGenerationProgress) => void } = {},
 ): Promise<AIImageProposal> {
+  const originalSnapshot = snapshot, originalInput = input;
+  const originalOrigin = snapshot.notes.find(note => note.id === input.originNoteId);
+  if (!originalOrigin) throw new Error("The note being illustrated is no longer in this Space.");
+  const projected = projectEditorAIContext(snapshot, input, "image");
+  snapshot = projected.snapshot; input = projected.input;
   const { origin, selected, instruction } = selection(snapshot, input);
   const enabled = contextEnabled(snapshot, input);
   const quality = input.quality ?? "detailed";
   const session = options.session ?? new ImageGenerationSession();
-  const shared = indexFor(snapshot.workspace.id);
-  const liveOrigin = { id: origin.id, body: input.documentMarkdown ?? origin.body };
-  const originVersion = spaceNoteVersion(origin);
+  const shared = indexFor(snapshot.workspace.id, projected.taskView);
+  const rawLiveBody = originalInput.documentMarkdown ?? originalOrigin.body;
+  // Rich context is a shortened safe serialization. Search/citation coordinates
+  // instead use the original Markdown's offset-preserving working projection.
+  const liveOrigin = { id: origin.id, body: projected.taskView === "working" ? workingTaskText(rawLiveBody) : rawLiveBody };
+  const indexSnapshot = { ...snapshot, notes: snapshot.notes.map(note => note.id === origin.id ? { ...note, body: liveOrigin.body } : note) };
+  const originVersion = spaceNoteVersion(originalOrigin);
+  const originalVersion = (item: ImageEvidence, value: AppSnapshot): string | undefined => {
+    if (item.kind === "note") {
+      const note = value.notes.find(note => note.id === item.entityId);
+      return note && spaceNoteVersion(note);
+    }
+    const source = value.sources.find(source => source.id === item.entityId);
+    return source && sourceEvidenceVersion(source);
+  };
+  const evidenceCurrent = (item: ImageEvidence, raw: AppSnapshot, view: AppSnapshot, live = liveOrigin) =>
+    session.evidenceVersions.get(item.id) === originalVersion(item, raw) && shared.index.evidenceCurrent(item, view, live);
   const settingsIdentity = (value: AppSnapshot) => JSON.stringify([value.workspace.id, value.settings.model, value.settings.reasoningEffort, value.settings.includeExistingNotesInAIContext]);
   const settings = settingsIdentity(snapshot);
-  const identity = stableKnowledgeHash(JSON.stringify([settings, originVersion, selected, instruction, enabled, quality,
+  const identity = stableKnowledgeHash(JSON.stringify([settings, projected.taskView, originVersion, selected, instruction, enabled, quality,
     enabled ? [liveOrigin.body, input.beforeMarkdown, input.afterMarkdown] : null]));
   if (session.identity !== identity || Date.now() - session.startedAt > MAX_SESSION_AGE_MS ||
-    [...session.evidence.values()].some((item) => !shared.index.evidenceCurrent(item, snapshot, liveOrigin))) session.clear();
+    [...session.evidence.values()].some((item) => !evidenceCurrent(item, originalSnapshot, indexSnapshot))) session.clear();
   session.identity = identity;
   const generation = session.generation;
   const controller = new AbortController();
@@ -177,7 +211,7 @@ export async function generateContextualNoteImage(
   options.signal?.addEventListener("abort", abort, { once: true });
   if (options.signal?.aborted) abort();
   const signal = controller.signal;
-  const current = () => options.currentSnapshot?.() ?? snapshot;
+  const current = () => options.currentSnapshot?.() ?? originalSnapshot;
   const check = () => {
     if (signal.aborted) throw signal.reason ?? new Error("Image generation was cancelled.");
     if (session.generation !== generation) throw new Error("Image generation was cancelled.");
@@ -186,7 +220,10 @@ export async function generateContextualNoteImage(
     if (settingsIdentity(fresh) !== settings || !note || spaceNoteVersion(note) !== originVersion) {
       throw new Error("The selected note, Space or AI settings changed. Start a new image request.");
     }
-    if ([...session.evidence.values()].some((item) => !shared.index.evidenceCurrent(item, fresh, liveOrigin))) {
+    const freshView = projectEditorAIContext(fresh, originalInput, "image");
+    const freshRawBody = originalInput.documentMarkdown ?? note.body;
+    const freshLive = { id: origin.id, body: freshView.taskView === "working" ? workingTaskText(freshRawBody) : freshRawBody };
+    if (freshView.taskView !== projected.taskView || [...session.evidence.values()].some((item) => !evidenceCurrent(item, fresh, freshView.snapshot, freshLive))) {
       throw new Error("A supporting passage changed. Try again to refresh the image context.");
     }
   };
@@ -304,18 +341,30 @@ export async function generateContextualNoteImage(
             .flatMap((item) => item.evidence?.map((evidence) => evidence.id) ?? []));
           const result = await withIndex(shared, async () => {
             check();
-            await shared.index.prepare(snapshot, liveOrigin, signal);
+            await shared.index.prepare(indexSnapshot, liveOrigin, signal);
             return shared.index.search(branch.query, { characterBudget: READER_CHARACTER_BUDGET, excludeIds, signal });
           });
           check();
           branch.hasMore = result.hasMore;
           session.partial ||= result.coverage.limited;
           branch.evidence = [];
-          for (const item of result.evidence) {
+          for (const indexed of result.evidence) {
+            const originalBody = indexed.kind === "note"
+              ? indexed.entityId === origin.id ? rawLiveBody : originalSnapshot.notes.find(note => note.id === indexed.entityId)?.body
+              : originalSnapshot.sources.find(source => source.id === indexed.entityId)?.text;
+            if (originalBody === undefined) throw new Error("The search returned an unavailable passage.");
+            // Masking preserves offsets for search; providers receive only
+            // verbatim visible spans, never a masked span labelled as exact.
+            const passages = projected.taskView === "history" ? indexed.passages : visibleTaskPassages(originalBody, indexed.passages);
+            if (!passages.length) continue;
+            const item = { ...indexed, passages, complete: indexed.complete && passages.length === 1 && passages[0].start === 0 && passages[0].end === originalBody.length };
             if (!session.evidence.has(item.id) && (session.evidence.size >= MAX_EVIDENCE_ITEMS || byteLength([...session.evidence.values(), item]) > MAX_EVIDENCE_BYTES)) {
               session.partial = true; branch.hasMore = true; continue;
             }
-            if (!shared.index.evidenceCurrent(item, snapshot, liveOrigin)) throw new Error("The search returned an outdated passage. Try again.");
+            if (!shared.index.evidenceCurrent(item, indexSnapshot, liveOrigin)) throw new Error("The search returned an outdated passage. Try again.");
+            const version = originalVersion(item, originalSnapshot);
+            if (!version) throw new Error("The search returned an unavailable evidence version.");
+            session.evidenceVersions.set(item.id, version);
             session.evidence.set(item.id, item);
             branch.evidence.push(item);
           }
@@ -414,7 +463,7 @@ export async function generateContextualNoteImage(
       check();
       session.brief = brief;
     }
-    const prompt = buildAIImagePrompt(snapshot, input, session.brief);
+    const prompt = buildProjectedAIImagePrompt(snapshot, input, session.brief);
     progress("render");
     const started = performance.now();
     const renderTimer = setTimeout(() => controller.abort(new Error("Image generation took too long. The image brief is saved for Retry.")), 210_000);

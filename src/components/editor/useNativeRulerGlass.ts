@@ -81,7 +81,7 @@ function enqueue(job: Job) {
 }
 
 const accessibilityQueries = ["(prefers-reduced-transparency: reduce)", "(prefers-contrast: more)", "(forced-colors: active)"];
-const overlaySelector = '[role="dialog"],[role="menu"],[role="listbox"],.editor-floating-menu,.modal-backdrop,.excerpt-picker-backdrop,.export-dialog-backdrop,.import-studio__backdrop,.import-studio__nested-backdrop,.source-viewer-backdrop';
+const overlaySelector = '[role="dialog"],[role="menu"],[role="listbox"],.chat-dock__panel,.editor-floating-menu,.modal-backdrop,.excerpt-picker-backdrop,.export-dialog-backdrop,.import-studio__backdrop,.import-studio__nested-backdrop,.source-viewer-backdrop';
 const cap = 8;
 const precision = (value: number) => Math.round(value * 100) / 100;
 const intersects = (a: DOMRect, b: { left: number; top: number; right: number; bottom: number }) =>

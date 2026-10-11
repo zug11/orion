@@ -4,6 +4,7 @@ import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { AllSelection, Plugin, TextSelection } from "@tiptap/pm/state";
 import { closeHistory } from "@tiptap/pm/history";
 import { normalizeNoteMargin, splitDocumentMargins, withDocumentMargins } from "../../lib/noteMargins";
+import { serializeWithLiteralCode } from "../../lib/noteCodeSerialization";
 
 export type MarginScope = "document" | "paragraphs";
 export interface MarginTarget {
@@ -195,7 +196,7 @@ export const NoteMarkdown = Markdown.extend({
       const document = parse(body);
       return { ...document, attrs: { ...document.attrs, marginLeft: margins.left, marginRight: margins.right } };
     };
-    manager.serialize = (document: JSONContent): string => withDocumentMargins(serialize(document), {
+    manager.serialize = (document: JSONContent): string => withDocumentMargins(serializeWithLiteralCode(document, serialize), {
       left: document.type === "doc" ? normalizeNoteMargin(document.attrs?.marginLeft) : 0,
       right: document.type === "doc" ? normalizeNoteMargin(document.attrs?.marginRight) : 0,
     });

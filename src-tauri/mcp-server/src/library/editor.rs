@@ -5,14 +5,44 @@ use super::*;
 const BLOCK_OPEN: &str = "<!-- orion-block:v1 -->";
 const BLOCK_CLOSE: &str = "<!-- /orion-block -->";
 const COMMANDS: &[&str] = &[
-    "text", "block", "heading", "h1", "h2", "h3", "h4", "h5", "h6", "todo", "bullet", "numbered",
-    "divider", "quote", "code", "table", "link", "excerpt", "image",
+    "text",
+    "block",
+    "heading",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "todo",
+    "bullet",
+    "numbered",
+    "divider",
+    "quote",
+    "code",
+    "table",
+    "link",
+    "excerpt",
+    "image",
+    "paragraph_format",
+    "document_margins",
+    "image_layout",
+    "table_layout",
+    "table_edit",
+    "inline_format",
+    "unlink",
+    "source_citation",
 ];
 
 pub(super) fn input_fields() -> Value {
     json!({
         "note_id":string(200), "expected_version":string(100),
         "command":{"type":"string","enum":COMMANDS},
+        "citation_action":{"type":"string","enum":["insert","remove"],"description":"source_citation only. Insert a numbered reference and attach its source atomically, or remove one marker while retaining source provenance."},
+        "source_id":string(200),
+        "source_expected_version":{"type":"string","minLength":1,"maxLength":100,"description":"Required for source_citation insert, from a current source read in this exact Space. Not accepted for removal."},
+        "mark":{"type":"string","enum":["bold","italic","strike","code"],"description":"inline_format only: change one portable inline mark, preserving the selected words and all other marks."},
+        "enabled":{"type":"boolean","description":"inline_format only: true applies the mark; false removes it. Never toggles. Removal requires complete marked spans."},
         "placement":choice(&["append","prepend","before","after","replace"],"append"),
         "anchor":{"type":"string","minLength":1,"maxLength":50000,"description":"Exact unique destination text; required only for before, after, or replace. Surrounding content is preserved."},
         "text":{"type":"string","maxLength":50000,"description":"Literal content, except block accepts Markdown. Required for text/heading/quote/code/excerpt; optional label for link. An omitted block text wraps anchor when replacing, otherwise creates an empty block."},
@@ -22,16 +52,49 @@ pub(super) fn input_fields() -> Value {
         "rows":{"type":"array","minItems":1,"maxItems":20,"items":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"string","maxLength":2000}},"description":"Rectangular literal-text table, at most 20 rows and 12 columns. First row is the header unless header=false."},
         "header":{"type":"boolean","default":true},
         "target_note_id":string(200), "target_expected_version":string(100),
+        "url":{"type":"string","minLength":1,"maxLength":2048,"description":"For link only: an HTTP/HTTPS web address or recognizable bare domain (normalized to HTTPS). Supply exactly one of url or target_note_id. No credentials, controls, backslashes, or network access. Omitted text preserves the replacement anchor, otherwise uses the normalized URL."},
         "image_url":{"type":"string","minLength":1,"maxLength":120,"description":"An existing orion-image://localhost/ASSET_ID referenced by an image in this same Space. No file or network import."},
-        "alt":{"type":"string","maxLength":500}
+        "alt":{"type":"string","maxLength":500},
+        "alignment":{"type":"string","enum":["left","justify"],"description":"paragraph_format only; left removes the existing justify suffix."},
+        "margin_left":{"type":"integer","minimum":0,"maximum":25,"description":"Paragraph or document left margin, as an integer percentage. Zero resets this side; omitted preserves it."},
+        "margin_right":{"type":"integer","minimum":0,"maximum":25,"description":"Paragraph or document right margin, as an integer percentage. Zero resets this side; omitted preserves it."},
+        "layout":editor_layout::image_schema(),
+        "table_layout":editor_table::layout_schema(),
+        "operation":{"type":"string","enum":["insert_row","delete_row","insert_column","delete_column","set_cell","resize","delete"]},
+        "row_index":{"type":"integer","minimum":0,"maximum":50000,"description":"Zero-based logical row; includes a real header but never the synthetic header of a headerless table. Insertion inserts before this index; row count appends."},
+        "column_index":{"type":"integer","minimum":0,"maximum":100,"description":"Zero-based column; insertion before this index, column count appends."},
+        "values":{"type":"array","maxItems":50000,"items":{"type":"string","maxLength":2000},"description":"Literal cells for an inserted row/column; omitted means empty cells. Must match the opposite dimension."},
+        "row_count":{"type":"integer","minimum":1,"maximum":50000},
+        "column_count":{"type":"integer","minimum":1,"maximum":100},
+        "allow_content_removal":{"type":"boolean","description":"Only for resize: explicitly permits removing nonempty cells at bottom/right edges."}
     })
 }
 
-fn invalid(message: &str) -> ToolFailure {
+pub(super) struct PreparedEdit {
+    pub body: String,
+    pub attach_source: Option<String>,
+}
+
+pub(super) fn prepare(
+    scope: &Space,
+    current: &Note,
+    args: &Map<String, Value>,
+) -> Result<PreparedEdit, ToolFailure> {
+    if arg(args, "command") == "source_citation" {
+        editor_citations::apply(scope, current, args)
+    } else {
+        Ok(PreparedEdit {
+            body: apply(scope, current, args)?,
+            attach_source: None,
+        })
+    }
+}
+
+pub(super) fn invalid(message: &str) -> ToolFailure {
     ToolFailure::new(format!("{message} Nothing was saved."))
 }
 
-fn exact_index(body: &str, selected: &str) -> Result<usize, ToolFailure> {
+pub(super) fn exact_index(body: &str, selected: &str) -> Result<usize, ToolFailure> {
     if selected.is_empty() {
         return Err(invalid("Supply a nonempty exact anchor."));
     }
@@ -58,7 +121,7 @@ fn require_text<'a>(args: &'a Map<String, Value>) -> Result<&'a str, ToolFailure
     Ok(text)
 }
 
-fn inline(text: &str) -> String {
+pub(super) fn inline(text: &str) -> String {
     let mut output = String::new();
     for character in text.chars() {
         if matches!(
@@ -198,7 +261,69 @@ fn target<'a>(scope: &'a Space, args: &Map<String, Value>) -> Result<&'a Note, T
     note(scope, id)
 }
 
-fn percent_encode(value: &str) -> String {
+/// Match the renderer's recognizable-bare-domain gate before WHATWG parsing.
+/// Explicit HTTP(S) addresses may also use localhost or an IP address.
+fn bare_web_domain(text: &str) -> bool {
+    let authority = text.split(['/', '?', '#']).next().unwrap_or("");
+    let host = if let Some((host, port)) = authority.rsplit_once(':') {
+        if port.is_empty() || port.len() > 5 || !port.bytes().all(|byte| byte.is_ascii_digit()) {
+            return false;
+        }
+        host
+    } else {
+        authority
+    };
+    let labels: Vec<_> = host.split('.').collect();
+    labels.len() > 1
+        && labels.iter().enumerate().all(|(index, label)| {
+            let mut chars = label.chars();
+            let Some(first) = chars.next() else {
+                return false;
+            };
+            (if index == labels.len() - 1 {
+                first.is_alphabetic()
+            } else {
+                first.is_alphanumeric()
+            }) && label.chars().last().is_some_and(char::is_alphanumeric)
+                && chars.all(|character| character.is_alphanumeric() || character == '-')
+        })
+}
+
+/// Keep URL policy aligned with src/lib/externalLinks.ts; this never fetches.
+fn external_link(value: &str) -> Result<String, ToolFailure> {
+    let text = value.trim();
+    let failure = || {
+        invalid("Provide a web URL of at most 2,048 characters using HTTP or HTTPS, without credentials, controls, spaces, or backslashes.")
+    };
+    if text.is_empty()
+        || text.encode_utf16().count() > 2_048
+        || text
+            .chars()
+            .any(|character| character <= '\u{20}' || character == '\u{7f}' || character == '\\')
+    {
+        return Err(failure());
+    }
+    let lower = text.to_ascii_lowercase();
+    let candidate = if lower.starts_with("https://") || lower.starts_with("http://") {
+        text.to_owned()
+    } else if bare_web_domain(text) {
+        format!("https://{text}")
+    } else {
+        return Err(failure());
+    };
+    let parsed = url::Url::parse(&candidate).map_err(|_| failure())?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.as_str().encode_utf16().count() > 2_048
+    {
+        return Err(failure());
+    }
+    Ok(parsed.into())
+}
+
+pub(super) fn percent_encode(value: &str) -> String {
     let mut output = String::new();
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&byte) {
@@ -218,7 +343,7 @@ fn quote(text: &str) -> String {
         .join("\n")
 }
 
-fn image_referenced(body: &str, url: &str) -> bool {
+pub(super) fn image_referenced(body: &str, url: &str) -> bool {
     let mut code_width = None;
     let mut in_comment = false;
     for line in text::lines(body) {
@@ -419,13 +544,25 @@ pub(super) fn apply(
     args: &Map<String, Value>,
 ) -> Result<String, ToolFailure> {
     let command = arg(args, "command");
+    if matches!(command, "inline_format" | "unlink") {
+        return editor_inline::apply(current, args);
+    }
+    if matches!(command, "table_layout" | "table_edit") {
+        return editor_table::apply(current, args);
+    }
+    if matches!(
+        command,
+        "paragraph_format" | "document_margins" | "image_layout"
+    ) {
+        return editor_layout::apply(current, args);
+    }
     let specific: &[&str] = match command {
         "text" | "block" | "quote" => &["text"],
         "heading" => &["text", "level"],
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => &["text"],
         "todo" | "bullet" | "numbered" => &["items"],
         "divider" => &[], "code" => &["text", "language"],
-        "table" => &["rows", "header"], "link" => &["target_note_id", "text"],
+        "table" => &["rows", "header"], "link" => &["target_note_id", "url", "text"],
         "excerpt" => &["target_note_id", "target_expected_version", "text"],
         "image" => &["image_url", "alt"],
         _ => return Err(invalid("Unsupported command. Use a documented formatting command or orion_edit_note_text for exact table deletion.")),
@@ -598,12 +735,32 @@ pub(super) fn apply(
             format!("{metadata}{}", lines.join("\n"))
         }
         "link" => {
-            let target = target(scope, args)?;
-            let label = args
-                .get("text")
-                .and_then(Value::as_str)
-                .unwrap_or(&target.title);
-            format!("[{}](orion-note://{})", single_line(label)?, target.id)
+            match (args.get("url"), args.get("target_note_id")) {
+                (Some(url), None) => {
+                    let url = external_link(url.as_str().unwrap_or(""))?;
+                    let label = args
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or(if placement == "replace" { anchor } else { &url });
+                    // WHATWG leaves parentheses in paths. Encode them so even an
+                    // unmatched closing parenthesis cannot escape Markdown's href.
+                    let destination = url.replace('(', "%28").replace(')', "%29");
+                    format!("[{}]({destination})", single_line(label)?)
+                }
+                (None, Some(_)) => {
+                    let target = target(scope, args)?;
+                    let label = args
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&target.title);
+                    format!("[{}](orion-note://{})", single_line(label)?, target.id)
+                }
+                _ => {
+                    return Err(invalid(
+                        "Supply exactly one link destination: url or target_note_id.",
+                    ))
+                }
+            }
         }
         "excerpt" => {
             let target = target(scope, args)?;

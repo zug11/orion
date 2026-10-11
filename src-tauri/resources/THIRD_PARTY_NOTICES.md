@@ -1,7 +1,17 @@
-# Orion bundled transcription notices
+# Orion bundled component notices
 
-Orion includes the following components so media transcription works
-without separately installed software or a local server.
+Orion includes the following components for its local media, visual and
+connector features. The separately distributed connectors also include
+`MCP_THIRD_PARTY_NOTICES.md` and the associated Markdown parser licenses.
+
+## MCP Markdown parser
+
+- pulldown-cmark 0.13.4: https://github.com/pulldown-cmark/pulldown-cmark
+- License: MIT (`licenses/pulldown-cmark-LICENSE`)
+- unicase 2.10.0: https://github.com/seanmonstar/unicase
+- License: MIT, selected from MIT OR Apache-2.0 (`licenses/unicase-LICENSE-MIT`)
+- Used by the independent local MCP connector to validate source spans for
+  guarded inline formatting and explicit link removal.
 
 ## React Bits visual effects
 

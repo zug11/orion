@@ -13,7 +13,7 @@ describe("AI writing selection positioning", () => {
         end: { top: 285, bottom: 303, left: 170, right: 384 },
       }),
     ).toEqual({
-      left: 247,
+      left: 346,
       top: 312,
       visible: true,
       placement: "below",
@@ -35,4 +35,14 @@ describe("AI writing selection positioning", () => {
       placement: "above",
     });
   });
+  it("keeps the selection controls centered inside a narrow viewport", () => {
+    const position = resolveAIWritingSelectionPosition({
+      workspace: { top: 42, bottom: 740, left: 0, right: 320 }, toolbarBottom: 140,
+      start: { top: 350, bottom: 370, left: 24, right: 24 },
+      end: { top: 350, bottom: 370, left: 270, right: 270 },
+    });
+    expect(position.left).toBe(160);
+    expect(position.top).toBeGreaterThan(140);
+  });
+
 });

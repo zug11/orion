@@ -1,5 +1,5 @@
 import type { AppSnapshot, EntityId, Relationship } from "../types";
-import { removeSourceCitations } from "./sourceCitations";
+import { proseSourceCitationIds, removeSourceCitations } from "./sourceCitations";
 
 export interface DeleteSourceResult {
   snapshot: AppSnapshot;
@@ -52,6 +52,51 @@ export function attachSourceToNoteInSnapshot(
     ),
     updatedAt: now,
   };
+}
+
+/** Complete import provenance in the same immutable update as the note merge.
+ * Only sources already present exactly once in this Space are eligible. Check
+ * before and after merging: an upsert may otherwise hide duplicate input IDs.
+ */
+export function reconcileImportedSourceCitations(
+  before: AppSnapshot,
+  merged: AppSnapshot,
+  importedNoteIds: readonly EntityId[],
+  authorizedEdges?: ReadonlyMap<EntityId, ReadonlySet<EntityId>>,
+): AppSnapshot {
+  if (before.workspace.id !== merged.workspace.id) throw new Error("Import provenance cannot cross a Space boundary.");
+  const counts = (records: readonly { id: string }[]) => {
+    const result = new Map<string, number>();
+    for (const record of records) result.set(record.id, (result.get(record.id) ?? 0) + 1);
+    return result;
+  };
+  const beforeSources = counts(before.sources);
+  const afterSources = counts(merged.sources);
+  const noteCounts = counts(merged.notes);
+  const targets = new Set(importedNoteIds);
+  const additions = new Map<string, Set<string>>();
+  let changed = false;
+  const notes = merged.notes.map((note) => {
+    if (!targets.has(note.id) || noteCounts.get(note.id) !== 1) return note;
+    const ids = proseSourceCitationIds(note.body).filter((id) => beforeSources.get(id) === 1 && afterSources.get(id) === 1
+      && (!authorizedEdges || authorizedEdges.get(note.id)?.has(id)));
+    for (const id of ids) {
+      const noteIds = additions.get(id) ?? new Set<string>();
+      noteIds.add(note.id);
+      additions.set(id, noteIds);
+    }
+    const missing = ids.filter((id) => !note.sourceIds.includes(id));
+    if (!missing.length) return note;
+    changed = true;
+    return { ...note, sourceIds: [...note.sourceIds, ...missing] };
+  });
+  const sources = merged.sources.map((source) => {
+    const missing = [...(additions.get(source.id) ?? [])].filter((id) => !source.noteIds.includes(id));
+    if (!missing.length) return source;
+    changed = true;
+    return { ...source, noteIds: [...source.noteIds, ...missing] };
+  });
+  return changed ? { ...merged, notes, sources } : merged;
 }
 
 function withoutSourceId(

@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Orion uses the microphone only when you record a voice memo for a note.</string>
+  <string>Orion uses the microphone when you start dictation or Talk to Space. Live voice sends audio to OpenAI while the call is active.</string>
 </dict>
 </plist>

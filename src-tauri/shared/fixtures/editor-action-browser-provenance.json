@@ -1,0 +1,27 @@
+{
+  "origin": "Actual RichNoteEditor and production startEditorActionMailbox in isolated browser; native and providers simulated for browser portion. No real vault or credentials.",
+  "captures": [
+    {
+      "case": "rewrite",
+      "fixture": "src-tauri/shared/fixtures/editor-action-rewrite.json",
+      "sourceCapture": "outputs/validation/20261011-editor-actions/native-fixture-provenance/actual-capture-rewrite.json",
+      "captureSha256": "5e773f108af509d721116cb83c21267fac97e057ef5dc0ac8b5c894adce6d94a",
+      "sourceReport": "outputs/validation/20261011-editor-actions/native-fixture-provenance/normal-accepted-and-undone.json",
+      "reportSha256": "d4100e441fa4136e92b940ecc6fece332bd73e3630dfb10ebc5e11e1a07a6733",
+      "originalBrowserReportPath": "outputs/validation/20261011-editor-actions/browser/evidence/normal-accepted-and-undone.json",
+      "captureMatchesActualMailboxLog": true,
+      "acceptedBodySource": "log.native editor_actions_accepted.args.body for same action id"
+    },
+    {
+      "case": "empty-write",
+      "fixture": "src-tauri/shared/fixtures/editor-action-empty-write.json",
+      "sourceCapture": "outputs/validation/20261011-editor-actions/native-fixture-provenance/actual-capture-empty-write.json",
+      "captureSha256": "f4e389c38303d5ab1c823facb5eec54efb0c1389d1054c6ec48f48137c16347a",
+      "sourceReport": "outputs/validation/20261011-editor-actions/native-fixture-provenance/normal-empty-write.json",
+      "reportSha256": "241a8677386289a27f7d5a1373a30d20396b4853eb11553cb88e2965bab34860",
+      "originalBrowserReportPath": "outputs/validation/20261011-editor-actions/browser/evidence/normal-empty-write.json",
+      "captureMatchesActualMailboxLog": true,
+      "acceptedBodySource": "log.native editor_actions_accepted.args.body for same action id"
+    }
+  ]
+}

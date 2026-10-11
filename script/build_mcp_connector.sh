@@ -97,14 +97,23 @@ node "$ROOT_DIR/script/test_mcp_connector.mjs" \
   /bin/cp "$MANIFEST_DIR/README.md" "$staging_dir/README.md"
   /bin/cp "$ROOT_DIR/src-tauri/icons/icon.png" "$staging_dir/icon.png"
   /bin/cp "$RELEASE_BINARY" "$staging_dir/server/orion-mcp"
+  /bin/cp "$RESOURCE_DIR/MCP_THIRD_PARTY_NOTICES.md" "$staging_dir/MCP_THIRD_PARTY_NOTICES.md"
+  mkdir -p "$staging_dir/licenses"
+  for notice in pulldown-cmark-LICENSE unicase-LICENSE-MIT; do
+    /bin/cp "$RESOURCE_DIR/licenses/$notice" "$staging_dir/licenses/$notice"
+  done
 
   (
     cd "$staging_dir"
     /usr/bin/zip -q -X -r "$staged_package" \
-      manifest.json README.md icon.png server
+      manifest.json README.md icon.png server MCP_THIRD_PARTY_NOTICES.md licenses
   )
   /usr/bin/unzip -tq "$staged_package"
   /usr/bin/unzip -q "$staged_package" -d "$verification_dir"
+  cmp "$RESOURCE_DIR/MCP_THIRD_PARTY_NOTICES.md" "$verification_dir/MCP_THIRD_PARTY_NOTICES.md"
+  for notice in pulldown-cmark-LICENSE unicase-LICENSE-MIT; do
+    cmp "$RESOURCE_DIR/licenses/$notice" "$verification_dir/licenses/$notice"
+  done
   codesign --verify --strict --verbose=2 \
     "$verification_dir/server/orion-mcp"
   "$verification_dir/server/orion-mcp" --version

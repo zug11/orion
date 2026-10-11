@@ -1,3 +1,5 @@
+import { TABLE_CODE_JOIN } from "./noteCodeSerialization";
+
 export const MIN_TABLE_WIDTH = 35;
 export const TABLE_META_PREFIX = "<!-- orion-table:v1 ";
 
@@ -54,14 +56,31 @@ interface TableMarkdownNode {
  */
 export function remarkNoteTableMetadata() {
   return (tree: TableMarkdownNode) => {
-    const visit = (parent: TableMarkdownNode) => {
+    const visit = (parent: TableMarkdownNode, inTable = false) => {
       if (!parent.children) return;
+      const table = inTable || parent.type === "table";
       parent.children = parent.children.filter((node, index, siblings) => {
         const next = siblings[index + 1];
         const gap = next?.position && node.position ? next.position.start.line - node.position.end.line : -1;
         return !(node.type === "html" && typeof node.value === "string" && parseNoteTableMetadata(node.value) && next?.type === "table" && gap >= 1 && gap <= 2);
       });
-      parent.children.forEach(visit);
+      if (table) {
+        const joined: TableMarkdownNode[] = [];
+        for (let index = 0; index < parent.children.length; index += 1) {
+          const node = parent.children[index];
+          const previous = joined[joined.length - 1];
+          const next = parent.children[index + 1];
+          if (node.type === "html" && node.value === TABLE_CODE_JOIN
+            && previous?.type === "inlineCode" && typeof previous.value === "string"
+            && next?.type === "inlineCode" && typeof next.value === "string") {
+            joined[joined.length - 1] = { ...previous, value: previous.value + next.value,
+              ...(previous.position && next.position ? { position: { start: previous.position.start, end: next.position.end } } : {}) };
+            index += 1;
+          } else joined.push(node);
+        }
+        parent.children = joined;
+      }
+      parent.children.forEach((child) => visit(child, table));
     };
     visit(tree);
   };

@@ -107,6 +107,35 @@ describe("procedural atmosphere resource boundaries", () => {
     expect(gl.deleteShader).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps its canvas and animation phase when equivalent palettes are refreshed", () => {
+    const view = render(<ProceduralAtmosphere palette={palette} motion="alive" fragmentSource={fragmentSource} className="mirage" />);
+    const canvas = view.container.querySelector("canvas");
+    advance(10);
+    advance(50);
+    view.rerender(<ProceduralAtmosphere palette={{ ...palette }} motion="alive" fragmentSource={fragmentSource} className="mirage" />);
+    advance(90);
+    expect(view.container.querySelector("canvas")).toBe(canvas);
+    expect(gl.deleteProgram).not.toHaveBeenCalled();
+    expect(gl.uniform1f.mock.calls.filter(([name]) => name === "uTime").slice(-1)[0]?.[1]).toBeCloseTo(0.08);
+    expect(frames.size).toBe(1);
+  });
+
+  it("preserves elapsed animation through colour changes and context recovery", () => {
+    const view = render(<ProceduralAtmosphere palette={palette} motion="alive" fragmentSource={fragmentSource} className="mirage" />);
+    advance(10);
+    advance(50);
+    view.rerender(<ProceduralAtmosphere palette={{ ...palette, primary: "#123456" }} motion="alive" fragmentSource={fragmentSource} className="mirage" />);
+    expect(gl.uniform1f.mock.calls.filter(([name]) => name === "uTime").slice(-1)[0]?.[1]).toBeCloseTo(0.04);
+    const canvas = view.container.querySelector("canvas")!;
+    act(() => { canvas.dispatchEvent(new Event("webglcontextlost", { cancelable: true })); });
+    act(() => { canvas.dispatchEvent(new Event("webglcontextrestored")); });
+    expect(gl.uniform1f.mock.calls.filter(([name]) => name === "uTime").slice(-1)[0]?.[1]).toBeCloseTo(0.04);
+    advance(100);
+    advance(140);
+    expect(gl.uniform1f.mock.calls.filter(([name]) => name === "uTime").slice(-1)[0]?.[1]).toBeCloseTo(0.08);
+    expect(frames.size).toBe(1);
+  });
+
   it("draws Still once, with no background animation loop", () => {
     render(<ProceduralAtmosphere palette={palette} motion="still" fragmentSource={fragmentSource} className="flux" />);
     expect(gl.drawArrays).toHaveBeenCalledOnce();

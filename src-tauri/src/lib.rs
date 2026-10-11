@@ -1,4 +1,7 @@
+mod chat_edits;
+mod chat_reading;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use chat_reading::{ChatReadRequest, ChatReadingFinding};
 use fs2::FileExt;
 use reqwest::{Client, Response, StatusCode, Url};
 use serde::{Deserialize, Serialize};
@@ -6,24 +9,46 @@ use serde_json::{json, Value};
 use std::{
     collections::{HashMap, VecDeque},
     fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::{BufReader, Write},
     net::{IpAddr, SocketAddr, ToSocketAddrs},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    process::Command,
     sync::{Arc, Mutex},
     time::Duration,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 use tauri_plugin_opener::OpenerExt;
-use tempfile::{NamedTempFile, TempDir};
+use tempfile::NamedTempFile;
 use zeroize::{Zeroize, Zeroizing};
 
 mod assistant_bridge;
+mod assistant_editor_actions;
+mod assistant_editor_context;
 #[path = "../shared/assistant_protocol.rs"]
 mod assistant_protocol;
+mod assistant_review;
+#[path = "../shared/assistant_review_protocol.rs"]
+mod assistant_review_protocol;
+mod assistant_voice_work_orders;
+mod connector_installation;
 mod desktop_windows;
+#[path = "../shared/editor_actions_protocol.rs"]
+mod editor_actions_protocol;
+#[path = "../shared/editor_context_protocol.rs"]
+mod editor_context_protocol;
 mod image_planning;
+mod knowledge_schemas;
+#[path = "../shared/note_version.rs"]
+mod note_version;
+#[path = "../shared/voice_work_orders_protocol.rs"]
+mod voice_work_orders_protocol;
+use knowledge_schemas::{
+    anthropic_knowledge_response_schema, anthropic_organizer_schema, knowledge_response_schema,
+    organizer_schema, strip_anthropic_unsupported_schema_keywords,
+};
+mod live_voice;
+mod local_transcription;
 mod media_jobs;
 mod narration_export;
 mod ruler_glass;
@@ -55,10 +80,6 @@ const MAX_COMPACT_ORGANIZER_CONTEXT_BYTES: usize = 56 * 1024;
 const MAX_CHAT_NOTE_BODY_CHARS: usize = 6_000;
 const MAX_CHAT_NOTE_ACTION_CONTENT_CHARS: usize = 24_000;
 const MAX_PENDING_KNOWLEDGE_CANCELLATIONS: usize = 512;
-const MAX_MEDIA_FILES: usize = 8;
-const MAX_MEDIA_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-const MAX_VOICE_MEMO_BYTES: usize = 64 * 1024 * 1024;
-const MAX_VOICE_MEMO_BASE64_BYTES: usize = MAX_VOICE_MEMO_BYTES.div_ceil(3) * 4;
 const MAX_WEBPAGE_BYTES: usize = 5 * 1024 * 1024;
 const MAX_WEBPAGE_REDIRECTS: usize = 5;
 const MAX_OCR_DOCUMENT_BYTES: usize = 25 * 1024 * 1024;
@@ -73,19 +94,6 @@ const MAX_NOTE_IMAGE_BASE64_BYTES: usize = MAX_NOTE_IMAGE_BYTES.div_ceil(3) * 4;
 const MAX_WEB_EXPORT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_WEB_EXPORT_WITH_IMAGES_BYTES: usize = 128 * 1024 * 1024;
 const BUNDLED_OCR_NAME: &str = "orion-ocr";
-const BUNDLED_WHISPER_NAME: &str = "orion-whisper";
-const BUNDLED_WHISPER_MODEL_NAME: &str = "ggml-model.bin";
-const BUNDLED_YT_DLP_NAME: &str = "yt-dlp";
-const BUNDLED_DENO_NAME: &str = "deno";
-const BUNDLED_CLAUDE_CONNECTOR_NAME: &str = "Orion-Claude-Connector.mcpb";
-const BUNDLED_CODEX_PLUGIN_DIRECTORY: &str = "Orion-Codex-Plugin";
-const BUNDLED_CODEX_MARKETPLACE_PATH: &[&str] = &[".agents", "plugins", "marketplace.json"];
-const BUNDLED_CODEX_SERVER_PATH: &[&str] = &["plugins", "orion", "server", "orion-mcp"];
-const MIN_BUNDLED_MODEL_BYTES: u64 = 400 * 1024 * 1024;
-const MEDIA_EXTENSIONS: &[&str] = &[
-    "flac", "m4a", "mp3", "mp4", "mpeg", "mpga", "ogg", "wav", "webm",
-];
-
 const ORGANIZER_INSTRUCTIONS: &str = r#"
 You are Orion's knowledge architect. Transform the supplied source material into a
 clear, durable personal wiki.
@@ -836,7 +844,11 @@ struct ChatRequest {
     #[serde(default)]
     allow_note_actions: bool,
     #[serde(default)]
+    edit_note_id: Option<String>,
+    #[serde(default)]
     reading_context: Option<String>,
+    #[serde(default)]
+    suggestion_context: Option<String>,
     #[serde(default)]
     model: Option<String>,
     #[serde(default)]
@@ -857,18 +869,27 @@ struct ChatNoteAction {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ChatResult {
     reply: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suggestions: Option<Vec<ChatPromptSuggestion>>,
     note_actions: Vec<ChatNoteAction>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    note_edits: Vec<chat_edits::ChatNoteEdit>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note_rewrite: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    edit_intent: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     read_requests: Option<Vec<ChatReadRequest>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checkpoint: Option<ChatReadingFinding>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ChatReadRequest {
-    kind: String,
-    id: String,
-    query: String,
-    start: Option<u64>,
+struct ChatPromptSuggestion {
+    prompt: String,
+    intent: String,
+    evidence_ids: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -900,29 +921,6 @@ struct ExportWebPageRequest {
 struct ExportWebPageResult {
     path: String,
     cancelled: bool,
-}
-
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WhisperConfig {
-    #[serde(default)]
-    language: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct VoiceMemoRequest {
-    file_name: String,
-    mime_type: String,
-    base64_data: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct YouTubeTranscriptionRequest {
-    url: String,
-    #[serde(default)]
-    language: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1059,93 +1057,6 @@ enum OCRDocumentKind {
     Jpeg,
     Heif,
     Pdf,
-}
-
-#[derive(Clone)]
-struct TranscriptionRuntime {
-    whisper: PathBuf,
-    model: PathBuf,
-    yt_dlp: PathBuf,
-    deno: PathBuf,
-}
-
-struct VoiceMemoWorker {
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
-    next_request_id: u64,
-}
-
-impl Drop for VoiceMemoWorker {
-    fn drop(&mut self) {
-        let _ = self.stdin.write_all(b"{\"quit\":true}\n");
-        let _ = self.stdin.flush();
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-#[derive(Clone, Default)]
-struct VoiceMemoWorkers(Arc<Mutex<HashMap<String, VoiceMemoWorker>>>);
-
-#[derive(Serialize)]
-struct VoiceMemoWorkerRequest<'a> {
-    id: u64,
-    input: &'a str,
-}
-
-#[derive(Deserialize)]
-struct VoiceMemoWorkerResponse {
-    #[serde(default)]
-    id: Option<u64>,
-    #[serde(default)]
-    ready: Option<bool>,
-    #[serde(default)]
-    text: Option<String>,
-    #[serde(default)]
-    error: Option<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TranscribedMedia {
-    title: String,
-    file_name: String,
-    mime_type: String,
-    byte_size: u64,
-    text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    source_url: Option<String>,
-    warnings: Vec<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct MediaTranscriptionFailure {
-    file_name: String,
-    error: String,
-}
-
-#[derive(Serialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct MediaTranscriptionBatch {
-    transcripts: Vec<TranscribedMedia>,
-    failures: Vec<MediaTranscriptionFailure>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TranscriptionSetupStatus {
-    whisper_available: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    whisper_version: Option<String>,
-    whisper_model: String,
-    yt_dlp_available: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    yt_dlp_version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    deno_version: Option<String>,
-    message: String,
 }
 
 fn vault_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1611,11 +1522,30 @@ async fn save_vault(
 #[tauri::command]
 async fn save_note_image(
     app: AppHandle,
+    window: tauri::WebviewWindow,
+    bridge: State<'_, assistant_bridge::AssistantBridge>,
+    editor_action_grant: Option<editor_actions_protocol::EditorActionGrant>,
     request: NoteImageRequest,
 ) -> Result<NoteImageAttachment, String> {
     let directory = note_image_directory(&app)?;
+    let actions = bridge.editor_actions.clone();
+    let owner = window.label().to_owned();
     tauri::async_runtime::spawn_blocking(move || {
+        if let Some(grant) = &editor_action_grant {
+            actions.authorize(
+                &owner,
+                grant,
+                editor_actions_protocol::ActionStage::ImageSaving,
+            )?;
+        }
         let (asset_id, file_name, mime_type, bytes) = decode_note_image(request)?;
+        if let Some(grant) = &editor_action_grant {
+            actions.authorize(
+                &owner,
+                grant,
+                editor_actions_protocol::ActionStage::ImageSaving,
+            )?;
+        }
         let byte_size = bytes.len();
         persist_note_image(&directory.join(&asset_id), &bytes)?;
         Ok(NoteImageAttachment {
@@ -1687,8 +1617,10 @@ async fn run_generate_note_image(
     client: &Client,
     request: GenerateNoteImageRequest,
     cancelled: &mut tokio::sync::watch::Receiver<bool>,
+    authorize: impl Fn() -> Result<(), String>,
 ) -> Result<GeneratedNoteImage, String> {
     validate_note_image_generation_request(&request)?;
+    authorize()?;
     let Some(api_key) = stored_api_key().await? else {
         return Err("Add an OpenAI API key in Settings before generating an image.".to_string());
     };
@@ -1701,6 +1633,7 @@ async fn run_generate_note_image(
         "output_format": "jpeg",
         "output_compression": 88
     });
+    authorize()?;
     let send = client
         .post(OPENAI_IMAGE_GENERATIONS_URL)
         .bearer_auth(api_key.as_str())
@@ -1733,16 +1666,40 @@ async fn run_generate_note_image(
             return Err("Image generation was cancelled.".to_string());
         }
     }?;
+    authorize()?;
     parse_generated_note_image_response(&response)
 }
 
 #[tauri::command]
 async fn generate_note_image(
+    window: tauri::WebviewWindow,
+    bridge: State<'_, assistant_bridge::AssistantBridge>,
+    editor_action_grant: Option<editor_actions_protocol::EditorActionGrant>,
     client: State<'_, OpenAiClient>,
     cancellation: State<'_, KnowledgeCancellation>,
     request: GenerateNoteImageRequest,
 ) -> Result<GeneratedNoteImage, String> {
     validate_note_image_generation_request(&request)?;
+    let quality = match request.quality {
+        NoteImageQuality::Fast => editor_actions_protocol::ImageQuality::Fast,
+        NoteImageQuality::Detailed => editor_actions_protocol::ImageQuality::Detailed,
+    };
+    let authorize = || {
+        if let Some(grant) = &editor_action_grant {
+            bridge.editor_actions.provider(
+                window.label(),
+                grant,
+                editor_actions_protocol::ActionStage::ImageRendering,
+                None,
+                None,
+                None,
+                Some(quality.clone()),
+                None,
+            )?;
+        }
+        Ok(())
+    };
+    authorize()?;
     let request_id = request.request_id.clone();
     let registration = cancellation.register(&request_id);
     let generation = registration.generation;
@@ -1750,7 +1707,7 @@ async fn generate_note_image(
     let result = if *cancelled.borrow() {
         Err("Image generation was cancelled.".to_string())
     } else {
-        run_generate_note_image(&client.0, request, &mut cancelled).await
+        run_generate_note_image(&client.0, request, &mut cancelled, authorize).await
     };
     cancellation.finish(&request_id, generation);
     result
@@ -1817,118 +1774,6 @@ async fn open_data_directory(app: AppHandle) -> Result<String, String> {
         .open_path(display_path.clone(), None::<String>)
         .map_err(|error| format!("Orion could not open its data folder: {error}"))?;
     Ok(display_path)
-}
-
-#[tauri::command]
-async fn open_claude_connector(app: AppHandle) -> Result<String, String> {
-    let connector = app
-        .path()
-        .resource_dir()
-        .map_err(|error| format!("Orion could not locate its bundled resources: {error}"))?
-        .join(BUNDLED_CLAUDE_CONNECTOR_NAME);
-    let metadata = fs::metadata(&connector)
-        .map_err(|_| "Orion's Claude connector is missing. Reinstall Orion.".to_string())?;
-    if !metadata.is_file() || metadata.len() < 1_024 {
-        return Err("Orion's Claude connector is incomplete. Reinstall Orion.".to_string());
-    }
-    let display_path = connector.to_string_lossy().into_owned();
-    app.opener()
-        .open_path(display_path.clone(), None::<String>)
-        .map_err(|error| format!("Orion could not open its Claude connector: {error}"))?;
-    Ok(display_path)
-}
-
-fn validate_bundled_codex_plugin(resource_directory: &Path) -> Result<PathBuf, String> {
-    if !resource_directory.is_absolute() {
-        return Err("Orion received an invalid bundled resource path.".to_string());
-    }
-
-    let plugin_directory = resource_directory.join(BUNDLED_CODEX_PLUGIN_DIRECTORY);
-    let canonical_plugin_directory = fs::canonicalize(&plugin_directory)
-        .map_err(|_| "Orion's Codex plugin is missing. Reinstall Orion.".to_string())?;
-    let marketplace =
-        plugin_directory.join(BUNDLED_CODEX_MARKETPLACE_PATH.iter().collect::<PathBuf>());
-    let server = plugin_directory.join(BUNDLED_CODEX_SERVER_PATH.iter().collect::<PathBuf>());
-    let canonical_marketplace = fs::canonicalize(&marketplace)
-        .map_err(|_| "Orion's Codex plugin catalog is missing. Reinstall Orion.".to_string())?;
-    let canonical_server = fs::canonicalize(&server)
-        .map_err(|_| "Orion's Codex connector is missing. Reinstall Orion.".to_string())?;
-
-    if !canonical_marketplace.starts_with(&canonical_plugin_directory)
-        || !canonical_server.starts_with(&canonical_plugin_directory)
-    {
-        return Err("Orion's Codex plugin contains an invalid bundled path.".to_string());
-    }
-
-    let marketplace_metadata = fs::metadata(&canonical_marketplace)
-        .map_err(|_| "Orion's Codex plugin catalog is missing. Reinstall Orion.".to_string())?;
-    if !marketplace_metadata.is_file() || marketplace_metadata.len() == 0 {
-        return Err("Orion's Codex plugin catalog is incomplete. Reinstall Orion.".to_string());
-    }
-
-    let marketplace_json: Value =
-        serde_json::from_reader(File::open(&canonical_marketplace).map_err(|_| {
-            "Orion could not read its bundled Codex plugin catalog. Reinstall Orion.".to_string()
-        })?)
-        .map_err(|_| "Orion's Codex plugin catalog is invalid. Reinstall Orion.".to_string())?;
-    let has_orion_entry = marketplace_json
-        .get("plugins")
-        .and_then(Value::as_array)
-        .is_some_and(|plugins| {
-            plugins.iter().any(|plugin| {
-                plugin.get("name").and_then(Value::as_str) == Some("orion")
-                    && plugin.pointer("/source/path").and_then(Value::as_str)
-                        == Some("./plugins/orion")
-            })
-        });
-    if !has_orion_entry {
-        return Err("Orion's Codex plugin catalog is invalid. Reinstall Orion.".to_string());
-    }
-
-    let server_metadata = fs::metadata(&canonical_server)
-        .map_err(|_| "Orion's Codex connector is missing. Reinstall Orion.".to_string())?;
-    if !server_metadata.is_file() || server_metadata.len() < 1_024 {
-        return Err("Orion's Codex connector is incomplete. Reinstall Orion.".to_string());
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if server_metadata.permissions().mode() & 0o111 == 0 {
-            return Err("Orion's Codex connector cannot run. Reinstall Orion.".to_string());
-        }
-    }
-
-    Ok(canonical_marketplace)
-}
-
-fn codex_plugin_url(marketplace: &Path) -> Result<Url, String> {
-    if !marketplace.is_absolute() {
-        return Err("Orion received an invalid Codex plugin path.".to_string());
-    }
-    let marketplace = marketplace
-        .to_str()
-        .ok_or_else(|| "Orion could not encode its Codex plugin path.".to_string())?;
-    let mut url = Url::parse("codex://plugins/orion")
-        .map_err(|_| "Orion could not create its Codex install link.".to_string())?;
-    url.query_pairs_mut()
-        .append_pair("marketplacePath", marketplace);
-    Ok(url)
-}
-
-#[tauri::command]
-async fn open_codex_plugin(app: AppHandle) -> Result<String, String> {
-    let resource_directory = app
-        .path()
-        .resource_dir()
-        .map_err(|error| format!("Orion could not locate its bundled resources: {error}"))?;
-    let marketplace = validate_bundled_codex_plugin(&resource_directory)?;
-    let install_url = codex_plugin_url(&marketplace)?.to_string();
-    app.opener()
-        .open_url(install_url.clone(), None::<String>)
-        .map_err(|error| {
-            format!("Orion could not open its Codex plugin: {error}. Make sure Codex is installed.")
-        })?;
-    Ok(install_url)
 }
 
 fn keychain_entry() -> Result<keyring::Entry, String> {
@@ -2319,7 +2164,8 @@ async fn generate_speech(
     if request.track_words && engine == "openai" {
         if let Some(job) = alignment_job {
             if window.is_visible().is_ok() && jobs.promote_picker(&job).is_ok() {
-                word_timings = align_generated_speech(&app, job, &text, &bytes).await;
+                word_timings =
+                    local_transcription::align_generated_speech(&app, job, &text, &bytes).await;
             }
         }
     }
@@ -2361,57 +2207,6 @@ async fn read_speech_response(mut response: Response, limit: usize) -> Result<Ve
         bytes.extend_from_slice(&chunk);
     }
     Ok(bytes)
-}
-
-/// Timing failure must not discard already-generated speech or retry a paid call.
-async fn align_generated_speech(
-    app: &AppHandle,
-    job: media_jobs::Job,
-    text: &str,
-    bytes: &[u8],
-) -> Option<Vec<speech_timing::SpeechWordTiming>> {
-    let runtime = bundled_transcription_runtime(app).ok()?;
-    validate_whisper_runtime(&runtime).ok()?;
-    let audio = bytes.to_vec();
-    let text = text.to_string();
-    tauri::async_runtime::spawn_blocking(move || {
-        job.control.check().ok()?;
-        // tempfile creates a private mode-0600 file; Drop removes it on every path.
-        let mut file = tempfile::Builder::new()
-            .prefix("orion-speech-")
-            .suffix(".mp3")
-            .tempfile()
-            .ok()?;
-        file.write_all(&audio).ok()?;
-        file.flush().ok()?;
-        let run = |cpu: bool| {
-            let mut command = Command::new(&runtime.whisper);
-            command
-                .arg("--align")
-                .arg("--model")
-                .arg(&runtime.model)
-                .arg("--input")
-                .arg(file.path());
-            if cpu {
-                command.arg("--cpu");
-            }
-            job.control.run(&mut command, Duration::from_secs(120)).ok()
-        };
-        let mut output = run(false)?;
-        if !output.status.success()
-            && String::from_utf8_lossy(&output.stderr).contains("ggml_metal_buffer_init: error")
-        {
-            output = run(true)?;
-        }
-        job.control.check().ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        speech_timing::from_acoustic_json(&text, &output.stdout)
-    })
-    .await
-    .ok()
-    .flatten()
 }
 
 #[tauri::command]
@@ -2545,201 +2340,6 @@ fn normalize_effort(effort: Option<String>) -> Result<Option<String>, String> {
     }
 }
 
-fn organizer_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "notes": {
-                "type": "array",
-                "maxItems": MAX_ORGANIZED_ITEMS,
-                "description": "Distinct thesis-led notes within the shared 30-output atomic safety boundary; no separate project-note quota.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "title": {
-                            "type": "string",
-                            "description": "A concise, unique wiki note title."
-                        },
-                        "summary": {
-                            "type": "string",
-                            "description": "A one or two sentence preview of the note."
-                        },
-                        "body": {
-                            "type": "string",
-                            "description": "The complete note in readable Markdown. Use ordinary concept text, never [[wiki-link]] bracket syntax."
-                        },
-                        "tags": {
-                            "type": "array",
-                            "items": { "type": "string" }
-                        },
-                        "aliases": {
-                            "type": "array",
-                            "items": { "type": "string" }
-                        },
-                        "links": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "targetTitle": { "type": "string" },
-                                    "context": { "type": "string" }
-                                },
-                                "required": ["targetTitle", "context"],
-                                "additionalProperties": false
-                            }
-                        }
-                    },
-                    "required": ["title", "summary", "body", "tags", "aliases", "links"],
-                    "additionalProperties": false
-                }
-            },
-            "wikiArticles": {
-                "type": "array",
-                "maxItems": MAX_ORGANIZED_ITEMS,
-                "description": "Canonical articles within the shared 30-output atomic safety boundary; create only distinct supported knowledge objects.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "title": {
-                            "type": "string",
-                            "description": "The canonical article title, such as SQL."
-                        },
-                        "summary": { "type": "string" },
-                        "body": {
-                            "type": "string",
-                            "description": "The complete coherent wiki article in readable Markdown, integrating existing and new context without provenance headings."
-                        },
-                        "overview": {
-                            "type": "string",
-                            "description": "A concise, high-confidence general explanation."
-                        },
-                        "spaceRelevance": {
-                            "type": "string",
-                            "description": "Why this subject matters in the supplied Space."
-                        },
-                        "sourceGroundedDetails": {
-                            "type": "array",
-                            "items": { "type": "string" }
-                        },
-                        "uncertainties": {
-                            "type": "array",
-                            "items": { "type": "string" }
-                        },
-                        "tags": {
-                            "type": "array",
-                            "items": { "type": "string" }
-                        },
-                        "aliases": {
-                            "type": "array",
-                            "items": { "type": "string" }
-                        },
-                        "links": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "targetTitle": { "type": "string" },
-                                    "context": { "type": "string" }
-                                },
-                                "required": ["targetTitle", "context"],
-                                "additionalProperties": false
-                            }
-                        }
-                    },
-                    "required": [
-                        "title", "summary", "body", "overview", "spaceRelevance",
-                        "sourceGroundedDetails", "uncertainties", "tags",
-                        "aliases", "links"
-                    ],
-                    "additionalProperties": false
-                }
-            },
-            "concepts": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "label": {
-                            "type": "string",
-                            "description": "A specific reusable phrase that should become a hyperlink."
-                        },
-                        "aliases": {
-                            "type": "array",
-                            "items": { "type": "string" }
-                        },
-                        "description": { "type": "string" },
-                        "canonicalTitle": {
-                            "type": "string",
-                            "description": "Exact title of this phrase's appropriate returned or existing canonical note or wiki article."
-                        },
-                        "relatedTitles": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "description": "Exact contextual note titles related to the canonical article."
-                        }
-                    },
-                    "required": [
-                        "label", "aliases", "description", "canonicalTitle",
-                        "relatedTitles"
-                    ],
-                    "additionalProperties": false
-                }
-            },
-            "suggestedConnections": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "fromTitle": { "type": "string" },
-                        "toTitle": { "type": "string" },
-                        "kind": {
-                            "type": "string",
-                            "enum": ["supports", "qualifies", "conflicts", "related"]
-                        },
-                        "reason": { "type": "string" }
-                    },
-                    "required": ["fromTitle", "toTitle", "kind", "reason"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        "required": ["notes", "wikiArticles", "concepts", "suggestedConnections"],
-        "additionalProperties": false
-    })
-}
-
-fn anthropic_organizer_schema() -> Value {
-    let mut schema = organizer_schema();
-    strip_anthropic_unsupported_schema_keywords(&mut schema);
-    schema
-}
-
-fn strip_anthropic_unsupported_schema_keywords(value: &mut Value) {
-    match value {
-        Value::Object(object) => {
-            for keyword in [
-                "minLength",
-                "maxLength",
-                "minItems",
-                "maxItems",
-                "minimum",
-                "maximum",
-            ] {
-                object.remove(keyword);
-            }
-            for child in object.values_mut() {
-                strip_anthropic_unsupported_schema_keywords(child);
-            }
-        }
-        Value::Array(values) => {
-            for child in values {
-                strip_anthropic_unsupported_schema_keywords(child);
-            }
-        }
-        _ => {}
-    }
-}
-
 fn validate_organizer_item_counts(notes: usize, wiki_articles: usize) -> Result<(), String> {
     if notes + wiki_articles > MAX_ORGANIZED_ITEMS {
         return Err(format!(
@@ -2768,1251 +2368,6 @@ fn validate_root_organizer_limits(response: &Value) -> Result<(), String> {
         return Ok(());
     };
     validate_organizer_item_counts(notes.len(), wiki_articles.len())
-}
-
-fn knowledge_reference_schema() -> Value {
-    json!({
-        "anyOf": [
-            {
-                "type": "object",
-                "properties": {
-                    "kind": { "type": "string", "const": "source" },
-                    "sourceId": { "type": "string", "minLength": 1, "maxLength": 300 }
-                },
-                "required": ["kind", "sourceId"],
-                "additionalProperties": false
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "kind": { "type": "string", "const": "source-range" },
-                    "sourceId": { "type": "string", "minLength": 1, "maxLength": 300 },
-                    "rangeId": { "type": "string", "minLength": 1, "maxLength": 300 }
-                },
-                "required": ["kind", "sourceId", "rangeId"],
-                "additionalProperties": false
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "kind": { "type": "string", "const": "note-digest-range" },
-                    "rangeId": { "type": "string", "minLength": 1, "maxLength": 300 }
-                },
-                "required": ["kind", "rangeId"],
-                "additionalProperties": false
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "kind": { "type": "string", "const": "note" },
-                    "noteId": { "type": "string", "minLength": 1, "maxLength": 300 },
-                    "version": { "type": "string", "minLength": 1, "maxLength": 300 }
-                },
-                "required": ["kind", "noteId", "version"],
-                "additionalProperties": false
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "kind": { "type": "string", "const": "concept" },
-                    "conceptId": { "type": "string", "minLength": 1, "maxLength": 300 }
-                },
-                "required": ["kind", "conceptId"],
-                "additionalProperties": false
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "kind": { "type": "string", "const": "artifact" },
-                    "artifactId": { "type": "string", "minLength": 1, "maxLength": 300 }
-                },
-                "required": ["kind", "artifactId"],
-                "additionalProperties": false
-            }
-        ]
-    })
-}
-
-fn knowledge_string_array_schema(max_items: usize) -> Value {
-    json!({
-        "type": "array",
-        "maxItems": max_items,
-        "items": { "type": "string", "minLength": 1, "maxLength": 4_000 }
-    })
-}
-
-fn knowledge_owner_proposal_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "destinationNoteId": { "type": "string", "minLength": 1, "maxLength": 300 },
-            "baseVersion": { "type": "string", "minLength": 1, "maxLength": 300 },
-            "title": { "type": "string", "minLength": 1, "maxLength": 300 },
-            "summary": { "type": "string", "maxLength": 2_000 },
-            "body": { "type": "string", "maxLength": 100_000 },
-            "aliases": knowledge_string_array_schema(24),
-            "tags": knowledge_string_array_schema(24),
-            "sourceIds": {
-                "type": "array",
-                "maxItems": 24,
-                "items": { "type": "string", "minLength": 1, "maxLength": 300 }
-            }
-        },
-        "required": [
-            "destinationNoteId", "baseVersion", "title", "summary", "body",
-            "aliases", "tags", "sourceIds"
-        ],
-        "additionalProperties": false
-    })
-}
-
-fn knowledge_source_range_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "sourceId": { "type": "string", "minLength": 1, "maxLength": 300 },
-            "rangeId": { "type": "string", "minLength": 1, "maxLength": 300 }
-        },
-        "required": ["sourceId", "rangeId"],
-        "additionalProperties": false
-    })
-}
-
-fn knowledge_reading_blueprint_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "spaceExplanation": { "type": "string", "minLength": 1, "maxLength": 8_000 },
-            "spaceFocusConcepts": knowledge_string_array_schema(40),
-            "spaceQuestions": knowledge_string_array_schema(40),
-            "readers": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 100,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "readerId": { "type": "string", "minLength": 1, "maxLength": 300 },
-                        "sourceId": { "type": "string", "minLength": 1, "maxLength": 300 },
-                        "rangeId": { "type": "string", "minLength": 1, "maxLength": 300 },
-                        "focusQuestions": knowledge_string_array_schema(40),
-                        "focusConcepts": knowledge_string_array_schema(40),
-                        "comparisons": {
-                            "type": "array",
-                            "maxItems": 40,
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "noteId": { "type": "string", "minLength": 1, "maxLength": 300 },
-                                    "reason": { "type": "string", "minLength": 1, "maxLength": 2_000 }
-                                },
-                                "required": ["noteId", "reason"],
-                                "additionalProperties": false
-                            }
-                        },
-                        "mustPreserve": knowledge_string_array_schema(100)
-                    },
-                    "required": [
-                        "readerId", "sourceId", "rangeId", "focusQuestions",
-                        "focusConcepts", "comparisons", "mustPreserve"
-                    ],
-                    "additionalProperties": false
-                }
-            },
-            "warnings": knowledge_string_array_schema(80)
-        },
-        "required": [
-            "spaceExplanation", "spaceFocusConcepts", "spaceQuestions",
-            "readers", "warnings"
-        ],
-        "additionalProperties": false
-    })
-}
-
-fn knowledge_source_reading_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "sourceId": { "type": "string", "minLength": 1, "maxLength": 300 },
-            "rangeId": { "type": "string", "minLength": 1, "maxLength": 300 },
-            "summary": { "type": "string", "minLength": 1, "maxLength": 8_000 },
-            "coverage": {
-                "type": "object",
-                "properties": {
-                    "complete": { "type": "boolean" },
-                    "limitations": knowledge_string_array_schema(40)
-                },
-                "required": ["complete", "limitations"],
-                "additionalProperties": false
-            },
-            "sourceAssessment": {
-                "type": "object",
-                "properties": {
-                    "importance": { "type": "string", "enum": ["low", "medium", "high"] },
-                    "rationale": { "type": "string", "minLength": 1, "maxLength": 4_000 }
-                },
-                "required": ["importance", "rationale"],
-                "additionalProperties": false
-            },
-            "spaceAssessment": {
-                "type": "object",
-                "properties": {
-                    "relevance": { "type": "string", "enum": ["low", "medium", "high"] },
-                    "novelty": { "type": "string", "enum": ["low", "medium", "high"] },
-                    "focusConcepts": knowledge_string_array_schema(40),
-                    "deprioritizedConcepts": knowledge_string_array_schema(40),
-                    "reviewedNoteIds": {
-                        "type": "array",
-                        "maxItems": 100,
-                        "items": { "type": "string", "minLength": 1, "maxLength": 300 }
-                    },
-                    "rationale": { "type": "string", "minLength": 1, "maxLength": 4_000 }
-                },
-                "required": [
-                    "relevance", "novelty", "focusConcepts",
-                    "deprioritizedConcepts", "reviewedNoteIds", "rationale"
-                ],
-                "additionalProperties": false
-            },
-            "sourceClaims": {
-                "type": "array",
-                "maxItems": 100,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "claimId": { "type": "string", "minLength": 1, "maxLength": 300 },
-                        "text": { "type": "string", "minLength": 1, "maxLength": 4_000 },
-                        "support": {
-                            "type": "array",
-                            "minItems": 1,
-                            "maxItems": 40,
-                            "items": knowledge_source_range_schema()
-                        }
-                    },
-                    "required": ["claimId", "text", "support"],
-                    "additionalProperties": false
-                }
-            },
-            "synthesisSeeds": {
-                "type": "array",
-                "maxItems": 100,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "seedId": { "type": "string", "minLength": 1, "maxLength": 300 },
-                        "proposedTitle": { "type": "string", "minLength": 1, "maxLength": 300 },
-                        "thesis": { "type": "string", "minLength": 1, "maxLength": 4_000 },
-                        "linkPhrases": {
-                            "type": "array",
-                            "maxItems": 8,
-                            "items": { "type": "string", "minLength": 1, "maxLength": 120 },
-                            "description": "Deliberate durable link phrases grounded in the thesis or exact selected claims; not a keyword inventory."
-                        },
-                        "claimIds": {
-                            "type": "array",
-                            "minItems": 1,
-                            "maxItems": 4,
-                            "items": { "type": "string", "minLength": 1, "maxLength": 300 }
-                        },
-                        "importance": { "type": "string", "enum": ["high", "medium", "low"] },
-                        "contribution": {
-                            "type": "string",
-                            "enum": ["new", "extends", "contradicts", "connects", "qualifies"]
-                        },
-                        "relatedNoteIds": {
-                            "type": "array",
-                            "maxItems": 100,
-                            "items": { "type": "string", "minLength": 1, "maxLength": 300 }
-                        },
-                        "rationale": { "type": "string", "minLength": 1, "maxLength": 4_000 }
-                    },
-                    "required": [
-                        "seedId", "proposedTitle", "thesis", "claimIds", "importance",
-                        "contribution", "relatedNoteIds", "linkPhrases", "rationale"
-                    ],
-                    "additionalProperties": false
-                }
-            },
-            "spaceInterpretations": {
-                "type": "array",
-                "maxItems": 100,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "interpretationId": { "type": "string", "minLength": 1, "maxLength": 300 },
-                        "text": { "type": "string", "minLength": 1, "maxLength": 4_000 },
-                        "sourceClaimIds": {
-                            "type": "array",
-                            "minItems": 1,
-                            "maxItems": 100,
-                            "items": { "type": "string", "minLength": 1, "maxLength": 300 }
-                        },
-                        "relatedNoteIds": {
-                            "type": "array",
-                            "maxItems": 100,
-                            "items": { "type": "string", "minLength": 1, "maxLength": 300 }
-                        },
-                        "rationale": { "type": "string", "minLength": 1, "maxLength": 4_000 }
-                    },
-                    "required": [
-                        "interpretationId", "text", "sourceClaimIds",
-                        "relatedNoteIds", "rationale"
-                    ],
-                    "additionalProperties": false
-                }
-            },
-            "mustPreserve": knowledge_string_array_schema(100)
-        },
-        "required": [
-            "sourceId", "rangeId", "summary", "coverage", "sourceAssessment",
-            "spaceAssessment", "sourceClaims", "synthesisSeeds", "spaceInterpretations",
-            "mustPreserve"
-        ],
-        "additionalProperties": false
-    })
-}
-
-fn knowledge_evidence_selection_schema(id_field: &str) -> Value {
-    let mut properties = json!({
-        "artifactId": { "type": "string", "minLength": 1, "maxLength": 300 }
-    });
-    properties
-        .as_object_mut()
-        .expect("properties is an object")
-        .insert(
-            id_field.to_string(),
-            json!({
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 100,
-                "items": { "type": "string", "minLength": 1, "maxLength": 300 }
-            }),
-        );
-    json!({
-        "type": "object",
-        "properties": properties,
-        "required": ["artifactId", id_field],
-        "additionalProperties": false
-    })
-}
-
-fn knowledge_existing_destination_schema() -> Value {
-    json!({
-        "anyOf": [
-            { "type": "null" },
-            {
-                "type": "object",
-                "properties": {
-                    "noteId": { "type": "string", "minLength": 1, "maxLength": 300 },
-                    "baseVersion": { "type": "string", "minLength": 1, "maxLength": 300 }
-                },
-                "required": ["noteId", "baseVersion"],
-                "additionalProperties": false
-            }
-        ]
-    })
-}
-
-fn knowledge_blueprint_output_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "outputId": { "type": "string", "minLength": 1, "maxLength": 300 },
-            "operation": { "type": "string", "enum": ["create", "revise"] },
-            "kind": { "type": "string", "enum": ["note", "wikiArticle"] },
-            "title": { "type": "string", "minLength": 1, "maxLength": 300 },
-            "editorialBrief": { "type": "string", "minLength": 1, "maxLength": 4_000 },
-            "sourceIds": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 24,
-                "items": { "type": "string", "minLength": 1, "maxLength": 300 }
-            },
-            "claimSelections": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 100,
-                "items": knowledge_evidence_selection_schema("claimIds")
-            },
-            "lensSelections": {
-                "type": "array",
-                "maxItems": 100,
-                "items": knowledge_evidence_selection_schema("interpretationIds")
-            },
-            "mustPreserve": knowledge_string_array_schema(100),
-            "estimatedTokens": { "type": "integer", "minimum": 128, "maximum": 12_000 },
-            "writerSlotId": { "type": "string", "minLength": 1, "maxLength": 300 },
-            "existingDestination": knowledge_existing_destination_schema()
-        },
-        "required": [
-            "outputId", "operation", "kind", "title", "editorialBrief",
-            "sourceIds", "claimSelections", "lensSelections", "mustPreserve",
-            "estimatedTokens", "writerSlotId", "existingDestination"
-        ],
-        "additionalProperties": false
-    })
-}
-
-fn knowledge_writing_blueprint_schema() -> Value {
-    let organizer = organizer_schema();
-    let concepts = organizer
-        .pointer("/properties/concepts")
-        .cloned()
-        .expect("organizer concepts schema exists");
-    let suggested_connections = organizer
-        .pointer("/properties/suggestedConnections")
-        .cloned()
-        .expect("organizer connection schema exists");
-    json!({
-        "type": "object",
-        "properties": {
-            "spaceThesis": { "type": "string", "minLength": 1, "maxLength": 8_000 },
-            "outputs": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": MAX_ORGANIZED_ITEMS,
-                "items": knowledge_blueprint_output_schema()
-            },
-            "seedDispositions": {
-                "type": "array",
-                "maxItems": 200,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "artifactId": { "type": "string", "minLength": 1, "maxLength": 300 },
-                        "seedId": { "type": "string", "minLength": 1, "maxLength": 300 },
-                        "disposition": { "type": "string", "enum": ["output", "merged", "omitted"] },
-                        "outputId": {
-                            "anyOf": [
-                                { "type": "null" },
-                                { "type": "string", "minLength": 1, "maxLength": 300 }
-                            ]
-                        },
-                        "rationale": { "type": "string", "minLength": 1, "maxLength": 4_000 }
-                    },
-                    "required": ["artifactId", "seedId", "disposition", "outputId", "rationale"],
-                    "additionalProperties": false
-                }
-            },
-            "writerSlots": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 6,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "writerSlotId": { "type": "string", "minLength": 1, "maxLength": 300 },
-                        "objective": { "type": "string", "minLength": 1, "maxLength": 2_000 },
-                        "outputIds": {
-                            "type": "array",
-                            "minItems": 1,
-                            "maxItems": MAX_ORGANIZED_ITEMS,
-                            "items": { "type": "string", "minLength": 1, "maxLength": 300 }
-                        }
-                    },
-                    "required": ["writerSlotId", "objective", "outputIds"],
-                    "additionalProperties": false
-                }
-            },
-            "concepts": concepts,
-            "suggestedConnections": suggested_connections,
-            "warnings": knowledge_string_array_schema(80)
-        },
-        "required": [
-            "spaceThesis", "outputs", "seedDispositions", "writerSlots", "concepts",
-            "suggestedConnections", "warnings"
-        ],
-        "additionalProperties": false
-    })
-}
-
-fn knowledge_writer_draft_schema() -> Value {
-    let organizer = organizer_schema();
-    let links = organizer
-        .pointer("/properties/notes/items/properties/links")
-        .cloned()
-        .expect("organizer links schema exists");
-    json!({
-        "type": "object",
-        "properties": {
-            "outputId": { "type": "string", "minLength": 1, "maxLength": 300 },
-            "operation": { "type": "string", "enum": ["create", "revise"] },
-            "kind": { "type": "string", "enum": ["note", "wikiArticle"] },
-            "title": { "type": "string", "minLength": 1, "maxLength": 300 },
-            "summary": { "type": "string", "maxLength": 2_000 },
-            "body": { "type": "string", "maxLength": 100_000 },
-            "tags": knowledge_string_array_schema(24),
-            "aliases": knowledge_string_array_schema(24),
-            "links": links,
-            "overview": { "type": "string", "maxLength": 4_000 },
-            "spaceRelevance": { "type": "string", "maxLength": 8_000 },
-            "sourceGroundedDetails": knowledge_string_array_schema(100),
-            "uncertainties": knowledge_string_array_schema(100),
-            "sourceIds": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 24,
-                "items": { "type": "string", "minLength": 1, "maxLength": 300 }
-            },
-            "claimSelections": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 100,
-                "items": knowledge_evidence_selection_schema("claimIds")
-            },
-            "lensSelections": {
-                "type": "array",
-                "maxItems": 100,
-                "items": knowledge_evidence_selection_schema("interpretationIds")
-            },
-            "mustPreserve": knowledge_string_array_schema(100),
-            "existingDestination": knowledge_existing_destination_schema()
-        },
-        "required": [
-            "outputId", "operation", "kind", "title", "summary", "body",
-            "tags", "aliases", "links", "overview", "spaceRelevance",
-            "sourceGroundedDetails", "uncertainties", "sourceIds",
-            "claimSelections", "lensSelections", "mustPreserve", "existingDestination"
-        ],
-        "additionalProperties": false
-    })
-}
-
-fn knowledge_writer_result_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "writerSlotId": { "type": "string", "minLength": 1, "maxLength": 300 },
-            "drafts": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": MAX_ORGANIZED_ITEMS,
-                "items": knowledge_writer_draft_schema()
-            },
-            "warnings": knowledge_string_array_schema(80)
-        },
-        "required": ["writerSlotId", "drafts", "warnings"],
-        "additionalProperties": false
-    })
-}
-
-fn knowledge_note_routing_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "rangeId": { "type": "string", "minLength": 1, "maxLength": 300 },
-            "routes": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 100,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "noteId": { "type": "string", "minLength": 1, "maxLength": 300 },
-                        "noteVersion": { "type": "string", "minLength": 1, "maxLength": 300 },
-                        "relation": {
-                            "type": "string",
-                            "enum": [
-                                "unrelated",
-                                "duplicate",
-                                "extends",
-                                "contradicts",
-                                "uncertain"
-                            ]
-                        },
-                        "rationale": { "type": "string", "minLength": 1, "maxLength": 2_000 },
-                        "candidateNoteIds": {
-                            "type": "array",
-                            "maxItems": 100,
-                            "items": { "type": "string", "minLength": 1, "maxLength": 300 }
-                        }
-                    },
-                    "required": [
-                        "noteId", "noteVersion", "relation", "rationale", "candidateNoteIds"
-                    ],
-                    "additionalProperties": false
-                }
-            },
-            "warnings": knowledge_string_array_schema(80)
-        },
-        "required": ["rangeId", "routes", "warnings"],
-        "additionalProperties": false
-    })
-}
-
-fn knowledge_validation_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "valid": { "type": "boolean" },
-            "issues": knowledge_string_array_schema(80),
-            "checkedArtifactIds": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 100,
-                "items": { "type": "string", "minLength": 1, "maxLength": 300 }
-            }
-        },
-        "required": ["valid", "issues", "checkedArtifactIds"],
-        "additionalProperties": false
-    })
-}
-
-fn knowledge_artifact_payload_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "summary": { "type": "string", "minLength": 1, "maxLength": 4_000 },
-            "body": { "type": "string", "maxLength": 64_000 },
-            "assessment": {
-                "type": "object",
-                "properties": {
-                    "spaceRelevance": { "type": "string", "enum": ["low", "medium", "high"] },
-                    "sourceImportance": { "type": "string", "enum": ["low", "medium", "high"] },
-                    "novelty": { "type": "string", "enum": ["low", "medium", "high"] },
-                    "focusConcepts": knowledge_string_array_schema(40),
-                    "deprioritizedConcepts": knowledge_string_array_schema(40),
-                    "reviewedNoteIds": {
-                        "type": "array",
-                        "maxItems": 100,
-                        "items": { "type": "string", "minLength": 1, "maxLength": 300 }
-                    },
-                    "rationale": { "type": "string", "minLength": 1, "maxLength": 4_000 }
-                },
-                "required": [
-                    "spaceRelevance", "sourceImportance", "novelty",
-                    "focusConcepts", "deprioritizedConcepts", "reviewedNoteIds",
-                    "rationale"
-                ],
-                "additionalProperties": false
-            },
-            "claims": {
-                "type": "array",
-                "maxItems": 100,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "text": { "type": "string", "minLength": 1, "maxLength": 4_000 },
-                        "references": {
-                            "type": "array",
-                            "maxItems": 40,
-                            "items": knowledge_reference_schema()
-                        }
-                    },
-                    "required": ["text", "references"],
-                    "additionalProperties": false
-                }
-            },
-            "references": {
-                "type": "array",
-                "maxItems": 100,
-                "items": knowledge_reference_schema()
-            },
-            "mustPreserve": knowledge_string_array_schema(100),
-            "ownerProposals": {
-                "type": "array",
-                "maxItems": 30,
-                "items": knowledge_owner_proposal_schema()
-            },
-            "validation": {
-                "anyOf": [
-                    { "type": "null" },
-                    knowledge_validation_schema()
-                ]
-            }
-        },
-        "required": [
-            "summary", "body", "assessment", "claims", "references", "mustPreserve",
-            "ownerProposals", "validation"
-        ],
-        "additionalProperties": false
-    })
-}
-
-fn knowledge_root_result_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "result": organizer_schema(),
-            "provenance": {
-                "type": "array",
-                "maxItems": MAX_ORGANIZED_ITEMS,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "kind": { "type": "string", "enum": ["note", "wikiArticle"] },
-                        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
-                        "sourceIds": {
-                            "type": "array",
-                            "maxItems": 12,
-                            "items": { "type": "string", "minLength": 1, "maxLength": 300 }
-                        },
-                        "evidenceReferences": {
-                            "type": "array",
-                            "maxItems": 100,
-                            "items": knowledge_reference_schema()
-                        }
-                    },
-                    "required": ["kind", "title", "sourceIds", "evidenceReferences"],
-                    "additionalProperties": false
-                }
-            },
-            "ownerProposals": {
-                "type": "array",
-                "maxItems": 30,
-                "items": knowledge_owner_proposal_schema()
-            },
-            "warnings": knowledge_string_array_schema(80)
-        },
-        "required": ["result", "provenance", "ownerProposals", "warnings"],
-        "additionalProperties": false
-    })
-}
-
-fn knowledge_assignment_schema() -> Value {
-    let identifier_array = json!({
-        "type": "array",
-        "minItems": 1,
-        "maxItems": 100,
-        "items": { "type": "string", "minLength": 1, "maxLength": 300 }
-    });
-    json!({
-        "type": "object",
-        "properties": {
-            "assignmentId": { "type": "string", "minLength": 1, "maxLength": 300 },
-            "parent": {
-                "anyOf": [
-                    {
-                        "type": "object",
-                        "properties": {
-                            "kind": { "type": "string", "const": "run" },
-                            "runId": { "type": "string", "minLength": 1, "maxLength": 300 }
-                        },
-                        "required": ["kind", "runId"],
-                        "additionalProperties": false
-                    },
-                    {
-                        "type": "object",
-                        "properties": {
-                            "kind": { "type": "string", "const": "assignment" },
-                            "assignmentId": { "type": "string", "minLength": 1, "maxLength": 300 }
-                        },
-                        "required": ["kind", "assignmentId"],
-                        "additionalProperties": false
-                    }
-                ]
-            },
-            "purpose": {
-                "type": "string",
-                "enum": ["root", "evidence", "reconciler", "compressor", "owner", "validator"]
-            },
-            "objective": { "type": "string", "minLength": 1, "maxLength": 2_000 },
-            "references": {
-                "type": "array",
-                "maxItems": 100,
-                "items": knowledge_reference_schema()
-            },
-            "constraints": {
-                "type": "object",
-                "properties": {
-                    "rules": knowledge_string_array_schema(100),
-                    "mustPreserve": knowledge_string_array_schema(100)
-                },
-                "required": ["rules", "mustPreserve"],
-                "additionalProperties": false
-            },
-            "authority": {
-                "anyOf": [
-                    {
-                        "type": "object",
-                        "properties": {
-                            "kind": { "type": "string", "const": "read-only" }
-                        },
-                        "required": ["kind"],
-                        "additionalProperties": false
-                    },
-                    {
-                        "type": "object",
-                        "properties": {
-                            "kind": { "type": "string", "const": "destination-owner" },
-                            "destinationNoteIds": identifier_array,
-                            "baseVersions": {
-                                "type": "array",
-                                "minItems": 1,
-                                "maxItems": 100,
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "noteId": { "type": "string", "minLength": 1, "maxLength": 300 },
-                                        "version": { "type": "string", "minLength": 1, "maxLength": 300 }
-                                    },
-                                    "required": ["noteId", "version"],
-                                    "additionalProperties": false
-                                }
-                            }
-                        },
-                        "required": ["kind", "destinationNoteIds", "baseVersions"],
-                        "additionalProperties": false
-                    }
-                ]
-            },
-            "output": {
-                "anyOf": [
-                    {
-                        "type": "object",
-                        "properties": { "kind": { "type": "string", "const": "root-result" } },
-                        "required": ["kind"],
-                        "additionalProperties": false
-                    },
-                    {
-                        "type": "object",
-                        "properties": { "kind": { "type": "string", "const": "evidence" } },
-                        "required": ["kind"],
-                        "additionalProperties": false
-                    },
-                    {
-                        "type": "object",
-                        "properties": { "kind": { "type": "string", "const": "reconciliation" } },
-                        "required": ["kind"],
-                        "additionalProperties": false
-                    },
-                    {
-                        "type": "object",
-                        "properties": { "kind": { "type": "string", "const": "compression" } },
-                        "required": ["kind"],
-                        "additionalProperties": false
-                    },
-                    {
-                        "type": "object",
-                        "properties": {
-                            "kind": { "type": "string", "const": "owner-proposal" },
-                            "destinationNoteIds": identifier_array
-                        },
-                        "required": ["kind", "destinationNoteIds"],
-                        "additionalProperties": false
-                    },
-                    {
-                        "type": "object",
-                        "properties": {
-                            "kind": { "type": "string", "const": "validation" },
-                            "proposalArtifactIds": identifier_array
-                        },
-                        "required": ["kind", "proposalArtifactIds"],
-                        "additionalProperties": false
-                    }
-                ]
-            },
-            "termination": {
-                "type": "object",
-                "properties": {
-                    "condition": { "type": "string", "minLength": 1, "maxLength": 1_000 }
-                },
-                "required": ["condition"],
-                "additionalProperties": false
-            }
-        },
-        "required": [
-            "assignmentId", "parent", "purpose", "objective", "references",
-            "constraints", "authority", "output", "termination"
-        ],
-        "additionalProperties": false
-    })
-}
-
-fn knowledge_coordination_call_schema() -> Value {
-    let artifact_ids = json!({
-        "type": "array",
-        "minItems": 1,
-        "maxItems": 100,
-        "items": { "type": "string", "minLength": 1, "maxLength": 300 }
-    });
-    let assignments = json!({
-        "type": "array",
-        "minItems": 1,
-        "maxItems": 100,
-        "items": knowledge_assignment_schema()
-    });
-    let base = |primitive: &str, properties: Value, required: Vec<&str>| {
-        let mut all_properties = json!({
-            "primitive": { "type": "string", "const": primitive },
-            "callId": { "type": "string", "minLength": 1, "maxLength": 300 }
-        });
-        if let (Some(target), Some(extra)) =
-            (all_properties.as_object_mut(), properties.as_object())
-        {
-            target.extend(extra.clone());
-        }
-        let mut all_required = vec!["primitive", "callId"];
-        all_required.extend(required);
-        json!({
-            "type": "object",
-            "properties": all_properties,
-            "required": all_required,
-            "additionalProperties": false
-        })
-    };
-    json!({
-        "anyOf": [
-            base("fan_out", json!({ "assignments": assignments }), vec!["assignments"]),
-            base(
-                "reconcile",
-                json!({
-                    "assignment": knowledge_assignment_schema(),
-                    "inputArtifactIds": artifact_ids
-                }),
-                vec!["assignment", "inputArtifactIds"]
-            ),
-            base(
-                "compress",
-                json!({
-                    "assignment": knowledge_assignment_schema(),
-                    "inputArtifactIds": artifact_ids,
-                    "mustPreserve": knowledge_string_array_schema(100)
-                }),
-                vec!["assignment", "inputArtifactIds", "mustPreserve"]
-            ),
-            base(
-                "assign_owner",
-                json!({ "assignment": knowledge_assignment_schema() }),
-                vec!["assignment"]
-            ),
-            base(
-                "re_expand",
-                json!({
-                    "assignments": assignments,
-                    "fromArtifactIds": artifact_ids
-                }),
-                vec!["assignments", "fromArtifactIds"]
-            ),
-            base(
-                "validate",
-                json!({
-                    "assignment": knowledge_assignment_schema(),
-                    "proposalArtifactIds": artifact_ids
-                }),
-                vec!["assignment", "proposalArtifactIds"]
-            ),
-            base(
-                "re_evaluate",
-                json!({
-                    "assignment": knowledge_assignment_schema(),
-                    "priorArtifactIds": artifact_ids,
-                    "observationIds": {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": 100,
-                        "items": { "type": "string", "minLength": 1, "maxLength": 300 }
-                    }
-                }),
-                vec!["assignment", "priorArtifactIds", "observationIds"]
-            )
-        ]
-    })
-}
-
-const KNOWLEDGE_ENUM_MAX_VALUES: usize = 500;
-const KNOWLEDGE_ENUM_MAX_BYTES: usize = 60_000;
-
-// Contract identifiers may only tighten a schema when every candidate is a
-// well-formed string: a partially extracted enum would reject responses the
-// contract actually allows, so any malformed candidate disables injection.
-fn contracted_identifier_values<'a, I>(candidates: Option<I>) -> Option<Vec<String>>
-where
-    I: IntoIterator<Item = Option<&'a str>>,
-{
-    let mut values: Vec<String> = Vec::new();
-    for candidate in candidates? {
-        let value = candidate?;
-        if value.is_empty() || value.len() > 300 {
-            return None;
-        }
-        if !values.iter().any(|existing| existing == value) {
-            values.push(value.to_string());
-        }
-    }
-    if values.is_empty() {
-        None
-    } else {
-        Some(values)
-    }
-}
-
-fn knowledge_pipeline_material_payloads<'a>(
-    context: &'a Value,
-    kind: &str,
-) -> Option<Vec<&'a Value>> {
-    let materials = context.get("pipelineMaterials")?.as_array()?;
-    let mut payloads = Vec::new();
-    for material in materials {
-        if material.get("kind").and_then(Value::as_str) != Some(kind) {
-            continue;
-        }
-        let payload = material.get("payload")?;
-        if !payload.is_object() {
-            return None;
-        }
-        payloads.push(payload);
-    }
-    if payloads.is_empty() {
-        None
-    } else {
-        Some(payloads)
-    }
-}
-
-fn contracted_nested_identifier_values(
-    payloads: Option<&Vec<&Value>>,
-    entries_pointer: &str,
-    id_field: &str,
-) -> Option<Vec<String>> {
-    let mut candidates = Vec::new();
-    for payload in payloads? {
-        for entry in payload.pointer(entries_pointer)?.as_array()? {
-            candidates.push(entry.get(id_field).and_then(Value::as_str));
-        }
-    }
-    contracted_identifier_values(Some(candidates))
-}
-
-// Enum injection is best-effort hardening: over-cap or over-budget contracts
-// silently keep the plain string schema so building the schema can never fail
-// or bloat a provider request.
-fn inject_contracted_enum(
-    payload: &mut Value,
-    pointer: &str,
-    values: Option<&Vec<String>>,
-    remaining_bytes: &mut usize,
-) {
-    let Some(values) = values else { return };
-    if values.is_empty() || values.len() > KNOWLEDGE_ENUM_MAX_VALUES {
-        return;
-    }
-    let added_bytes = serde_json::to_string(values).map_or(usize::MAX, |encoded| encoded.len());
-    if added_bytes > *remaining_bytes {
-        return;
-    }
-    let Some(target) = payload.pointer_mut(pointer) else {
-        return;
-    };
-    *remaining_bytes -= added_bytes;
-    *target = json!({ "type": "string", "enum": values });
-}
-
-// The valid identifiers for a fixed-pipeline response are already contracted
-// inside the request, so the response schema can make hallucinated
-// identifiers impossible at decode time. Cross-field pairing (which claim
-// belongs to which artifact) stays with the downstream validators.
-fn apply_knowledge_contract_enums(
-    expected_output: &str,
-    assignment: &Value,
-    context: &Value,
-    payload: &mut Value,
-) {
-    let mut remaining_bytes = KNOWLEDGE_ENUM_MAX_BYTES;
-    match expected_output {
-        "note-routing" => {
-            let expected_notes = assignment
-                .pointer("/output/expectedNotes")
-                .and_then(Value::as_array);
-            let range_id = contracted_identifier_values(
-                assignment
-                    .pointer("/output/rangeId")
-                    .map(|value| std::iter::once(value.as_str())),
-            );
-            let note_ids = contracted_identifier_values(expected_notes.map(|notes| {
-                notes
-                    .iter()
-                    .map(|note| note.get("noteId").and_then(Value::as_str))
-            }));
-            let note_versions = contracted_identifier_values(expected_notes.map(|notes| {
-                notes
-                    .iter()
-                    .map(|note| note.get("noteVersion").and_then(Value::as_str))
-            }));
-            inject_contracted_enum(
-                payload,
-                "/properties/rangeId",
-                range_id.as_ref(),
-                &mut remaining_bytes,
-            );
-            inject_contracted_enum(
-                payload,
-                "/properties/routes/items/properties/noteId",
-                note_ids.as_ref(),
-                &mut remaining_bytes,
-            );
-            inject_contracted_enum(
-                payload,
-                "/properties/routes/items/properties/noteVersion",
-                note_versions.as_ref(),
-                &mut remaining_bytes,
-            );
-        }
-        "writing-blueprint" => {
-            let readings = knowledge_pipeline_material_payloads(context, "source-reading");
-            let artifact_ids = contracted_identifier_values(readings.as_ref().map(|payloads| {
-                payloads
-                    .iter()
-                    .map(|payload| payload.get("artifactId").and_then(Value::as_str))
-            }));
-            let claim_ids = contracted_nested_identifier_values(
-                readings.as_ref(),
-                "/reading/sourceClaims",
-                "claimId",
-            );
-            let interpretation_ids = contracted_nested_identifier_values(
-                readings.as_ref(),
-                "/reading/spaceInterpretations",
-                "interpretationId",
-            );
-            let seed_ids = contracted_nested_identifier_values(
-                readings.as_ref(),
-                "/reading/synthesisSeeds",
-                "seedId",
-            );
-            let outputs = "/properties/outputs/items/properties";
-            inject_contracted_enum(
-                payload,
-                &format!("{outputs}/claimSelections/items/properties/artifactId"),
-                artifact_ids.as_ref(),
-                &mut remaining_bytes,
-            );
-            inject_contracted_enum(
-                payload,
-                &format!("{outputs}/claimSelections/items/properties/claimIds/items"),
-                claim_ids.as_ref(),
-                &mut remaining_bytes,
-            );
-            inject_contracted_enum(
-                payload,
-                &format!("{outputs}/lensSelections/items/properties/artifactId"),
-                artifact_ids.as_ref(),
-                &mut remaining_bytes,
-            );
-            inject_contracted_enum(
-                payload,
-                &format!("{outputs}/lensSelections/items/properties/interpretationIds/items"),
-                interpretation_ids.as_ref(),
-                &mut remaining_bytes,
-            );
-            let dispositions = "/properties/seedDispositions/items/properties";
-            inject_contracted_enum(
-                payload,
-                &format!("{dispositions}/artifactId"),
-                artifact_ids.as_ref(),
-                &mut remaining_bytes,
-            );
-            inject_contracted_enum(
-                payload,
-                &format!("{dispositions}/seedId"),
-                seed_ids.as_ref(),
-                &mut remaining_bytes,
-            );
-        }
-        "writer-result" => {
-            let blueprints = knowledge_pipeline_material_payloads(context, "writing-blueprint");
-            let output_ids = contracted_nested_identifier_values(
-                blueprints.as_ref(),
-                "/assignedOutputs",
-                "outputId",
-            );
-            inject_contracted_enum(
-                payload,
-                "/properties/drafts/items/properties/outputId",
-                output_ids.as_ref(),
-                &mut remaining_bytes,
-            );
-        }
-        _ => {}
-    }
-}
-
-fn knowledge_response_schema(
-    expected_output: &str,
-    assignment: &Value,
-    context: &Value,
-) -> Result<Value, String> {
-    let mut payload = match expected_output {
-        "root-result" => knowledge_root_result_schema(),
-        "note-routing" => knowledge_note_routing_schema(),
-        "reading-blueprint" => knowledge_reading_blueprint_schema(),
-        "source-reading" => knowledge_source_reading_schema(),
-        "writing-blueprint" => knowledge_writing_blueprint_schema(),
-        "writer-result" => knowledge_writer_result_schema(),
-        "evidence" | "reconciliation" | "compression" | "owner-proposal" | "validation" => {
-            knowledge_artifact_payload_schema()
-        }
-        _ => {
-            return Err("The knowledge assignment has an unsupported output contract.".to_string())
-        }
-    };
-    apply_knowledge_contract_enums(expected_output, assignment, context, &mut payload);
-    let fixed_pipeline_output = matches!(
-        expected_output,
-        "note-routing"
-            | "reading-blueprint"
-            | "source-reading"
-            | "writing-blueprint"
-            | "writer-result"
-    );
-    if fixed_pipeline_output {
-        return Ok(json!({
-            "type": "object",
-            "properties": {
-                "kind": { "type": "string", "const": "complete" },
-                "payload": payload,
-                "calls": { "type": "null" }
-            },
-            "required": ["kind", "payload", "calls"],
-            "additionalProperties": false
-        }));
-    }
-    Ok(json!({
-        "type": "object",
-        "properties": {
-            "kind": {
-                "type": "string",
-                "enum": ["complete", "coordinate"]
-            },
-            "payload": {
-                "anyOf": [
-                    { "type": "null" },
-                    payload
-                ]
-            },
-            "calls": {
-                "anyOf": [
-                    { "type": "null" },
-                    {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": 100,
-                        "items": knowledge_coordination_call_schema()
-                    }
-                ]
-            }
-        },
-        "required": ["kind", "payload", "calls"],
-        "additionalProperties": false
-    }))
-}
-
-fn anthropic_knowledge_response_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "kind": {
-                "type": "string",
-                "enum": ["complete", "coordinate"]
-            },
-            "dataJson": {
-                "type": "string",
-                "description": "JSON-encoded completion payload or coordination-call array for the active kind."
-            }
-        },
-        "required": ["kind", "dataJson"],
-        "additionalProperties": false
-    })
 }
 
 fn normalize_anthropic_knowledge_response(value: Value) -> Result<Value, String> {
@@ -4186,106 +2541,267 @@ fn parse_chat_result(output_text: &str, reply_only: bool) -> Result<ChatResult, 
     };
     Ok(ChatResult {
         reply,
+        suggestions: None,
         note_actions,
+        note_edits: Vec::new(),
+        note_rewrite: None,
+        edit_intent: None,
         read_requests: None,
+        checkpoint: None,
     })
 }
 
-// The renderer and native transport use the same authored reading protocol.
-fn chat_reading_protocol() -> Value {
-    serde_json::from_str(include_str!("../../src/lib/chatReadingProtocol.json"))
-        .expect("the bundled Chat reading protocol is valid JSON")
+// One authored read-only suggestion protocol is shared by both provider transports.
+fn chat_suggestions_protocol() -> Value {
+    serde_json::from_str(include_str!("../../src/lib/chatSuggestionsProtocol.json"))
+        .expect("the bundled Chat suggestion protocol is valid JSON")
 }
 
-fn chat_transport_schema(reply_only: bool, reading: bool) -> Value {
-    let mut schema = chat_schema(reply_only);
-    if reading {
-        schema["properties"]["reply"] = json!({ "type": "string", "maxLength": 6000 });
-        schema["properties"]["readRequests"] = chat_reading_protocol()["requestsSchema"].clone();
-        schema["required"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!("readRequests"));
-    }
-    schema
+fn suggestion_keys(value: &Value, keys: &[&str]) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.len() == keys.len() && keys.iter().all(|key| object.contains_key(*key))
+    })
 }
 
-fn validate_chat_reading_context(text: Option<&str>) -> Result<Value, String> {
+fn suggestion_text(value: &Value, max: usize, nonempty: bool) -> bool {
+    value
+        .as_str()
+        .is_some_and(|text| text.chars().count() <= max && (!nonempty || !text.trim().is_empty()))
+}
+
+fn validate_chat_suggestion_context(text: Option<&str>) -> Result<Value, String> {
     let text = text
-        .filter(|text| text.len() <= 96_000)
-        .ok_or("Chat's reading packet exceeded its limit.")?;
+        .filter(|text| text.len() <= 32_000)
+        .ok_or("Chat's suggestion context exceeded its limit.")?;
     let value: Value =
-        serde_json::from_str(text).map_err(|_| "Chat received an invalid reading packet.")?;
-    if !value.is_object()
-        || !value["finalizing"].is_boolean()
-        || !value["evidence"]
-            .as_array()
-            .is_some_and(|items| items.len() <= 12)
+        serde_json::from_str(text).map_err(|_| "Chat received invalid suggestion context.")?;
+    let valid = suggestion_keys(
+        &value,
+        &[
+            "spaceId",
+            "spaceName",
+            "attachedNoteId",
+            "evidence",
+            "directory",
+            "previousPrompts",
+        ],
+    ) && suggestion_text(&value["spaceId"], 200, true)
+        && suggestion_text(&value["spaceName"], 300, false)
+        && (value["attachedNoteId"].is_null()
+            || suggestion_text(&value["attachedNoteId"], 200, true))
+        && value["evidence"].as_array().is_some_and(|items| {
+            items.len() <= 8
+                && items.iter().all(|item| {
+                    suggestion_keys(item, &["id", "kind", "entityId", "title", "text"])
+                        && suggestion_text(&item["id"], 200, true)
+                        && matches!(item["kind"].as_str(), Some("note" | "source"))
+                        && suggestion_text(&item["entityId"], 200, true)
+                        && suggestion_text(&item["title"], 300, false)
+                        && suggestion_text(&item["text"], 2_000, true)
+                })
+        })
+        && value["directory"].as_array().is_some_and(|items| {
+            items.len() <= 12
+                && items.iter().all(|item| {
+                    suggestion_keys(item, &["id", "title"])
+                        && suggestion_text(&item["id"], 200, true)
+                        && suggestion_text(&item["title"], 300, false)
+                })
+        })
+        && value["previousPrompts"].as_array().is_some_and(|items| {
+            items.len() <= 8 && items.iter().all(|item| suggestion_text(item, 260, true))
+        });
+    if !valid {
+        return Err("Chat received invalid suggestion context.".to_string());
+    }
+    let evidence = value["evidence"].as_array().unwrap();
+    let directory = value["directory"].as_array().unwrap();
+    let evidence_ids: std::collections::HashSet<_> = evidence
+        .iter()
+        .map(|item| item["id"].as_str().unwrap())
+        .collect();
+    let directory_ids: std::collections::HashSet<_> = directory
+        .iter()
+        .map(|item| item["id"].as_str().unwrap())
+        .collect();
+    if evidence_ids.len() != evidence.len()
+        || directory_ids.len() != directory.len()
+        || value["attachedNoteId"].as_str().is_some_and(|id| {
+            !evidence
+                .iter()
+                .any(|item| item["kind"] == "note" && item["entityId"] == id)
+        })
     {
-        return Err("Chat received an invalid reading packet.".to_string());
+        return Err("Chat received invalid suggestion context.".to_string());
     }
     Ok(value)
 }
 
-fn parse_chat_response(
+// This rejects suspicious model suggestions; ordinary user messages retain model-inferred intent.
+fn suggestion_discuss_requests_edit(prompt: &str) -> bool {
+    let lower = prompt.to_lowercase();
+    let words = lower
+        .split(|c: char| !c.is_ascii_lowercase())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let first = if words.first() == Some(&"please") {
+        words.get(1)
+    } else {
+        words.first()
+    };
+    let after_you = words
+        .iter()
+        .position(|word| *word == "you")
+        .and_then(|index| {
+            words
+                .iter()
+                .skip(index + 1)
+                .take(3)
+                .find(|word| !["please", "to"].contains(word))
+        });
+    let protocol = chat_suggestions_protocol();
+    let action_starter = |word: &&str| {
+        protocol["discussActionStarters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == *word)
+    };
+    words.iter().any(|word| {
+        protocol["discussEditVerbs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == *word)
+    }) || first.is_some_and(action_starter)
+        || after_you.is_some_and(action_starter)
+}
+
+fn parse_chat_suggestion_result(output_text: &str, context: &Value) -> Result<ChatResult, ()> {
+    let value: Value = serde_json::from_str(output_text).map_err(|_| ())?;
+    if !suggestion_keys(&value, &["suggestions"]) {
+        return Err(());
+    }
+    let items = value["suggestions"].as_array().ok_or(())?;
+    if !(2..=4).contains(&items.len()) {
+        return Err(());
+    }
+    let evidence = context["evidence"].as_array().ok_or(())?;
+    let mut prompts = std::collections::HashSet::new();
+    let mut suggestions = Vec::new();
+    for item in items {
+        if !suggestion_keys(item, &["prompt", "intent", "evidenceIds"])
+            || !suggestion_text(&item["prompt"], 260, true)
+            || !matches!(item["intent"].as_str(), Some("discuss" | "edit" | "create"))
+        {
+            return Err(());
+        }
+        let suggestion: ChatPromptSuggestion =
+            serde_json::from_value(item.clone()).map_err(|_| ())?;
+        if !(1..=4).contains(&suggestion.evidence_ids.len())
+            || suggestion
+                .evidence_ids
+                .iter()
+                .any(|id| !evidence.iter().any(|passage| passage["id"] == *id))
+            || suggestion
+                .evidence_ids
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                != suggestion.evidence_ids.len()
+            || !prompts.insert(suggestion.prompt.trim().to_lowercase())
+        {
+            return Err(());
+        }
+        if suggestion.intent == "discuss" && suggestion_discuss_requests_edit(&suggestion.prompt) {
+            return Err(());
+        }
+        let creates = chat_prompt_allows_note_creation(&suggestion.prompt);
+        if suggestion.intent == "create" {
+            let prefix = suggestion.prompt.strip_prefix("Create a note");
+            if !creates
+                || prefix.is_none_or(|suffix| {
+                    suffix
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+                })
+            {
+                return Err(());
+            }
+        } else if creates {
+            return Err(());
+        }
+        if suggestion.intent == "edit"
+            && !context["attachedNoteId"].as_str().is_some_and(|id| {
+                evidence.iter().any(|passage| {
+                    passage["kind"] == "note"
+                        && passage["entityId"] == id
+                        && suggestion
+                            .evidence_ids
+                            .iter()
+                            .any(|evidence_id| passage["id"] == *evidence_id)
+                })
+            })
+        {
+            return Err(());
+        }
+        suggestions.push(suggestion);
+    }
+    Ok(ChatResult {
+        reply: String::new(),
+        suggestions: Some(suggestions),
+        note_actions: Vec::new(),
+        note_edits: Vec::new(),
+        note_rewrite: None,
+        edit_intent: None,
+        read_requests: None,
+        checkpoint: None,
+    })
+}
+
+fn parse_chat_edit_response(
     output_text: &str,
     reply_only: bool,
     reading: bool,
+    editing: bool,
 ) -> Result<ChatResult, ()> {
-    if !reading {
-        return parse_chat_result(output_text, reply_only);
-    }
     let mut value: Value = serde_json::from_str(output_text).map_err(|_| ())?;
     let object = value.as_object_mut().ok_or(())?;
-    if object.keys().any(|key| {
-        !["reply", "readRequests"].contains(&key.as_str()) && (reply_only || key != "noteActions")
-    }) {
-        return Err(());
+    let edits = object.remove("noteEdits");
+    let rewrite = object.remove("noteRewrite");
+    let intent = object.remove("editIntent");
+    let mut result = chat_reading::parse_response(&value.to_string(), reply_only, reading)?;
+    if editing {
+        result.edit_intent = Some(chat_edits::parse_intent(intent)?);
+        if result
+            .read_requests
+            .as_ref()
+            .is_none_or(|reads| reads.is_empty())
+        {
+            result.note_edits = chat_edits::parse(edits)?;
+            result.note_rewrite = chat_edits::parse_rewrite(rewrite)?;
+        }
     }
-    let requests_value = object.remove("readRequests").ok_or(())?;
-    if !requests_value.as_array().is_some_and(|items| {
-        items.iter().all(|item| {
-            item.as_object().is_some_and(|object| {
-                object.len() == 4
-                    && ["kind", "id", "query", "start"]
-                        .iter()
-                        .all(|key| object.contains_key(*key))
-            })
-        })
-    }) {
-        return Err(());
-    }
-    let requests: Vec<ChatReadRequest> = serde_json::from_value(requests_value).map_err(|_| ())?;
-    if requests.len() > 4
-        || requests.iter().any(|request| {
-            !["search", "cluster", "note", "source", "related"].contains(&request.kind.as_str())
-                || request.id.chars().count() > 200
-                || request.query.chars().count() > 600
-                || request.start.is_some_and(|start| start > 1_000_000_000)
-                || if request.kind == "search" {
-                    !request.id.is_empty() || request.query.trim().is_empty()
-                } else {
-                    request.id.trim().is_empty()
-                }
-        })
-    {
-        return Err(());
-    }
-    let reply = object.get("reply").and_then(Value::as_str).ok_or(())?;
-    if reply.chars().count() > 6_000 {
-        return Err(());
-    }
-    if !requests.is_empty() {
-        // Reading responses cannot commit accompanying prose or note actions.
-        return Ok(ChatResult {
-            reply: String::new(),
-            note_actions: Vec::new(),
-            read_requests: Some(requests),
-        });
-    }
-    let mut result = parse_chat_result(&value.to_string(), reply_only)?;
-    result.read_requests = Some(requests);
     Ok(result)
+}
+
+fn chat_edit_schema(reply_only: bool, reading: bool, editing: bool) -> Value {
+    let mut schema = chat_reading::schema(reply_only, reading);
+    if editing {
+        for (field, contract) in [
+            ("editIntent", "intentSchema"),
+            ("noteEdits", "schema"),
+            ("noteRewrite", "rewriteSchema"),
+        ] {
+            schema["properties"][field] = chat_edits::protocol()[contract].clone();
+            schema["required"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!(field));
+        }
+    }
+    schema
 }
 
 fn normalize_chat_note_action(value: &Value) -> Option<ChatNoteAction> {
@@ -5165,7 +3681,39 @@ fn chat_prompt_allows_note_creation(prompt: &str) -> bool {
 }
 
 #[tauri::command]
-async fn chat(client: State<'_, OpenAiClient>, request: ChatRequest) -> Result<ChatResult, String> {
+async fn chat(
+    window: tauri::WebviewWindow,
+    bridge: State<'_, assistant_bridge::AssistantBridge>,
+    editor_action_grant: Option<editor_actions_protocol::EditorActionGrant>,
+    client: State<'_, OpenAiClient>,
+    request: ChatRequest,
+) -> Result<ChatResult, String> {
+    let external_model = request.model.clone();
+    let external_effort = request.effort.clone();
+    if editor_action_grant.is_some()
+        && (request.mode.as_deref() != Some("inline-writing")
+            || request.allow_note_actions
+            || request.edit_note_id.is_some()
+            || !request.history.is_empty())
+    {
+        return Err("This external editor grant authorizes only an inline writing proposal, not Chat, note creation or another edit target.".into());
+    }
+    let authorize = || {
+        if let Some(grant) = &editor_action_grant {
+            bridge.editor_actions.provider(
+                window.label(),
+                grant,
+                editor_actions_protocol::ActionStage::Writing,
+                external_model.as_deref(),
+                external_effort.as_deref(),
+                None,
+                None,
+                None,
+            )?;
+        }
+        Ok::<(), String>(())
+    };
+    authorize()?;
     let prompt = request.prompt.trim().to_string();
     if prompt.is_empty() {
         return Err("Ask Orion a question first.".to_string());
@@ -5175,36 +3723,75 @@ async fn chat(client: State<'_, OpenAiClient>, request: ChatRequest) -> Result<C
     }
 
     let inline_writing = match request.mode.as_deref() {
-        None | Some("chat") | Some("chat-reading") => false,
+        None | Some("chat") | Some("chat-reading") | Some("chat-suggestions") => false,
         Some("inline-writing") => true,
         Some(_) => return Err("Orion received an unsupported AI request mode.".to_string()),
     };
-    let allow_note_actions =
-        !inline_writing && request.allow_note_actions && chat_prompt_allows_note_creation(&prompt);
+    let suggestions = request.mode.as_deref() == Some("chat-suggestions");
+    let suggestion_context = if suggestions {
+        Some(validate_chat_suggestion_context(
+            request.suggestion_context.as_deref(),
+        )?)
+    } else {
+        None
+    };
+    let allow_note_actions = !suggestions
+        && !inline_writing
+        && request.allow_note_actions
+        && chat_prompt_allows_note_creation(&prompt);
     let reading = request.mode.as_deref() == Some("chat-reading");
+    let allow_edits = reading
+        && request
+            .edit_note_id
+            .as_ref()
+            .is_some_and(|id| !id.is_empty() && id.len() <= 200)
+        && !request.allow_note_actions;
     let reading_context = if reading {
-        Some(validate_chat_reading_context(
+        Some(chat_reading::validate_context(
             request.reading_context.as_deref(),
         )?)
     } else {
         None
     };
-    let provider_instructions = if inline_writing {
+    let mut provider_instructions = if suggestions {
+        chat_suggestions_protocol()["instructions"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    } else if inline_writing {
         INLINE_WRITING_INSTRUCTIONS.trim().to_string()
     } else if reading {
         format!(
             "{}\n\n{}",
-            chat_reading_protocol()["instructions"].as_str().unwrap(),
+            chat_reading::protocol()["instructions"].as_str().unwrap(),
             if allow_note_actions {
                 format!("{}\nOnly the final answer may contain noteActions. Reading responses must return an empty noteActions array.", CHAT_NOTE_ACTION_INSTRUCTIONS.trim())
             } else {
-                "No note write is authorized. Do not return noteActions or claim to have created or changed notes.".to_string()
+                if allow_edits { "No new note creation is authorized. Do not return noteActions or claim to have created notes." } else { "No note write is authorized. Do not return noteActions or claim to have created notes." }.to_string()
             }
         )
     } else {
         chat_instructions(allow_note_actions)
     };
-    let max_output_tokens = if inline_writing || allow_note_actions {
+    if reading {
+        provider_instructions.push_str("\n\n");
+        if allow_edits {
+            for instruction in [
+                "automaticInstructions",
+                "instructions",
+                "rewriteInstructions",
+            ] {
+                provider_instructions
+                    .push_str(chat_edits::protocol()[instruction].as_str().unwrap());
+                provider_instructions.push_str("\n\n");
+            }
+        } else {
+            provider_instructions.push_str("No text edit is authorized. Do not return noteEdits or claim to have changed a note.");
+        }
+    }
+    let max_output_tokens = if suggestions {
+        6_000
+    } else if inline_writing || allow_note_actions || allow_edits {
         12_000
     } else {
         6_000
@@ -5279,7 +3866,9 @@ async fn chat(client: State<'_, OpenAiClient>, request: ChatRequest) -> Result<C
             })
         })
         .collect::<Vec<_>>();
-    let chat_payload = if let Some(reading_context) = reading_context {
+    let chat_payload = if let Some(context) = &suggestion_context {
+        json!({ "suggestionContext": context })
+    } else if let Some(reading_context) = reading_context {
         json!({
             "question": prompt,
             "workspaceName": bounded_text(&request.workspace_name, 300),
@@ -5298,7 +3887,11 @@ async fn chat(client: State<'_, OpenAiClient>, request: ChatRequest) -> Result<C
     };
 
     if use_anthropic {
-        let mut provider_schema = chat_transport_schema(!allow_note_actions, reading);
+        let mut provider_schema = if suggestions {
+            chat_suggestions_protocol()["schema"].clone()
+        } else {
+            chat_edit_schema(!allow_note_actions, reading, allow_edits)
+        };
         strip_anthropic_unsupported_schema_keywords(&mut provider_schema);
         let mut output_config = json!({
             "format": {
@@ -5322,6 +3915,7 @@ async fn chat(client: State<'_, OpenAiClient>, request: ChatRequest) -> Result<C
             }],
             "output_config": output_config
         });
+        authorize()?;
         let response = client
             .0
             .post(ANTHROPIC_MESSAGES_URL)
@@ -5340,8 +3934,14 @@ async fn chat(client: State<'_, OpenAiClient>, request: ChatRequest) -> Result<C
             .json::<Value>()
             .await
             .map_err(|error| format!("Orion could not read Anthropic's response: {error}"))?;
+        authorize()?;
         let output_text = extract_anthropic_output_text(&response, operation)?;
-        return parse_chat_response(&output_text, !allow_note_actions, reading).map_err(|_| {
+        return (if let Some(context) = &suggestion_context {
+            parse_chat_suggestion_result(&output_text, context)
+        } else {
+            parse_chat_edit_response(&output_text, !allow_note_actions, reading, allow_edits)
+        })
+        .map_err(|_| {
             format!(
                 "Anthropic returned {} Orion could not read. Try again.",
                 if inline_writing {
@@ -5365,7 +3965,7 @@ async fn chat(client: State<'_, OpenAiClient>, request: ChatRequest) -> Result<C
                 "type": "json_schema",
                 "name": "orion_chat",
                 "strict": true,
-                "schema": chat_transport_schema(!allow_note_actions, reading)
+                "schema": if suggestions { chat_suggestions_protocol()["schema"].clone() } else { chat_edit_schema(!allow_note_actions, reading, allow_edits) }
             }
         }
     });
@@ -5375,6 +3975,7 @@ async fn chat(client: State<'_, OpenAiClient>, request: ChatRequest) -> Result<C
             .insert("reasoning".to_string(), json!({ "effort": effort }));
     }
 
+    authorize()?;
     let response = client
         .0
         .post(OPENAI_RESPONSES_URL)
@@ -5393,8 +3994,14 @@ async fn chat(client: State<'_, OpenAiClient>, request: ChatRequest) -> Result<C
         .json::<Value>()
         .await
         .map_err(|error| format!("Orion could not read OpenAI's response: {error}"))?;
+    authorize()?;
     let output_text = extract_output_text(&response, operation)?;
-    parse_chat_response(&output_text, !allow_note_actions, reading).map_err(|_| {
+    (if let Some(context) = &suggestion_context {
+        parse_chat_suggestion_result(&output_text, context)
+    } else {
+        parse_chat_edit_response(&output_text, !allow_note_actions, reading, allow_edits)
+    })
+    .map_err(|_| {
         format!(
             "OpenAI returned {} Orion could not read. Try again.",
             if inline_writing {
@@ -5605,15 +4212,6 @@ fn persist_web_export(path: &Path, html: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn selected_local_path(path: FilePath) -> Result<PathBuf, String> {
-    match path {
-        FilePath::Path(path) => Ok(path),
-        FilePath::Url(url) => url
-            .to_file_path()
-            .map_err(|_| "The selected media source is not a local file.".to_string()),
-    }
-}
-
 fn is_executable_file(path: &Path) -> bool {
     let Ok(metadata) = fs::metadata(path) else {
         return false;
@@ -5630,235 +4228,6 @@ fn is_executable_file(path: &Path) -> bool {
     {
         true
     }
-}
-
-fn normalize_transcription_language(config: WhisperConfig) -> Result<Option<String>, String> {
-    let language = config
-        .language
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| !value.is_empty() && value != "auto");
-    if language.as_ref().is_some_and(|value| {
-        value.len() > 32
-            || value
-                .chars()
-                .any(|character| !(character.is_ascii_alphanumeric() || character == '-'))
-    }) {
-        return Err("Use a short language code such as en, fr, or ja.".to_string());
-    }
-    Ok(language)
-}
-
-fn bundled_transcription_runtime(app: &AppHandle) -> Result<TranscriptionRuntime, String> {
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("Orion could not locate its app bundle: {error}"))?;
-    let executable_directory = executable
-        .parent()
-        .ok_or_else(|| "Orion could not locate its bundled tools.".to_string())?;
-    let resource_directory = app
-        .path()
-        .resource_dir()
-        .map_err(|error| format!("Orion could not locate its bundled model: {error}"))?;
-
-    Ok(TranscriptionRuntime {
-        whisper: executable_directory.join(BUNDLED_WHISPER_NAME),
-        model: resource_directory
-            .join("models")
-            .join(BUNDLED_WHISPER_MODEL_NAME),
-        yt_dlp: executable_directory.join(BUNDLED_YT_DLP_NAME),
-        deno: executable_directory.join(BUNDLED_DENO_NAME),
-    })
-}
-
-fn validate_whisper_runtime(runtime: &TranscriptionRuntime) -> Result<(), String> {
-    if !is_executable_file(&runtime.whisper) {
-        return Err(
-            "Orion's bundled Whisper engine is missing or damaged. Reinstall Orion.".to_string(),
-        );
-    }
-    let model = fs::metadata(&runtime.model)
-        .map_err(|_| "Orion's bundled Whisper model is missing. Reinstall Orion.".to_string())?;
-    if !model.is_file() || model.len() < MIN_BUNDLED_MODEL_BYTES {
-        return Err(
-            "Orion's bundled Whisper model is incomplete or damaged. Reinstall Orion.".to_string(),
-        );
-    }
-    Ok(())
-}
-
-fn bundled_whisper_model_label(runtime: &TranscriptionRuntime) -> String {
-    match fs::metadata(&runtime.model).map(|metadata| metadata.len()) {
-        Ok(bytes) if bytes >= 1_000_000_000 => "Whisper medium · multilingual".to_string(),
-        _ => "Whisper small · multilingual".to_string(),
-    }
-}
-
-fn valid_voice_memo_session_id(session_id: &str) -> bool {
-    let length = session_id.len();
-    (8..=160).contains(&length)
-        && session_id.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | ':' | '.')
-        })
-}
-
-fn launch_voice_memo_worker(
-    runtime: &TranscriptionRuntime,
-    language: Option<&str>,
-    use_cpu: bool,
-) -> Result<VoiceMemoWorker, String> {
-    let mut command = Command::new(&runtime.whisper);
-    command
-        .arg("--server")
-        .arg("--model")
-        .arg(&runtime.model)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    if use_cpu {
-        command.arg("--cpu");
-    }
-    if let Some(language) = language {
-        command.arg("--language").arg(language);
-    }
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("Orion could not start its persistent Whisper worker: {error}"))?;
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "The persistent Whisper worker has no input channel.".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "The persistent Whisper worker has no output channel.".to_string())?;
-    let mut worker = VoiceMemoWorker {
-        child,
-        stdin,
-        stdout: BufReader::new(stdout),
-        next_request_id: 1,
-    };
-    let mut ready_line = String::new();
-    worker
-        .stdout
-        .read_line(&mut ready_line)
-        .map_err(|error| format!("The persistent Whisper worker could not initialize: {error}"))?;
-    let response: VoiceMemoWorkerResponse =
-        serde_json::from_str(ready_line.trim()).map_err(|_| {
-            "The persistent Whisper worker returned an invalid startup response.".to_string()
-        })?;
-    if response.ready != Some(true) {
-        return Err(response.error.unwrap_or_else(|| {
-            "The persistent Whisper worker stopped while loading its model.".to_string()
-        }));
-    }
-    Ok(worker)
-}
-
-fn start_voice_memo_worker(
-    runtime: &TranscriptionRuntime,
-    language: Option<String>,
-) -> Result<VoiceMemoWorker, String> {
-    validate_whisper_runtime(runtime)?;
-    match launch_voice_memo_worker(runtime, language.as_deref(), false) {
-        Ok(worker) => Ok(worker),
-        Err(gpu_error) => launch_voice_memo_worker(runtime, language.as_deref(), true).map_err(
-            |cpu_error| {
-                format!(
-                    "The persistent Whisper worker could not load on GPU ({gpu_error}) or CPU ({cpu_error})."
-                )
-            },
-        ),
-    }
-}
-
-fn transcribe_voice_memo_with_worker(
-    workers: &VoiceMemoWorkers,
-    session_id: &str,
-    media_path: &Path,
-) -> Result<String, String> {
-    let input = media_path
-        .to_str()
-        .ok_or_else(|| "The voice memo temporary path is not valid Unicode.".to_string())?;
-    let mut sessions = workers
-        .0
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let worker = sessions
-        .get_mut(session_id)
-        .ok_or_else(|| "The persistent dictation session is no longer active.".to_string())?;
-    let request_id = worker.next_request_id;
-    worker.next_request_id = worker.next_request_id.saturating_add(1);
-    let encoded = serde_json::to_vec(&VoiceMemoWorkerRequest {
-        id: request_id,
-        input,
-    })
-    .map_err(|error| format!("Orion could not prepare the transcription request: {error}"))?;
-    worker
-        .stdin
-        .write_all(&encoded)
-        .and_then(|_| worker.stdin.write_all(b"\n"))
-        .and_then(|_| worker.stdin.flush())
-        .map_err(|error| {
-            format!("The persistent Whisper worker stopped accepting audio: {error}")
-        })?;
-
-    let mut response_line = String::new();
-    worker
-        .stdout
-        .read_line(&mut response_line)
-        .map_err(|error| format!("The persistent Whisper worker stopped unexpectedly: {error}"))?;
-    if response_line.is_empty() {
-        return Err("The persistent Whisper worker stopped unexpectedly.".to_string());
-    }
-    let response: VoiceMemoWorkerResponse = serde_json::from_str(response_line.trim())
-        .map_err(|_| "The persistent Whisper worker returned invalid text.".to_string())?;
-    if response.id != Some(request_id) {
-        return Err("The persistent Whisper worker returned an out-of-order response.".to_string());
-    }
-    if let Some(error) = response.error.filter(|error| !error.trim().is_empty()) {
-        return Err(error.chars().take(900).collect());
-    }
-    Ok(response.text.unwrap_or_default().trim().to_string())
-}
-
-fn validate_youtube_runtime(runtime: &TranscriptionRuntime) -> Result<(), String> {
-    if !is_executable_file(&runtime.yt_dlp) {
-        return Err("Orion's bundled yt-dlp is missing or damaged. Reinstall Orion.".to_string());
-    }
-    if !is_executable_file(&runtime.deno) {
-        return Err(
-            "Orion's bundled YouTube JavaScript runtime is missing or damaged. Reinstall Orion."
-                .to_string(),
-        );
-    }
-    Ok(())
-}
-
-fn normalize_youtube_url(value: &str) -> Result<String, String> {
-    let url =
-        Url::parse(value.trim()).map_err(|_| "Enter a valid YouTube video URL.".to_string())?;
-    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
-        return Err("Use a standard https YouTube video URL.".to_string());
-    }
-    let host = url
-        .host_str()
-        .unwrap_or_default()
-        .trim_end_matches('.')
-        .to_ascii_lowercase();
-    if !matches!(
-        host.as_str(),
-        "youtube.com"
-            | "www.youtube.com"
-            | "m.youtube.com"
-            | "music.youtube.com"
-            | "youtu.be"
-            | "www.youtu.be"
-    ) {
-        return Err("Only YouTube and youtu.be links are supported.".to_string());
-    }
-    if url.path() == "/" || url.path().is_empty() {
-        return Err("Paste a link to a specific YouTube video.".to_string());
-    }
-    Ok(url.to_string())
 }
 
 fn normalize_webpage_url(value: &str) -> Result<Url, String> {
@@ -6344,619 +4713,6 @@ async fn recognize_document_text(request: OCRDocumentRequest) -> Result<OCRDocum
     recognize_document_text_with_runtime(&runtime, request).await
 }
 
-fn media_extension(path: &Path) -> Option<String> {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .filter(|extension| MEDIA_EXTENSIONS.contains(&extension.as_str()))
-}
-
-fn media_mime_type(path: &Path) -> &'static str {
-    match media_extension(path).as_deref() {
-        Some("flac") => "audio/flac",
-        Some("m4a") => "audio/mp4",
-        Some("mp3" | "mpeg" | "mpga") => "audio/mpeg",
-        Some("mp4") => "video/mp4",
-        Some("ogg") => "audio/ogg",
-        Some("wav") => "audio/wav",
-        Some("webm") => "video/webm",
-        _ => "application/octet-stream",
-    }
-}
-
-fn media_title(path: &Path) -> String {
-    let stem = path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("Media transcript")
-        .replace(['_', '-'], " ");
-    let title = stem.split_whitespace().collect::<Vec<_>>().join(" ");
-    if title.is_empty() {
-        "Media transcript".to_string()
-    } else {
-        title
-    }
-}
-
-fn decode_voice_memo(
-    request: VoiceMemoRequest,
-) -> Result<(String, String, Zeroizing<Vec<u8>>), String> {
-    let VoiceMemoRequest {
-        file_name,
-        mime_type,
-        base64_data,
-    } = request;
-    let normalized_file_name = file_name.trim();
-    if normalized_file_name.is_empty()
-        || normalized_file_name.chars().count() > 255
-        || normalized_file_name.chars().any(char::is_control)
-        || normalized_file_name.contains(['/', '\\'])
-        || Path::new(normalized_file_name)
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| !extension.eq_ignore_ascii_case("m4a"))
-            .unwrap_or(true)
-    {
-        return Err("That voice memo has an invalid M4A file name.".to_string());
-    }
-    let normalized_mime_type = mime_type
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    if !matches!(
-        normalized_mime_type.as_str(),
-        "audio/mp4" | "audio/x-m4a" | "audio/m4a"
-    ) {
-        return Err("Orion accepts voice memos as M4A audio.".to_string());
-    }
-    let encoded = Zeroizing::new(base64_data);
-    if encoded.is_empty() {
-        return Err("The voice memo is empty.".to_string());
-    }
-    if encoded.len() > MAX_VOICE_MEMO_BASE64_BYTES {
-        return Err("Voice memos must be 64 MB or smaller.".to_string());
-    }
-    let bytes = Zeroizing::new(
-        BASE64_STANDARD
-            .decode(encoded.as_bytes())
-            .map_err(|_| "The voice memo data is not valid base64.".to_string())?,
-    );
-    if bytes.is_empty() {
-        return Err("The voice memo is empty.".to_string());
-    }
-    if bytes.len() > MAX_VOICE_MEMO_BYTES {
-        return Err("Voice memos must be 64 MB or smaller.".to_string());
-    }
-    if bytes.len() < 12 || &bytes[4..8] != b"ftyp" {
-        return Err("The voice memo contents are not valid M4A audio.".to_string());
-    }
-    Ok((
-        normalized_file_name.to_string(),
-        normalized_mime_type,
-        bytes,
-    ))
-}
-
-async fn transcribe_path(
-    runtime: &TranscriptionRuntime,
-    config: &WhisperConfig,
-    path: &Path,
-    title_override: Option<String>,
-    source_url: Option<String>,
-) -> Result<TranscribedMedia, String> {
-    transcribe_path_controlled(
-        runtime,
-        config,
-        path,
-        title_override,
-        source_url,
-        &media_jobs::Control::default(),
-    )
-    .await
-}
-
-async fn transcribe_path_controlled(
-    runtime: &TranscriptionRuntime,
-    config: &WhisperConfig,
-    path: &Path,
-    title_override: Option<String>,
-    source_url: Option<String>,
-    control: &media_jobs::Control,
-) -> Result<TranscribedMedia, String> {
-    control.check()?;
-    let extension = media_extension(path)
-        .ok_or_else(|| "Choose FLAC, M4A, MP3, MP4, MPEG, OGG, WAV, or WebM media.".to_string())?;
-    let metadata = fs::metadata(path)
-        .map_err(|error| format!("Orion could not inspect this media file: {error}"))?;
-    if !metadata.is_file() {
-        return Err("The selected media source is not a file.".to_string());
-    }
-    if metadata.len() == 0 {
-        return Err("The selected media file is empty.".to_string());
-    }
-    if metadata.len() > MAX_MEDIA_BYTES {
-        return Err("Media files must be smaller than 2 GB.".to_string());
-    }
-    validate_whisper_runtime(runtime)?;
-    let language = normalize_transcription_language(config.clone())?;
-    let whisper = runtime.whisper.clone();
-    let model = runtime.model.clone();
-    let media = path.to_path_buf();
-    let process_control = control.clone();
-    let output = tauri::async_runtime::spawn_blocking(move || {
-        let run = |use_cpu: bool| {
-            let mut command = Command::new(&whisper);
-            command
-                .arg("--model")
-                .arg(&model)
-                .arg("--input")
-                .arg(&media);
-            if use_cpu {
-                command.arg("--cpu");
-            }
-            if let Some(language) = language.as_ref() {
-                command.arg("--language").arg(language);
-            }
-            process_control.run(&mut command, media_jobs::TRANSCRIPTION_TIMEOUT)
-        };
-        let first = run(false)?;
-        let gpu_allocation_failed = !first.status.success()
-            && String::from_utf8_lossy(&first.stderr).contains("ggml_metal_buffer_init: error");
-        if gpu_allocation_failed {
-            run(true)
-        } else {
-            Ok(first)
-        }
-    })
-    .await
-    .map_err(|error| format!("The offline transcription task could not finish: {error}"))??;
-    control.check()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let detail = stderr
-            .lines()
-            .rev()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("The bundled Whisper engine stopped unexpectedly.")
-            .trim();
-        return Err(detail.chars().take(900).collect());
-    }
-    let text = String::from_utf8(output.stdout)
-        .map_err(|_| "The bundled Whisper engine returned invalid text.".to_string())?
-        .trim()
-        .to_string();
-    if text.is_empty() {
-        return Err("Whisper finished without detecting any speech.".to_string());
-    }
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("media")
-        .to_string();
-
-    Ok(TranscribedMedia {
-        title: title_override.unwrap_or_else(|| media_title(path)),
-        file_name,
-        mime_type: media_mime_type(path).to_string(),
-        byte_size: metadata.len(),
-        text,
-        source_url,
-        warnings: if extension == "mp4" || extension == "webm" {
-            vec![
-                "Audio was extracted from the selected video and transcribed entirely on-device."
-                    .to_string(),
-            ]
-        } else {
-            Vec::new()
-        },
-    })
-}
-
-fn downloaded_media(directory: &TempDir) -> Result<PathBuf, String> {
-    fs::read_dir(directory.path())
-        .map_err(|error| format!("Orion could not inspect the temporary download: {error}"))?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.is_file() && media_extension(path).is_some())
-        .max_by_key(|path| {
-            fs::metadata(path)
-                .map(|metadata| metadata.len())
-                .unwrap_or(0)
-        })
-        .ok_or_else(|| "yt-dlp finished without producing supported media.".to_string())
-}
-
-fn yt_dlp_title(stdout: &[u8]) -> Option<String> {
-    String::from_utf8_lossy(stdout)
-        .lines()
-        .rev()
-        .find_map(|line| {
-            serde_json::from_str::<Value>(line)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .get("title")?
-                        .as_str()
-                        .map(str::trim)
-                        .map(str::to_string)
-                })
-                .filter(|title| !title.is_empty())
-        })
-}
-
-#[tauri::command]
-async fn transcribe_media_files(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-    jobs: State<'_, media_jobs::MediaJobs>,
-    request_id: String,
-    config: WhisperConfig,
-) -> Result<MediaTranscriptionBatch, String> {
-    let job = jobs.begin_picker(window.label(), &request_id)?;
-    normalize_transcription_language(config.clone())?;
-    let selected = app
-        .dialog()
-        .file()
-        .set_title("Choose audio or video to transcribe")
-        .add_filter("Audio and video", MEDIA_EXTENSIONS)
-        .blocking_pick_files();
-    let Some(selected) = selected else {
-        return Ok(MediaTranscriptionBatch::default());
-    };
-    if selected.len() > MAX_MEDIA_FILES {
-        return Err(format!(
-            "Choose no more than {MAX_MEDIA_FILES} media files at a time."
-        ));
-    }
-
-    // Promote the exact pending control under the registry lock. Cancellation
-    // remains durable for the entire dialog lifetime, without blocking Quit on it.
-    jobs.promote_picker(&job)?;
-    if app.get_webview_window(window.label()).is_none() {
-        return Err("The media import window was closed.".into());
-    }
-    let runtime = bundled_transcription_runtime(&app)?;
-    transcribe_media_paths(
-        &runtime,
-        &config,
-        selected.into_iter().map(selected_local_path).collect(),
-        &job.control,
-    )
-    .await
-}
-
-async fn transcribe_media_paths(
-    runtime: &TranscriptionRuntime,
-    config: &WhisperConfig,
-    selected: Vec<Result<PathBuf, String>>,
-    control: &media_jobs::Control,
-) -> Result<MediaTranscriptionBatch, String> {
-    let mut result = MediaTranscriptionBatch::default();
-    for selected_path in selected {
-        control.check_cancelled()?;
-        let path = match selected_path {
-            Ok(path) => path,
-            Err(error) => {
-                result.failures.push(MediaTranscriptionFailure {
-                    file_name: "Selected media".into(),
-                    error,
-                });
-                continue;
-            }
-        };
-        match transcribe_path_controlled(runtime, config, &path, None, None, control).await {
-            Ok(transcript) => result.transcripts.push(transcript),
-            Err(error) => {
-                control.check_cancelled()?;
-                result.failures.push(MediaTranscriptionFailure {
-                    file_name: path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned(),
-                    error,
-                });
-            }
-        }
-    }
-    control.check_cancelled()?;
-    Ok(result)
-}
-
-#[tauri::command]
-fn cancel_media_import(
-    window: tauri::WebviewWindow,
-    jobs: State<'_, media_jobs::MediaJobs>,
-    request_id: String,
-) -> Result<(), String> {
-    jobs.cancel(window.label(), &request_id)
-}
-
-#[tauri::command]
-async fn start_voice_memo_session(
-    app: AppHandle,
-    workers: State<'_, VoiceMemoWorkers>,
-    session_id: String,
-    config: WhisperConfig,
-) -> Result<(), String> {
-    if !valid_voice_memo_session_id(&session_id) {
-        return Err("The dictation session identifier is invalid.".to_string());
-    }
-    let runtime = bundled_transcription_runtime(&app)?;
-    let language = normalize_transcription_language(config)?;
-    let shared_workers = workers.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        {
-            let sessions = shared_workers
-                .0
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if sessions.contains_key(&session_id) {
-                return Err("That dictation session is already active.".to_string());
-            }
-        }
-        let worker = start_voice_memo_worker(&runtime, language)?;
-        let mut sessions = shared_workers
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if sessions.contains_key(&session_id) {
-            return Err("That dictation session is already active.".to_string());
-        }
-        sessions.insert(session_id, worker);
-        Ok(())
-    })
-    .await
-    .map_err(|error| format!("The persistent Whisper worker could not start: {error}"))?
-}
-
-#[tauri::command]
-async fn finish_voice_memo_session(
-    workers: State<'_, VoiceMemoWorkers>,
-    session_id: String,
-) -> Result<(), String> {
-    if !valid_voice_memo_session_id(&session_id) {
-        return Err("The dictation session identifier is invalid.".to_string());
-    }
-    let shared_workers = workers.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let worker = shared_workers
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(&session_id);
-        drop(worker);
-    })
-    .await
-    .map_err(|error| format!("The persistent Whisper worker could not stop: {error}"))?;
-    Ok(())
-}
-
-#[tauri::command]
-async fn transcribe_voice_memo(
-    app: AppHandle,
-    workers: State<'_, VoiceMemoWorkers>,
-    request: VoiceMemoRequest,
-    config: WhisperConfig,
-    session_id: Option<String>,
-) -> Result<TranscribedMedia, String> {
-    let (file_name, mime_type, bytes) = decode_voice_memo(request)?;
-    let mut temporary = tempfile::Builder::new()
-        .prefix("orion-voice-memo-")
-        .suffix(".m4a")
-        .tempfile()
-        .map_err(|error| format!("Orion could not prepare the voice memo: {error}"))?;
-    temporary
-        .write_all(&bytes)
-        .and_then(|_| temporary.flush())
-        .map_err(|error| format!("Orion could not prepare the voice memo: {error}"))?;
-    let byte_size = bytes.len() as u64;
-    if let Some(session_id) = session_id {
-        if !valid_voice_memo_session_id(&session_id) {
-            return Err("The dictation session identifier is invalid.".to_string());
-        }
-        let shared_workers = workers.inner().clone();
-        let text = tauri::async_runtime::spawn_blocking(move || {
-            let path = temporary.path().to_path_buf();
-            transcribe_voice_memo_with_worker(&shared_workers, &session_id, &path)
-        })
-        .await
-        .map_err(|error| format!("The dictation segment could not finish: {error}"))??;
-        return Ok(TranscribedMedia {
-            title: "Voice memo".to_string(),
-            file_name,
-            mime_type,
-            byte_size,
-            text,
-            source_url: None,
-            warnings: Vec::new(),
-        });
-    }
-
-    let runtime = bundled_transcription_runtime(&app)?;
-    let mut transcript = transcribe_path(
-        &runtime,
-        &config,
-        temporary.path(),
-        Some("Voice memo".to_string()),
-        None,
-    )
-    .await?;
-    transcript.file_name = file_name;
-    transcript.mime_type = mime_type;
-    transcript.byte_size = byte_size;
-    Ok(transcript)
-}
-
-#[tauri::command]
-async fn transcribe_youtube(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-    jobs: State<'_, media_jobs::MediaJobs>,
-    request_id: String,
-    request: YouTubeTranscriptionRequest,
-) -> Result<TranscribedMedia, String> {
-    let job = jobs.begin(window.label(), &request_id)?;
-    let runtime = bundled_transcription_runtime(&app)?;
-    transcribe_youtube_controlled(&runtime, request, &job.control).await
-}
-
-#[cfg(test)]
-async fn transcribe_youtube_with_runtime(
-    runtime: &TranscriptionRuntime,
-    request: YouTubeTranscriptionRequest,
-) -> Result<TranscribedMedia, String> {
-    transcribe_youtube_controlled(runtime, request, &media_jobs::Control::default()).await
-}
-
-async fn transcribe_youtube_controlled(
-    runtime: &TranscriptionRuntime,
-    request: YouTubeTranscriptionRequest,
-    control: &media_jobs::Control,
-) -> Result<TranscribedMedia, String> {
-    control.check()?;
-    validate_whisper_runtime(runtime)?;
-    validate_youtube_runtime(runtime)?;
-    let config = WhisperConfig {
-        language: request.language,
-    };
-    normalize_transcription_language(config.clone())?;
-    let youtube_url = normalize_youtube_url(&request.url)?;
-    let temporary = TempDir::new()
-        .map_err(|error| format!("Orion could not prepare a temporary download: {error}"))?;
-    let output_template = temporary
-        .path()
-        .join("orion-media.%(ext)s")
-        .to_string_lossy()
-        .into_owned();
-    let executable_for_task = runtime.yt_dlp.clone();
-    let deno_runtime = format!("deno:{}", runtime.deno.display());
-    let youtube_url_for_task = youtube_url.clone();
-    let process_control = control.clone();
-    let output = tauri::async_runtime::spawn_blocking(move || {
-        let mut command = Command::new(executable_for_task);
-        media_jobs::limit_download_file_size(&mut command, MAX_MEDIA_BYTES);
-        command.args([
-            "--ignore-config",
-            "--no-playlist",
-            "--no-simulate",
-            "--no-progress",
-            "--no-part",
-            "--socket-timeout",
-            "30",
-            "--retries",
-            "2",
-            "--fragment-retries",
-            "2",
-            "--restrict-filenames",
-            "--max-filesize",
-            "2G",
-            "--js-runtimes",
-            &deno_runtime,
-            "--format",
-            "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
-            "--output",
-            &output_template,
-            "--print",
-            "{\"title\":%(title)j}",
-            "--",
-            &youtube_url_for_task,
-        ]);
-        process_control.run(&mut command, media_jobs::DOWNLOAD_TIMEOUT)
-    })
-    .await
-    .map_err(|error| format!("The yt-dlp download task could not finish: {error}"))??;
-    if !output.status.success() {
-        let detail: String = String::from_utf8_lossy(&output.stderr)
-            .trim()
-            .chars()
-            .take(900)
-            .collect();
-        return Err(if detail.is_empty() {
-            format!("yt-dlp stopped with status {}.", output.status)
-        } else {
-            format!("yt-dlp could not download that video: {detail}")
-        });
-    }
-
-    let path = downloaded_media(&temporary)?;
-    let title = yt_dlp_title(&output.stdout).unwrap_or_else(|| media_title(&path));
-    transcribe_path_controlled(
-        runtime,
-        &config,
-        &path,
-        Some(title),
-        Some(youtube_url),
-        control,
-    )
-    .await
-    // `temporary` is dropped here on success and on every error path, deleting the download.
-}
-
-async fn bundled_tool_version(path: &Path) -> Option<String> {
-    if !is_executable_file(path) {
-        return None;
-    }
-    let executable = path.to_path_buf();
-    tauri::async_runtime::spawn_blocking(move || Command::new(executable).arg("--version").output())
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .filter(|output| output.status.success())
-        .and_then(|output| {
-            String::from_utf8(output.stdout).ok().and_then(|value| {
-                value
-                    .lines()
-                    .find(|line| !line.trim().is_empty())
-                    .map(str::trim)
-                    .map(str::to_string)
-            })
-        })
-}
-
-#[tauri::command]
-async fn transcription_setup_status(app: AppHandle) -> Result<TranscriptionSetupStatus, String> {
-    let runtime = bundled_transcription_runtime(&app)?;
-    let whisper_version = bundled_tool_version(&runtime.whisper).await;
-    let yt_dlp_version = bundled_tool_version(&runtime.yt_dlp).await;
-    let deno_version = bundled_tool_version(&runtime.deno).await;
-    let model_ready = fs::metadata(&runtime.model)
-        .map(|metadata| metadata.is_file() && metadata.len() >= MIN_BUNDLED_MODEL_BYTES)
-        .unwrap_or(false);
-    let whisper_available = whisper_version.is_some() && model_ready;
-    let yt_dlp_available = yt_dlp_version.is_some() && deno_version.is_some();
-
-    let whisper_message = if whisper_available {
-        format!(
-            "{} and its on-device model are ready.",
-            whisper_version.as_deref().unwrap_or("Bundled Whisper")
-        )
-    } else {
-        "The bundled Whisper engine or model is missing. Reinstall Orion.".to_string()
-    };
-    let youtube_message = if yt_dlp_available {
-        format!(
-            "Bundled yt-dlp {} and {} are ready.",
-            yt_dlp_version.as_deref().unwrap_or(""),
-            deno_version.as_deref().unwrap_or("Deno")
-        )
-    } else {
-        "The bundled YouTube tools are incomplete. Reinstall Orion.".to_string()
-    };
-
-    Ok(TranscriptionSetupStatus {
-        whisper_available,
-        whisper_version,
-        whisper_model: bundled_whisper_model_label(&runtime),
-        yt_dlp_available,
-        yt_dlp_version,
-        deno_version,
-        message: format!("{whisper_message} {youtube_message}"),
-    })
-}
-
 #[tauri::command]
 async fn export_markdown(app: AppHandle, notes: Vec<ExportNote>) -> Result<ExportResult, String> {
     if notes.is_empty() {
@@ -7067,7 +4823,7 @@ pub fn run() {
         .manage(KnowledgeCancellation::default())
         .manage(VaultWriteLock::default())
         .manage(desktop_windows::DesktopWindows::default())
-        .manage(VoiceMemoWorkers::default())
+        .manage(local_transcription::VoiceMemoWorkers::default())
         .manage(media_jobs::MediaJobs::default())
         .manage(theme_icon::ThemeIconState::default())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -7093,6 +4849,7 @@ pub fn run() {
             note_image_protocol_response(context.app_handle(), &request)
         })
         .invoke_handler(tauri::generate_handler![
+            live_voice::create_live_voice_session,
             load_vault,
             window_glass::set_window_glass,
             ruler_glass::set_ruler_glass,
@@ -7108,13 +4865,35 @@ pub fn run() {
             assistant_bridge::assistant_progress,
             assistant_bridge::assistant_finish,
             assistant_bridge::assistant_commit_vault,
+            assistant_editor_context::editor_context_poll,
+            assistant_editor_context::editor_context_respond,
+            assistant_voice_work_orders::voice_work_orders_poll,
+            assistant_voice_work_orders::voice_work_orders_claim,
+            assistant_voice_work_orders::voice_work_orders_respond,
+            assistant_voice_work_orders::voice_work_orders_authorize,
+            assistant_voice_work_orders::voice_work_orders_release,
+            assistant_editor_actions::editor_actions_poll,
+            assistant_editor_actions::editor_actions_capture,
+            assistant_editor_actions::editor_actions_claim,
+            assistant_editor_actions::editor_actions_authorize,
+            assistant_editor_actions::editor_actions_review,
+            assistant_editor_actions::editor_actions_decide,
+            assistant_editor_actions::editor_actions_accepted,
+            assistant_editor_actions::editor_actions_saved,
+            assistant_editor_actions::editor_actions_fail,
+            assistant_review::assistant_review_poll,
+            assistant_review::assistant_review_stage,
+            assistant_review::assistant_review_decide,
+            assistant_review::assistant_review_accepted,
+            assistant_review::assistant_review_saved,
+            assistant_review::assistant_review_fail,
             save_note_image,
             generate_note_image,
             image_planning::plan_note_image,
             cancel_note_image_generation,
             open_data_directory,
-            open_claude_connector,
-            open_codex_plugin,
+            connector_installation::open_claude_connector,
+            connector_installation::open_codex_plugin,
             save_api_key,
             api_key_status,
             delete_api_key,
@@ -7135,15 +4914,15 @@ pub fn run() {
             knowledge_reading_cache_get,
             knowledge_reading_cache_put,
             chat,
-            transcribe_media_files,
-            cancel_media_import,
-            start_voice_memo_session,
-            transcribe_voice_memo,
-            finish_voice_memo_session,
-            transcribe_youtube,
+            local_transcription::transcribe_media_files,
+            local_transcription::cancel_media_import,
+            local_transcription::start_voice_memo_session,
+            local_transcription::transcribe_voice_memo,
+            local_transcription::finish_voice_memo_session,
+            local_transcription::transcribe_youtube,
             fetch_webpage,
             recognize_document_text,
-            transcription_setup_status,
+            local_transcription::transcription_setup_status,
             export_markdown,
             export_web_page,
             word_export::export_word_document,
@@ -7185,6 +4964,22 @@ pub fn run() {
                 .state::<media_jobs::MediaJobs>()
                 .cancel_owner(&label);
             desktop_windows::destroyed(app_handle, &label);
+            app_handle
+                .state::<assistant_bridge::AssistantBridge>()
+                .reviews
+                .close_window(&label);
+            app_handle
+                .state::<assistant_bridge::AssistantBridge>()
+                .editor_context
+                .close_window(&label);
+            app_handle
+                .state::<assistant_bridge::AssistantBridge>()
+                .voice_work_orders
+                .close_window(&label);
+            app_handle
+                .state::<assistant_bridge::AssistantBridge>()
+                .editor_actions
+                .close_window(&label);
         }
         _ => {}
     });
@@ -7193,6 +4988,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn speech_request_accepts_openai_and_elevenlabs_chunks() {
@@ -7263,50 +5059,6 @@ mod tests {
             .is_some());
     }
 
-    fn assert_openai_strict_objects(schema: &Value, path: &str) {
-        match schema {
-            Value::Object(object) => {
-                if object.get("type") == Some(&json!("object")) {
-                    let properties = object
-                        .get("properties")
-                        .and_then(Value::as_object)
-                        .unwrap_or_else(|| panic!("missing properties at {path}"));
-                    let required = object
-                        .get("required")
-                        .and_then(Value::as_array)
-                        .unwrap_or_else(|| panic!("missing required at {path}"));
-                    let mut property_names = properties.keys().cloned().collect::<Vec<_>>();
-                    let mut required_names = required
-                        .iter()
-                        .map(|value| {
-                            value
-                                .as_str()
-                                .unwrap_or_else(|| panic!("non-string required field at {path}"))
-                                .to_string()
-                        })
-                        .collect::<Vec<_>>();
-                    property_names.sort();
-                    required_names.sort();
-                    assert_eq!(required_names, property_names, "optional field at {path}");
-                    assert_eq!(
-                        object.get("additionalProperties"),
-                        Some(&json!(false)),
-                        "additional properties allowed at {path}"
-                    );
-                }
-                for (key, value) in object {
-                    assert_openai_strict_objects(value, &format!("{path}/{key}"));
-                }
-            }
-            Value::Array(values) => {
-                for (index, value) in values.iter().enumerate() {
-                    assert_openai_strict_objects(value, &format!("{path}/{index}"));
-                }
-            }
-            _ => {}
-        }
-    }
-
     #[cfg(unix)]
     fn write_executable(path: &Path, contents: &str) {
         use std::os::unix::fs::PermissionsExt;
@@ -7315,31 +5067,6 @@ mod tests {
         let mut permissions = fs::metadata(path).unwrap().permissions();
         permissions.set_mode(0o700);
         fs::set_permissions(path, permissions).unwrap();
-    }
-
-    #[cfg(unix)]
-    fn fake_transcription_runtime(
-        directory: &TempDir,
-        whisper_script: &str,
-        yt_dlp_script: &str,
-    ) -> TranscriptionRuntime {
-        let whisper = directory.path().join("orion-whisper");
-        let yt_dlp = directory.path().join("yt-dlp");
-        let deno = directory.path().join("deno");
-        let model = directory.path().join(BUNDLED_WHISPER_MODEL_NAME);
-        write_executable(&whisper, whisper_script);
-        write_executable(&yt_dlp, yt_dlp_script);
-        write_executable(&deno, "#!/bin/sh\nprintf 'deno 2.9.4\\n'\n");
-        File::create(&model)
-            .unwrap()
-            .set_len(MIN_BUNDLED_MODEL_BYTES)
-            .unwrap();
-        TranscriptionRuntime {
-            whisper,
-            model,
-            yt_dlp,
-            deno,
-        }
     }
 
     fn ocr_request(mime_type: &str, bytes: &[u8]) -> OCRDocumentRequest {
@@ -7469,116 +5196,6 @@ mod tests {
         let inlined = inline_web_export_images(&image_directory, &html).unwrap();
         assert!(inlined.contains("data:image/png;base64,iVBORw0KGgpib2R5"));
         assert!(!inlined.contains("orion-image://"));
-    }
-
-    #[cfg(unix)]
-    fn create_codex_plugin_fixture(directory: &TempDir) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-
-        let plugin_directory = directory.path().join(BUNDLED_CODEX_PLUGIN_DIRECTORY);
-        let marketplace =
-            plugin_directory.join(BUNDLED_CODEX_MARKETPLACE_PATH.iter().collect::<PathBuf>());
-        let server = plugin_directory.join(BUNDLED_CODEX_SERVER_PATH.iter().collect::<PathBuf>());
-        fs::create_dir_all(marketplace.parent().unwrap()).unwrap();
-        fs::create_dir_all(server.parent().unwrap()).unwrap();
-        fs::write(
-            &marketplace,
-            br#"{
-              "name": "orion-bundled",
-              "plugins": [{
-                "name": "orion",
-                "source": { "source": "local", "path": "./plugins/orion" }
-              }]
-            }"#,
-        )
-        .unwrap();
-        File::create(&server).unwrap().set_len(1_024).unwrap();
-        let mut permissions = fs::metadata(&server).unwrap().permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(&server, permissions).unwrap();
-        marketplace
-    }
-
-    #[test]
-    fn codex_plugin_url_encodes_and_recovers_the_absolute_marketplace_path() {
-        let marketplace =
-            Path::new("/Applications/Orion Atlas #1/.agents/plugins/marketplace.json");
-        let url = codex_plugin_url(marketplace).unwrap();
-
-        assert_eq!(url.scheme(), "codex");
-        assert_eq!(url.host_str(), Some("plugins"));
-        assert_eq!(url.path(), "/orion");
-        assert_eq!(
-            url.query_pairs()
-                .find(|(name, _)| name == "marketplacePath")
-                .map(|(_, value)| value.into_owned()),
-            Some(marketplace.to_string_lossy().into_owned())
-        );
-        assert!(url.as_str().contains("Orion+Atlas+%231"));
-        assert!(codex_plugin_url(Path::new("relative/marketplace.json")).is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn validates_the_expected_bundled_codex_plugin_layout() {
-        let directory = tempfile::tempdir().unwrap();
-        let marketplace = create_codex_plugin_fixture(&directory);
-
-        assert_eq!(
-            validate_bundled_codex_plugin(directory.path()).unwrap(),
-            fs::canonicalize(marketplace).unwrap()
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn rejects_an_invalid_or_non_executable_codex_plugin_bundle() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let directory = tempfile::tempdir().unwrap();
-        let marketplace = create_codex_plugin_fixture(&directory);
-        fs::write(&marketplace, br#"{"plugins": []}"#).unwrap();
-        assert!(validate_bundled_codex_plugin(directory.path())
-            .unwrap_err()
-            .contains("catalog is invalid"));
-
-        create_codex_plugin_fixture(&directory);
-        let server = directory
-            .path()
-            .join(BUNDLED_CODEX_PLUGIN_DIRECTORY)
-            .join(BUNDLED_CODEX_SERVER_PATH.iter().collect::<PathBuf>());
-        let mut permissions = fs::metadata(&server).unwrap().permissions();
-        permissions.set_mode(0o600);
-        fs::set_permissions(server, permissions).unwrap();
-        assert!(validate_bundled_codex_plugin(directory.path())
-            .unwrap_err()
-            .contains("cannot run"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn rejects_a_codex_plugin_file_that_escapes_its_bundled_directory() {
-        use std::os::unix::fs::symlink;
-
-        let directory = tempfile::tempdir().unwrap();
-        let marketplace = create_codex_plugin_fixture(&directory);
-        let external_catalog = directory.path().join("outside-marketplace.json");
-        fs::write(
-            &external_catalog,
-            br#"{
-              "plugins": [{
-                "name": "orion",
-                "source": { "source": "local", "path": "./plugins/orion" }
-              }]
-            }"#,
-        )
-        .unwrap();
-        fs::remove_file(&marketplace).unwrap();
-        symlink(external_catalog, marketplace).unwrap();
-
-        assert!(validate_bundled_codex_plugin(directory.path())
-            .unwrap_err()
-            .contains("invalid bundled path"));
     }
 
     #[test]
@@ -7738,172 +5355,7 @@ mod tests {
     }
 
     #[test]
-    fn knowledge_schemas_keep_openai_strict_and_anthropic_compact() {
-        let no_contract = json!({});
-        let root = knowledge_response_schema("root-result", &no_contract, &no_contract).unwrap();
-        let evidence = knowledge_response_schema("evidence", &no_contract, &no_contract).unwrap();
-        let note_routing =
-            knowledge_response_schema("note-routing", &no_contract, &no_contract).unwrap();
-        let reading_blueprint =
-            knowledge_response_schema("reading-blueprint", &no_contract, &no_contract).unwrap();
-        let source_reading =
-            knowledge_response_schema("source-reading", &no_contract, &no_contract).unwrap();
-        let writing_blueprint =
-            knowledge_response_schema("writing-blueprint", &no_contract, &no_contract).unwrap();
-        let writer_result =
-            knowledge_response_schema("writer-result", &no_contract, &no_contract).unwrap();
-        let root_text = root.to_string();
-        let evidence_text = evidence.to_string();
-
-        for primitive in [
-            "fan_out",
-            "reconcile",
-            "compress",
-            "assign_owner",
-            "re_expand",
-            "validate",
-            "re_evaluate",
-        ] {
-            assert!(root_text.contains(primitive));
-            assert!(evidence_text.contains(primitive));
-        }
-        assert_eq!(root.pointer("/type"), Some(&json!("object")));
-        assert!(root.get("anyOf").is_none());
-        assert_eq!(
-            root.pointer("/required"),
-            Some(&json!(["kind", "payload", "calls"]))
-        );
-        assert!(root
-            .pointer("/properties/payload/anyOf/1/properties/result")
-            .is_some());
-        assert!(evidence
-            .pointer("/properties/payload/anyOf/1/properties/claims")
-            .is_some());
-        assert_openai_strict_objects(&root, "root");
-        assert_openai_strict_objects(&evidence, "evidence");
-        assert_openai_strict_objects(&note_routing, "note routing");
-        assert_openai_strict_objects(&reading_blueprint, "reading blueprint");
-        assert_openai_strict_objects(&source_reading, "source reading");
-        assert_openai_strict_objects(&writing_blueprint, "writing blueprint");
-        assert_openai_strict_objects(&writer_result, "writer result");
-        for fixed in [
-            &note_routing,
-            &reading_blueprint,
-            &source_reading,
-            &writing_blueprint,
-            &writer_result,
-        ] {
-            assert_eq!(
-                fixed.pointer("/properties/kind/const"),
-                Some(&json!("complete"))
-            );
-            assert_eq!(
-                fixed.pointer("/properties/calls/type"),
-                Some(&json!("null"))
-            );
-            assert!(fixed.pointer("/properties/calls/anyOf").is_none());
-        }
-        assert!(note_routing
-            .pointer("/properties/payload/properties/routes/items/properties/noteVersion")
-            .is_some());
-        assert_eq!(
-            note_routing
-                .pointer("/properties/payload/properties/routes/items/properties/relation/enum"),
-            Some(&json!([
-                "unrelated",
-                "duplicate",
-                "extends",
-                "contradicts",
-                "uncertain"
-            ]))
-        );
-        assert!(reading_blueprint
-            .pointer("/properties/payload/properties/readers/items/properties/rangeId")
-            .is_some());
-        assert!(source_reading
-            .pointer("/properties/payload/properties/sourceClaims/items/properties/support")
-            .is_some());
-        assert!(source_reading
-            .pointer("/properties/payload/properties/spaceInterpretations")
-            .is_some());
-        assert_eq!(
-            source_reading.pointer(
-                "/properties/payload/properties/synthesisSeeds/items/properties/contribution/enum"
-            ),
-            Some(&json!([
-                "new",
-                "extends",
-                "contradicts",
-                "connects",
-                "qualifies"
-            ]))
-        );
-        assert_eq!(
-            source_reading.pointer(
-                "/properties/payload/properties/synthesisSeeds/items/properties/importance/enum"
-            ),
-            Some(&json!(["high", "medium", "low"]))
-        );
-        assert_eq!(
-            source_reading.pointer(
-                "/properties/payload/properties/synthesisSeeds/items/properties/claimIds/maxItems"
-            ),
-            Some(&json!(4))
-        );
-        assert_eq!(
-            writing_blueprint.pointer("/properties/payload/properties/writerSlots/maxItems"),
-            Some(&json!(6))
-        );
-        assert_eq!(
-            writing_blueprint.pointer(
-                "/properties/payload/properties/seedDispositions/items/properties/disposition/enum"
-            ),
-            Some(&json!(["output", "merged", "omitted"]))
-        );
-        assert!(writer_result
-            .pointer("/properties/payload/properties/drafts/items/properties/claimSelections")
-            .is_some());
-        assert!(writer_result
-            .pointer("/properties/payload/properties/drafts/items/properties/mustPreserve")
-            .is_some());
-        let coordination_assignment = knowledge_assignment_schema().to_string();
-        assert!(!coordination_assignment.contains("reading-blueprint"));
-        assert!(!coordination_assignment.contains("note-routing"));
-        assert!(!coordination_assignment.contains("router"));
-        assert!(!coordination_assignment.contains("source-reader"));
-        assert!(!coordination_assignment.contains("writing-blueprint"));
-        assert!(!coordination_assignment.contains("writer-result"));
-        assert!(!root_text.contains("desiredWidth"));
-        assert!(!root_text.contains("maxNodes"));
-        assert!(!root_text.contains("researcher"));
-        assert_eq!(
-            root.pointer("/properties/payload/anyOf/1/properties/result/properties/notes/maxItems"),
-            Some(&json!(MAX_ORGANIZED_ITEMS))
-        );
-        assert_eq!(
-            root.pointer(
-                "/properties/payload/anyOf/1/properties/result/properties/wikiArticles/maxItems"
-            ),
-            Some(&json!(MAX_ORGANIZED_ITEMS))
-        );
-        assert_eq!(
-            root.pointer("/properties/payload/anyOf/1/properties/provenance/maxItems"),
-            Some(&json!(MAX_ORGANIZED_ITEMS))
-        );
-
-        let anthropic = anthropic_knowledge_response_schema();
-        let anthropic_text = anthropic.to_string();
-        for unsupported in [
-            "anyOf",
-            "minLength",
-            "maxLength",
-            "minItems",
-            "maxItems",
-            "minimum",
-            "maximum",
-        ] {
-            assert!(!anthropic_text.contains(unsupported));
-        }
+    fn anthropic_knowledge_response_normalization_preserves_inner_contract_errors() {
         assert_eq!(
             normalize_anthropic_knowledge_response(json!({
                 "kind": "Complete",
@@ -7949,230 +5401,6 @@ mod tests {
                 "payload": "not json"
             }),
             "malformed inner JSON must reach the TypeScript correction path"
-        );
-
-        let anthropic_organizer = anthropic_organizer_schema().to_string();
-        assert!(!anthropic_organizer.contains("maxItems"));
-        assert!(!anthropic_organizer.contains("minItems"));
-    }
-
-    #[test]
-    fn routing_schema_constrains_identifiers_to_the_contract() {
-        let assignment = json!({
-            "output": {
-                "kind": "note-routing",
-                "rangeId": "notes-1",
-                "expectedNotes": [
-                    { "noteId": "note-a", "noteVersion": "v-a" },
-                    { "noteId": "note-b", "noteVersion": "v-b" },
-                    { "noteId": "note-c", "noteVersion": "v-b" }
-                ]
-            }
-        });
-        let schema = knowledge_response_schema("note-routing", &assignment, &json!({})).unwrap();
-        let routes = "/properties/payload/properties/routes/items/properties";
-        assert_eq!(
-            schema.pointer("/properties/payload/properties/rangeId/enum"),
-            Some(&json!(["notes-1"]))
-        );
-        assert_eq!(
-            schema.pointer(&format!("{routes}/noteId/enum")),
-            Some(&json!(["note-a", "note-b", "note-c"]))
-        );
-        assert_eq!(
-            schema.pointer(&format!("{routes}/noteVersion/enum")),
-            Some(&json!(["v-a", "v-b"]))
-        );
-        assert_eq!(
-            schema.pointer(&format!("{routes}/relation/enum")),
-            Some(&json!([
-                "unrelated",
-                "duplicate",
-                "extends",
-                "contradicts",
-                "uncertain"
-            ]))
-        );
-        assert_openai_strict_objects(&schema, "routing with contract enums");
-    }
-
-    #[test]
-    fn writing_blueprint_schema_constrains_selections_to_the_readings() {
-        let context = json!({
-            "pipelineMaterials": [
-                {
-                    "kind": "source-reading",
-                    "trust": "source-evidence",
-                    "payload": {
-                        "artifactId": "artifact-1",
-                        "reading": {
-                            "sourceClaims": [
-                                { "claimId": "range1-claim-01" },
-                                { "claimId": "range1-claim-02" }
-                            ],
-                            "synthesisSeeds": [
-                                { "seedId": "range1-seed-01" },
-                                { "seedId": "range1-seed-02" }
-                            ],
-                            "spaceInterpretations": [
-                                { "interpretationId": "range1-lens-01" }
-                            ]
-                        }
-                    }
-                },
-                {
-                    "kind": "source-reading",
-                    "trust": "source-evidence",
-                    "payload": {
-                        "artifactId": "artifact-2",
-                        "reading": {
-                            "sourceClaims": [{ "claimId": "range2-claim-01" }],
-                            "synthesisSeeds": [{ "seedId": "range2-seed-01" }],
-                            "spaceInterpretations": [
-                                { "interpretationId": "range2-lens-01" }
-                            ]
-                        }
-                    }
-                },
-                { "kind": "space-orientation", "trust": "untrusted-context", "payload": {} }
-            ]
-        });
-        let schema = knowledge_response_schema("writing-blueprint", &json!({}), &context).unwrap();
-        let outputs = "/properties/payload/properties/outputs/items/properties";
-        assert_eq!(
-            schema.pointer(&format!(
-                "{outputs}/claimSelections/items/properties/artifactId/enum"
-            )),
-            Some(&json!(["artifact-1", "artifact-2"]))
-        );
-        assert_eq!(
-            schema.pointer(&format!(
-                "{outputs}/claimSelections/items/properties/claimIds/items/enum"
-            )),
-            Some(&json!([
-                "range1-claim-01",
-                "range1-claim-02",
-                "range2-claim-01"
-            ]))
-        );
-        assert_eq!(
-            schema.pointer(&format!(
-                "{outputs}/lensSelections/items/properties/artifactId/enum"
-            )),
-            Some(&json!(["artifact-1", "artifact-2"]))
-        );
-        assert_eq!(
-            schema.pointer(&format!(
-                "{outputs}/lensSelections/items/properties/interpretationIds/items/enum"
-            )),
-            Some(&json!(["range1-lens-01", "range2-lens-01"]))
-        );
-        let dispositions = "/properties/payload/properties/seedDispositions/items/properties";
-        assert_eq!(
-            schema.pointer(&format!("{dispositions}/artifactId/enum")),
-            Some(&json!(["artifact-1", "artifact-2"]))
-        );
-        assert_eq!(
-            schema.pointer(&format!("{dispositions}/seedId/enum")),
-            Some(&json!([
-                "range1-seed-01",
-                "range1-seed-02",
-                "range2-seed-01"
-            ]))
-        );
-        assert_openai_strict_objects(&schema, "writing blueprint with contract enums");
-    }
-
-    #[test]
-    fn writer_result_schema_constrains_draft_output_ids_when_contracted() {
-        let context = json!({
-            "pipelineMaterials": [{
-                "kind": "writing-blueprint",
-                "trust": "untrusted-context",
-                "payload": {
-                    "spaceThesis": "The Space centers on grounded evidence.",
-                    "assignedOutputs": [
-                        { "outputId": "output-1" },
-                        { "outputId": "output-2" }
-                    ]
-                }
-            }]
-        });
-        let schema = knowledge_response_schema("writer-result", &json!({}), &context).unwrap();
-        let output_id = "/properties/payload/properties/drafts/items/properties/outputId";
-        assert_eq!(
-            schema.pointer(&format!("{output_id}/enum")),
-            Some(&json!(["output-1", "output-2"]))
-        );
-        assert_openai_strict_objects(&schema, "writer result with contract enums");
-
-        let uncontracted =
-            knowledge_response_schema("writer-result", &json!({}), &json!({})).unwrap();
-        assert!(uncontracted.pointer(&format!("{output_id}/enum")).is_none());
-        assert_eq!(
-            uncontracted.pointer(&format!("{output_id}/maxLength")),
-            Some(&json!(300))
-        );
-    }
-
-    #[test]
-    fn oversized_or_malformed_contracts_keep_plain_string_schemas() {
-        let routes = "/properties/payload/properties/routes/items/properties";
-        let contract = |notes: Vec<Value>| {
-            json!({
-                "output": {
-                    "kind": "note-routing",
-                    "rangeId": "notes-1",
-                    "expectedNotes": notes
-                }
-            })
-        };
-
-        let too_many = contract(
-            (0..501)
-                .map(|index| {
-                    json!({
-                        "noteId": format!("note-{index}"),
-                        "noteVersion": format!("v-{index}")
-                    })
-                })
-                .collect(),
-        );
-        let schema = knowledge_response_schema("note-routing", &too_many, &json!({})).unwrap();
-        for field in ["noteId", "noteVersion"] {
-            let string_schema = schema.pointer(&format!("{routes}/{field}")).unwrap();
-            assert!(string_schema.get("enum").is_none());
-            assert_eq!(string_schema.pointer("/maxLength"), Some(&json!(300)));
-        }
-        assert_eq!(
-            schema.pointer("/properties/payload/properties/rangeId/enum"),
-            Some(&json!(["notes-1"]))
-        );
-        assert_openai_strict_objects(&schema, "routing with an over-cap contract");
-
-        let too_heavy = contract(
-            (0..250)
-                .map(|index| {
-                    json!({
-                        "noteId": format!("note-{index:0>276}"),
-                        "noteVersion": "v-shared"
-                    })
-                })
-                .collect(),
-        );
-        let schema = knowledge_response_schema("note-routing", &too_heavy, &json!({})).unwrap();
-        assert!(schema.pointer(&format!("{routes}/noteId/enum")).is_none());
-        assert_eq!(
-            schema.pointer(&format!("{routes}/noteVersion/enum")),
-            Some(&json!(["v-shared"]))
-        );
-
-        let malformed = contract(vec![json!({ "noteId": 7, "noteVersion": "v-1" })]);
-        let schema = knowledge_response_schema("note-routing", &malformed, &json!({})).unwrap();
-        assert!(schema.pointer(&format!("{routes}/noteId/enum")).is_none());
-        assert_eq!(
-            schema.pointer(&format!("{routes}/noteVersion/enum")),
-            Some(&json!(["v-1"]))
         );
     }
 
@@ -8328,18 +5556,6 @@ mod tests {
 
     #[test]
     fn import_link_plan_supports_phrases_and_typed_arguments() {
-        let organizer = organizer_schema();
-        assert_eq!(
-            organizer.pointer("/properties/suggestedConnections/items/properties/kind/enum"),
-            Some(&json!(["supports", "qualifies", "conflicts", "related"]))
-        );
-        let reading = knowledge_source_reading_schema();
-        assert!(reading
-            .pointer("/properties/synthesisSeeds/items/required")
-            .unwrap()
-            .as_array()
-            .unwrap()
-            .contains(&json!("linkPhrases")));
         let legacy: SuggestedConnection = serde_json::from_value(json!({
             "fromTitle": "Argument", "toTitle": "Claim", "reason": "A meaningful relation"
         }))
@@ -8567,69 +5783,167 @@ mod tests {
         assert!(!KNOWLEDGE_ORCHESTRATION_INSTRUCTIONS.contains("three readers"));
     }
 
-    #[test]
-    fn chat_reading_schema_and_reads_keep_writes_separate() {
-        let read_only = chat_transport_schema(true, true);
-        assert_eq!(read_only["required"], json!(["reply", "readRequests"]));
-        assert!(read_only["properties"].get("noteActions").is_none());
-        assert_eq!(read_only["properties"]["readRequests"]["maxItems"], 4);
-        assert!(chat_transport_schema(false, true)["properties"]
-            .get("noteActions")
-            .is_some());
-        let response = json!({ "reply": "Premature prose", "readRequests": [
-            {"kind": "note", "id": "note-a", "query": "support", "start": null}
-        ], "noteActions": [{"title":"Injected", "summary":"", "body":"Do not create while reading", "tags":[], "aliases":[]}] });
-        let parsed = parse_chat_response(&response.to_string(), false, true).unwrap();
-        assert!(parsed.reply.is_empty());
-        assert!(parsed.note_actions.is_empty());
-        assert_eq!(parsed.read_requests.unwrap().len(), 1);
-        assert!(parse_chat_response(&response.to_string(), true, true).is_err());
-        assert!(parse_chat_response(&response.to_string(), false, false).is_err());
-        let answer = json!({"reply":"Grounded answer [[e1]].", "readRequests":[]});
-        assert_eq!(
-            parse_chat_response(&answer.to_string(), true, true)
-                .unwrap()
-                .reply,
-            "Grounded answer [[e1]]."
-        );
+    fn suggestion_context_fixture() -> Value {
+        json!({ "spaceId": "fiction", "spaceName": "Transformations", "attachedNoteId": "maurice",
+            "evidence": [{"id":"e1","kind":"note","entityId":"maurice","title":"Maurice","text":"Maurice survives a head injury. Elmore wins a prize the next day."}],
+            "directory": [{"id":"maurice","title":"Maurice"}], "previousPrompts": [] })
+    }
+
+    fn suggestion_result_fixture() -> Value {
+        json!({"suggestions":[
+            {"prompt":"Could Maurice's injury and Elmore's prize share a hidden cause?","intent":"discuss","evidenceIds":["e1"]},
+            {"prompt":"Rewrite Maurice's opening so the injury foreshadows Elmore's prize.","intent":"edit","evidenceIds":["e1"]},
+            {"prompt":"Create a note tracing the hidden cause of Maurice's injury.","intent":"create","evidenceIds":["e1"]}
+        ]})
     }
 
     #[test]
-    fn chat_reading_rejects_unbounded_or_malformed_requests() {
-        let valid = json!({"kind":"source", "id":"source-a", "query":"", "start":0});
-        for request in [
-            json!({"kind":"delete", "id":"note-a", "query":"", "start":null}),
-            json!({"kind":"note", "id":"note-a", "query":""}),
-            json!({"kind":"note", "id":"note-a", "query":"", "start":-1}),
-            json!({"kind":"search", "id":"", "query":"", "start":0}),
-            json!({"kind":"note", "id":"note-a", "query":"", "start":null, "spaceId":"other"}),
-        ] {
-            assert!(parse_chat_response(
-                &json!({"reply":"", "readRequests":[request]}).to_string(),
-                true,
-                true
-            )
-            .is_err());
-        }
-        assert!(parse_chat_response(
-            &json!({"reply":"", "readRequests":vec![valid;5]}).to_string(),
-            true,
-            true
-        )
-        .is_err());
-        assert!(parse_chat_response(
-            &json!({"reply":"", "readRequests":[]}).to_string(),
-            true,
-            true
-        )
-        .is_err());
-        assert!(
-            validate_chat_reading_context(Some("{\"finalizing\":false,\"evidence\":[]}")).is_ok()
+    fn chat_suggestions_share_a_read_only_schema_and_preserve_exact_prompts() {
+        let protocol = chat_suggestions_protocol();
+        let schema = &protocol["schema"];
+        assert_eq!(schema["required"], json!(["suggestions"]));
+        assert_eq!(schema["properties"].as_object().unwrap().len(), 1);
+        assert_eq!(schema["additionalProperties"], false);
+        assert!(protocol["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("inserting note titles into such templates is still generic"));
+        let context =
+            validate_chat_suggestion_context(Some(&suggestion_context_fixture().to_string()))
+                .unwrap();
+        let payload = suggestion_result_fixture();
+        let result = parse_chat_suggestion_result(&payload.to_string(), &context).unwrap();
+        assert!(result.reply.is_empty());
+        assert!(result.note_actions.is_empty());
+        assert!(result.note_edits.is_empty());
+        assert!(result.note_rewrite.is_none());
+        assert!(result.read_requests.is_none());
+        assert_eq!(
+            serde_json::to_value(result.suggestions.unwrap()).unwrap(),
+            payload["suggestions"]
         );
-        assert!(validate_chat_reading_context(Some("[]")).is_err());
-        let oversized =
-            json!({"finalizing":false,"evidence":[],"text":"😀".repeat(30_000)}).to_string();
-        assert!(validate_chat_reading_context(Some(&oversized)).is_err());
+        for field in [
+            "noteActions",
+            "noteEdits",
+            "noteRewrite",
+            "readRequests",
+            "reply",
+        ] {
+            let mut invalid = payload.clone();
+            invalid[field] = json!([]);
+            assert!(parse_chat_suggestion_result(&invalid.to_string(), &context).is_err());
+        }
+    }
+
+    #[test]
+    fn chat_suggestions_reject_unbounded_or_unowned_context() {
+        let original = suggestion_context_fixture();
+        for (field, bad) in [
+            ("attachedNoteId", json!("other-space")),
+            ("extra", json!(true)),
+            ("directory", json!([{}, {}])),
+            ("previousPrompts", json!(["x".repeat(261)])),
+        ] {
+            let mut value = original.clone();
+            value[field] = bad;
+            assert!(validate_chat_suggestion_context(Some(&value.to_string())).is_err());
+        }
+        let mut value = original.clone();
+        value["evidence"][0]["text"] = json!("x".repeat(2001));
+        assert!(validate_chat_suggestion_context(Some(&value.to_string())).is_err());
+        value["evidence"][0]["text"] = json!("🪐".repeat(2000));
+        assert!(validate_chat_suggestion_context(Some(&value.to_string())).is_ok());
+        value["evidence"] = json!((0..8)
+            .map(|index| {
+                let mut item = value["evidence"][0].clone();
+                item["id"] = json!(format!("e{index}"));
+                item
+            })
+            .collect::<Vec<_>>());
+        assert!(validate_chat_suggestion_context(Some(&value.to_string())).is_err());
+        assert!(validate_chat_suggestion_context(Some("[]")).is_err());
+        assert!(validate_chat_suggestion_context(None).is_err());
+    }
+
+    #[test]
+    fn chat_suggestions_validate_intent_evidence_duplicates_and_attachment() {
+        let context = suggestion_context_fixture();
+        let original = suggestion_result_fixture();
+        for (field, bad) in [
+            ("evidenceIds", json!(["unknown"])),
+            ("evidenceIds", json!(["e1", "e1"])),
+            ("prompt", json!("x".repeat(261))),
+            ("prompt", json!("Create a note about Maurice")),
+            ("prompt", json!("Rewrite Maurice\'s opening")),
+            ("prompt", json!("Could you revise Maurice\'s opening?")),
+            ("prompt", json!("Could you please add a final paragraph?")),
+            (
+                "prompt",
+                json!("Please add a final paragraph to Maurice\'s story"),
+            ),
+            ("intent", json!("delete")),
+            ("hiddenPrompt", json!("Create a note")),
+        ] {
+            let mut value = original.clone();
+            value["suggestions"][0][field] = bad;
+            assert!(parse_chat_suggestion_result(&value.to_string(), &context).is_err());
+        }
+        let mut value = original.clone();
+        value["suggestions"][2]["prompt"] = json!("Save this as a note");
+        assert!(parse_chat_suggestion_result(&value.to_string(), &context).is_err());
+        let mut no_attachment = context.clone();
+        no_attachment["attachedNoteId"] = Value::Null;
+        assert!(parse_chat_suggestion_result(&original.to_string(), &no_attachment).is_err());
+        let duplicate =
+            json!({"suggestions":[original["suggestions"][0], original["suggestions"][0]]});
+        assert!(parse_chat_suggestion_result(&duplicate.to_string(), &context).is_err());
+        assert!(parse_chat_suggestion_result("{\"suggestions\":[]}", &context).is_err());
+    }
+
+    #[test]
+    fn chat_editing_intent_chooses_review_shape_without_creation_authority() {
+        let schema = chat_edit_schema(true, true, true);
+        for field in ["editIntent", "noteEdits", "noteRewrite"] {
+            assert!(schema["properties"].get(field).is_some());
+            assert!(schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(field)));
+            assert!(chat_edit_schema(true, true, false)["properties"]
+                .get(field)
+                .is_none());
+        }
+        assert!(schema["properties"].get("noteActions").is_none());
+        let focused = r#"{"reply":"Review the change","readRequests":[],"editIntent":"focused","noteEdits":[{"before":"Old","after":"New"}],"noteRewrite":""}"#;
+        let parsed = parse_chat_edit_response(focused, true, true, true).unwrap();
+        assert_eq!(parsed.edit_intent.as_deref(), Some("focused"));
+        assert_eq!(parsed.note_edits.len(), 1);
+        let output = r#"{"reply":"Review in note","readRequests":[],"editIntent":"rewrite","noteEdits":[],"noteRewrite":"A complete new body."}"#;
+        let parsed = parse_chat_edit_response(output, true, true, true).unwrap();
+        assert_eq!(parsed.edit_intent.as_deref(), Some("rewrite"));
+        assert_eq!(parsed.note_rewrite.as_deref(), Some("A complete new body."));
+        for unauthorized in [focused, output] {
+            let parsed = parse_chat_edit_response(unauthorized, true, true, false).unwrap();
+            assert!(parsed.note_edits.is_empty());
+            assert!(parsed.note_rewrite.is_none());
+            assert!(parsed.edit_intent.is_none());
+        }
+        let destination = r#"{"reply":"Ready","readRequests":[],"editIntent":"focused","noteEdits":[{"before":"Old","after":"New","noteId":"other"}]}"#;
+        assert!(parse_chat_edit_response(destination, true, true, true).is_err());
+        let invalid = r#"{"reply":"Ready","readRequests":[],"editIntent":"apply"}"#;
+        assert!(parse_chat_edit_response(invalid, true, true, true).is_err());
+        assert!(chat_edits::parse_rewrite(Some(json!("x".repeat(24001)))).is_err());
+        assert!(chat_edits::parse_rewrite(Some(json!("😀".repeat(24000)))).is_ok());
+    }
+
+    #[test]
+    fn chat_read_steps_keep_intent_but_drop_all_edit_payloads() {
+        let reading = r#"{"reply":"Premature draft","readRequests":[{"kind":"note","id":"target","query":"","start":null}],"editIntent":"rewrite","noteEdits":"malformed","noteRewrite":900}"#;
+        let parsed = parse_chat_edit_response(reading, true, true, true).unwrap();
+        assert_eq!(parsed.edit_intent.as_deref(), Some("rewrite"));
+        assert!(parsed.reply.is_empty());
+        assert!(parsed.note_edits.is_empty());
+        assert!(parsed.note_rewrite.is_none());
     }
 
     #[test]
@@ -8878,75 +6192,6 @@ mod tests {
         write_vault_file_if_current(&path, &next, Some("2026-08-01T12:08:54.897813Z")).unwrap();
 
         assert_eq!(read_vault_file(&path).unwrap(), Some(next));
-    }
-
-    #[test]
-    fn normalizes_optional_transcription_language() {
-        let accepted = normalize_transcription_language(WhisperConfig {
-            language: Some("en".to_string()),
-        })
-        .unwrap();
-        assert_eq!(accepted.as_deref(), Some("en"));
-        assert_eq!(
-            normalize_transcription_language(WhisperConfig {
-                language: Some(" Auto ".to_string())
-            })
-            .unwrap(),
-            None
-        );
-        assert!(normalize_transcription_language(WhisperConfig {
-            language: Some("../english".to_string())
-        })
-        .is_err());
-    }
-
-    #[test]
-    fn validates_voice_memo_container_type_and_bound() {
-        let m4a = b"\0\0\0\x18ftypM4A fixture";
-        let (file_name, mime_type, decoded) = decode_voice_memo(VoiceMemoRequest {
-            file_name: "voice-memo.m4a".to_string(),
-            mime_type: "audio/mp4;codecs=mp4a.40.2".to_string(),
-            base64_data: BASE64_STANDARD.encode(m4a),
-        })
-        .unwrap();
-        assert_eq!(file_name, "voice-memo.m4a");
-        assert_eq!(mime_type, "audio/mp4");
-        assert_eq!(&decoded[..], m4a);
-
-        assert!(decode_voice_memo(VoiceMemoRequest {
-            file_name: "../memo.m4a".to_string(),
-            mime_type: "audio/mp4".to_string(),
-            base64_data: BASE64_STANDARD.encode(m4a),
-        })
-        .is_err());
-        assert!(decode_voice_memo(VoiceMemoRequest {
-            file_name: "memo.m4a".to_string(),
-            mime_type: "audio/webm".to_string(),
-            base64_data: BASE64_STANDARD.encode(m4a),
-        })
-        .is_err());
-        assert!(decode_voice_memo(VoiceMemoRequest {
-            file_name: "memo.m4a".to_string(),
-            mime_type: "audio/mp4".to_string(),
-            base64_data: BASE64_STANDARD.encode(b"not-m4a"),
-        })
-        .is_err());
-        assert!(decode_voice_memo(VoiceMemoRequest {
-            file_name: "memo.m4a".to_string(),
-            mime_type: "audio/mp4".to_string(),
-            base64_data: "A".repeat(MAX_VOICE_MEMO_BASE64_BYTES + 1),
-        })
-        .unwrap_err()
-        .contains("64 MB"));
-    }
-
-    #[test]
-    fn accepts_only_specific_https_youtube_urls() {
-        assert!(normalize_youtube_url("https://www.youtube.com/watch?v=abc123").is_ok());
-        assert!(normalize_youtube_url("https://youtu.be/abc123").is_ok());
-        assert!(normalize_youtube_url("http://youtube.com/watch?v=abc123").is_err());
-        assert!(normalize_youtube_url("https://example.com/watch?v=abc123").is_err());
-        assert!(normalize_youtube_url("https://youtube.com/").is_err());
     }
 
     #[test]
@@ -9219,175 +6464,5 @@ mod tests {
         assert!(!is_public_web_ip("::ffff:192.168.1.2".parse().unwrap()));
         assert!(!is_public_web_ip("64:ff9b::a00:1".parse().unwrap()));
         assert!(!is_public_web_ip("2002:0a00:0001::".parse().unwrap()));
-    }
-
-    #[test]
-    fn extracts_title_from_yt_dlp_json_output() {
-        let output = br#"{"id":"abc","title":"A useful conversation"}"#;
-        assert_eq!(
-            yt_dlp_title(output).as_deref(),
-            Some("A useful conversation")
-        );
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn runs_the_bundled_whisper_engine_for_local_media() {
-        let directory = tempfile::tempdir().unwrap();
-        let runtime = fake_transcription_runtime(
-            &directory,
-            "#!/bin/sh\nprintf 'A local offline transcript.\\n'\n",
-            "#!/bin/sh\nexit 0\n",
-        );
-        let media = directory.path().join("field-recording.mp3");
-        fs::write(&media, b"not-real-audio").unwrap();
-        let config = WhisperConfig {
-            language: Some("en".to_string()),
-        };
-
-        let transcript =
-            tauri::async_runtime::block_on(transcribe_path(&runtime, &config, &media, None, None))
-                .unwrap();
-
-        assert_eq!(transcript.text, "A local offline transcript.");
-        assert_eq!(transcript.file_name, "field-recording.mp3");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn media_batch_keeps_successful_siblings_when_a_file_fails() {
-        let directory = tempfile::tempdir().unwrap();
-        let runtime = fake_transcription_runtime(
-            &directory,
-            "#!/bin/sh\nprintf 'A recovered transcript.\\n'\n",
-            "#!/bin/sh\nexit 0\n",
-        );
-        let good = directory.path().join("good.mp3");
-        let bad = directory.path().join("empty.mp3");
-        let later = directory.path().join("later.mp3");
-        fs::write(&good, b"audio").unwrap();
-        fs::write(&bad, b"").unwrap();
-        fs::write(&later, b"more audio").unwrap();
-        let batch = tauri::async_runtime::block_on(transcribe_media_paths(
-            &runtime,
-            &WhisperConfig { language: None },
-            vec![Ok(good), Ok(bad), Ok(later)],
-            &media_jobs::Control::default(),
-        ))
-        .unwrap();
-        assert_eq!(batch.transcripts.len(), 2);
-        assert_eq!(batch.transcripts[0].file_name, "good.mp3");
-        assert_eq!(batch.transcripts[1].file_name, "later.mp3");
-        assert_eq!(batch.failures.len(), 1);
-        assert_eq!(batch.failures[0].file_name, "empty.mp3");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn media_batch_retains_completed_files_after_its_overall_deadline() {
-        let directory = tempfile::tempdir().unwrap();
-        let second_started = directory.path().join("second-started");
-        let script = format!("#!/bin/sh\ncase \"$*\" in *slow.mp3*) touch '{}' ; sleep 10 ;; esac\nprintf 'Completed transcript.\\n'\n", second_started.display());
-        let runtime = fake_transcription_runtime(&directory, &script, "#!/bin/sh\nexit 0\n");
-        let paths: Vec<_> = ["good.mp3", "slow.mp3", "later.mp3"]
-            .iter()
-            .map(|name| {
-                let path = directory.path().join(name);
-                fs::write(&path, b"audio").unwrap();
-                Ok(path)
-            })
-            .collect();
-        let control = media_jobs::Control::default();
-        let clock = control.clone();
-        let expire = std::thread::spawn(move || {
-            let started = std::time::Instant::now();
-            while !second_started.exists() && started.elapsed() < Duration::from_secs(10) {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            assert!(second_started.exists(), "The second recording never began");
-            clock.expire_for_test();
-        });
-        let batch = tauri::async_runtime::block_on(transcribe_media_paths(
-            &runtime,
-            &WhisperConfig { language: None },
-            paths,
-            &control,
-        ))
-        .unwrap();
-        expire.join().unwrap();
-        assert_eq!(batch.transcripts.len(), 1);
-        assert_eq!(batch.transcripts[0].file_name, "good.mp3");
-        assert_eq!(batch.failures.len(), 2);
-        assert!(batch
-            .failures
-            .iter()
-            .all(|failure| failure.error.contains("limit")));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn youtube_workflow_deletes_its_temporary_download() {
-        let fixture = tempfile::tempdir().unwrap();
-        let temporary_marker = fixture.path().join("temporary-directory.txt");
-        let argument_marker = fixture.path().join("yt-dlp-arguments.txt");
-        let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"{}\"\noutput=\"\"\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--output\" ]; then\n    shift\n    output=\"$1\"\n  fi\n  shift\ndone\ndirectory=$(dirname \"$output\")\nprintf '%s' \"$directory\" > \"{}\"\nprintf 'fake-youtube-audio' > \"$directory/orion-media.m4a\"\nprintf '{{\"title\":\"Recorded dialogue\"}}\\n'\n",
-            argument_marker.display(),
-            temporary_marker.display()
-        );
-        let runtime = fake_transcription_runtime(
-            &fixture,
-            "#!/bin/sh\nprintf 'A video transcript.\\n'\n",
-            &script,
-        );
-
-        let transcript = tauri::async_runtime::block_on(transcribe_youtube_with_runtime(
-            &runtime,
-            YouTubeTranscriptionRequest {
-                url: "https://youtu.be/orion-example".to_string(),
-                language: None,
-            },
-        ))
-        .unwrap();
-
-        assert_eq!(transcript.title, "Recorded dialogue");
-        assert_eq!(transcript.text, "A video transcript.");
-        assert_eq!(
-            transcript.source_url.as_deref(),
-            Some("https://youtu.be/orion-example")
-        );
-        let temporary_path = fs::read_to_string(&temporary_marker).unwrap();
-        assert!(!Path::new(&temporary_path).exists());
-        let arguments = fs::read_to_string(&argument_marker).unwrap();
-        assert!(arguments.contains("--ignore-config"));
-        assert!(arguments.contains("--no-simulate"));
-        assert!(arguments.contains("--js-runtimes"));
-        assert!(arguments.contains(&format!("deno:{}", runtime.deno.display())));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn youtube_workflow_does_not_download_when_bundled_whisper_is_missing() {
-        let fixture = tempfile::tempdir().unwrap();
-        let marker = fixture.path().join("yt-dlp-ran");
-        let mut runtime = fake_transcription_runtime(
-            &fixture,
-            "#!/bin/sh\nprintf 'unused transcript\\n'\n",
-            &format!("#!/bin/sh\ntouch \"{}\"\n", marker.display()),
-        );
-        runtime.whisper = fixture.path().join("missing-whisper");
-
-        let error = tauri::async_runtime::block_on(transcribe_youtube_with_runtime(
-            &runtime,
-            YouTubeTranscriptionRequest {
-                url: "https://youtu.be/orion-example".to_string(),
-                language: None,
-            },
-        ))
-        .err()
-        .unwrap();
-
-        assert!(error.contains("bundled Whisper engine"));
-        assert!(!marker.exists());
     }
 }

@@ -24,11 +24,11 @@ export function AssistantConnections({ access = defaultSettings.assistantAccess,
   const change = (patch: Partial<AssistantAccess>) => onChange({ ...access, ...patch });
   return <div className="setting-card assistant-connections">
     <div className="setting-card-header">
-      <span><strong>Orion workflows</strong><small>Let Codex and Claude Desktop use Orion’s search, context, import, export, and generation tools while Orion is open.</small></span>
+      <span><strong>Orion workflows</strong><small>Let Codex and Claude Desktop research, import, export, create notes, and propose edits for your review while Orion is open.</small></span>
     </div>
     <label className="assistant-permission">
       <input type="checkbox" checked={access.enabled} disabled={!desktop} onChange={(event) => change({ enabled: event.target.checked })} />
-      <span><strong>Enable desktop workflows</strong><small>Context and results are shared with the connected assistant under its account settings.</small></span>
+      <span><strong>Enable desktop workflows</strong><small>Connected assistants can request selected text and cursor position in allowed Spaces, including unsaved text. Context and results are shared under that assistant’s account settings.</small></span>
     </label>
     <fieldset disabled={!desktop || !access.enabled}>
       <legend>Allowed workflows</legend>
@@ -38,7 +38,7 @@ export function AssistantConnections({ access = defaultSettings.assistantAccess,
       </label>
       <label className="assistant-permission">
         <input type="checkbox" checked={access.allowWrites} onChange={(event) => change({ allowWrites: event.target.checked })} />
-        <span><strong>Import and save workflow results</strong><small>Import supplied local files or public URLs, reprocess sources, and create or develop notes. Source extraction stays available without AI.</small></span>
+        <span><strong>Import and save workflow results</strong><small>Import files or public URLs, reprocess sources, create notes, and propose changes in your open note. Proposed edits wait for Accept changes or Discard. Source extraction and edit review need no Orion AI key.</small></span>
       </label>
       <div className="assistant-space-heading">Allowed Spaces</div>
       <div className="assistant-spaces" aria-label="Spaces allowed for desktop workflows">

@@ -163,6 +163,12 @@ impl WindowRouting {
         }
     }
 
+    fn owns_editor_note(&self, label: &str, space: &str, note: &str) -> bool {
+        self.writing
+            .get(label)
+            .is_none_or(|target| target.space_id == space && target.note_id == note)
+    }
+
     fn route_note(&mut self, label: &str, target: &NoteNavigation) -> bool {
         if self.writing.contains_key(label) {
             return false;
@@ -207,6 +213,33 @@ pub struct DesktopWindows {
     creation: tokio::sync::Mutex<()>,
     quit: Mutex<QuitState>,
     overviews: Mutex<HashMap<String, (String, String)>>,
+}
+
+/// External reviews and reference reads cannot retarget an immutable writing window.
+pub(crate) fn review_target_matches(app: &AppHandle, label: &str, space: &str, note: &str) -> bool {
+    if app.get_webview_window(label).is_none() {
+        return false;
+    }
+    let state = app.state::<DesktopWindows>();
+    let Ok(routing) = state.routing.lock() else {
+        return false;
+    };
+    routing.owns_editor_note(label, space, note)
+}
+
+/// Voice targets belong to a library window; writing windows never host Space voice.
+pub(crate) fn voice_target_matches(app: &AppHandle, label: &str, _space: &str) -> bool {
+    if app.get_webview_window(label).is_none() {
+        return false;
+    }
+    let state = app.state::<DesktopWindows>();
+    let Ok(routing) = state.routing.lock() else {
+        return false;
+    };
+    // Library navigation is renderer-owned, just as for editor target registration.
+    // The mailbox binds its reported Space to the native caller/session and
+    // checks the exact persisted Space grant; it cannot retarget a writing window.
+    !routing.writing.contains_key(label)
 }
 
 pub fn preferred_window(app: &AppHandle) -> Option<WebviewWindow> {
@@ -835,6 +868,15 @@ mod tests {
         ]})
     }
 
+    #[test]
+    fn editor_context_writing_window_ownership_cannot_change_note_or_space() {
+        let mut routing = WindowRouting::default();
+        routing.writing.insert("writing".into(), target("a", "n"));
+        assert!(routing.owns_editor_note("writing", "a", "n"));
+        assert!(!routing.owns_editor_note("writing", "a", "other"));
+        assert!(!routing.owns_editor_note("writing", "b", "n"));
+        assert!(routing.owns_editor_note("main", "b", "other"));
+    }
     #[test]
     fn writing_targets_require_one_note_in_the_exact_space() {
         let vault = fixture_vault();

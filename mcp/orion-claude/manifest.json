@@ -3,9 +3,9 @@
   "manifest_version": "0.4",
   "name": "orion-knowledge-atlas",
   "display_name": "Orion",
-  "version": "0.4.7",
+  "version": "0.5.0",
   "description": "Search, edit, research, import, and generate in your local Orion Spaces.",
-  "long_description": "Connect Claude Desktop to Orion's local library and optional native AI workflows. Read and edit notes without an API key, or enable scoped research, source import/reprocessing, generation, concept development, enrichment, and overview refresh while Orion is open. The app retains credentials, provider settings, and atomic writes. Jobs report evidence, coverage, freshness, and cancellation. Includes exact source passages, note sections, concept and link-path navigation, provenance, tasks, guarded text edits, atomic metadata batches, duplicate detection, and integrity checks. All 30 local library tools work while Orion is closed. Includes guarded writing blocks and slash-command formatting.",
+  "long_description": "Connect Claude Desktop to Orion's local library and optional native AI workflows. Read and edit notes without an API key, or enable scoped research, source import/reprocessing, generation, concept development, enrichment, and overview refresh while Orion is open. The app retains credentials, provider settings, and atomic writes. Jobs report evidence, coverage, freshness, and cancellation. Includes exact source passages, note sections, concept and link-path navigation, provenance, tasks, guarded text edits, atomic metadata batches, duplicate detection, and integrity checks. All 30 local library tools work while Orion is closed. Includes guarded writing blocks and slash-command formatting. The 55-tool surface also includes exact open-editor context, in-note edit review, and finite inspection/cancellation/read-only continuation of existing voice workers, and capture/start/status/cancel for real inline Write, Rewrite and image previews; it never automates microphone or call controls.",
   "author": {
     "name": "Orion"
   },
@@ -112,6 +112,18 @@
       "description": "Cancel queued or running work and prevent late note commits."
     },
     {
+      "name": "orion_propose_note_edit",
+      "description": "Submit a version-guarded edit for review in a specific open Orion note. Only the user's Accept changes action applies it."
+    },
+    {
+      "name": "orion_get_edit_review",
+      "description": "Read an edit review's state, distinguishing pending review, editor acceptance and verified saving."
+    },
+    {
+      "name": "orion_cancel_edit_review",
+      "description": "Cancel a pending edit review before acceptance. This cannot undo an edit already accepted by the user."
+    },
+    {
       "name": "orion_list_sources",
       "description": "Page through source metadata, optionally filtering kind, title, or source URL. No source body upload."
     },
@@ -194,6 +206,38 @@
     {
       "name": "orion_apply_note_command",
       "description": "Insert writing blocks, headings, tasks, lists, tables, code, links, excerpts, or existing images through version-guarded slash-command semantics in one exact Space."
+    },
+    {
+      "name": "orion_get_editor_context",
+      "description": "Read the bounded selected passage or cursor from an exact open-note window as reference-only context; no voice, AI or write permission required."
+    },
+    {
+      "name": "orion_list_voice_work_orders",
+      "description": "List existing workers in an exact native-issued voice target and Space, with revisions and consistent pagination. Does not start audio or research."
+    },
+    {
+      "name": "orion_get_voice_work_order",
+      "description": "Read one exact voice-worker revision with bounded findings, exact evidence, public task memory and explicit omissions. No transcript or hidden reasoning."
+    },
+    {
+      "name": "orion_control_voice_work_order",
+      "description": "Cancel, retry or steer one exact voice worker with revision and request guards. External research is read-only; no microphone, navigation or note-write control."
+    },
+    {
+      "name": "orion_capture_editor_action",
+      "description": "Capture the actual rich-editor selection/cursor for a finite Write, Rewrite or image action without provider use. Returns an exact capture identity, not caller-controlled text or acceptance."
+    },
+    {
+      "name": "orion_start_editor_action",
+      "description": "Start a previously captured inline action with exact document and target guards. Uses Orion provider settings; generated text/image awaits user Accept/Discard in the note."
+    },
+    {
+      "name": "orion_get_editor_action",
+      "description": "Read one bounded editor-action receipt, keeping captured, generated preview, accepted-in-editor and native-verified saved states distinct."
+    },
+    {
+      "name": "orion_cancel_editor_action",
+      "description": "Cancel one captured/generating action or withdraw its unaccepted preview. Never accepts, replays or undoes an already accepted action."
     }
   ],
   "tools_generated": false,

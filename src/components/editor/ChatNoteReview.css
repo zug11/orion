@@ -1,0 +1,41 @@
+.chat-note-review {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface-raised);
+  box-shadow: 0 6px 22px rgb(0 0 0 / 8%);
+}
+.chat-note-review__description { flex: 1; min-width: 0; display: grid; gap: 4px; font-size: 12px; }
+.chat-note-review__description > span { color: var(--muted); font-size: 11px; }
+.chat-note-review mark, .editor-prose .chat-note-removed, .editor-prose .chat-note-removed-block {
+  background: color-mix(in srgb, #d69a36 22%, transparent);
+  color: inherit;
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+}
+.chat-note-review mark { padding: 1px 3px; border-radius: 3px; }
+.editor-prose .chat-note-addition, .chat-note-review__legend {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 7%, transparent);
+  text-decoration: underline dotted;
+  text-decoration-color: color-mix(in srgb, var(--muted) 45%, transparent);
+  text-underline-offset: 4px;
+}
+.editor-prose .chat-note-addition * { color: inherit !important; }
+.editor-prose .chat-note-addition--block { display: block; padding: 2px 10px; margin: 10px 0; border-left: 2px solid var(--muted); }
+.editor-prose .chat-note-addition img { opacity: .55; }
+.chat-note-review .button { flex-shrink: 0; font-size: 12px; }
+@media (max-width: 700px) {
+  .chat-note-review { flex-wrap: wrap; gap: 8px; }
+  .chat-note-review__description { flex-basis: 100%; }
+}
+
+.editor-prose span.chat-note-addition { padding-inline: .12em; border-radius: 3px; }
+.editor-prose .chat-note-removed { padding-inline: .06em; border-radius: 3px; }

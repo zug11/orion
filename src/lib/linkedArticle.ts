@@ -1,9 +1,11 @@
 import {
   normalizeConceptPhrase,
+  type LinkedDocumentReceipt,
 } from "./concepts";
 import { truncateUnicode } from "./text";
 import { deleteNoteFromSnapshot } from "./noteDeletion";
 import { buildCompactOrganizerContext } from "./organizerContext";
+import { projectEditorAIContext, type EditorAILinkContext } from "./editorAIWorkingContext";
 import type {
   AppSnapshot,
   Note,
@@ -39,7 +41,35 @@ export interface LinkedArticleJob {
   stage: LinkedArticleJobStage;
   instructions?: string;
   selectedContext?: string;
+  editorContext?: EditorAILinkContext;
+  /** Exact origin at admission, used to reject stale captured-context retries. */
+  originBody?: string;
+  originLinkConceptId?: string;
+  linkedDocument?: LinkedDocumentReceipt;
   error?: string;
+}
+
+/** Permit the host's exact link transaction or its single matching link mark,
+ * never a fresh passage or general Markdown normalization. */
+export function isLinkedArticleOriginCurrent(
+  origin: Note,
+  capture: Pick<LinkedArticleJob, "originBody" | "editorContext" | "originLinkConceptId" | "linkedDocument">,
+): boolean {
+  const bases = [capture.originBody, capture.editorContext?.documentMarkdown]
+    .filter((value): value is string => value !== undefined);
+  if (capture.linkedDocument?.body !== undefined && origin.body === capture.linkedDocument.body) return true;
+  if (!bases.length) return !capture.editorContext;
+  if (bases.includes(origin.body)) return true;
+  const conceptId = capture.originLinkConceptId;
+  if (!conceptId || !/^[A-Za-z0-9_-]+$/.test(conceptId)) return false;
+  const mark = /\[((?:\\.|[^\]\\\r\n])*)\]\(orion-concept:\/\/([A-Za-z0-9_-]+)\)/g;
+  for (const match of origin.body.matchAll(mark)) {
+    if (match[2] !== conceptId) continue;
+    if (match.index && ["!", "\\"].includes(origin.body[match.index - 1])) continue;
+    const unlinked = origin.body.slice(0, match.index) + match[1] + origin.body.slice(match.index! + match[0].length);
+    if (bases.includes(unlinked)) return true;
+  }
+  return false;
 }
 
 /**
@@ -216,7 +246,20 @@ export function buildLinkedArticleRequest(
   phrase: string,
   customInstructions = "",
   selectedContext = "",
+  editorContext?: EditorAILinkContext,
 ): OrganizeContentRequest {
+  const projected = projectEditorAIContext(snapshot, {
+    originNoteId: originNote.id,
+    instruction: customInstructions,
+    selectedText: selectedContext,
+    ...editorContext,
+  }, "rewrite");
+  snapshot = projected.snapshot;
+  originNote = snapshot.notes.find(note => note.id === originNote.id)!;
+  if (projected.input.documentMarkdown !== undefined) {
+    originNote = { ...originNote, body: projected.input.documentMarkdown };
+  }
+  selectedContext = projected.input.selectedText ?? "";
   const directSources = originNote.sourceIds
     .map((sourceId) =>
       snapshot.sources.find((source) => source.id === sourceId),

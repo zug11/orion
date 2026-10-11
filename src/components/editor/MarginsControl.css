@@ -94,24 +94,6 @@
 .editor-ruler-marker:focus-visible { outline: 2px solid var(--periwinkle); outline-offset: 2px; }
 .editor-ruler-marker.is-mixed .editor-ruler-marker-shape { opacity: .6; }
 .editor-ruler-marker:disabled { opacity: .3; cursor: default; }
-.editor-ruler-value {
-  position: absolute;
-  bottom: calc(100% + 3px);
-  left: 50%;
-  display: none;
-  transform: translateX(-50%);
-  padding: 3px 5px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--surface-raised);
-  color: var(--text);
-  font: 10px/1 var(--ui-font);
-  white-space: nowrap;
-  pointer-events: none;
-}
-.editor-ruler-marker:hover .editor-ruler-value,
-.editor-ruler-marker:focus-visible .editor-ruler-value,
-.editor-ruler-marker.is-dragging .editor-ruler-value { display: block; }
 .editor-formatting-dock[data-native-editor-glass="true"] .editor-margins-track::before,
 .editor-formatting-dock[data-native-editor-glass="true"] .editor-margins-track .editor-ruler-shading { display: none; }
 .editor-formatting-dock[data-native-editor-glass="true"] .editor-margins-track .editor-ruler-ticks,

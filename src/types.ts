@@ -638,7 +638,7 @@ export interface ChatHistoryItem {
 }
 
 export interface ChatRequest {
-  mode?: "chat" | "inline-writing" | "chat-reading";
+  mode?: "chat" | "inline-writing" | "chat-reading" | "chat-suggestions";
   prompt: string;
   workspaceName: string;
   notes: ChatNoteContext[];
@@ -647,24 +647,53 @@ export interface ChatRequest {
   history: ChatHistoryItem[];
   /** Host-derived authorization for creation-only Chat note actions. */
   allowNoteActions?: boolean;
+  /** Host-captured target for review-only proposals. Only local acceptance can write. */
+  editNoteId?: string;
   /** Bounded host-built reading packet. Only used by chat-reading. */
   readingContext?: string;
+  /** Bounded read-only exact passages for contextual prompt synthesis. */
+  suggestionContext?: string;
   model?: string;
   effort?: ReasoningEffort;
 }
 
 export interface ChatResult {
   reply: string;
+  /** Transient prompt ideas. They carry no note-write authority. */
+  suggestions?: ChatPromptSuggestion[];
   noteActions?: ChatNoteAction[];
+  /** Transient exact-text proposals; never directly applied or persisted. */
+  noteEdits?: ChatNoteEdit[];
+  noteRewrite?: string;
+  /** Agent-selected response scope; never write authority. */
+  editIntent?: "none" | ChatEditMode;
+  editProposal?: ChatEditProposal;
   /** Provider requests; executed locally and never persisted as conversation. */
   readRequests?: ChatReadRequest[];
+  /** Optional public research finding. Never a hidden reasoning trace or write. */
+  checkpoint?: ChatReadingFinding;
   /** Host-built citations and coverage, never accepted from provider output. */
   evidence?: ChatEvidence[];
   coverage?: ChatCoverage;
 }
 
+export interface ChatReadingFinding {
+  /** A concise useful update with exact [[eN]] citations, or empty while reading. */
+  finding: string;
+  /** Brief task decisions and their evidence basis; never chain-of-thought. */
+  decisions: string[];
+  openQuestions: string[];
+}
+
+export interface ChatPromptSuggestion {
+  /** The exact text shown in the UI and inserted into the composer. */
+  prompt: string;
+  intent: "discuss" | "edit" | "create";
+  evidenceIds: string[];
+}
+
 export interface ChatReadRequest {
-  kind: "search" | "cluster" | "note" | "source" | "related";
+  kind: "search" | "cluster" | "note" | "source" | "note-full" | "source-full" | "related";
   id: string;
   query: string;
   /** UTF-16 offset for exact text, directory offset for search/cluster. */
@@ -698,6 +727,18 @@ export interface ChatNoteAction {
   body: string;
   tags: string[];
   aliases: string[];
+}
+
+export type ChatEditMode = "focused" | "rewrite";
+export interface ChatNoteEdit { before: string; after: string }
+export interface ChatEditProposal {
+  spaceId: string;
+  noteId: string;
+  title: string;
+  baseBody: string;
+  mode?: ChatEditMode;
+  rewrite?: string;
+  edits: ChatNoteEdit[];
 }
 
 export interface ApiKeyStatus {

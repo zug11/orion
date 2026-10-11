@@ -39,6 +39,7 @@ pub(super) fn call(path: &Path, name: &str, args: &Map<String, Value>) -> ToolRe
         };
         let mut seen = BTreeSet::new();
         let mut changes = Vec::new();
+        let mut attachments = Vec::new();
         let mut content_changed = false;
         for (id, version) in requests {
             if !seen.insert(id) {
@@ -66,7 +67,31 @@ pub(super) fn call(path: &Path, name: &str, args: &Map<String, Value>) -> ToolRe
                 }
             } else {
                 let body = match name {
-                    "orion_apply_note_command" => editor::apply(scope, current, args)?,
+                    "orion_apply_note_command" => {
+                        let prepared = editor::prepare(scope, current, args)?;
+                        if let Some(source_id) = prepared.attach_source {
+                            let attached = source(scope, &source_id)?;
+                            let mut note_ids = attached.note_ids.clone();
+                            let source_changed = !note_ids.contains(&current.id);
+                            if source_changed {
+                                note_ids.push(current.id.clone());
+                            }
+                            if !current.source_ids.contains(&source_id) {
+                                let mut source_ids = current.source_ids.clone();
+                                source_ids.push(source_id.clone());
+                                fields.insert("sourceIds".into(), json!(source_ids));
+                                content_changed = true;
+                            }
+                            attachments.push((
+                                current.id.clone(),
+                                source_id,
+                                note_ids,
+                                source_changed,
+                            ));
+                            content_changed |= source_changed;
+                        }
+                        prepared.body
+                    }
                     "orion_append_to_note" => format!("{}{}", current.body, arg(args, "text")),
                     "orion_edit_note_text" => {
                         let old = arg(args, "old_text");
@@ -123,7 +148,8 @@ pub(super) fn call(path: &Path, name: &str, args: &Map<String, Value>) -> ToolRe
             changes.push((id.to_string(), fields));
         }
         // Apply only after every selection/version validates under the vault lock.
-        let changed = changes.iter().any(|(_, fields)| !fields.is_empty());
+        let changed = changes.iter().any(|(_, fields)| !fields.is_empty())
+            || attachments.iter().any(|(_, _, _, changed)| *changed);
         let now = now_iso()?;
         let target = require_space_value_mut(raw, &space_id)?;
         let records = required_array_mut(target, "notes")?;
@@ -138,6 +164,18 @@ pub(super) fn call(path: &Path, name: &str, args: &Map<String, Value>) -> ToolRe
                 .unwrap();
             record.extend(fields.clone());
             set_updated_at(record, &now);
+        }
+        for (_, id, note_ids, changed) in &attachments {
+            if *changed {
+                let record = required_array_mut(target, "sources")?
+                    .iter_mut()
+                    .find(|record| record["id"] == *id)
+                    .and_then(Value::as_object_mut)
+                    .unwrap();
+                // Source has no updatedAt field. The opaque version includes
+                // noteIds, so callers receive its changed version below.
+                record.insert("noteIds".into(), json!(note_ids));
+            }
         }
         if changed {
             if content_changed {
@@ -167,7 +205,13 @@ pub(super) fn call(path: &Path, name: &str, args: &Map<String, Value>) -> ToolRe
             result["linkedFromTruncated"] = json!(links.linked_from_truncated);
             results.push(result);
         }
-        let result = json!({"spaceId":space_id,"changed":changed,"notes":results,"vaultRevision":after.updated_at,"atomic":true});
+        let mut result = json!({"spaceId":space_id,"changed":changed,"notes":results,"vaultRevision":after.updated_at,"atomic":true});
+        if !attachments.is_empty() {
+            let attached: Vec<_> = attachments.iter().map(|(note_id, id, _, changed)| {
+                Ok(json!({"noteId":note_id,"changed":changed,"source":source_ref(source(scope,id)?)}))
+            }).collect::<Result<_,ToolFailure>>()?;
+            result["sourceAttachments"] = json!(attached);
+        }
         if serde_json::to_vec(&result).unwrap().len() > 2 * 1024 * 1024 {
             return Err(ToolFailure::new(
                 "Edit receipt exceeds the result bound. Nothing was saved; select fewer notes.",

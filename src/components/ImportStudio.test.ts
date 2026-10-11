@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createEmptySnapshot } from "../data/defaults";
+import { IMPORT_NOTE_TRUNCATION_NOTICE } from "../lib/importNoteExcerpt";
 import type {
   Concept,
   Note,
@@ -179,8 +180,21 @@ describe("buildImportPayload", () => {
     const previewBody = payload.notes[0].body;
     const heading = "# Long pasted notes\n\n";
     expect(previewBody.startsWith(heading)).toBe(true);
-    expect(previewBody.slice(heading.length)).toHaveLength(200_000);
+    expect(previewBody.slice(heading.length)).toBe(IMPORT_NOTE_TRUNCATION_NOTICE);
     expect(previewBody).not.toContain("SOURCE_TAIL");
+  });
+
+  it("ends an oversized manual note before a portable block and retains that entire source", () => {
+    const retained = "# Import title\n\nComplete opening paragraph.";
+    const frame = `<!-- orion-block:v1 -->\n\n${"Inside the block.\n\n".repeat(12_000)}<!-- /orion-block -->`;
+    const text = `${retained}\n\n${frame}`;
+    const payload = buildImportPayload([
+      makeOrganizedSource("large-block", makeParsedImport("Import title", "large.md", text)),
+    ], createEmptySnapshot("Manual Space", TEST_NOW));
+    expect(payload.notes[0].body).toBe(`${retained}\n\n${IMPORT_NOTE_TRUNCATION_NOTICE}`);
+    expect(payload.sources[0].text).toBe(text);
+    expect(payload.notes[0].sourceIds).toEqual([payload.sources[0].id]);
+    expect(payload.sources[0].noteIds).toEqual([payload.notes[0].id]);
   });
 
   it("persists batch guidance on every source", () => {

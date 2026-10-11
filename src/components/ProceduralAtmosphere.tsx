@@ -39,6 +39,8 @@ export default function ProceduralAtmosphere({
 }: ProceduralAtmosphereProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [contextGeneration, setContextGeneration] = useState(0);
+  const elapsedRef = useRef(0);
+  const { primary, secondary, tertiary, background, backgroundSecondary, isLight } = palette;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -91,11 +93,11 @@ export default function ProceduralAtmosphere({
       touch: gl.getUniformLocation(program, "uTouch"),
     };
     for (const [name, hex] of [
-      ["uPrimary", palette.primary],
-      ["uSecondary", palette.secondary],
-      ["uTertiary", palette.tertiary],
-      ["uBackground", palette.background],
-      ["uBackgroundSecondary", palette.backgroundSecondary],
+      ["uPrimary", primary],
+      ["uSecondary", secondary],
+      ["uTertiary", tertiary],
+      ["uBackground", background],
+      ["uBackgroundSecondary", backgroundSecondary],
     ]) {
       gl.uniform3f(
         gl.getUniformLocation(program, name),
@@ -104,7 +106,7 @@ export default function ProceduralAtmosphere({
         parseInt(hex.slice(5, 7), 16) / 255,
       );
     }
-    gl.uniform1f(gl.getUniformLocation(program, "uLight"), palette.isLight ? 1 : 0);
+    gl.uniform1f(gl.getUniformLocation(program, "uLight"), isLight ? 1 : 0);
 
     canvas.setAttribute("aria-hidden", "true");
     container.append(canvas);
@@ -118,7 +120,7 @@ export default function ProceduralAtmosphere({
     let contextLost = false;
     let frame = 0;
     let lastFrame = 0;
-    let elapsed = 0;
+    let elapsed = elapsedRef.current;
     let pointerX = 0.69;
     let pointerY = 0.51;
     let targetX = pointerX;
@@ -151,6 +153,7 @@ export default function ProceduralAtmosphere({
       if (!lastFrame || now - lastFrame >= 1000 / 30) {
         const delta = lastFrame ? Math.min(now - lastFrame, 80) / 1000 : 0;
         elapsed += delta * speed;
+        elapsedRef.current = elapsed;
         const ease = 1 - Math.exp(-delta * 5);
         pointerX += (targetX - pointerX) * ease;
         pointerY += (targetY - pointerY) * ease;
@@ -248,7 +251,9 @@ export default function ProceduralAtmosphere({
       canvas.remove();
       release();
     };
-  }, [palette, motion, fragmentSource, contextGeneration]);
+  // Palette objects are refreshed by ordinary vault/theme updates. Only actual
+  // render inputs may rebuild the canvas; the clock survives those rebuilds.
+  }, [primary, secondary, tertiary, background, backgroundSecondary, isLight, motion, fragmentSource, contextGeneration]);
 
   return (
     <div

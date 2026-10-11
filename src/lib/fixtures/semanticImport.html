@@ -1,0 +1,25 @@
+<!doctype html>
+<html><head><title>Semantic HTML evidence</title><base href="https://untrusted.invalid/"></head><body>
+<custom-document><h1>HTML field notes</h1><p>First paragraph.</p><p>Second paragraph: <strong>bold <strong>nested</strong></strong>, <em>italic</em>, <del>retired</del>, and <code>`exact` &amp; code</code>.</p></custom-document>
+<p><strong>a</strong><strong>b</strong> <em>outer <em>inner</em></em> 🪐 café</p>
+<p>Read <a href="https://example.com/a(b)?one=1&amp;two=2">the source</a>; keep <a href="orion-note://not-authorized">this label</a> and <a href="mailto:a@example.com">email label</a>.</p>
+<p>Literal *stars*, [link](orion-note://private), &amp;nbsp; and &lt;!-- orion-block:v1 --&gt;.</p>
+<ol start="3"><li>First ordered<ul><li>Nested bullet</li></ul></li><li>Second ordered</li></ol>
+<ul><li><input type="checkbox" checked>Read the evidence</li><li><label><input type="checkbox">Review the caveat</label></li></ul>
+<blockquote><p>Quoted paragraph one.</p><p>Quoted paragraph two.</p></blockquote>
+<pre><code>  first line
+
+ordinary code line
+last line
+</code></pre>
+<p><code> paired spaces </code></p>
+<p>Edges: <code> leading</code>|<code>trailing </code>|<code>	tabbed</code></p>
+<pre>``` literal fence
+kept as literal text</pre>
+<table><caption>Measurements</caption><tr><th>Topic</th><th>Evidence</th></tr><tr><td><strong>Pipe code</strong></td><td><code>a|b</code> <a href="https://example.com/a|b">pipe link</a></td></tr></table>
+<table><tr><td></td><td></td></tr><tr><td>First real data</td><td>🪐</td></tr></table>
+<table><tr><td><code>c\|d</code></td><td>Literal table fallback</td></tr></table>
+<figure><img src="https://untrusted.invalid/image" alt="The diagram"><figcaption>Image caption remains.</figcaption></figure>
+<script>throw new Error('never execute')</script>
+<!-- orion-document-margins:v1 {"left":50} -->
+</body></html>

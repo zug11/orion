@@ -34,11 +34,12 @@ export function resolveAIWritingSelectionPosition(input: {
           workspace.bottom - 32,
         );
 
+  const halfWidth = Math.min(176, Math.max(0, (workspace.right - workspace.left - 24) / 2));
   return {
     left: clamp(
-      anchor.left,
-      workspace.left + 176,
-      workspace.right - 176,
+      Math.abs(start.top - end.top) < 4 ? (start.left + end.right) / 2 : anchor.left + halfWidth,
+      workspace.left + halfWidth + (halfWidth < 176 ? 12 : 0),
+      workspace.right - halfWidth - (halfWidth < 176 ? 12 : 0),
     ),
     top,
     visible: true,

@@ -1,0 +1,19 @@
+.editor-writing-session { display: flex; flex: 0 0 auto; align-items: center; gap: 5px; min-width: 0; }
+.editor-toolbar button.editor-writing-timer { flex: 0 0 auto; width: auto; min-width: 28px; gap: 5px; padding-inline: 6px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.editor-toolbar:has(.editor-writing-session.is-open) > :not(.editor-writing-session) { display: none; }
+.editor-writing-session.is-open { position: relative; flex: 1; flex-wrap: wrap; justify-content: center; width: 100%; gap: 7px; padding-inline: 34px; }
+.editor-writing-session.is-open > .editor-writing-timer { position: absolute; left: 0; }
+.editor-toolbar .editor-writing-session button { width: auto; min-width: 26px; padding-inline: 6px; white-space: nowrap; font: 500 11px var(--ui-font); }
+.editor-toolbar .editor-writing-session select { min-width: 0; max-width: 135px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--text-soft); font: 12px var(--ui-font); }
+.writing-session-duration { display: inline-flex; align-items: center; gap: 3px; color: var(--muted); font: 11px var(--ui-font); }
+.writing-session-duration input { width: 42px; height: 26px; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: var(--text); font: 12px var(--ui-font); text-align: center; }
+.writing-session-label,.writing-session-clock { color: var(--text-soft); font: 12px var(--ui-font); font-variant-numeric: tabular-nums; }
+.writing-session-hint { flex: 0 1 auto; min-width: 110px; color: var(--muted); font: 11px/1.4 var(--ui-font); text-align: center; }
+.editor-toolbar .writing-session-start { color: var(--periwinkle-strong); background: var(--periwinkle-wash); }
+.editor-toolbar .writing-session-close { position: absolute; right: 0; }
+.flow-writing-passage { transition: opacity .12s linear; }
+.editor-formatting-dock[data-native-editor-glass="true"] .writing-session-duration > span,
+.editor-formatting-dock[data-native-editor-glass="true"] .writing-session-label,
+.editor-formatting-dock[data-native-editor-glass="true"] .writing-session-clock,
+.editor-formatting-dock[data-native-editor-glass="true"] .writing-session-hint { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { .flow-writing-passage { transition: none; } }

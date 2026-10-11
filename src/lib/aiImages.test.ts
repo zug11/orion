@@ -4,6 +4,7 @@ import { createEmptySnapshot } from "../data/defaults";
 import type { Note, Source } from "../types";
 import { buildAIImagePrompt, generateContextualNoteImage, ImageGenerationSession, type ImageGenerationProgress } from "./aiImages";
 import { parseImagePlanningContext, parseImagePlanningResult, type ImagePlanningRequest, type ImagePlanningResult } from "./aiImagePlanning";
+import { workingTaskText } from "./taskWorkingView";
 
 const NOW = "2026-09-29T00:00:00.000Z";
 function note(id: string, title: string, body: string): Note {
@@ -278,5 +279,103 @@ describe("adaptive image research", () => {
     expect(() => buildAIImagePrompt(snapshot, { ...input, selectedText: "x".repeat(32_001) }, brief)).toThrow("too large");
     expect(() => parseImagePlanningResult({ ...brief, noteActions: [] }, "compose")).toThrow();
     expect(() => parseImagePlanningContext({ stage: "search", context: JSON.stringify({ selectedPassage: "x", contextEnabled: false, evidence: [] }) })).toThrow();
+  });
+
+  it("keeps completed tasks and their cached derivatives out of every image planning/render boundary", async () => {
+    const snapshot = fixture();
+    const raw = "- [x] ORIGIN_PRIVATE_BEGIN\n\nThe network has no centre.\n\n- [x] ORIGIN_PRIVATE_END";
+    snapshot.notes[0].body = raw;
+    snapshot.notes[0].summary = "ORIGIN_PRIVATE_BEGIN cached summary";
+    snapshot.notes[1].body = "- [x] NOTE_PRIVATE_BEGIN mycelium\n\nHyphae connect roots.\n\n- [x] NOTE_PRIVATE_MIDDLE\n\nMycelium transports nutrients.\n\n- [x] NOTE_PRIVATE_END";
+    snapshot.sources[0].text = "- [x] SOURCE_PRIVATE_BEGIN mycelium\n\nHyphae support branching roots.\n\n- [x] SOURCE_PRIVATE_MIDDLE\n\nMycelium forms living networks.\n\n- [x] SOURCE_PRIVATE_END";
+    const capture = { ...input, documentMarkdown: raw, beforeMarkdown: "- [x] ORIGIN_PRIVATE_BEGIN", afterMarkdown: "- [x] ORIGIN_PRIVATE_END",
+      workingContext: { documentMarkdown: workingTaskText(raw), selectedMarkdown: input.selectedText, selectedText: input.selectedText,
+        beforeMarkdown: "", afterMarkdown: "", selectionTouchesCompleted: false, caretInsideCompleted: false } };
+    const before = JSON.stringify({ snapshot, capture }), calls = drivers();
+    calls.plan.mockImplementation(async request => request.stage === "search"
+      ? { queries: ["mycelium", "hyphae"], focus: "Compare living networks." } : response(request));
+    await generateContextualNoteImage(snapshot, capture, calls);
+    expect(calls.plan.mock.calls.map(([request]) => request.stage)).toContain("merge");
+    for (const [request] of calls.plan.mock.calls) {
+      expect(request.context).not.toContain("PRIVATE");
+      for (const evidence of (JSON.parse(request.context) as Context).evidence ?? []) {
+        const original = evidence.kind === "note" ? snapshot.notes.find(note => note.id === evidence.entityId)!.body : snapshot.sources.find(source => source.id === evidence.entityId)!.text;
+        for (const passage of evidence.passages) expect(original.slice(passage.start, passage.end)).toBe(passage.text);
+      }
+    }
+    for (const [prompt] of calls.render.mock.calls) expect(prompt).not.toContain("PRIVATE");
+    expect(JSON.stringify({ snapshot, capture })).toBe(before);
+  });
+
+  it("rejects a partial selection inside a checked item before planning or rendering, including selection-only", async () => {
+    const snapshot = fixture(), calls = drivers();
+    const raw = "- [x] A PRIVATE selected phrase\n\nUnfinished thought.";
+    snapshot.notes[0].body = raw;
+    const capture = { ...input, contextMode: "selection" as const, documentMarkdown: raw, selectedText: "PRIVATE selected", selectedMarkdown: "PRIVATE selected",
+      workingContext: { documentMarkdown: workingTaskText(raw), selectedMarkdown: "", selectedText: "", beforeMarkdown: "", afterMarkdown: "Unfinished thought.",
+        selectionTouchesCompleted: true, caretInsideCompleted: false } };
+    await expect(generateContextualNoteImage(snapshot, capture, calls)).rejects.toThrow("completed work");
+    expect(() => buildAIImagePrompt(snapshot, capture, brief)).toThrow("completed work");
+    expect(calls.plan).not.toHaveBeenCalled(); expect(calls.render).not.toHaveBeenCalled();
+    await generateContextualNoteImage(snapshot, { ...capture, instruction: "Illustrate completed task history." }, calls);
+    expect(calls.plan.mock.calls[0][0].context).toContain("PRIVATE selected");
+    expect(calls.render.mock.calls[0][0]).toContain("PRIVATE selected");
+  });
+
+  it("indexes live origin evidence at original offsets despite a shortened rich working projection", async () => {
+    const snapshot = fixture(), calls = drivers();
+    snapshot.notes = [snapshot.notes[0]]; snapshot.sources = [];
+    const raw = "- [x] PRIVATE_PARENT mycelium\n  PRIVATE_CONTINUATION hyphae\n  - [ ] An unfinished hyphae observation.\n\nMycelium supports roots.\n\n- [x] PRIVATE_END";
+    const safe = "Mycelium supports roots.";
+    const captured = { ...input, selectedText: safe, selectedMarkdown: safe, documentMarkdown: raw,
+      workingContext: { documentMarkdown: safe, selectedMarkdown: safe, selectedText: safe,
+        beforeMarkdown: "", afterMarkdown: "", selectionTouchesCompleted: false, caretInsideCompleted: false } };
+    await generateContextualNoteImage(snapshot, captured, calls);
+    const read = calls.plan.mock.calls.find(([request]) => request.stage === "read")![0];
+    const evidence = (JSON.parse(read.context) as Context).evidence;
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0].passages.some(part => part.text.includes("Mycelium supports roots."))).toBe(true);
+    // Global working views deliberately retain a nested unchecked task. The
+    // direct selection guard remains stricter about checked rich ancestors.
+    expect(evidence[0].passages.some(part => part.text.includes("unfinished hyphae"))).toBe(true);
+    for (const part of evidence[0].passages) expect(raw.slice(part.start, part.end)).toBe(part.text);
+    expect(JSON.stringify(calls.plan.mock.calls)).not.toContain("PRIVATE_");
+    expect(JSON.stringify(calls.render.mock.calls)).not.toContain("PRIVATE_");
+  });
+
+  it("isolates a historical image checkpoint and shared search index from subsequent working requests", async () => {
+    const snapshot = fixture(), session = new ImageGenerationSession(), calls = drivers();
+    snapshot.sources[0].text += "\n\n- [x] PRIVATE_HISTORY mycelium";
+    await generateContextualNoteImage(snapshot, { ...input, instruction: "Illustrate completed task history." }, calls, { session });
+    expect(calls.plan.mock.calls.some(([request]) => request.context.includes("PRIVATE_HISTORY"))).toBe(true);
+    const historyGeneration = session.generation;
+    calls.plan.mockClear(); calls.render.mockClear();
+    await generateContextualNoteImage(snapshot, input, calls, { session });
+    expect(session.generation).toBeGreaterThan(historyGeneration);
+    expect(calls.plan.mock.calls[0][0].stage).toBe("search"); expect(calls.render).toHaveBeenCalledOnce();
+    expect(JSON.stringify(calls.plan.mock.calls)).not.toContain("PRIVATE_HISTORY");
+    expect(JSON.stringify(calls.render.mock.calls)).not.toContain("PRIVATE_HISTORY");
+  });
+
+  it.each(["note", "source"])("retains original %s freshness even when an omitted task changes to the same masked length", async kind => {
+    const snapshot = fixture(), session = new ImageGenerationSession(), calls = drivers();
+    if (kind === "note") snapshot.notes[1].body += "\n\n- [x] HIDDEN_A";
+    else snapshot.sources[0].text += "\n\n- [x] HIDDEN_A";
+    const current = structuredClone(snapshot);
+    calls.plan.mockImplementation(async request => {
+      if (request.stage === "read") {
+        if (kind === "note") current.notes[1].body = current.notes[1].body.replace("HIDDEN_A", "HIDDEN_B");
+        else current.sources[0].text = current.sources[0].text.replace("HIDDEN_A", "HIDDEN_B");
+      }
+      return response(request);
+    });
+    await expect(generateContextualNoteImage(snapshot, input, calls, { session, currentSnapshot: () => current })).rejects.toThrow("supporting passage changed");
+    expect(calls.render).not.toHaveBeenCalled();
+    const generation = session.generation;
+    calls.plan.mockClear(); calls.plan.mockImplementation(async request => response(request));
+    await generateContextualNoteImage(current, input, calls, { session });
+    expect(session.generation).toBeGreaterThan(generation);
+    expect(calls.plan.mock.calls[0][0].stage).toBe("search");
+    expect(JSON.stringify(calls.plan.mock.calls)).not.toContain("HIDDEN_");
   });
 });

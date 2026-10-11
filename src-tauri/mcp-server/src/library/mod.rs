@@ -5,10 +5,14 @@ use std::collections::{hash_map::DefaultHasher, VecDeque};
 use std::hash::{Hash, Hasher};
 
 mod editor;
+mod editor_citations;
+mod editor_inline;
+mod editor_layout;
+mod editor_table;
 mod read;
 #[cfg(test)]
 mod tests;
-mod text;
+pub(super) mod text;
 mod write;
 
 pub const NAMES: [&str; 21] = [
@@ -57,7 +61,17 @@ pub fn call(path: &Path, name: &str, args: &Map<String, Value>) -> ToolResult {
     let result = if WRITES.contains(&name) {
         write::call(path, name, args)?
     } else {
-        let vault = read_vault(path)?;
+        let mut vault = read_vault(path)?;
+        let historical = working_view::history(args)?
+            || (name == "orion_list_tasks"
+                && matches!(
+                    args.get("state").and_then(Value::as_str),
+                    Some("all" | "completed")
+                ));
+        // The task tool must deduplicate with original task authority before filtering state.
+        if !historical && name != "orion_list_tasks" {
+            working_view::apply(&mut vault);
+        }
         let scope = read_space_from_arguments(&vault, args)?;
         if vault
             .spaces
@@ -79,6 +93,7 @@ pub fn call(path: &Path, name: &str, args: &Map<String, Value>) -> ToolResult {
             ));
         }
         let mut result = read::call(scope, name, args)?;
+        working_view::receipt(&mut result, historical);
         result["spaceId"] = json!(scope.workspace.id);
         result["vaultRevision"] = json!(vault.updated_at);
         result
@@ -102,6 +117,16 @@ fn validate_arguments(args: &Map<String, Value>, schema: &Value) -> Result<(), T
 }
 fn validate_value(value: &Value, schema: &Value, field: &str) -> Result<(), ToolFailure> {
     let invalid = || ToolFailure::new(format!("Invalid {field}; follow the tool's input schema."));
+    if let Some(variants) = schema.get("anyOf").and_then(Value::as_array) {
+        return if variants
+            .iter()
+            .any(|variant| validate_value(value, variant, field).is_ok())
+        {
+            Ok(())
+        } else {
+            Err(invalid())
+        };
+    }
     if let Some(values) = schema.get("enum").and_then(Value::as_array) {
         if !values.contains(value) {
             return Err(invalid());
@@ -145,6 +170,22 @@ fn validate_value(value: &Value, schema: &Value, field: &str) -> Result<(), Tool
         }
         "boolean" => {
             if !value.is_boolean() {
+                return Err(invalid());
+            }
+        }
+        "number" => {
+            let number = value
+                .as_f64()
+                .filter(|number| number.is_finite())
+                .ok_or_else(invalid)?;
+            if number < schema["minimum"].as_f64().unwrap_or(f64::MIN)
+                || number > schema["maximum"].as_f64().unwrap_or(f64::MAX)
+            {
+                return Err(invalid());
+            }
+        }
+        "null" => {
+            if !value.is_null() {
                 return Err(invalid());
             }
         }
@@ -208,12 +249,12 @@ pub fn definitions() -> Vec<Value> {
         (NAMES[17], "Audit Space-local references, duplicate IDs, missing canonical targets, and broken explicit Orion links. Reports bounded diagnostics without changing knowledge.", json!({}), vec![], true),
         (NAMES[18], "List current notes changed since an RFC3339 timestamp, sorted chronologically. This is current-state metadata, not a historical audit log; deletions and prior bodies are unavailable.", json!({"since":string(80)}), vec!["since"], true),
         (NAMES[19], "Find one shortest directed connection path between two exact notes using existing Orion links and persisted relationships. Search has explicit node, edge, text, and hop bounds; returns cited steps and no graph UI.", json!({"from_note_id":id,"to_note_id":id,"max_hops":integer(4,1,8)}), vec!["from_note_id","to_note_id"], false),
-        (NAMES[20], "Apply a bounded local note formatting command, using the same portable Markdown as editor blocks and slash commands. Requires an exact Space and current destination note version. This does not execute slash text, editor UI, shell commands, pickers, or AI. Block accepts Markdown; other text/labels/cells are literal. Supports text, block, heading/h1-h6, todo, bullet, numbered, divider, quote, code, table, link, excerpt, and image. Link/excerpt targets must exist in this Space; excerpt also requires current target_expected_version and unique exact text from that note body. Image reuses a managed image URL already referenced in this Space. For table row/column/table deletion, read the exact table then use orion_edit_note_text with its current version. Placement inserts separated blocks; link replacement is inline. Stale retries cannot duplicate content.", editor::input_fields(), vec!["note_id","expected_version","command"], false),
+        (NAMES[20], "Apply a bounded local note formatting command, using the same portable Markdown as editor blocks and slash commands. Requires an exact Space and current destination note version. This does not execute slash text, editor UI, shell commands, pickers, or AI. Block accepts Markdown; other text/labels/cells are literal. Supports text, block, heading/h1-h6, todo, bullet, numbered, divider, quote, code, table, link, excerpt, image, paragraph_format, document_margins, image_layout, table_layout, and table_edit. inline_format applies/removes one bold, italic, strike or code mark with explicit enabled, an exact unique anchor of at most 20000 characters, and no replacement text or placement. It preserves visible text and unrelated marks; removal requires complete marked spans. Only ordinary paragraphs/ATX headings of at most 50000 characters are supported, including inside writing blocks. Code applies only to unformatted single-line text without literal backticks or whitespace at either edge, matching current editor serialization. unlink removes exactly one complete ordinary HTTP(S), note or concept inline link wrapper, preserving its label and marks; automatic concept vocabulary is unchanged. Reference links, bare URL/email paragraphs, generated source References footers, source citations, excerpt/passage metadata, images, HTML, lists, quotes, tables, code blocks and structural selections require their own operation or an explicit exact edit. Commands fail without saving if semantic preservation cannot be proven. Table commands require an exact complete standalone table anchor including adjacent metadata. table_layout patches width/header/banding/column widths. table_edit supports indexed row/column insertion and deletion, literal set_cell, guarded resize and delete; zero-based logical rows exclude synthetic headerless padding. Resize of occupied cells needs allow_content_removal:true. Explicit delete operations remove their addressed content; deleting the last row or column removes the table. New growth is limited to 20 rows/12 columns; existing larger imported axes remain intact. Layout commands patch only supplied fields; explicit zero/false resets, while omitted fields remain unchanged. Paragraph formatting requires one exact complete paragraph or heading, alignment left/justify and integer margin percentages 0-25. Document margins use the same bounded percentages. Image layout requires the exact standalone managed image in this note and a partial layout object; no asset import or new ownership. Layout commands accept no insertion placement or replacement text. Link accepts exactly one of target_note_id or url. HTTP/HTTPS URLs and bare domains are normalized locally with no credentials or network access; text is a literal label. Note link/excerpt targets must exist in this Space; excerpt also requires current target_expected_version and unique exact text from that note body. Image reuses a managed image URL already referenced in this Space. Use the finite table_edit operations for ordinary complete tables; unsupported nested structures remain exact version-guarded text edits. Placement inserts separated blocks; link replacement is inline. Stale retries cannot duplicate content.", editor::input_fields(), vec!["note_id","expected_version","command"], false),
     ];
     specs.into_iter().map(|(name, description, mut fields, mut required, paged)| {
         let writes = WRITES.contains(&name);
         fields["space_id"] = json!({"type":"string","minLength":1,"maxLength":200,"description":if writes {"Exact explicit Space ID; required for edits."} else {"Exact Space ID; omission reads only the active Space."}});
-        if writes { required.push("space_id"); }
+        if writes { required.push("space_id"); } else { fields["task_view"] = working_view::schema(); }
         if paged { fields.as_object_mut().unwrap().extend(page.as_object().unwrap().clone()); }
         json!({"name":name,"description":description,"inputSchema":object(fields,&required),
             "outputSchema":output_schema(name),
@@ -255,6 +296,9 @@ fn output_schema(name: &str) -> Value {
         properties["changed"] = json!({"type":"boolean"});
         properties["atomic"] = json!({"type":"boolean","const":true});
     }
+    if name == "orion_apply_note_command" {
+        properties["sourceAttachments"] = json!({"type":"array","maxItems":1,"items":{"type":"object","properties":{"noteId":{"type":"string"},"changed":{"type":"boolean"},"source":{"type":"object"}},"required":["noteId","changed","source"]}});
+    }
     json!({"type":"object","properties":properties,"required":["spaceId","vaultRevision",field],"additionalProperties":true})
 }
 
@@ -264,26 +308,29 @@ fn fingerprint(value: impl Hash) -> String {
     format!("v1-{:016x}", hash.finish())
 }
 pub(super) fn note_version(note: &Note) -> String {
-    fingerprint(
-        json!([
-            note.id,
-            note.title,
-            note.body,
-            note.summary,
-            note.slug,
-            note.aliases,
-            note.tags,
-            note.source_ids,
-            note.concept_ids,
-            note.created_at,
-            note.updated_at,
-            note.pinned,
-            note.color
-        ])
-        .to_string(),
-    )
+    if let Some(version) = &note.view_version {
+        return version.clone();
+    }
+    crate::note_version::note_version_fields(json!([
+        note.id,
+        note.title,
+        note.body,
+        note.summary,
+        note.slug,
+        note.aliases,
+        note.tags,
+        note.source_ids,
+        note.concept_ids,
+        note.created_at,
+        note.updated_at,
+        note.pinned,
+        note.color
+    ]))
 }
-fn source_version(source: &Source) -> String {
+pub(super) fn source_version(source: &Source) -> String {
+    if let Some(version) = &source.view_version {
+        return version.clone();
+    }
     fingerprint(
         json!([
             source.id,
