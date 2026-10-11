@@ -1,0 +1,55 @@
+{
+  "version": "0.5.0",
+  "source_commit": "eaa7209569bed5ef77b0398e7511287a4eb3024d",
+  "verified_source_files": 749,
+  "artifacts": [
+    {
+      "edition": "small",
+      "version": "0.5.0",
+      "bundle_id": "app.orion.knowledge",
+      "artifact": "Orion-0.5.0-Apple-Silicon.dmg",
+      "bytes": 537105335,
+      "sha256": "a3b15b23c5bc33dd63cc2aa17951f6f45c1a8d8a9fda7757b3f40ffd846edf92",
+      "model_bytes": 487601967,
+      "model_sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+      "main_executable_sha256": "4f0c286de5e8aade85bded7163831474c6687e23612c91b8839a20370bb4bba1",
+      "stamps": {
+        "orion-source.sha256": "2bc545047381ecdf7e5794ba8e275023c0016b40e9ee07dfb273b2ce6402c823",
+        "orion-renderer.sha256": "3cdcaa3ab0c98d9d46dae443aaa14917c58e230911d38a0187d568ab3bef82d1"
+      },
+      "notarization": {
+        "id": "70f26caa-8226-4b32-a581-64794b57ae8c",
+        "status": "Accepted",
+        "createdDate": "2026-10-11T08:56:33.327Z"
+      },
+      "stapled": true,
+      "dmg_gatekeeper": "accepted",
+      "copied_app_gatekeeper": "accepted",
+      "deep_strict_signature": "passed"
+    },
+    {
+      "edition": "medium",
+      "version": "0.5.0",
+      "bundle_id": "app.orion.knowledge",
+      "artifact": "Orion-0.5.0.m-Apple-Silicon.dmg",
+      "bytes": 1505307167,
+      "sha256": "97e300fb1d47db56cd153c22af0a1b6edc267abffb2484170315fbf7ab14174f",
+      "model_bytes": 1533763059,
+      "model_sha256": "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+      "main_executable_sha256": "beea9a7925648afee375458c9e34881a531e05aad893f77c98e2011cca20bfed",
+      "stamps": {
+        "orion-source.sha256": "3afa819c7d673704302c4cbaf51b3bfec1f9d8a64a323d21659594084d9295a9",
+        "orion-renderer.sha256": "3215438c9cf731ce68ed2405a5901e26aa561ab88a6b021f4ed06f963bbf260d"
+      },
+      "notarization": {
+        "id": "5ca02a4f-12bb-4aff-a9a1-c4131a2f516b",
+        "status": "Accepted",
+        "createdDate": "2026-10-11T09:02:52.535Z"
+      },
+      "stapled": true,
+      "dmg_gatekeeper": "accepted",
+      "copied_app_gatekeeper": "accepted",
+      "deep_strict_signature": "passed"
+    }
+  ]
+}

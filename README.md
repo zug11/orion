@@ -90,7 +90,8 @@ suggestions, and Space voice with independent research workers and an animated
 voice constellation. It also adds guarded connector actions for the current
 editor, long-note reading, and import and export fidelity improvements. Both
 Whisper Small and Medium editions contain the same application features.
-See the [0.5.0 release notes](releases/0.5.0.md) for details, verification and the
+Both installers are Developer ID signed, Apple notarized and stapled, and pass
+Gatekeeper. See the [0.5.0 release notes](releases/0.5.0.md) for details, verification and the
 remaining live-voice acceptance check. The earlier 0.4.8 builds were local only;
 0.5.0 includes their changes.
 
