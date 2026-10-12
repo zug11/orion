@@ -1,9 +1,10 @@
-import type { ChatCoverage, ChatEvidence, ChatReadRequest, ChatReadingFinding } from "../types";
+import type { ChatCoverage, ChatEvidence, ChatReadRequest, ChatReadingFinding, ChatVoicePresentation } from "../types";
 import protocol from "./chatReadingProtocol.json";
 
 export const CHAT_READING_INSTRUCTIONS = protocol.instructions;
 export const CHAT_READ_REQUESTS_SCHEMA = protocol.requestsSchema;
 export const CHAT_READING_CHECKPOINT_SCHEMA = protocol.checkpointSchema;
+export const CHAT_VOICE_PRESENTATION_SCHEMA = protocol.voiceSchema;
 export const MAX_CHAT_READING_CONTEXT_BYTES = protocol.maxContextBytes;
 export const MAX_CHAT_READING_EVIDENCE = protocol.maxReadingEvidence;
 export const MAX_CHAT_EVIDENCE = 12;
@@ -11,6 +12,16 @@ export const MAX_CHAT_PASSAGE_CHARS = 3_000;
 
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+export function parseChatVoicePresentation(value: unknown): ChatVoicePresentation | undefined {
+  if (value == null) return undefined;
+  if (!record(value) || Object.keys(value).sort().join(",") !== "label,summary" ||
+    typeof value.label !== "string" || !value.label.trim() || [...value.label].length > 80 || /[\u0000-\u001f]/.test(value.label) ||
+    typeof value.summary !== "string" || [...value.summary].length > 360 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value.summary)) {
+    throw new Error("Chat returned an invalid voice summary (CHAT_VOICE). Try again.");
+  }
+  return { label: value.label.trim(), summary: value.summary.trim() };
 }
 
 export function parseChatReadingFinding(value: unknown): ChatReadingFinding | undefined {

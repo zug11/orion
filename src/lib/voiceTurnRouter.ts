@@ -1,6 +1,7 @@
 import type { VoiceTurn } from "./voiceConversation";
 import type { VoiceReservationClarification } from "./voiceReservations";
 import type { VoiceTurnDecision } from "./voiceWorkOrders";
+import { VOICE_TURN_SETTLE_MS } from "./voiceUtterance";
 
 export type RoutingVoiceTurn = VoiceTurn & { clarification?: VoiceReservationClarification };
 interface Options {
@@ -29,13 +30,13 @@ export class VoiceTurnRouter {
   get hasCapacity() { return this.queue.length < 8; }
   get pending(): readonly RoutingVoiceTurn[] { return [...this.queue, ...(this.running ? [this.running.turn] : [])]; }
 
-  debounce(consider: () => void) {
+  debounce(consider: () => void, delay = VOICE_TURN_SETTLE_MS) {
     clearTimeout(this.debounceTimer);
     const epoch = this.epoch;
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = undefined;
       if (epoch === this.epoch && this.options.enabled()) consider();
-    }, 900);
+    }, delay);
   }
   enqueue(turn: RoutingVoiceTurn) {
     if (!this.hasCapacity) return false;

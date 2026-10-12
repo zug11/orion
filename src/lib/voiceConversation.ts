@@ -1,6 +1,7 @@
 import type { VoiceEvent } from "./liveVoice";
 import type { VoiceSelection } from "./voiceSelection";
 import { explicitVoiceAssignment, type VoiceFocusedWorker } from "./voiceWorkOrders";
+import { unfinishedVoiceThought, voiceTurnSettleMs, VOICE_THOUGHT_CONTINUATION_MS, VOICE_TURN_SETTLE_MS } from "./voiceUtterance";
 
 interface Fragment { id: number; role: "user" | "assistant"; text: string; start: number; end: number; focusNoteId?: string; selection?: VoiceSelection; focusedWorker?: VoiceFocusedWorker }
 export interface VoiceTurn { key: number; prompt: string; delegationId: string | null; delegated: boolean; focusNoteId?: string; selection?: VoiceSelection; focusedWorker?: VoiceFocusedWorker }
@@ -15,6 +16,7 @@ export class VoiceConversation {
   private seen = new Set<string>();
   private seenDelegations = new Set<string>();
   private decisions: string[] = [];
+  private opened = false;
 
   text() { return [this.decisions.length ? `Recorded user decisions/corrections (quoted context):\n${this.decisions.join("\n")}` : "", [this.carry, ...this.fragments.map(item => `${item.role}: ${item.text}`)].join("\n").slice(-6_000)].join("\n").slice(-8_000); }
   remember(prompt: string, correction = false) {
@@ -22,11 +24,17 @@ export class VoiceConversation {
     this.decisions = [...this.decisions.filter(item => item !== prompt), prompt.slice(0, 250)].slice(-6);
   }
   reconnect() {
+    const welcome = !this.opened && !this.text().trim();
+    this.opened = true;
     this.carry = [this.carry, ...this.fragments.map(item => `${item.role}: ${item.text}`)].join("\n").slice(-6_000); this.fragments = []; this.delegations.clear();
     this.handled.clear(); this.seen.clear(); this.seenDelegations.clear();
+    return welcome;
   }
-  clear() { this.carry = ""; this.fragments = []; this.delegations.clear(); this.handled.clear(); this.seen.clear(); this.seenDelegations.clear(); this.decisions = []; }
+  clear() { this.carry = ""; this.fragments = []; this.delegations.clear(); this.handled.clear(); this.seen.clear(); this.seenDelegations.clear(); this.decisions = []; this.opened = false; }
   stop() { this.delegations.clear(); }
+  /** The first fragment owns this reference throughout the utterance. */
+  get userSelection() { return [...this.fragments].reverse().find(item => item.role === "user")?.selection; }
+  get settleMs() { return voiceTurnSettleMs([...this.fragments].reverse().find(item => item.role === "user")?.text ?? ""); }
   /** Bounded exact user text for suppressing a cancelled delayed delegation. */
   recentTurns(): Pick<VoiceTurn, "key" | "prompt" | "delegated">[] {
     return this.fragments.filter(item => item.role === "user" && item.text.trim())
@@ -57,12 +65,15 @@ export class VoiceConversation {
     const recent = [...this.fragments].reverse().find(item => item.role === role);
     // Use the same silence boundary for live and batched transcripts. Once
     // dispatched, a new explicit assignment also starts its own turn.
-    const separate = role === "user" && recent && (start - recent.end >= 900 ||
+    const continuation = role === "user" && recent && unfinishedVoiceThought(recent.text) &&
+      start - recent.end < VOICE_THOUGHT_CONTINUATION_MS && !explicitVoiceAssignment(event.delta);
+    const separate = role === "user" && recent && !continuation && (start - recent.end >= VOICE_TURN_SETTLE_MS ||
       this.handled.has(recent.id) && explicitVoiceAssignment(event.delta));
-    if (recent?.role === role && !separate && start >= recent.start && start - recent.end < 1_500) {
+    if (recent?.role === role && !separate && start >= recent.start && (continuation || start - recent.end < 1_500)) {
       // Preserve the opening qualifications. The extra character triggers the
       // router's explicit overlength clarification instead of authorizing a tail.
-      recent.text = (recent.text + event.delta).slice(0, 4_001); recent.end = Math.max(recent.end, end);
+      const separator = continuation && start - recent.end >= VOICE_TURN_SETTLE_MS && !/\s$/.test(recent.text) && !/^\s|^[,.!?]/.test(event.delta) ? " " : "";
+      recent.text = (recent.text + separator + event.delta).slice(0, 4_001); recent.end = Math.max(recent.end, end);
     } else this.fragments.push({ id: ++this.nextId, role, text: event.delta.slice(0, 4_001), start, end, focusNoteId,
       ...(role === "user" && selection ? { selection: structuredClone(selection) } : {}),
       ...(role === "user" && focusedWorker ? { focusedWorker: { ...focusedWorker } } : {}) });
@@ -73,7 +84,9 @@ export class VoiceConversation {
   }
   /** Called after a silence/debounce window; an early delegation remains pending. */
   takeTurns(): VoiceTurn[] {
-    const users = this.fragments.filter(item => item.role === "user");
+    // Keep unfinished text and its captured target for a later continuation.
+    // A provider delegation is not proof that the person finished the sentence.
+    const users = this.fragments.filter(item => item.role === "user" && !unfinishedVoiceThought(item.text));
     const turns = new Map<number, VoiceTurn>();
     for (const [id, offset] of this.delegations) {
       const target = [...users].reverse().find(item => offset === null || (item.start <= offset && item.end >= offset - 1_500));
@@ -100,27 +113,38 @@ export class VoiceConversation {
   }
 }
 
-export interface VoiceDelivery { text: string; delegationId: string | null; id?: string; revision?: number; sequence?: number; reference?: string }
-type QueuedVoiceDelivery = VoiceDelivery & { queuedAt: number };
+export interface VoiceDelivery { text: string; delegationId: string | null; id?: string; revision?: number; sequence?: number; reference?: string; background?: boolean; completion?: boolean }
+export type QueuedVoiceDelivery = VoiceDelivery & { queuedAt: number };
 
 /** Buffer a whole update before transport chunking; never interpret an ACK as speech. */
 export class VoiceDeliveryQueue {
   private queue: QueuedVoiceDelivery[] = [];
-  private newest = new Map<string, { revision: number; sequence: number }>();
+  private newest = new Map<string, VoiceDelivery & { revision: number; sequence: number }>();
   enqueue(delivery: VoiceDelivery) {
     if (delivery.id && delivery.revision !== undefined && delivery.sequence !== undefined) {
       const previous = this.newest.get(delivery.id);
       if (previous && (previous.revision > delivery.revision ||
         previous.revision === delivery.revision && previous.sequence >= delivery.sequence)) return;
-      this.newest.set(delivery.id, { revision: delivery.revision, sequence: delivery.sequence });
-      if (this.newest.size > 24) this.newest.delete(this.newest.keys().next().value!);
+      this.newest.set(delivery.id, { ...delivery, revision: delivery.revision, sequence: delivery.sequence });
     }
     // Coalescing new findings must not keep restarting the maximum delivery wait.
     const queuedAt = this.queue.find(item => item.id && item.id === delivery.id && item.revision === delivery.revision)?.queuedAt ?? Date.now();
     if (delivery.id) this.queue = this.queue.filter(item => item.id !== delivery.id);
-    this.queue.push({ ...delivery, queuedAt }); this.queue = this.queue.slice(-12);
+    // Job retention is owned by research (24 terminal + active workers), not a
+    // smaller speech limit. Only the latest unscoped conversational prompt lives
+    // here; it carries no retained work result.
+    else this.queue = this.queue.filter(item => item.id);
+    this.queue.push({ ...delivery, queuedAt });
   }
-  discardInvalid(valid: (delivery: VoiceDelivery) => boolean) { this.queue = this.queue.filter(valid); }
+  discardInvalid(valid: (delivery: VoiceDelivery) => boolean) {
+    this.queue = this.queue.filter(valid);
+    for (const [id, item] of this.newest) if (!valid(item)) this.newest.delete(id);
+  }
+  eligible(valid: (delivery: VoiceDelivery) => boolean, eligible: (delivery: QueuedVoiceDelivery) => boolean) {
+    this.discardInvalid(valid);
+    return this.queue.filter(eligible);
+  }
+  remove(items: readonly VoiceDelivery[]) { this.queue = this.queue.filter(item => !items.includes(item)); }
   flush(
     valid: (delivery: VoiceDelivery) => boolean,
     send: (delivery: VoiceDelivery) => boolean,

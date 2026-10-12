@@ -32,6 +32,50 @@ function childScope(request: ChatRequest): VoiceResearchAssignment {
 }
 
 describe("parallel voice research scopes", () => {
+  it("lets the reading model name its assignment without changing its identity, scope or user authority", async () => {
+    const config = options(async request => {
+      const result = exactAnswer(request);
+      return { ...result, voice: { label: "The alpha and beta connection", summary: result.readRequests?.length ? "" : "Alpha relates to beta [[e1]]." } };
+    });
+    const engine = new VoiceResearch(config), prompt = "Um, could you investigate that relationship";
+    await engine.run("stable-worker", prompt, "", "n");
+    expect(engine.getJobs()[0]).toMatchObject({ id: "stable-worker", revision: 1, prompt,
+      subject: "The alpha and beta connection", state: "completed" });
+    expect(config.commit).not.toHaveBeenCalled();
+    expect(config.deliver).toHaveBeenLastCalledWith("commentary", expect.stringContaining("Alpha relates to beta"), null,
+      expect.objectContaining({ id: "stable-worker", revision: 1, completion: true }));
+  });
+  it("runs ten exact note partitions simultaneously through the shared reader", async () => {
+    const config = options(async request => {
+      const scope = childScope(request), packet = JSON.parse(request.readingContext!);
+      expect(request.allowNoteActions).toBe(false); expect(request.editNoteId).toBeUndefined();
+      expect(packet.referenceTargets.map((entry: { id: string }) => entry.id)).toEqual(scope.noteIds);
+      if (!packet.evidence.length) return { reply: "", readRequests: scope.noteIds!.map(id => ({ kind: "note-full" as const, id, query: "", start: null })) };
+      await new Promise<void>(resolve => finishing.set(scope.subject, resolve));
+      return { reply: `Read this assigned note [[${packet.evidence[0].id}]].` };
+    });
+    const template = config.snapshot().notes[0];
+    config.snapshot().notes = Array.from({ length: 10 }, (_, i) => ({ ...template, id: `n${i}`, title: `Note ${i}`, body: `Evidence for note ${i}.` }));
+    const finishing = new Map<string, () => void>();
+    const engine = new VoiceResearch(config);
+    const work = Array.from({ length: 10 }, (_, i) => engine.run(`worker-${i}`, "spawn 10 workers to read across all the notes", "", undefined, null, false, undefined,
+      { subject: `Reader ${i}`, focus: "Read this assigned note completely.", noteIds: [`n${i}`] }));
+    expect(engine.getJobs()).toHaveLength(10);
+    await vi.waitFor(() => expect(finishing.size).toBe(10));
+    expect(engine.getJobs().some(job => job.phase === "queued")).toBe(false);
+    for (const finish of finishing.values()) finish();
+    await Promise.all(work);
+    expect(engine.getJobs().every(job => job.state === "completed")).toBe(true);
+    expect(engine.getJobs().flatMap(job => job.result?.evidence?.map(e => e.entityId))).toEqual(config.snapshot().notes.map(note => note.id));
+    expect(config.commit).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unavailable partition rather than reading whichever note is open", async () => {
+    const driver = vi.fn(async () => ({ reply: "Wrong note" })), config = options(driver), engine = new VoiceResearch(config);
+    await engine.run("worker", "Read all notes", "", "n", null, false, undefined, { subject: "Reader", focus: "Read the assigned note.", noteIds: ["deleted"] });
+    expect(engine.getJobs()[0]).toMatchObject({ state: "failed" });
+    expect(driver).not.toHaveBeenCalled();
+  });
   it("admits three independently scoped workers for the same exact request and keeps their results separate", async () => {
     const prompt = "Use three workers to investigate the connection, its strengths and its gaps";
     const scopes = [
@@ -277,7 +321,7 @@ describe("voice delegated work", () => {
     expect(result.reply).toContain("Yes. I can read the 1 note");
     expect(result.evidence[0].entityId).toBe("n");
     expect(result.evidence[0].text).toContain("Alpha relates to beta.");
-    expect(config.deliver).toHaveBeenLastCalledWith("commentary", expect.stringContaining("Alpha relates to beta."), "d-access", { id: "access", revision: 1, sequence: 1, reference: expect.any(String) });
+    expect(config.deliver).toHaveBeenLastCalledWith("commentary", expect.stringContaining("Alpha relates to beta."), "d-access", { id: "access", revision: 1, sequence: 1, reference: expect.any(String), background: true, completion: true });
   });
   it("reads the attached note for a this-note lookup even when other notes rank higher", async () => {
     const config = options(async request => exactAnswer(request));
@@ -321,7 +365,7 @@ describe("voice delegated work", () => {
     // identical prompt, actual reads, evidence and final-answer topology.
     const withoutContinuity = (request: ChatRequest) => {
       const context = JSON.parse(request.readingContext!);
-      delete context.checkpointsEnabled; delete context.workerContinuity;
+      delete context.checkpointsEnabled; delete context.workerContinuity; delete context.voicePresentationEnabled;
       return { ...request, readingContext: JSON.stringify(context) };
     };
     expect(driver.mock.calls.map(([request]) => withoutContinuity(request))).toEqual(typedRequests.map(withoutContinuity));
@@ -441,6 +485,32 @@ describe("voice delegated work", () => {
     coordinator.announceResult("job");
     expect(config.deliver.mock.calls.filter(call => call[0] === "commentary")).toHaveLength(2);
   });
+  it("retains a detailed final result quietly, supersedes its queued checkpoint, and speaks it only when asked", async () => {
+    let read = 0;
+    const conclusion = "This is a qualified analysis of the captured note. ".repeat(35) + "The evidence is limited and does not establish causation [[e1]].";
+    const config = options(async request => {
+      const packet = JSON.parse(request.readingContext!);
+      if (!packet.evidence.length) return { reply: "", readRequests: [{ kind: "note-full", id: "n", query: "", start: null }] };
+      if (read++ === 0) return { reply: "", readRequests: [{ kind: "search", id: "", query: "beta", start: null }],
+        checkpoint: { finding: "Alpha is connected to beta [[e1]].", decisions: [], openQuestions: ["Does this establish causation?"] } };
+      return { reply: conclusion, readRequests: [] };
+    });
+    const coordinator = new VoiceResearch(config);
+    await coordinator.run("job", "Research the connection", "", "n");
+    expect(coordinator.getJobs()[0].state).toBe("completed");
+    const commentary = config.deliver.mock.calls.filter(call => call[0] === "commentary");
+    expect(commentary).toHaveLength(1);
+    expect(commentary[0][3]).toMatchObject({ background: true, sequence: 1 });
+    expect(coordinator.isCurrentFinding("job", 1, 1)).toBe(false);
+    expect(coordinator.isCurrentFinding("job", 1, 2)).toBe(true);
+    const finalPacket = findingMetadata(config).slice(-1)[0];
+    expect(finalPacket.finding).toContain("does not establish causation");
+    expect(finalPacket).toMatchObject({ sequence: 2, stage: "complete" });
+    coordinator.announceResult("job");
+    expect(config.deliver).toHaveBeenLastCalledWith("commentary", expect.stringContaining("does not establish causation"), null,
+      expect.objectContaining({ background: false, sequence: 3 }));
+    expect(config.commit).not.toHaveBeenCalled();
+  });
   it("allows an unrelated note edit during research but rejects changes to opened evidence", async () => {
     for (const related of [false, true]) {
       const config = options(async request => {
@@ -526,7 +596,7 @@ describe("voice delegated work", () => {
     await coordinator.run("save", "Save this as a note", "after reconnect");
     expect(config.commit).toHaveBeenCalledOnce();
   });
-  it.each([10, 20])("admits %i independent workers, visibly queues overflow, and cancels only a chosen queued assignment", async count => {
+  it.each([11, 20])("admits %i independent workers, visibly queues overflow, and cancels only a chosen queued assignment", async count => {
     let active = 0, maximum = 0;
     const finish: (() => void)[] = [];
     const started: string[] = [];
@@ -541,19 +611,19 @@ describe("voice delegated work", () => {
     });
     const coordinator = new VoiceResearch(config);
     const pending = Array.from({ length: count }, (_, i) => coordinator.run(`job-${i}`, `Question ${i}`, ""));
-    await vi.waitFor(() => expect(maximum).toBe(3));
+    await vi.waitFor(() => expect(maximum).toBe(10));
     expect(coordinator.getJobs().filter(job => job.state === "running")).toHaveLength(count);
-    expect(coordinator.getJobs().filter(job => job.phase === "queued")).toHaveLength(count - 3);
+    expect(coordinator.getJobs().filter(job => job.phase === "queued")).toHaveLength(count - 10);
     expect(coordinator.getJobs().filter(job => job.phase === "queued").every(job => job.progress === "Queued for research")).toBe(true);
-    coordinator.cancel("job-6"); await pending[6];
-    expect(coordinator.getJobs().find(job => job.id === "job-6")).toMatchObject({ state: "cancelled" });
+    coordinator.cancel("job-10"); await pending[10];
+    expect(coordinator.getJobs().find(job => job.id === "job-10")).toMatchObject({ state: "cancelled" });
     expect(coordinator.getJobs().filter(job => job.state === "running")).toHaveLength(count - 1);
     while (coordinator.getJobs().some(job => job.state === "running")) {
       finish.splice(0).forEach(done => done());
       await new Promise(resolve => setTimeout(resolve, 0));
     }
     await Promise.all(pending);
-    expect(maximum).toBe(3); expect(started).not.toContain("Question 6");
+    expect(maximum).toBe(10); expect(started).not.toContain("Question 10");
     expect(config.onResult).toHaveBeenCalledTimes(count - 1);
     expect(coordinator.getJobs().filter(job => job.state === "completed")).toHaveLength(count - 1);
     expect(config.commit).not.toHaveBeenCalled();
@@ -565,7 +635,7 @@ describe("voice delegated work", () => {
       : new Promise(resolve => release.push(() => resolve(exactAnswer(request)))));
     const coordinator = new VoiceResearch(config);
     try {
-      const pending = Array.from({ length: 3 }, (_, i) => coordinator.run(`busy-${i}`, `Busy ${i}`, ""));
+      const pending = Array.from({ length: 10 }, (_, i) => coordinator.run(`busy-${i}`, `Busy ${i}`, ""));
       const queued = coordinator.run("queued", "Queued question", "");
       await vi.advanceTimersByTimeAsync(181_000);
       expect(coordinator.getJobs().find(job => job.id === "queued")).toMatchObject({ state: "running", phase: "queued" });
@@ -584,13 +654,14 @@ describe("voice delegated work", () => {
     const pending = Array.from({ length: 80 }, (_, i) => coordinator.run(`worker-${i}`, `Question ${i}: ` + "漢".repeat(500), ""));
     // All IDs are admitted immediately; the UI receives a coalesced batch.
     expect(coordinator.getJobs()).toHaveLength(80); expect(onJobs).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(release).toHaveLength(3));
-    expect(onJobs.mock.calls.length).toBeLessThan(10);
+    await vi.waitFor(() => expect(release).toHaveLength(10));
+    expect(onJobs.mock.calls[0][0]).toHaveLength(80);
+    expect(onJobs.mock.calls.length).toBeLessThan(80);
     expect(coordinator.getJobs()).toHaveLength(80);
-    expect(coordinator.getJobs().filter(job => job.phase === "queued")).toHaveLength(77);
+    expect(coordinator.getJobs().filter(job => job.phase === "queued")).toHaveLength(70);
     const encoded = coordinator.context(), context = JSON.parse(encoded);
     expect(new TextEncoder().encode(encoded).length).toBeLessThanOrEqual(10_000);
-    expect(context).toMatchObject({ totalJobs: 80, runningJobs: 80, queuedJobs: 77 });
+    expect(context).toMatchObject({ totalJobs: 80, runningJobs: 80, queuedJobs: 70 });
     expect(context.jobs.length + context.omittedJobs).toBe(80);
     expect(context.omittedJobs).toBeGreaterThan(0);
     expect(coordinator.getJobs()).toHaveLength(80);

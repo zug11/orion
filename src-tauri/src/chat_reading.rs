@@ -2,7 +2,7 @@
 //! The host command and provider transport remain in lib.rs; this module cannot
 //! read a vault, call a provider, or grant note-write authority.
 use super::{chat_schema, parse_chat_result, ChatResult};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -14,12 +14,75 @@ pub(super) struct ChatReadingFinding {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ChatVoicePresentation {
+    label: String,
+    summary: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct ChatReadRequest {
     kind: String,
     id: String,
     query: String,
+    #[serde(deserialize_with = "read_start")]
     start: Option<u64>,
+}
+
+// JSON Schema integers also include integral numeric spellings such as 0.0
+// and 1e3. Match Number.isSafeInteger in the renderer without accepting strings,
+// fractional offsets, negative values or values outside the reading contract.
+fn read_start<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<u64>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    match value.as_f64() {
+        Some(number) if (0.0..=1_000_000_000.0).contains(&number) && number.fract() == 0.0 => {
+            Ok(Some(number as u64))
+        }
+        _ => Err(serde::de::Error::custom("invalid reading offset")),
+    }
+}
+
+/// Static diagnostics only: never include provider prose, note contents or keys.
+#[derive(Debug)]
+pub(super) enum ParseError {
+    Json,
+    Envelope,
+    Checkpoint,
+    Reads,
+    Reply,
+    Intent,
+    Edits,
+    Rewrite,
+    Suggestions,
+    Voice,
+}
+
+impl ParseError {
+    pub(super) fn message(&self, provider: &str) -> String {
+        let (detail, code) = match self {
+            Self::Json => ("the answer was not valid JSON", "CHAT_JSON"),
+            Self::Envelope => ("the answer had an unexpected structure", "CHAT_STRUCTURE"),
+            Self::Checkpoint => ("the research update was invalid", "CHAT_CHECKPOINT"),
+            Self::Reads => (
+                "the note-reading instructions were invalid",
+                "CHAT_READ_REQUESTS",
+            ),
+            Self::Reply => (
+                "the final reply was empty or exceeded its limit",
+                "CHAT_REPLY",
+            ),
+            Self::Intent => ("the editing intent was invalid", "CHAT_EDIT_INTENT"),
+            Self::Edits => ("the proposed edits were invalid", "CHAT_EDITS"),
+            Self::Rewrite => ("the proposed rewrite was invalid", "CHAT_REWRITE"),
+            Self::Suggestions => ("the suggested prompts were invalid", "CHAT_SUGGESTIONS"),
+            Self::Voice => ("the voice label or summary was invalid", "CHAT_VOICE"),
+        };
+        format!("{provider}'s response could not be used: {detail} ({code}). Try again.")
+    }
 }
 
 // The renderer and native transport use the same authored reading protocol.
@@ -34,10 +97,12 @@ pub(super) fn schema(reply_only: bool, reading: bool) -> Value {
         schema["properties"]["reply"] = json!({ "type": "string", "maxLength": 6000 });
         schema["properties"]["readRequests"] = protocol()["requestsSchema"].clone();
         schema["properties"]["checkpoint"] = protocol()["checkpointSchema"].clone();
-        schema["required"]
-            .as_array_mut()
-            .unwrap()
-            .extend([json!("readRequests"), json!("checkpoint")]);
+        schema["properties"]["voice"] = protocol()["voiceSchema"].clone();
+        schema["required"].as_array_mut().unwrap().extend([
+            json!("readRequests"),
+            json!("checkpoint"),
+            json!("voice"),
+        ]);
     }
     schema
 }
@@ -63,22 +128,46 @@ pub(super) fn parse_response(
     output_text: &str,
     reply_only: bool,
     reading: bool,
-) -> Result<ChatResult, ()> {
+) -> Result<ChatResult, ParseError> {
     if !reading {
-        return parse_chat_result(output_text, reply_only);
+        return parse_chat_result(output_text, reply_only).map_err(|_| ParseError::Reply);
     }
-    let mut value: Value = serde_json::from_str(output_text).map_err(|_| ())?;
-    let object = value.as_object_mut().ok_or(())?;
+    let mut value: Value = serde_json::from_str(output_text).map_err(|_| ParseError::Json)?;
+    let object = value.as_object_mut().ok_or(ParseError::Envelope)?;
     if object.keys().any(|key| {
-        !["reply", "readRequests", "checkpoint"].contains(&key.as_str())
+        !["reply", "readRequests", "checkpoint", "voice"].contains(&key.as_str())
             && (reply_only || key != "noteActions")
     }) {
-        return Err(());
+        return Err(ParseError::Envelope);
+    }
+    let mut voice = object
+        .remove("voice")
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            serde_json::from_value::<ChatVoicePresentation>(value).map_err(|_| ParseError::Voice)
+        })
+        .transpose()?;
+    if let Some(presentation) = voice.as_mut() {
+        if presentation.label.trim().is_empty()
+            || presentation.label.chars().count() > 80
+            || presentation.label.chars().any(|ch| (ch as u32) < 32)
+            || presentation.summary.chars().count() > 360
+            || presentation
+                .summary
+                .chars()
+                .any(|ch| (ch as u32) < 32 && !matches!(ch, '\t' | '\n' | '\r'))
+        {
+            return Err(ParseError::Voice);
+        }
+        presentation.label = presentation.label.trim().to_string();
+        presentation.summary = presentation.summary.trim().to_string();
     }
     let checkpoint = object
         .remove("checkpoint")
         .filter(|value| !value.is_null())
-        .map(|value| serde_json::from_value::<ChatReadingFinding>(value).map_err(|_| ()))
+        .map(|value| {
+            serde_json::from_value::<ChatReadingFinding>(value).map_err(|_| ParseError::Checkpoint)
+        })
         .transpose()?;
     if checkpoint.as_ref().is_some_and(|update| {
         update.finding.chars().count() > 1_200
@@ -90,9 +179,9 @@ pub(super) fn parse_response(
                 .chain(&update.open_questions)
                 .any(|text| text.chars().count() > 240)
     }) {
-        return Err(());
+        return Err(ParseError::Checkpoint);
     }
-    let requests_value = object.remove("readRequests").ok_or(())?;
+    let requests_value = object.remove("readRequests").ok_or(ParseError::Reads)?;
     if !requests_value.as_array().is_some_and(|items| {
         items.iter().all(|item| {
             item.as_object().is_some_and(|object| {
@@ -103,9 +192,10 @@ pub(super) fn parse_response(
             })
         })
     }) {
-        return Err(());
+        return Err(ParseError::Reads);
     }
-    let requests: Vec<ChatReadRequest> = serde_json::from_value(requests_value).map_err(|_| ())?;
+    let requests: Vec<ChatReadRequest> =
+        serde_json::from_value(requests_value).map_err(|_| ParseError::Reads)?;
     if requests.len() > 4
         || requests.iter().any(|request| {
             ![
@@ -128,13 +218,19 @@ pub(super) fn parse_response(
                 }
         })
     {
-        return Err(());
+        return Err(ParseError::Reads);
     }
-    let reply = object.get("reply").and_then(Value::as_str).ok_or(())?;
+    let reply = object
+        .get("reply")
+        .and_then(Value::as_str)
+        .ok_or(ParseError::Reply)?;
     if reply.chars().count() > 6_000 {
-        return Err(());
+        return Err(ParseError::Reply);
     }
     if !requests.is_empty() {
+        if let Some(presentation) = voice.as_mut() {
+            presentation.summary.clear();
+        }
         // Reading responses cannot commit accompanying prose or note actions.
         return Ok(ChatResult {
             reply: String::new(),
@@ -145,16 +241,65 @@ pub(super) fn parse_response(
             edit_intent: None,
             read_requests: Some(requests),
             checkpoint,
+            voice,
         });
     }
-    let mut result = parse_chat_result(&value.to_string(), reply_only)?;
+    let mut result =
+        parse_chat_result(&value.to_string(), reply_only).map_err(|_| ParseError::Reply)?;
     result.read_requests = Some(requests);
+    result.voice = voice;
     Ok(result)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reading_offsets_accept_schema_valid_integer_spellings_and_reject_invalid_values() {
+        for start in ["0", "0.0", "1e3", "1000000000.0", "null"] {
+            let text = format!(
+                r#"{{"reply":"","checkpoint":null,"readRequests":[{{"kind":"note-full","id":"n","query":"","start":{start}}}]}}"#
+            );
+            let result = parse_response(&text, true, true).unwrap();
+            assert_eq!(result.read_requests.unwrap().len(), 1);
+        }
+        for start in ["-1", "0.5", "1e15", "1000000001", "true", "\"0\""] {
+            let text = format!(
+                r#"{{"reply":"","checkpoint":null,"readRequests":[{{"kind":"note-full","id":"n","query":"","start":{start}}}]}}"#
+            );
+            assert!(parse_response(&text, true, true)
+                .unwrap_err()
+                .message("OpenAI")
+                .contains("CHAT_READ_REQUESTS"));
+        }
+    }
+
+    #[test]
+    fn diagnostics_distinguish_invalid_reply_reads_and_checkpoints_without_echoing_private_text() {
+        for (text, expected) in [
+            ("private unfinished JSON", "CHAT_JSON"),
+            (
+                r#"{"reply":"private","unexpected":"private"}"#,
+                "CHAT_STRUCTURE",
+            ),
+            (
+                r#"{"reply":"private","checkpoint":{},"readRequests":[]}"#,
+                "CHAT_CHECKPOINT",
+            ),
+            (
+                r#"{"reply":"private","readRequests":[{}]}"#,
+                "CHAT_READ_REQUESTS",
+            ),
+            (r#"{"reply":"","readRequests":[]}"#, "CHAT_REPLY"),
+        ] {
+            let error = parse_response(text, true, true)
+                .unwrap_err()
+                .message("OpenAI");
+            assert!(error.contains(expected), "{error}");
+            assert!(!error.contains("private"));
+        }
+    }
 
     #[test]
     fn reading_transport_preserves_complete_research_reference_records() {
@@ -197,7 +342,7 @@ mod tests {
         let read_only = schema(true, true);
         assert_eq!(
             read_only["required"],
-            json!(["reply", "readRequests", "checkpoint"])
+            json!(["reply", "readRequests", "checkpoint", "voice"])
         );
         assert!(read_only["properties"].get("noteActions").is_none());
         assert_eq!(read_only["properties"]["readRequests"]["maxItems"], 4);
@@ -220,6 +365,29 @@ mod tests {
                 .reply,
             "Grounded answer [[e1]]."
         );
+    }
+
+    #[test]
+    fn voice_presentation_is_bounded_and_cannot_add_actions() {
+        let mut response = json!({"reply":"Full answer [[e1]].", "readRequests":[],
+            "voice":{"label":"A useful assignment name", "summary":"A concise finding [[e1]]."}});
+        let result = parse_response(&response.to_string(), true, true).unwrap();
+        assert_eq!(result.voice.unwrap().summary, "A concise finding [[e1]].");
+        response["readRequests"] = json!([{"kind":"note", "id":"n", "query":"", "start":null}]);
+        let result = parse_response(&response.to_string(), true, true).unwrap();
+        assert!(result.reply.is_empty());
+        assert!(result.voice.unwrap().summary.is_empty());
+        response["voice"]["summary"] = json!("x".repeat(361));
+        assert!(matches!(
+            parse_response(&response.to_string(), true, true),
+            Err(ParseError::Voice)
+        ));
+        response["voice"]["summary"] = json!("");
+        response["voice"]["noteId"] = json!("another-note");
+        assert!(matches!(
+            parse_response(&response.to_string(), true, true),
+            Err(ParseError::Voice)
+        ));
     }
 
     #[test]

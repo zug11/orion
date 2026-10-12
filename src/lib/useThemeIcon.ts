@@ -3,7 +3,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { ThemePalette } from "./theme";
 import { renderThemeIcon, resolveIconPalette, type ThemeIconImages } from "./themeIcon";
 
-export interface ThemeIconStatus { applied: boolean; finder: "updated" | "restored" | "read-only" | "unavailable" }
+export interface ThemeIconStatus { applied: boolean }
 
 export function useThemeIcon(palette: ThemePalette, enabled: boolean, ready = true): { mark: string; message: string | null } {
   const key = JSON.stringify(resolveIconPalette(palette));
@@ -43,9 +43,7 @@ export function useThemeIcon(palette: ThemePalette, enabled: boolean, ready = tr
           if (cancelled) return;
           try {
             const status = await invoke<ThemeIconStatus>("set_theme_icon", { png: enabled ? dock : null });
-            if (!cancelled && status.applied) setMessage(status.finder === "read-only"
-              ? "Dock updated. Move Orion to a writable Applications folder to update its Finder icon."
-              : status.finder === "unavailable" ? "Dock updated. Finder colours are available in the installed macOS app." : null);
+            if (!cancelled && status.applied) setMessage(null);
           } catch {
             if (!cancelled) setMessage("The app icon could not update. Choose Original, then Theme to try again.");
           }

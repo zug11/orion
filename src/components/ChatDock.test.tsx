@@ -190,7 +190,7 @@ it("uses an existing reply in the attached note without asking for an editing mo
   fireEvent.click(screen.getByRole("button", { name: "Use in note" }));
   await waitFor(() => expect(onUseReply).toHaveBeenCalledWith("reply", "current", expect.any(Function)));
   expect(p.onSend).not.toHaveBeenCalled();
-  expect(screen.getByRole("button", { name: "Review in note" })).toBeVisible();
+  expect(await screen.findByRole("button", { name: "Review in note" })).toBeVisible();
 });
 
 

@@ -1497,7 +1497,7 @@ export function SettingsView({
               <div className="setting-row">
                 <span>
                   <strong>Icon colours</strong>
-                  <small>Match the O, Dock, and Finder icon to your theme. Original restores Orion’s colours.</small>
+                  <small>Match the O and running Dock icon to your theme. Original restores Orion’s colours.</small>
                   {themeIconMessage && <small className="icon-colour-status" role="status">{themeIconMessage}</small>}
                 </span>
                 <ThemeChoiceGroup

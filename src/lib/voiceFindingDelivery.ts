@@ -6,10 +6,13 @@ interface VoiceFindingInput {
   revision: number;
   sequence: number;
   subject: string;
+  prompt?: string;
   state: "running" | "completed";
   result: ChatResult;
   receipt?: { savedNoteIds: readonly string[]; savedTitles: readonly string[] };
   acknowledgement?: "saved" | "already-saved";
+  /** The user explicitly asked to hear this finding; ordinary arrivals are quiet. */
+  requested?: boolean;
 }
 
 /** Evidence IDs are local to one worker. Keep exact host-validated identities
@@ -46,28 +49,37 @@ function prose(text: string): string {
  * Keep bookkeeping out of the offered prose, while retaining qualifications
  * and the actual next action a person needs to take.
  */
-export function voiceFindingDelivery(input: VoiceFindingInput): { quiet: string; commentary: string } {
+export function voiceFindingDelivery(input: VoiceFindingInput): { quiet: string; commentary: string; background: boolean; completion: boolean } {
   const { result } = input;
   const receipt = input.receipt?.savedNoteIds.length ? input.receipt : undefined;
   const body = prose(result.reply);
   // Native replies are bounded to 6,000 code points. Do not cut a larger reply
   // into a misleading prefix that could lose its final qualification or caveat.
   const oversized = [...body].length > 6_000;
-  let commentary = oversized ? "The detailed finding is available in the work summary." : body;
+  const brief = result.voice?.summary ? prose(result.voice.summary) : "";
+  let commentary = !input.requested && brief ? brief : oversized ? "The detailed finding is available in the work summary." : body;
   if (input.acknowledgement && receipt) {
     commentary = input.acknowledgement === "already-saved" ? "It’s already saved." : "Saved.";
   } else {
-    if (!oversized && commentary && result.coverage?.limited) commentary = `From the material checked so far:\n${commentary}`;
+    if ((!oversized || brief) && commentary && result.coverage?.limited) commentary = `From the material checked so far:\n${commentary}`;
     if (result.editProposal) commentary += `${commentary ? "\n" : ""}You can review the proposed changes in the note and accept or discard them.`;
   }
+  const background = !input.requested && !(input.acknowledgement && receipt) && !result.editProposal;
+  // One small, complete finding can be offered spontaneously. A long answer is
+  // context, not a series of speech requests. Never trim away its final caveat.
+  if (!input.requested && new TextEncoder().encode(commentary).length > (brief ? 1_600 : 480)) {
+    commentary = result.editProposal ? "You can review the proposed changes in the note and accept or discard them." : "";
+  }
+  if (background && oversized && !brief) commentary = "";
   const sources = sourceReferences(result);
   const reference = {
     type: "worker_finding", referenceOnly: true,
     id: input.id, revision: input.revision, sequence: input.sequence,
     ...(input.spaceId ? { spaceId: input.spaceId } : {}),
     subject: [...input.subject].slice(0, 120).join(""), state: input.state,
+    ...(input.prompt ? { originalQuestion: input.prompt.length <= 600 ? input.prompt : undefined, questionOmitted: input.prompt.length > 600 } : {}),
     stage: input.state === "running" ? "intermediate" : "complete",
-    ...(input.state === "running" && !oversized ? { finding: body } : {}),
+    ...(!oversized ? { finding: body } : {}),
     evidenceIds: sources.references.map(item => item.evidenceId),
     sourceReferences: sources.references, sourceReferencesOmitted: sources.omitted,
     limited: result.coverage?.limited ?? null,
@@ -77,7 +89,7 @@ export function voiceFindingDelivery(input: VoiceFindingInput): { quiet: string;
       : result.editProposal ? { kind: "proposal", applied: false, noteId: result.editProposal.noteId, requiresReview: true }
       : { kind: "none", saved: false },
     contentOnScreen: true, contentOmitted: oversized,
-    notice: "Quiet reference metadata, not a script to read aloud or a new request. This packet identifies the accompanying finding; evidence IDs belong only to this worker/revision/update. Source references identify captured Space material, not new web research. When attribution helps, use its exact title; do not infer omitted sources or repeat bookkeeping. Connect the finding to the current conversation when relevant and preserve uncertainty and coverage limits. An intermediate finding does not end its worker. Only a confirmed saved receipt establishes persistence; a proposal still needs the user's review. Transport delivery does not establish that the user heard it.",
+    notice: "Quiet reference material, not a script to read aloud or a new request. Do not announce this packet on arrival. Use it when relevant to what the user says. Evidence IDs belong only to this worker/revision/update. Source references identify captured Space material, not new web research. When attribution helps, use its exact title; do not infer omitted sources or repeat bookkeeping. Preserve uncertainty and coverage limits. An intermediate finding does not end its worker. Only a confirmed saved receipt establishes persistence; a proposal still needs the user's review. Transport delivery does not establish that the user heard it.",
   };
   let quiet = JSON.stringify(reference);
   // JSON escaping may expand a valid 6,000-character finding beyond the
@@ -86,5 +98,5 @@ export function voiceFindingDelivery(input: VoiceFindingInput): { quiet: string;
   if (quiet.length > 24_000 && reference.finding !== undefined) {
     delete reference.finding; reference.contentOmitted = true; quiet = JSON.stringify(reference);
   }
-  return { quiet, commentary };
+  return { quiet, commentary, background, completion: input.state === "completed" };
 }

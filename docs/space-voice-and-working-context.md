@@ -14,16 +14,43 @@ connected or connecting; transcripts, elapsed time and provider/usage text stay
 out of the composer. Local Whisper dictation retains its existing insertion and
 transcription behavior.
 
+A fresh main conversation waits two connected seconds before offering one
+neutral welcome: “Hey, where would you like to start?” Input stays live, and
+any arriving user/assistant transcript, input/output activity, delegation,
+spoken finding, mute or teardown cancels the pending greeting. Reconnect,
+navigation and worker switches do not greet again. Existing work suppresses it;
+Clear voice chat restores eligibility for the next explicit fresh call. The
+offer is one trusted `instructions` append after session startup, following
+[OpenAI's greeting sequence](https://developers.openai.com/api/docs/guides/live-conversations#greet-before-the-caller-speaks),
+with no automatic retry. The native prompt never treats the open note or restored
+context as a request to start a subject. This timing and cancellation are local
+guarantees; natural wording and yielding mid-greeting still need live listening.
+
 The central orb represents the main conversation; visible worker orbs are tied
 to actual work-order IDs. Useful checkpoint sequences send a small filled bead
 to the centre, while completion has its own settled cue. Workers cannot open
 their own conversation until they finish with a current result. Selecting one
 stops the previous audio connection before opening a new connection grounded
-in that worker's retained evidence and conversation. Returning to the centre
+in that worker's retained evidence and conversation. An automatic return caused
+by stale or revised evidence waits until playback and arriving speech settle. Returning to the centre
 restores the main conversation. A further research request uses the same worker
 identity, relocks its conversation and hands audio back to the centre. Switching
 recipients never cancels admitted unrelated work. These explicit switches may
 involve connection latency and a new billable voice session.
+
+The work summary offers **Clear voice chat…** with an inline confirmation. It
+ends the transport, cancels pending routing/research/preparation, replaces the
+Space's transient coordinator and clears retained voice conversations/results.
+Late events from the old recipient or coordinator cannot repopulate the cleared
+view. Saved notes and typed Chat are not deleted; a save already admitted to the
+atomic writer may finish. The user explicitly starts the next call.
+
+Undecided ordinary conversation routing remains cancellable in the work summary
+but does not flash a provisional research orb. Explicit worker reservations stay
+visible. Actual routing/research and direct edit preparation drive circular
+indicators, independently of measured audio. Reduced motion uses static rings.
+The router receives a bounded reference to the captured finished finding so a
+question about existing evidence can stay conversational.
 
 Throwing a running worker back into the small swarm cancels only that job.
 Throwing a completed worker shrinks its visible orb while retaining the result,
@@ -41,11 +68,13 @@ typing within that note, renaming it or refreshing the directory never resends
 its passages. Startup/navigation passages are a snapshot, so detailed questions
 retrieve current evidence. Deleting the focused note clears its context. Questions about whether Orion can see notes resolve
 locally, without waiting for a planning model. Explicit assignments can start
-from the exact transcript before a provider delegation arrives, avoiding a
-redundant intent-model call. Other delegated turns use the intent router. Once
+from the exact transcript before a provider delegation arrives. Reading requests
+use the ordered intent router to choose one worker or several useful independent
+investigations; the user need not name the workers or say “in parallel”. Explicit
+writing requests retain their direct path. Once
 admitted, each work order passes the exact user prompt to `runChatReading`, using
 the same automatic intent, reading and edit-review path as typed Chat. There is
-no separate research planning call or rewritten search-only prompt. Recent spoken
+no per-worker research planning call or rewritten search-only prompt. Recent spoken
 context is reference data inside the existing bounded Chat history budget; it
 retains the newest correction without hiding the preceding Chat reply's evidence.
 Parallelism comes from independently controlled work orders.
@@ -99,9 +128,18 @@ re-sends it immediately before its prose, so interleaved workers cannot inherit
 each other's source mapping. A rejected reference send holds commentary; a
 rejected commentary retries both together. Current-call delegation IDs are
 resolved at delivery rather than carried blindly across audio connections.
-A small intermediate finding is also available
-there immediately while the commentary offer waits for a pause. Only the useful
-finding and its meaningful scope qualification enter `session.commentary.append`;
+Complete bounded findings are available there immediately, including final
+answers. The same reading calls can return a validated `voice` object with a
+short assignment label (80 Unicode characters) and a final spoken summary
+(360 Unicode characters). The label changes presentation only; the original
+prompt, identity, scope and write authority stay fixed. Final summary citations
+resolve against retained exact evidence, and coverage qualifications survive.
+The automatic summary has a separate 1,600-byte transport budget, including its
+qualification. A legacy response without this field may offer a complete finding
+up to 480 UTF-8 bytes; a longer response is never clipped into a false summary.
+A reading step cannot publish its voice summary as a completed answer. Explicitly
+asking for a result can still offer its full bounded prose. A newer quiet-only
+answer invalidates queued older speech through the worker delivery sequence;
 there is no repeated research-status or unsaved-status narration. Complete bounded
 replies retain ending caveats, citation transport stays on screen, and proposals
 still explain review and Accept/Discard. Explicit Keep receives a brief save
@@ -123,13 +161,28 @@ and require the existing review, Accept changes, Discard and Undo workflow.
 Work orders have independent IDs, subjects, revisions, captured note context,
 cancellation and results. Ordinary speech does not invalidate research. The
 coordinator interprets buffered turns in conversational order; research workers
-run independently, with at most three researching workers and additional
+run independently, with at most ten researching workers and additional
 assignments queued. The old six-work-order admission cap is removed; a single
 request may allocate up to 1,000 workers, planned in validated pages of 24.
 Queueing does not consume a worker's execution deadline. At most 24 terminal
 records are retained; active and queued jobs are never evicted by that retention
 limit. Requested orb identities remain visible through routing and clarification,
 and a clarification answer retains the original note and selected passage.
+An explicit request such as “spawn 4 workers to read across all the notes” already
+defines its scope. When each worker can receive 1–24 notes, the host partitions
+the current Space's note IDs into four disjoint groups without a provider planning
+call. Those IDs enter the existing reader as explicit references, with no editing
+authority or unrelated open-note priority. Larger directories or more workers
+than notes use contextual scope planning. Each result still reports its actual
+coverage; admission is not proof every assigned word was read. All admitted orbs
+are visible, including queued work beyond the ten concurrently executing jobs. The shared physical provider budget
+is also ten requests per renderer, shared fairly with other AI work; a busy
+provider pool can delay a worker’s next request.
+For contextual requests, the router chooses complementary angles itself. It
+repairs incomplete worker counts and unnecessary topic questions once internally.
+Repeated malformed plans report an error instead of asking the user to design the
+team or claiming workers started. A genuinely missing subject or ambiguous
+control target can still require clarification.
 Explicit local cancellation bypasses routing and can cancel
 an assignment still being understood. A named correction replaces only that
 assignment; ambiguous references receive one short question. Its answer resolves
@@ -174,6 +227,11 @@ backchannels, preserves the originally open note, and matches delegation timelin
 offsets to that utterance instead of the latest speech. Early delegations wait
 for their transcript. After dispatch, a new explicit assignment or a gap of at
 least 900 ms starts a new turn; short continuations can still revise that turn.
+An obviously dangling phrase uses a 3.2-second settling window and cannot admit
+research or edits even when the provider delegates it. A continuation within
+eight seconds retains its original note, selection and worker reference; a new
+explicit assignment remains separate. These conservative assembly hints do not
+claim general semantic endpoint detection or override the provider's turn-taking.
 An unchanged turn with a late delegation cannot restart its existing work.
 Inside a finished worker's conversation, the opening transcript fragment captures
 its exact ID and revision along with the note and selection. “Follow that
@@ -242,10 +300,37 @@ buffered separately and checked against their work-order revision immediately
 before sending. Local energy monitoring uses the existing mic and playback
 streams without another capture or duplicate playback; transcript activity is a
 primary speech signal. A 1.5-second transcript quiet interval normally gates
-offering a finding; audio energy extends this only briefly. The local wait is
-capped at 12 seconds, after which commentary is offered for the voice to work into
-the conversation. Continuous noise or transcript traffic cannot reset that cap,
-and unrelated routing does not block it. Pending corrections still resolve first
+offering a finding. Actual playback holds new speech offers until it ends and
+a 1.5-second quiet interval passes. Arriving assistant transcripts keep that guard
+active even when the local output meter reports silence. Input noise has a
+twelve-second cap; arriving user or assistant transcripts and audible output
+always retain their quiet guard. An overdue finding cannot override a person
+still speaking, even when the input meter reports silence.
+Interim findings get at most one unsolicited offer after user speech, at least
+twelve seconds apart. Assistant transcripts, noise, silence and orb handoffs do
+not renew it. A completed assignment's concise answer bypasses this interim
+allowance and remains paced behind existing speech. Revision/sequence guards
+prevent duplicate final announcements. Explicit requests and confirmed actions
+also remain eligible independently. Detailed results remain in quiet context
+and the work summary; opening a worker is never required to receive its finding.
+The speech queue now follows research retention rather than dropping updates
+after twelve, and the work list exposes every retained result rather than six.
+At an eligible pause, automatic completions collect for 1.2 seconds, then up to
+four enter a bounded reference packet with exact complete summaries, original
+questions and worker-local sources. A fixed trusted instruction asks for one
+brief contribution connected to the current conversation, preserving overlap,
+disagreement and limited coverage. It is one transport chunk; worker prose is
+never interpolated into instructions. Groups have an eight-second spacing and
+never wait for the entire team. Explicit result/save responses take precedence.
+Waiting for a pause and Shared with voice describe the local queue/send states,
+not provider acknowledgments, completed playback or hearing. Read aloud remains
+available on each finished job. Stop clears offers; internal orb handoffs retain
+them and their grouping budget. Revised/evicted findings cannot be replayed.
+Scope routing receives the validated short summary and coverage of retained
+completed work so it can reuse known findings, without another planning hop or
+copying detailed answers into routing context. Live conversational quality is a
+separate acceptance requirement from these deterministic coordination checks.
+Unrelated routing does not block eligible findings. Pending corrections still resolve first
 under their bounded routing timeout, preventing obsolete findings from being
 offered. GPT-Live has no explicit turn-end/audio-done event, so this remains an
 approximation, not forced playback. Provider append ACKs
@@ -268,7 +353,11 @@ capture/playback stopped but reports that final service usage is unconfirmed.
 
 Highlighting in either note reading or editing captures a local reference after
 180 ms of settled selection. It shows a quiet **Selected text** cue in the call
-pill and updates reference context without triggering speech, work or a note edit.
+pill without sending a selection update to the provider. Only an actual user
+transcript publishes the passage bound to that utterance, through quiet reference
+context. The voice uses it when the user refers to it, never acknowledging or
+discussing a highlight merely because it exists. Unrelated speech continues its
+own topic. Starting a call with text already highlighted also waits for speech.
 Dictation remains independent. Voice controls preserve the capture; replacing the
 highlight replaces it, while deselecting in the note, editing its contents or
 navigating away clears the current selection.
@@ -374,3 +463,42 @@ its audible confirmation, reconnect, and Space-switch cleanup on the target Mac.
 API references: [WebRTC setup](https://developers.openai.com/api/docs/guides/voice-webrtc),
 [client delegation](https://developers.openai.com/api/docs/guides/live-delegation),
 and [session lifecycle](https://developers.openai.com/api/docs/guides/live-conversations).
+
+## Direct voice note edits
+
+Explicit requests such as “make this tighter” bypass the research planner and
+worker reservations. `VoiceNoteEdits` binds the captured note/selection, uses the
+shared reader and validators with `purpose: edit`, and passes its proposal into
+the real editor review. The first local read targets the note; the model chooses
+focused edits or the full-rewrite handshake. A chat-only draft gets an internal
+correction instead of being passed off as a completed edit. Creation is disabled,
+strict snapshot freshness remains in force, and this lane cannot persist.
+
+Delayed delegation cannot duplicate an edit. A new editing direction supersedes
+pending preparation; unrelated conversation, workers and note navigation do not
+retarget it. Cancellation and Space teardown discard stale replies. Ending voice
+only closes audio. A preparing label and cancel control expose ongoing editing
+without creating an orb. Review errors are surfaced, and applying still requires
+Accept changes with the existing undo and autosave behavior.
+
+## Response diagnostics
+
+OpenAI progress commentary and a final structured message are extracted separately;
+SDK aggregate text cannot corrupt the final JSON. Missing finals, invalid JSON,
+reading instructions, checkpoints, replies and edits have distinct static error
+codes, with no raw provider/note content in the diagnostic. Native read offsets
+accept bounded integral JSON spellings such as `0.0` and `1e3`, matching browser
+validation. These regressions cover known failure cases, not the exact unretained
+payloads from the three failures reported on 12 October.
+
+### Bounded answer recovery
+
+A structured-reading parse failure (`CHAT_JSON`, `CHAT_STRUCTURE`,
+`CHAT_FINAL_MISSING` or `CHAT_VOICE`) gets one format-only retry within the same
+reading run and deadline. Completed reads, checkpoints and exact permissions
+remain unchanged; rejected text is never repaired into a write action.
+A second failure remains actionable. The separate general knowledge orchestrator
+reserves its last allowed assignment turn for final synthesis before its safety
+fuse, disables further coordination on that turn, and reports the final validation
+failure without an extra loop. This change does not establish which live request
+produced the user's earlier fuse error.

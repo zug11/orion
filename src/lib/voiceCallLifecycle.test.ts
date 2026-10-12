@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallLifecycle } from "./voiceCallLifecycle";
 import type { VoiceTransportOptions } from "./liveVoice";
 import { silentVoiceActivity } from "./voicePresence";
+afterEach(() => vi.useRealTimers());
 
 function setup(start?: () => Promise<void>) {
   const events: string[] = [];
@@ -17,6 +18,73 @@ function setup(start?: () => Promise<void>) {
 }
 
 describe("single-recipient voice call lifecycle", () => {
+  it("offers one neutral opening after connection and a short pause, never on repeated status events", async () => {
+    vi.useFakeTimers();
+    const { call, transports, options } = setup(); call.open(options, true);
+    const transport = transports[0];
+    await vi.advanceTimersByTimeAsync(5_000); expect(transport.append).not.toHaveBeenCalled();
+    transport.options.onStatus("listening");
+    await vi.advanceTimersByTimeAsync(1_999); expect(transport.append).not.toHaveBeenCalled();
+    transport.options.onStatus("listening");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(transport.append).toHaveBeenCalledExactlyOnceWith("instructions", expect.stringContaining("where would you like to start?"), null);
+    expect(transport.mute).toHaveBeenCalledExactlyOnceWith(false);
+    transport.options.onStatus("listening"); await vi.advanceTimersByTimeAsync(30_000);
+    expect(transport.append).toHaveBeenCalledOnce(); call.dispose(); expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each(["user", "assistant", "inputAudio", "outputAudio", "delegation", "finding", "mute", "stop", "disconnect", "handoff"])("abandons the pending welcome on %s without replaying it later", async cause => {
+    vi.useFakeTimers();
+    const { call, transports, options } = setup(); call.open(options, true);
+    const transport = transports[0]; transport.options.onStatus("listening");
+    await vi.advanceTimersByTimeAsync(1_000);
+    if (cause === "user" || cause === "assistant") transport.options.onEvent({ type: `session.${cause === "user" ? "input" : "output"}_transcript.delta`, delta: "Hello" });
+    if (cause === "inputAudio" || cause === "outputAudio") transport.options.onActivity?.({ ...silentVoiceActivity(), inputActive: cause === "inputAudio", outputActive: cause === "outputAudio" });
+    if (cause === "delegation") transport.options.onEvent({ type: "session.delegation.created", delegation: { id: "work" } });
+    if (cause === "finding") call.append("commentary", "The requested finding.");
+    if (cause === "mute") { call.mute(true); call.mute(false); }
+    if (cause === "stop") call.stop();
+    if (cause === "disconnect") transport.options.onStatus("disconnected");
+    if (cause === "handoff") { call.pause(); call.open(options); transports[1].options.onStatus("listening"); }
+    await vi.advanceTimersByTimeAsync(30_000);
+    for (const recipient of transports) expect(recipient.append.mock.calls.filter(call => call[0] === "instructions")).toEqual([]);
+    call.dispose(); expect(vi.getTimerCount()).toBe(0);
+  });
+  it("keeps a resumed or initially muted call quiet even before any transcript arrives", async () => {
+    vi.useFakeTimers();
+    const { call, transports, options } = setup(); call.open(options);
+    transports[0].options.onStatus("listening"); await vi.advanceTimersByTimeAsync(5_000);
+    expect(transports[0].append).not.toHaveBeenCalled();
+    call.pause(); call.mute(true); call.open(options, true);
+    transports[1].options.onStatus("listening"); call.mute(false);
+    await vi.advanceTimersByTimeAsync(5_000); expect(transports[1].append).not.toHaveBeenCalled(); call.dispose();
+  });
+  it("waits out arriving speech before an automatic handback even with a silent output meter", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(0);
+    const { call, transports, options } = setup(); call.open(options);
+    const transport = transports[0], handback = vi.fn();
+    transport.options.onEvent({ type: "session.output_transcript.delta", delta: "A sentence" });
+    call.handoffWhenQuiet(handback);
+    for (let i = 0; i < 40; i++) {
+      transport.options.onEvent({ type: "session.output_transcript.delta", delta: " still speaking" });
+      await vi.advanceTimersByTimeAsync(500);
+    }
+    expect(handback).not.toHaveBeenCalled(); expect(transport.dispose).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000); expect(handback).toHaveBeenCalledOnce();
+    call.dispose(); expect(vi.getTimerCount()).toBe(0);
+  });
+  it("pauses the departing recipient immediately and cancels any deferred handback on an explicit switch", async () => {
+    vi.useFakeTimers();
+    const { call, transports, options } = setup(); call.open(options);
+    transports[0].options.onActivity?.({ ...silentVoiceActivity(), outputActive: true });
+    const handback = vi.fn(); call.handoffWhenQuiet(handback);
+    call.pause();
+    expect(transports[0].close).toHaveBeenCalledOnce(); expect(transports[0].dispose).toHaveBeenCalledOnce();
+    expect(call.acceptsInput).toBe(false); expect(call.canStart).toBe(true);
+    call.open(options); options.onStatus.mockClear();
+    transports[0].options.onStatus("disconnected"); await vi.advanceTimersByTimeAsync(30_000);
+    expect(options.onStatus).not.toHaveBeenCalled(); expect(handback).not.toHaveBeenCalled();
+    call.dispose(); expect(vi.getTimerCount()).toBe(0);
+  });
   it("opens only one connection and disposes the old recipient before creating a new one", () => {
     const { call, transports, options, events } = setup();
     expect(call.open(options)).toBe(true); expect(call.open(options)).toBe(false);

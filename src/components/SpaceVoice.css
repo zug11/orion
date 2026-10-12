@@ -6,10 +6,14 @@
 .space-voice button:disabled { opacity: .45; cursor: default; }
 .space-voice__progress { margin-top: 7px; justify-content: space-between; }
 .space-voice__result-controls { margin-top: 6px; }
+.space-voice__delivery { display: block; margin-top: 5px; color: var(--text-muted, var(--text)); }
 .space-voice__result { max-height: 260px; overflow-y: auto; padding: 8px 2px; overflow-wrap: anywhere; }
 .space-voice { max-height: 340px; overflow-y: auto; }
 .space-voice__job + .space-voice__job { margin-top: 9px; }
 .space-voice__subject { min-width: 0; flex: 1 1 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.space-voice__clear-action { display: flex; justify-content: flex-end; color: var(--muted); }
+.space-voice__clear { padding: 6px 0 10px; }
+.space-voice__clear p { margin: 0 0 8px; color: var(--text-soft); line-height: 1.5; }
 .space-voice__progress [role="status"] { max-width: 100%; overflow-wrap: anywhere; opacity: .7; }
 .space-voice__clarification { padding: 6px 0; }
 .space-voice__finding { margin-top: 6px; }

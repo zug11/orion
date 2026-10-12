@@ -8,6 +8,15 @@ const finding: ChatResult = { reply: "The passage suggests a connection [1](#ori
 function input(result = finding) { return { id: "private-job-identity", revision: 7, sequence: 3, subject: "Causation", state: "running" as const, result }; }
 
 describe("natural finding delivery", () => {
+  it("automatically offers the separate qualified summary of a long final answer", () => {
+    const reply = "A detailed discussion of the evidence. ".repeat(100) + "The cause remains uncertain.";
+    const delivery = voiceFindingDelivery({ ...input({ ...finding, reply, voice: { label: "Connection and causation", summary: finding.reply } }), state: "completed" });
+    expect(delivery).toMatchObject({ background: true, completion: true });
+    expect(delivery.commentary).toContain("The passage suggests a connection, but it does not establish causation.");
+    expect(delivery.commentary).toContain("material checked so far");
+    expect(delivery.commentary).not.toMatch(/ready|open|second|detailed discussion/i);
+    expect(JSON.parse(delivery.quiet).finding).toBe(reply);
+  });
   it("keeps identity and status in quiet context while offering the whole qualified finding", () => {
     const delivery = voiceFindingDelivery(input());
     expect(JSON.parse(delivery.quiet)).toMatchObject({ id: "private-job-identity", revision: 7, sequence: 3, stage: "intermediate", limited: true,
@@ -42,13 +51,16 @@ describe("natural finding delivery", () => {
     expect(delivery.commentary).toContain("accept or discard");
     expect(delivery.commentary).not.toMatch(/saved|already applied/i);
   });
-  it("preserves an ending caveat beyond the previous short prefix and never narrates an oversized partial excerpt", () => {
+  it("keeps long answers quiet and complete, including their ending caveat, until explicitly requested", () => {
     const reply = "The draft makes an observation. ".repeat(100) + "However, this does not establish causation and needs further evidence.";
     const normal = voiceFindingDelivery({ ...input({ ...finding, reply }), state: "completed" });
-    expect(normal.commentary).toContain("However, this does not establish causation and needs further evidence.");
-    expect(JSON.parse(normal.quiet)).not.toHaveProperty("finding");
+    expect(normal.commentary).toBe("");
+    expect(JSON.parse(normal.quiet).finding).toBe(reply);
+    const requested = voiceFindingDelivery({ ...input({ ...finding, reply }), requested: true, state: "completed" });
+    expect(requested.background).toBe(false);
+    expect(requested.commentary).toContain("However, this does not establish causation and needs further evidence.");
     const oversized = voiceFindingDelivery({ ...input({ ...finding, reply: "Unsupported opening. ".repeat(1_000) }), state: "completed" });
-    expect(oversized.commentary).toBe("The detailed finding is available in the work summary.");
+    expect(oversized.commentary).toBe("");
     expect(JSON.parse(oversized.quiet).contentOmitted).toBe(true);
     expect(oversized.commentary).not.toContain("Unsupported opening");
   });
@@ -82,10 +94,19 @@ describe("natural finding delivery", () => {
   });
 
   it("keeps JSON transport bounded when escaping expands a legitimate finding", () => {
-    const delivery = voiceFindingDelivery(input({ ...finding, reply: `Finding ${"\u0001".repeat(5_500)} with an ending caveat.` }));
+    const delivery = voiceFindingDelivery({ ...input({ ...finding, reply: `Finding ${"\u0001".repeat(5_500)} with an ending caveat.` }), requested: true });
     expect(delivery.commentary).toContain("with an ending caveat.");
     expect(delivery.quiet.length).toBeLessThanOrEqual(24_000);
     expect(JSON.parse(delivery.quiet)).toMatchObject({ contentOmitted: true, evidenceIds: ["e1"] });
     expect(JSON.parse(delivery.quiet)).not.toHaveProperty("finding");
+  });
+  it("bounds spontaneous findings by actual transport bytes without chopping multilingual caveats", () => {
+    const reply = "文".repeat(170) + "。This remains uncertain.";
+    const delivery = voiceFindingDelivery(input({ ...finding, reply }));
+    expect(delivery.commentary).toBe("");
+    expect(JSON.parse(delivery.quiet).finding).toBe(reply);
+    const short = voiceFindingDelivery(input());
+    expect(short.background).toBe(true);
+    expect(new TextEncoder().encode(short.commentary).length).toBeLessThanOrEqual(480);
   });
 });

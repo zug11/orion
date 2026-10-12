@@ -15,36 +15,47 @@ describe("voice selection routing boundaries", () => {
     conversation.receive(speech("What do you think", 0, 100), "n", selected);
     selected.text = "Mutated local object";
     conversation.receive(speech(" of this?", 110, 300), "other-note", second);
+    expect(conversation.userSelection).toEqual(first);
     const [turn] = conversation.takeTurns(); expect(turn.selection).toEqual(first); expect(turn.focusNoteId).toBe("n");
     conversation.receive({ type: "session.delegation.created", delegation: { id: "delayed" }, offset_ms: 300 });
     expect(conversation.takeTurns()[0]).toMatchObject({ selection: first, focusNoteId: "n", delegated: true });
     conversation.receive(speech("Now this other passage", 2000, 2200), "n", second);
+    expect(conversation.userSelection).toEqual(second);
     expect(conversation.takeTurns()[0].selection).toEqual(second);
   });
   it("does not attach a later highlight to an utterance begun without selection", () => {
     const conversation = new VoiceConversation();
     conversation.receive(speech("Check", 0, 100), "n");
     conversation.receive(speech(" this", 100, 200), "n", first);
+    expect(conversation.userSelection).toBeUndefined();
     expect(conversation.takeTurns()[0].selection).toBeUndefined();
   });
-  it("sends a quiet bounded delta for replacement and clearing, even under context pressure, without repeating it", () => {
+  it("withholds highlight changes until a spoken turn, then sends its bound reference without repeating it", () => {
     const updates = new VoiceContextUpdates(), send = vi.fn((_text: string) => true);
     const input = { snapshot, jobs: [], conversation: "Still talking", focusNoteId: "n" };
     updates.reset(input);
     updates.update({ ...input, selection: first }, send);
+    updates.update({ ...input, selection: second }, send);
+    updates.update(input, send);
+    expect(send).not.toHaveBeenCalled();
+    updates.update({ ...input, selection: first, userSpeaking: true }, send);
     const initial = JSON.parse(send.mock.calls[0][0]);
     expect(initial).toMatchObject({ type: "selection_update", referenceOnly: true, selectedText: { id: first.id, passage: first.text } });
     expect(initial.instruction).toContain("Do not speak");
-    updates.update({ ...input, selection: first }, send); expect(send).toHaveBeenCalledTimes(1);
-    updates.update({ ...input, selection: second, usageRatio: .82 }, send);
+    updates.update({ ...input, selection: first, userSpeaking: true }, send); expect(send).toHaveBeenCalledTimes(1);
+    updates.update({ ...input, selection: second, usageRatio: .82 }, send); expect(send).toHaveBeenCalledTimes(1);
+    updates.update({ ...input, selection: second, userSpeaking: true, usageRatio: .82 }, send);
     expect(JSON.parse(send.mock.calls[send.mock.calls.length - 1][0]).selectedText.passage).toBe(second.text);
     updates.update(input, send);
+    expect(send).toHaveBeenCalledTimes(2);
+    updates.update({ ...input, userSpeaking: true }, send);
     expect(JSON.parse(send.mock.calls[send.mock.calls.length - 1][0])).toMatchObject({ type: "selection_update", selectedText: null });
   });
   it("retries a selection context update after a transport refusal", () => {
     const updates = new VoiceContextUpdates(), input = { snapshot, jobs: [], conversation: "", focusNoteId: "n" };
     updates.reset(input); const send = vi.fn((_text: string) => false);
-    updates.update({ ...input, selection: first }, send); send.mockReturnValue(true);
-    updates.update({ ...input, selection: first }, send); expect(send).toHaveBeenCalledTimes(2);
+    updates.update({ ...input, selection: first, userSpeaking: true }, send); send.mockReturnValue(true);
+    updates.update({ ...input, selection: first }, send); expect(send).toHaveBeenCalledOnce();
+    updates.update({ ...input, selection: first, userSpeaking: true }, send); expect(send).toHaveBeenCalledTimes(2);
   });
 });

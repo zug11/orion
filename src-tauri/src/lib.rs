@@ -1,7 +1,7 @@
 mod chat_edits;
 mod chat_reading;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use chat_reading::{ChatReadRequest, ChatReadingFinding};
+use chat_reading::{ChatReadRequest, ChatReadingFinding, ChatVoicePresentation};
 use fs2::FileExt;
 use reqwest::{Client, Response, StatusCode, Url};
 use serde::{Deserialize, Serialize};
@@ -882,6 +882,8 @@ struct ChatResult {
     read_requests: Option<Vec<ChatReadRequest>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     checkpoint: Option<ChatReadingFinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    voice: Option<ChatVoicePresentation>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -2548,6 +2550,7 @@ fn parse_chat_result(output_text: &str, reply_only: bool) -> Result<ChatResult, 
         edit_intent: None,
         read_requests: None,
         checkpoint: None,
+        voice: None,
     })
 }
 
@@ -2757,6 +2760,7 @@ fn parse_chat_suggestion_result(output_text: &str, context: &Value) -> Result<Ch
         edit_intent: None,
         read_requests: None,
         checkpoint: None,
+        voice: None,
     })
 }
 
@@ -2765,22 +2769,28 @@ fn parse_chat_edit_response(
     reply_only: bool,
     reading: bool,
     editing: bool,
-) -> Result<ChatResult, ()> {
-    let mut value: Value = serde_json::from_str(output_text).map_err(|_| ())?;
-    let object = value.as_object_mut().ok_or(())?;
+) -> Result<ChatResult, chat_reading::ParseError> {
+    let mut value: Value =
+        serde_json::from_str(output_text).map_err(|_| chat_reading::ParseError::Json)?;
+    let object = value
+        .as_object_mut()
+        .ok_or(chat_reading::ParseError::Envelope)?;
     let edits = object.remove("noteEdits");
     let rewrite = object.remove("noteRewrite");
     let intent = object.remove("editIntent");
     let mut result = chat_reading::parse_response(&value.to_string(), reply_only, reading)?;
     if editing {
-        result.edit_intent = Some(chat_edits::parse_intent(intent)?);
+        result.edit_intent =
+            Some(chat_edits::parse_intent(intent).map_err(|_| chat_reading::ParseError::Intent)?);
         if result
             .read_requests
             .as_ref()
             .is_none_or(|reads| reads.is_empty())
         {
-            result.note_edits = chat_edits::parse(edits)?;
-            result.note_rewrite = chat_edits::parse_rewrite(rewrite)?;
+            result.note_edits =
+                chat_edits::parse(edits).map_err(|_| chat_reading::ParseError::Edits)?;
+            result.note_rewrite = chat_edits::parse_rewrite(rewrite)
+                .map_err(|_| chat_reading::ParseError::Rewrite)?;
         }
     }
     Ok(result)
@@ -2897,14 +2907,23 @@ fn extract_output_text(response: &Value, activity: &str) -> Result<String, Strin
             .unwrap_or_else(|| "the response ended early".to_string());
         return Err(format!("OpenAI could not {activity} ({reason})."));
     }
-    if let Some(text) = response.get("output_text").and_then(Value::as_str) {
-        return Ok(text.to_string());
-    }
-
+    // Phased responses can contain commentary before the structured answer.
+    // The SDK's combined output_text loses that boundary; never parse it here.
+    let phased = response
+        .get("output")
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| item.get("phase").is_some_and(|phase| !phase.is_null()))
+        });
     let mut output_text = String::new();
     let mut refusal: Option<String> = None;
     if let Some(items) = response.get("output").and_then(Value::as_array) {
         for item in items {
+            if phased && item.get("phase").and_then(Value::as_str) != Some("final_answer") {
+                continue;
+            }
             let Some(parts) = item.get("content").and_then(Value::as_array) else {
                 continue;
             };
@@ -2927,11 +2946,21 @@ fn extract_output_text(response: &Value, activity: &str) -> Result<String, Strin
         }
     }
 
+    if let Some(refusal) = refusal {
+        return Err(format!("OpenAI could not {activity}: {refusal}"));
+    }
+    if !phased {
+        if let Some(text) = response.get("output_text").and_then(Value::as_str) {
+            if !text.is_empty() {
+                return Ok(text.to_string());
+            }
+        }
+    }
     if !output_text.is_empty() {
         return Ok(output_text);
     }
-    if let Some(refusal) = refusal {
-        return Err(format!("OpenAI could not {activity}: {refusal}"));
+    if phased {
+        return Err(format!("OpenAI returned progress without a final answer for {activity}. Try again (CHAT_FINAL_MISSING)."));
     }
     Err(format!(
         "OpenAI returned no result for {activity}. Try again."
@@ -3938,19 +3967,11 @@ async fn chat(
         let output_text = extract_anthropic_output_text(&response, operation)?;
         return (if let Some(context) = &suggestion_context {
             parse_chat_suggestion_result(&output_text, context)
+                .map_err(|_| chat_reading::ParseError::Suggestions)
         } else {
             parse_chat_edit_response(&output_text, !allow_note_actions, reading, allow_edits)
         })
-        .map_err(|_| {
-            format!(
-                "Anthropic returned {} Orion could not read. Try again.",
-                if inline_writing {
-                    "a writing proposal"
-                } else {
-                    "a Chat reply"
-                }
-            )
-        });
+        .map_err(|error| error.message("Anthropic"));
     }
 
     let mut body = json!({
@@ -3998,19 +4019,11 @@ async fn chat(
     let output_text = extract_output_text(&response, operation)?;
     (if let Some(context) = &suggestion_context {
         parse_chat_suggestion_result(&output_text, context)
+            .map_err(|_| chat_reading::ParseError::Suggestions)
     } else {
         parse_chat_edit_response(&output_text, !allow_note_actions, reading, allow_edits)
     })
-    .map_err(|_| {
-        format!(
-            "OpenAI returned {} Orion could not read. Try again.",
-            if inline_writing {
-                "a writing proposal"
-            } else {
-                "a Chat reply"
-            }
-        )
-    })
+    .map_err(|error| error.message("OpenAI"))
 }
 
 fn display_title(title: &str) -> String {
@@ -5311,6 +5324,38 @@ mod tests {
         assert_eq!(result.wiki_articles[0].title, "Warm evidence");
         assert_eq!(result.concepts[0].label, "warm evidence");
         assert_eq!(result.concepts[0].canonical_title, "Warm evidence");
+    }
+
+    #[test]
+    fn structured_answers_exclude_phased_commentary_and_aggregated_sdk_text() {
+        let answer = r#"{"reply":"Grounded answer.","readRequests":[],"checkpoint":null}"#;
+        let response = json!({
+            "output_text": format!("Checking the notes.{answer}"),
+            "output": [
+                {"type":"message","phase":"commentary","content":[{"type":"output_text","text":"Checking the notes."}]},
+                {"type":"reasoning"},
+                {"type":"message","phase":"final_answer","content":[{"type":"output_text","text":&answer[..25]}, {"type":"output_text","text":&answer[25..]}]}
+            ]
+        });
+        let output = extract_output_text(&response, "finish Chat").unwrap();
+        assert_eq!(
+            parse_chat_edit_response(&output, true, true, false)
+                .unwrap()
+                .reply,
+            "Grounded answer."
+        );
+        let mut missing = response.clone();
+        missing["output"].as_array_mut().unwrap().pop();
+        assert!(extract_output_text(&missing, "finish Chat")
+            .unwrap_err()
+            .contains("CHAT_FINAL_MISSING"));
+        let mut refusal = response;
+        refusal["output"][2]["content"] =
+            json!([{"type":"refusal","refusal":"Cannot answer this request."}]);
+        assert!(extract_output_text(&refusal, "finish Chat")
+            .unwrap_err()
+            .contains("Cannot answer this request."));
+        assert_eq!(extract_output_text(&json!({"output":[{"phase":null,"content":[{"type":"output_text","text":"first"}]},{"content":[{"type":"output_text","text":" second"}]}]}), "finish Chat").unwrap(), "first second");
     }
 
     #[test]

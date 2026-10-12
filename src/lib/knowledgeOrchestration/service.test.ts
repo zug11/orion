@@ -38,6 +38,27 @@ afterEach(() => {
 });
 
 describe("knowledge orchestration service", () => {
+  it("reserves the last assignment turn for a grounded final answer before the safety fuse", async () => {
+    const { context, root } = setup();
+    const driver = vi.fn(async (request: KnowledgeAssignmentExecutionRequest) => {
+      if (!request.finalizing) return { response: { invalid: true } };
+      expect(request.attempt).toBe(3);
+      expect(request.context.timeBudget).toMatchObject({ phase: "finalizing", coordinationAllowed: false });
+      expect(request.observations.some(item => item.message.includes("final available turn"))).toBe(true);
+      return { response: { kind: "complete", payload: runResult() } };
+    });
+    const result = await runKnowledgeOrchestration({ runContext: context, rootAssignment: root,
+      model: "gpt-5.6-sol", effort: "high", maxTurnsPerAssignment: 3, driver });
+    expect(result.result).toEqual(runResult()); expect(driver).toHaveBeenCalledTimes(3);
+  });
+  it("reports the final validation failure without making an extra fuse turn or accepting invalid output", async () => {
+    const { context, root } = setup(), driver = vi.fn(async () => ({ response: { kind: "complete", payload: runResult() } }));
+    await expect(runKnowledgeOrchestration({ runContext: context, rootAssignment: root,
+      model: "gpt-5.6-sol", effort: "high", maxTurnsPerAssignment: 2, driver,
+      validateRootResult: () => { throw new Error("The requested source was not covered."); },
+    })).rejects.toThrow("The requested source was not covered");
+    expect(driver).toHaveBeenCalledTimes(2);
+  });
   it("completes a trivial import in one provider call", async () => {
     const { context, root } = setup();
     const driver = vi.fn().mockResolvedValue({

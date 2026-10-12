@@ -18,7 +18,7 @@ export interface VoiceOrbSnapshot {
 }
 export interface VoiceOrbFrame {
   status: VoiceStatus; activity: VoiceActivity; muted: boolean; jobs: readonly OrbJob[];
-  focusedJobId?: string; dismissedJobIds?: readonly string[]; reducedMotion?: boolean;
+  focusedJobId?: string; dismissedJobIds?: readonly string[]; reducedMotion?: boolean; thinking?: boolean;
 }
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const settle = (value: number, target: number, delta: number, rate = 5) => value + (target - value) * (1 - Math.exp(-delta * rate));
@@ -192,7 +192,7 @@ export class VoiceOrbMotion {
   advance(frame: VoiceOrbFrame, elapsed: number): VoiceOrbSnapshot {
     const delta = clamp(elapsed, 0, .06), reduced = frame.reducedMotion === true;
     const talking = frame.status === "listening";
-    const moving = !reduced && (talking || frame.jobs.some(job => job.state === "running"));
+    const moving = !reduced && (talking || frame.status === "connecting" || frame.thinking || frame.jobs.some(job => job.state === "running"));
     if (moving) this.phase += delta;
     // Admission is independent of rendering density. Existing slots survive
     // reordering, queuing, completion and focus; every admitted ID stays here.

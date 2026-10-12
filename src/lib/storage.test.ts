@@ -688,7 +688,7 @@ describe("native knowledge assignment boundary", () => {
       if (command === "recognize_document_text") return Promise.resolve({ text: "Local text", pageCount: 1, pages: [{ pageNumber: 1, text: "Local text" }], warnings: [] });
       return Promise.resolve(true);
     });
-    const controllers = Array.from({ length: 6 }, () => new AbortController());
+    const controllers = Array.from({ length: 10 }, () => new AbortController());
     const jobs = controllers.map((controller, index) => runKnowledgeAssignment({
       ...knowledgeExecutionRequest({ requestId: `active-${index}`, timeoutMs: 30_000, finalizing: false }),
       model: index % 2 ? "claude-sonnet-5" : "gpt-5.6-sol",
@@ -723,7 +723,7 @@ describe("native knowledge assignment boundary", () => {
 
     finish.get("active-0")!({ response: { kind: "complete", payload: {} } });
     await expect(chat).resolves.toEqual({ reply: "Ready." });
-    for (let index = 1; index < 6; index += 1) finish.get(`active-${index}`)!({ response: { kind: "complete", payload: {} } });
+    for (let index = 1; index < controllers.length; index += 1) finish.get(`active-${index}`)!({ response: { kind: "complete", payload: {} } });
     await settledJobs;
   });
 
@@ -1699,6 +1699,23 @@ describe("browser persistence fallback", () => {
         "finish Chat",
       ),
     ).toBe("first second");
+  });
+
+  it("parses the final structured answer without merging phased progress, even with SDK aggregated text", () => {
+    const final = '{"reply":"Grounded answer.","readRequests":[],"checkpoint":null}';
+    const response = {
+      output_text: `Checking the notes.${final}`,
+      output: [
+        { type: "message", phase: "commentary", content: [{ type: "output_text", text: "Checking the notes." }] },
+        { type: "reasoning" },
+        { type: "message", phase: "final_answer", content: [{ type: "output_text", text: final.slice(0, 25) }, { type: "output_text", text: final.slice(25) }] },
+      ],
+    };
+    expect(parseChatResult(JSON.parse(extractBrowserOutputText(response, "finish Chat")), true)).toEqual({ reply: "Grounded answer.", readRequests: [] });
+    expect(() => extractBrowserOutputText({ ...response, output: response.output.slice(0, 2) }, "finish Chat")).toThrow("CHAT_FINAL_MISSING");
+    expect(() => extractBrowserOutputText({ ...response, output: [...response.output.slice(0, 1), {
+      phase: "final_answer", content: [{ type: "refusal", refusal: "Cannot answer this request." }],
+    }] }, "finish Chat")).toThrow("Cannot answer this request.");
   });
 
   it("rejects a v2 vault with a missing active space", async () => {

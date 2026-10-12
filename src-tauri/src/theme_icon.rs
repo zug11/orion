@@ -1,5 +1,5 @@
-//! Runtime Dock tile plus reversible Finder custom-icon metadata on this app.
-//! Never rewrite a signed resource or accept a target path from the renderer.
+//! In-memory Dock image only. Never write custom-icon metadata into the signed
+//! application bundle or accept a target path from the renderer.
 //! https://developer.apple.com/documentation/appkit/nsapplication/applicationiconimage
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
@@ -13,7 +13,6 @@ pub struct ThemeIconState(Mutex<Option<(Option<Vec<u8>>, IconStatus)>>);
 #[serde(rename_all = "camelCase")]
 pub struct IconStatus {
     applied: bool,
-    finder: &'static str,
 }
 
 fn decode_icon(encoded: &str) -> Result<Vec<u8>, String> {
@@ -48,8 +47,8 @@ pub async fn set_theme_icon(
     #[cfg(target_os = "macos")]
     {
         use objc2::{AllocAnyThread, MainThreadMarker};
-        use objc2_app_kit::{NSApplication, NSImage, NSWorkspace, NSWorkspaceIconCreationOptions};
-        use objc2_foundation::{NSBundle, NSData};
+        use objc2_app_kit::{NSApplication, NSImage};
+        use objc2_foundation::NSData;
         let (send, receive) = tokio::sync::oneshot::channel();
         let handle = app.clone();
         app.run_on_main_thread(move || {
@@ -59,15 +58,12 @@ pub async fn set_theme_icon(
                 if !crate::desktop_windows::preferred_library_window(&handle)
                     .is_some_and(|preferred| preferred.label() == window.label())
                 {
-                    return Ok(IconStatus {
-                        applied: false,
-                        finder: "unavailable",
-                    });
+                    return Ok(IconStatus { applied: false });
                 }
                 let state = handle.state::<ThemeIconState>();
                 let mut previous = state.0.lock().map_err(|_| "Icon state is unavailable.")?;
                 if let Some((prior, status)) = previous.as_ref() {
-                    if prior == &bytes && ["updated", "restored"].contains(&status.finder) {
+                    if prior == &bytes {
                         return Ok(status.clone());
                     }
                 }
@@ -80,40 +76,14 @@ pub async fn set_theme_icon(
                     })
                     .transpose()?;
                 let application = NSApplication::sharedApplication(mtm);
-                let bundle = NSBundle::mainBundle();
-                let path = bundle.bundlePath();
-                // Plain `tauri dev` has no app bundle; mounted DMGs and app
-                // translocation may be read-only. Never elevate or target a
-                // different installation in those cases.
-                let finder = if path.to_string().ends_with(".app")
-                    && bundle
-                        .bundleIdentifier()
-                        .is_some_and(|id| id.to_string() == handle.config().identifier)
-                {
-                    if NSWorkspace::sharedWorkspace().setIcon_forFile_options(
-                        image.as_deref(),
-                        &path,
-                        NSWorkspaceIconCreationOptions::empty(),
-                    ) {
-                        if image.is_some() {
-                            "updated"
-                        } else {
-                            "restored"
-                        }
-                    } else {
-                        "read-only"
-                    }
-                } else {
-                    "unavailable"
-                };
-                // AppKit retains the image. Nil restores the packaged icon.
+                // AppKit retains the runtime image. Nil restores the packaged
+                // icon. Finder keeps the packaged icon: NSWorkspace.setIcon
+                // would add FinderInfo/ResourceFork metadata to the app bundle,
+                // invalidating strict signature verification after launch.
                 unsafe {
                     application.setApplicationIconImage(image.as_deref());
                 }
-                let status = IconStatus {
-                    applied: true,
-                    finder,
-                };
+                let status = IconStatus { applied: true };
                 *previous = Some((bytes, status.clone()));
                 Ok(status)
             })();
@@ -127,10 +97,7 @@ pub async fn set_theme_icon(
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (app, window, bytes);
-        Ok(IconStatus {
-            applied: false,
-            finder: "unavailable",
-        })
+        Ok(IconStatus { applied: false })
     }
 }
 

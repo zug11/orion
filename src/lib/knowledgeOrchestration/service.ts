@@ -442,6 +442,11 @@ export async function runKnowledgeOrchestration(
       emit();
       const running = runtime.projection().assignments.get(assignmentId);
       if (!running) return;
+      // Reserve the last permitted turn for synthesis rather than admitting
+      // work whose parent could never consume it before hitting the fuse.
+      const lastAssignmentTurn = running.attempts >= maxTurnsPerAssignment;
+      if (lastAssignmentTurn) noteObservation(assignmentId,
+        "This is the assignment's final available turn. Return a complete grounded result from the evidence already available, preserving gaps and uncertainty. Do not create more assignments.");
       const childArtifacts = running.childAssignmentIds.flatMap((childId) => {
         const artifactId = runtime.projection().assignments.get(childId)?.artifactId;
         const artifact = artifactId ? registry.get(artifactId) : undefined;
@@ -482,9 +487,9 @@ export async function runKnowledgeOrchestration(
           const context: KnowledgeAssignmentContextPacket = {
             ...baseContext,
             timeBudget: {
-              phase,
+              phase: lastAssignmentTurn ? "finalizing" : phase,
               remainingMs: Math.max(0, hardDeadline - Date.now()),
-              coordinationAllowed: phase === "exploring",
+              coordinationAllowed: phase === "exploring" && !lastAssignmentTurn,
               finalizationReserveMs: Math.max(
                 0,
                 hardDeadline - explorationDeadline,
@@ -515,7 +520,7 @@ export async function runKnowledgeOrchestration(
                 attempt: running.attempts,
                 requestId,
                 timeoutMs,
-                finalizing: phase === "finalizing",
+                finalizing: phase === "finalizing" || lastAssignmentTurn,
               },
               attemptController.signal,
             );
@@ -562,7 +567,7 @@ export async function runKnowledgeOrchestration(
               assignmentId,
               `The proposed final response did not match Orion's knowledge contract: ${errorMessage(error)}`,
             );
-            if (phase === "finalizing" && running.attempts >= 2) {
+            if (lastAssignmentTurn || phase === "finalizing" && running.attempts >= 2) {
               throw error;
             }
             runtime.waitAssignment(assignmentId);
@@ -591,7 +596,7 @@ export async function runKnowledgeOrchestration(
                   assignmentId,
                   `The proposed final result was not complete: ${errorMessage(error)}`,
                 );
-                if (phase === "finalizing" && running.attempts >= 2) {
+                if (lastAssignmentTurn || phase === "finalizing" && running.attempts >= 2) {
                   throw error;
                 }
                 runtime.waitAssignment(assignmentId);
@@ -627,14 +632,14 @@ export async function runKnowledgeOrchestration(
             emit();
             return;
           }
-          if (phase === "finalizing") {
+          if (phase === "finalizing" || lastAssignmentTurn) {
             noteObservation(
               assignmentId,
               "The import is in its finalization reserve; return a complete result from available summaries without creating more assignments.",
             );
-            if (running.contract.purpose !== "root" || running.attempts >= 2) {
+            if (lastAssignmentTurn || running.contract.purpose !== "root" || running.attempts >= 2) {
               throw new Error(
-                "The model attempted to create more work during finalization.",
+                lastAssignmentTurn ? "The model kept requesting more research instead of returning its final answer. The assignment stopped at its turn limit; try a narrower scope. (KNOWLEDGE_TURN_LIMIT)" : "The model attempted to create more work during finalization.",
               );
             }
             runtime.waitAssignment(assignmentId);

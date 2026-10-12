@@ -12,6 +12,9 @@ import { VoiceConversation, type VoiceTurn, type VoiceDelivery } from "../lib/vo
 import { VoiceReservations } from "../lib/voiceReservations";
 import { VoiceTurnRouter, type RoutingVoiceTurn } from "../lib/voiceTurnRouter";
 import { VoiceFindingScheduler } from "../lib/voiceFindingScheduler";
+import { VOICE_FINDING_BATCH_INSTRUCTION } from "../lib/voiceFindingBatch";
+import { VoiceNoteEdits } from "../lib/voiceNoteEdits";
+import { directVoiceNoteEdit } from "../lib/voiceWorkOrders";
 import { VoiceCallLifecycle } from "../lib/voiceCallLifecycle";
 import { VoiceContextUpdates } from "../lib/voiceContextUpdates";
 import { ChatReply } from "./ChatReply";
@@ -27,7 +30,7 @@ interface Props {
   snapshot: AppSnapshot; focusNoteId?: string; enabled: boolean;
   toggleRequest?: number; onActiveChange?: (active: boolean) => void;
   commit: (request: VoiceCommit) => Promise<VoiceReceipt>;
-  onProposal: (result: ChatResult) => void;
+  onProposal: (result: ChatResult) => void | Promise<unknown>;
   onOpenNote: (id: string) => void; onOpenSource?: (id: string) => void;
   onOpenSettings: () => void;
   floating?: boolean;
@@ -56,7 +59,10 @@ export function SpaceVoice(props: Props) {
   const [activity, setActivity] = useState(silentVoiceActivity);
   const [muted, setMuted] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const [sceneMotion] = useState(() => new VoiceOrbMotion());
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [voiceGeneration, setVoiceGeneration] = useState(0);
+  const [sceneMotion, setSceneMotion] = useState(() => new VoiceOrbMotion());
+  const [, setFindingVersion] = useState(0);
   useEffect(() => { if (props.chatVisible) setExpanded(false); }, [props.chatVisible]);
   const [reservations] = useState(() => new VoiceReservations());
   const [routes] = useState(() => new VoiceTurnRouter({
@@ -79,6 +85,8 @@ export function SpaceVoice(props: Props) {
     correcting: item => routes.pending.some(turn => !!item.id && voiceCorrectionMayAffect(turn.prompt, item.id, research.current?.getJobs() ?? [])),
     sendReference: item => voiceCall.append("thinking", item.reference!, voiceCall.delegation(item.delegationId)),
     send: item => voiceCall.append("commentary", item.text, voiceCall.delegation(item.delegationId)),
+    sendBatch: reference => voiceCall.append("thinking", reference) && voiceCall.append("instructions", VOICE_FINDING_BATCH_INSTRUCTION),
+    onChange: () => { if (alive.current) setFindingVersion(value => value + 1); },
   }));
   const contextUpdates = useRef(new VoiceContextUpdates());
   const activeSpace = useRef(props.snapshot.workspace.id);
@@ -90,10 +98,34 @@ export function SpaceVoice(props: Props) {
   const [keeping, setKeeping] = useState<string>();
   const [shownJob, setShownJob] = useState<string>();
   const alive = useRef(true);
+  const [editProgress, setEditProgress] = useState("");
+  const [noteEdits] = useState(() => new VoiceNoteEdits({
+    snapshot: () => liveProps.current.snapshot, driver: chatWithOrion,
+    progress: message => { if (alive.current) setEditProgress(message); },
+    proposal: presentProposal,
+    failed: message => { if (alive.current) setError(message); },
+  }));
+
+  function presentProposal(result: ChatResult) {
+    if (!alive.current || !result.editProposal) return;
+    const failed = (error: unknown) => {
+      if (alive.current) setError(error instanceof Error ? error.message : "The note review could not be opened.");
+      voiceCall.append("thinking", "The requested note review could not be completed. No accepted edit or save is confirmed. The error is visible on screen; do not claim the note was changed.");
+    };
+    try {
+      // Review can remain pending until Accept/Discard. Catch a busy or stale
+      // editor rejection instead of dropping its promise and losing the diff.
+      void Promise.resolve(liveProps.current.onProposal(result)).catch(failed);
+      voiceCall.append("thinking", JSON.stringify({ type: "note_edit_proposal", noteId: result.editProposal.noteId,
+        title: result.editProposal.title, applied: false, saved: false,
+        notice: "Quiet application result. Proposed changes were sent to the existing note review, with Accept/Discard. No research worker was needed for this edit. Do not read the draft aloud or claim it was applied or saved." }));
+    } catch (error) { failed(error); }
+  }
 
   const candidates = useMemo(() => activeSpace.current === props.snapshot.workspace.id ? [...jobs, ...routingJobs.filter(job => !jobs.some(existing => existing.id === job.id))] : [], [jobs, routingJobs, props.snapshot.workspace.id]);
-  useEffect(() => { props.presence?.update({ status, activity, muted, jobs: candidates, focusedJobId, dismissedJobIds, motion: sceneMotion }); },
-    [props.presence, status, activity, muted, candidates, focusedJobId, dismissedJobIds, sceneMotion]);
+  const thinking = routes.pending.length > 0 || !!editProgress;
+  useEffect(() => { props.presence?.update({ status, activity, muted, thinking, jobs: candidates, focusedJobId, dismissedJobIds, motion: sceneMotion }); },
+    [props.presence, status, activity, muted, thinking, candidates, focusedJobId, dismissedJobIds, sceneMotion]);
 
   function focusConversation(id?: string, resume = true) {
     let target: { id: string; revision: number } | undefined;
@@ -107,7 +139,7 @@ export function SpaceVoice(props: Props) {
     conversations.current.set(focusedConversation.current?.id ?? "main", conversation.current);
     cancelRouting();
     // Tear down the previous audio path before granting the new recipient input.
-    voiceCall.dispose(); setStatus("idle"); setActivity(silentVoiceActivity());
+    voiceCall.pause(); setStatus("idle"); setActivity(silentVoiceActivity());
     focusedConversation.current = target; setFocusedJobId(id);
     conversation.current = conversations.current.get(id ?? "main") ?? new VoiceConversation();
     if (resume) startCall(true);
@@ -116,12 +148,12 @@ export function SpaceVoice(props: Props) {
     voiceCall.mute(!voiceCall.isMuted); setMuted(voiceCall.isMuted);
   }
 
-  function syncContext(usageRatio?: number) {
+  function syncContext(usageRatio?: number, userSpeaking = false) {
     if (voiceCall.status !== "listening") return;
     const current = liveProps.current;
     contextUpdates.current.update({ snapshot: current.snapshot, focusNoteId: current.focusNoteId,
       jobs: currentContextJobs(), receipts: research.current?.getReceipts() ?? [],
-      conversation: conversation.current.text(), usageRatio, selection: current.voiceSelection?.getSnapshot() },
+      conversation: conversation.current.text(), usageRatio, userSpeaking, selection: conversation.current.userSelection },
     text => voiceCall.append("thinking", text));
   }
   function pendingJobs() { return reservations.jobs(); }
@@ -138,7 +170,7 @@ export function SpaceVoice(props: Props) {
   }
 
   function validDelivery(item: VoiceDelivery) {
-    return !item.id || (item.revision !== undefined && research.current?.isCurrent(item.id, item.revision) === true);
+    return !item.id || (item.revision !== undefined && research.current?.isCurrentFinding(item.id, item.revision, item.sequence) === true);
   }
   function scheduleDelivery() { deliveries.wake(); }
   function cancelRouting() {
@@ -149,6 +181,16 @@ export function SpaceVoice(props: Props) {
   function stopCall() {
     cancelRouting(); deliveries.clear(); voiceCall.stop();
     setActivity(silentVoiceActivity());
+  }
+  function clearVoiceChat() {
+    // Explicit confirmation discards only transient voice state. The native
+    // writer still owns any save already committed; no note is deleted here.
+    stopCall(); voiceCall.dispose(); deliveries.reset(); noteEdits.cancel();
+    conversations.current.clear(); conversation.current = new VoiceConversation();
+    focusedConversation.current = undefined; setFocusedJobId(undefined);
+    setJobs([]); setRoutingJobs([]); setShownJob(undefined); setKeeping(undefined);
+    setError(""); setClarification(""); setConfirmClear(false); setExpanded(false);
+    setSceneMotion(new VoiceOrbMotion()); setVoiceGeneration(value => value + 1);
   }
   function abortReservationRoutes(key: number) {
     for (const dependent of routes.cancelReservation(key)) reservations.markCancelled(dependent);
@@ -181,21 +223,22 @@ export function SpaceVoice(props: Props) {
     setJobs([]); setShownJob(undefined); setError(""); setClarification(""); setStatus("idle");
     conversations.current.clear(); focusedConversation.current = undefined; setFocusedJobId(undefined);
     setDismissedJobIds([]);
+    setConfirmClear(false);
     voiceCall.mute(false); setMuted(false); setActivity(silentVoiceActivity());
     const coordinator = new VoiceResearch({
       snapshot: () => liveProps.current.snapshot, driver: chatWithOrion,
       commit: request => liveProps.current.commit(request), onProgress: () => undefined,
       onJobs: next => {
-        if (!alive.current) return;
+        if (!alive.current || research.current !== coordinator) return;
         setJobs(next); deliveries.discardInvalid(validDelivery); scheduleDelivery();
         syncContext();
       },
-      onResult: answer => { if (alive.current && answer.editProposal) liveProps.current.onProposal(answer); },
+      onResult: result => { if (research.current === coordinator) presentProposal(result); },
       deliver: (kind, text, providerDelegation, stamp) => {
-        if (!alive.current) return;
+        if (!alive.current || research.current !== coordinator) return;
         // Associate current-call responses precisely; reconnect uses general context.
         const delegationId = voiceCall.delegation(providerDelegation);
-        if (kind === "thinking") voiceCall.append("thinking", text, delegationId);
+        if (kind === "thinking") { deliveries.discardInvalid(validDelivery); voiceCall.append("thinking", text, delegationId); }
         else deliveries.enqueue({ text, delegationId, ...stamp });
       },
     });
@@ -216,15 +259,15 @@ export function SpaceVoice(props: Props) {
       liveProps.current.onActiveChange?.(false);
       liveProps.current.presence?.update({ status: "idle", activity: silentVoiceActivity(), muted: false, jobs: [] });
       conversation.current.clear(); reservations.reset();
-      coordinator.dispose();
+      coordinator.dispose(); noteEdits.dispose();
     };
     // Each mounted Space owns its coordinator and transient conversational state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.snapshot.workspace.id]);
+  }, [props.snapshot.workspace.id, voiceGeneration]);
 
   useEffect(() => {
     if (!props.enabled || !props.snapshot.settings.apiKeyConfigured || activeSpace.current !== props.snapshot.workspace.id) {
-      stopCall(); research.current?.cancel(); conversation.current.clear(); reservations.reset();
+      stopCall(); research.current?.cancel(); noteEdits.cancel(); conversation.current.clear(); reservations.reset();
       setClarification("");
     }
   }, [props.enabled, props.snapshot.settings.apiKeyConfigured, props.snapshot.workspace.id]);
@@ -232,7 +275,7 @@ export function SpaceVoice(props: Props) {
   useEffect(() => {
     if (status === "listening" && props.enabled) syncContext();
     // Cheap identity/delta checks. Typing in the same note never resends its body.
-  }, [props.focusNoteId, props.snapshot.notes, props.snapshot.workspace.id, props.enabled, status, selectedText]);
+  }, [props.focusNoteId, props.snapshot.notes, props.snapshot.workspace.id, props.enabled, status]);
 
   useEffect(() => {
     if (!props.toggleRequest || !props.enabled) return;
@@ -251,7 +294,11 @@ export function SpaceVoice(props: Props) {
         // A changed/evicted result cannot remain the voice's current evidence.
         // Only hand an ongoing call back; never reacquire capture after Stop or
         // disconnection merely because a note or background job changed.
-        focusConversation(undefined, voiceCall.acceptsInput);
+        if (!voiceCall.acceptsInput) focusConversation(undefined, false);
+        else voiceCall.handoffWhenQuiet(() => {
+          const target = focusedConversation.current;
+          if (target?.id === focusedJobId && !research.current?.isCurrent(target.id, target.revision)) focusConversation(undefined, true);
+        });
       }
     }
     const retained = new Set(jobs.map(job => job.id));
@@ -308,7 +355,7 @@ export function SpaceVoice(props: Props) {
       if (!captured) return;
       setClarification(reservations.clarification?.question ?? "");
       const context = conversation.current.text() + "\n" + engine.context();
-      for (const { id, assignment } of plan) void engine.run(id, decision.prompt, context, captured.focusNoteId, turn.delegationId, false, captured.selection, assignment);
+      for (const { id, assignment } of plan) void engine.run(id, decision.prompt, context, assignment.noteIds ? undefined : captured.focusNoteId, turn.delegationId, false, captured.selection, assignment);
       publishPending();
     } else if (decision.action === "new") {
       const source = turn.clarification?.turn ?? turn;
@@ -379,6 +426,13 @@ export function SpaceVoice(props: Props) {
       const pending = reservations.clarification;
       const turn: RoutingVoiceTurn = { ...receivedTurn, ...((pending && !voiceControlAction(pending.turn.prompt) && !explicitVoiceAssignment(receivedTurn.prompt) && !likelyVoiceControl(receivedTurn.prompt)) ? { clarification: pending } : {}) };
       if (reservations.isCancelled(turn.key)) continue;
+      // Editing the captured note uses Chat's proposal path directly. It does
+      // not reserve an orb, enter a worker conversation or need a router call.
+      if (directVoiceNoteEdit(turn.prompt)) {
+        routes.replace(turn.key); setError("");
+        void noteEdits.run(turn, conversation.current, conversation.current.text());
+        continue;
+      }
       // A delayed provider delegation acknowledges an assignment already started
       // from the transcript. It must not restart it or increment its revision.
       if (reservations.isReplay(turn, research.current?.getJobs() ?? [])) continue;
@@ -389,18 +443,19 @@ export function SpaceVoice(props: Props) {
       if (decision) applyDecision(turn, decision);
       else if (routes.hasCapacity) {
         const count = requestedVoiceWorkerCount(turn.prompt);
-        if (!turn.clarification && (turn.delegated || count) && !likelyVoiceControl(turn.prompt) && !reservations.turn(turn.key)) {
+        if (!turn.clarification && (count || turn.delegated || explicitVoiceAssignment(turn.prompt)) && !likelyVoiceControl(turn.prompt) && !reservations.turn(turn.key)) {
           if (!reserveWorkers(turn, count ?? 1, "routing")) {
             setClarification(`Please request between 1 and ${MAX_VOICE_WORKERS_PER_REQUEST.toLocaleString()} workers in one message. Existing workers can continue while you add more.`); continue;
           }
         }
         routes.enqueue(turn);
+        publishPending();
       }
       else setError("Several requests are still being understood. Please finish or cancel one before adding more.");
     }
     routes.pump();
   }
-  function receiveDebounced() { routes.debounce(considerTurns); }
+  function receiveDebounced() { routes.debounce(considerTurns, conversation.current.settleMs); }
   function receive(event: VoiceEvent) {
     if (!alive.current || !voiceCall.acceptsInput) return;
     const usageRatio = voiceContextUsageRatio(event);
@@ -415,8 +470,11 @@ export function SpaceVoice(props: Props) {
       voiceCall.rememberDelegation(event.delegation.id);
     }
     if (event.type.endsWith("transcript.delta")) {
-      deliveries.transcript();
+      deliveries.transcript(event.type === "session.input_transcript.delta" ? "user" : "assistant", conversation.current.settleMs);
       if (event.type === "session.input_transcript.delta") {
+        // Highlighting is local only. The first actual spoken fragment publishes
+        // its captured reference; later highlighting cannot retarget that turn.
+        syncContext(undefined, true);
         // Keep the question and its worker identities until routing resolves it.
         deliveries.discardInvalid(item => Boolean(item.id) && validDelivery(item));
       }
@@ -436,13 +494,15 @@ export function SpaceVoice(props: Props) {
       deliveries.discardInvalid(item => Boolean(item.id) && validDelivery(item));
       deliveries.handoff();
     } else deliveries.reset();
-    reservations.reset(); conversation.current.reconnect();
+    reservations.reset();
+    const freshConversation = conversation.current.reconnect();
+    const welcome = freshConversation && !preserveFindings && !focusedConversation.current && !currentContextJobs().length;
     setError(""); setClarification("");
     const current = liveProps.current;
     let contextSent = false;
     voiceCall.open({
       spaceId: current.snapshot.workspace.id,
-      context: voiceContext(current.snapshot, conversation.current.text(), current.focusNoteId, current.voiceSelection?.getSnapshot()),
+      context: voiceContext(current.snapshot, conversation.current.text(), current.focusNoteId),
       onEvent: receive,
       onActivity: next => { setActivity(next); deliveries.audio(next); },
       onStatus: (value, message) => {
@@ -460,7 +520,7 @@ export function SpaceVoice(props: Props) {
             contextSent = voiceCall.append("thinking", research.current?.context() ?? "");
             if (contextSent) {
               contextUpdates.current.reset({ snapshot: current.snapshot, focusNoteId: current.focusNoteId,
-                jobs: currentContextJobs(), receipts: research.current?.getReceipts() ?? [], selection: current.voiceSelection?.getSnapshot() });
+                jobs: currentContextJobs(), receipts: research.current?.getReceipts() ?? [] });
               syncContext();
             }
           }
@@ -469,20 +529,27 @@ export function SpaceVoice(props: Props) {
           setActivity(silentVoiceActivity()); cancelRouting(); deliveries.clear();
         }
       },
-    });
+    }, welcome);
   }
 
 
-  const visible = [...candidates.filter(job => job.state === "running"), ...candidates.filter(job => job.state === "failed" || job.state === "cancelled" || job.state === "completed" && job.result).slice(-6)];
+  const visible = [...candidates.filter(job => job.state === "running" || job.state === "failed"), ...candidates.filter(job => job.state === "cancelled" || job.state === "completed" && job.result)];
   const active = ["connecting", "listening", "closing"].includes(status);
   const running = candidates.filter(job => job.state === "running" && job.phase !== "clarifying" && job.phase !== "queued").length;
   const waiting = candidates.filter(job => job.phase === "clarifying").length;
   const queued = candidates.filter(job => job.phase === "queued").length;
   const ready = candidates.filter(job => job.state === "completed" && job.result).length;
-  if (!visible.length && !error && !clarification && !(props.floating && active)) return null;
+  if (!visible.length && !error && !clarification && !editProgress && !(props.floating && active)) return null;
   const content = <div className="space-voice">
+    {confirmClear ? <div className="space-voice__clear" role="group" aria-label="Clear voice chat confirmation">
+      <p>End the call and clear voice conversations, workers and unsaved research? Saved notes stay in your Space.</p>
+      <button type="button" onClick={clearVoiceChat}>Clear voice chat</button>
+      <button type="button" onClick={() => setConfirmClear(false)}>Keep voice chat</button>
+    </div> : <div className="space-voice__clear-action"><button type="button" onClick={() => setConfirmClear(true)}>Clear voice chat…</button></div>}
+    {editProgress && <div className="space-voice__progress"><span role="status">{editProgress}</span><button type="button" onClick={() => noteEdits.cancel()}>Cancel note changes</button></div>}
     {visible.map(job => {
       const latestFinding = job.updates?.[job.updates.length - 1];
+      const offer = deliveries.status(job.id, job.revision);
       return <div className="space-voice__job" key={job.id}>
       <div className="space-voice__progress">
         <span className="space-voice__subject" title={job.prompt}>{job.subject}</span>
@@ -504,7 +571,11 @@ export function SpaceVoice(props: Props) {
         {job.receipt.savedNoteIds.map((id, index) => <button type="button" key={id} onClick={() => props.onOpenNote(id)}>Saved · {job.receipt!.savedTitles[index]}</button>)}
       </div>}
       {job.state === "completed" && job.result && <>
+        <span className="space-voice__delivery" title={offer === "shared" ? "The finding was sent to the voice connection. This does not confirm it was spoken or heard." : undefined}>
+          {offer === "shared" ? "Shared with voice" : offer === "waiting" && status === "listening" ? focusedJobId ? "Ready for the main conversation" : "Waiting for a pause" : "Ready in work summary"}
+        </span>
         <div className="space-voice__result-controls">
+          {status === "listening" && !focusedJobId && <button type="button" onClick={() => research.current?.announceResult(job.id)}>Read aloud</button>}
           {props.floating && <button type="button" onClick={() => focusConversation(job.id)}>{dismissedJobIds.includes(job.id) ? "Bring back & talk" : "Talk to worker"}</button>}
           <button type="button" aria-expanded={shownJob === job.id} onClick={() => setShownJob(shownJob === job.id ? undefined : job.id)}>{shownJob === job.id ? "Hide research" : "Research & references"}</button>
           {job.receipt ? job.receipt.savedNoteIds.map((id, index) => <button type="button" key={id} onClick={() => props.onOpenNote(id)}>Saved · {job.receipt!.savedTitles[index]}</button>) :
@@ -524,7 +595,7 @@ export function SpaceVoice(props: Props) {
   </div>;
   if (!props.floating) return content;
   const embedded = Boolean(props.chatVisible && props.sceneHost && props.controlsHost);
-  const scene = <VoiceConstellation status={status} activity={activity} muted={muted} jobs={candidates} focusedJobId={focusedJobId}
+  const scene = <VoiceConstellation status={status} activity={activity} muted={muted} thinking={thinking} jobs={candidates} focusedJobId={focusedJobId}
     dismissedJobIds={dismissedJobIds} palette={props.voicePalette} onFocus={focusConversation} onDismiss={dismissJob} size="expanded" motion={sceneMotion} onShowWorkers={() => setExpanded(true)} />;
   const showWork = () => { if (!embedded && !expanded) props.onShowWork?.(); setExpanded(value => !value); };
   const escape = (event: KeyboardEvent) => {
@@ -537,15 +608,15 @@ export function SpaceVoice(props: Props) {
   const controls = <section className={`space-voice-call${embedded ? " space-voice-call--embedded" : ""}`} aria-label="Space voice conversation" onKeyDown={escape}>
     {expanded && <div className="space-voice-call__expanded">
       {!embedded && scene}
-      {(visible.length > 0 || error || clarification) && content}
+      {content}
     </div>}
     <div className="space-voice-call__pill">
-      {!embedded && <VoiceConstellation status={status} activity={activity} muted={muted} jobs={candidates} focusedJobId={focusedJobId}
+      {!embedded && <VoiceConstellation status={status} activity={activity} muted={muted} thinking={thinking} jobs={candidates} focusedJobId={focusedJobId}
         dismissedJobIds={dismissedJobIds} palette={props.voicePalette} onFocus={focusConversation} onDismiss={dismissJob} size="pill" motion={sceneMotion} />}
       <button type="button" className="space-voice-call__summary" aria-expanded={expanded} onClick={showWork}>
         <strong>{focusedJobId ? candidates.find(job => job.id === focusedJobId)?.subject ?? "Worker conversation" : "Talk to Space"}</strong>
         {selectedText && <span key={selectedText.id} className="space-voice-call__selection" title={selectedText.noteTitle}>Selected text</span>}
-        <span>{status === "connecting" ? "Connecting…" : status === "disconnected" ? "Disconnected" : `${running} working · ${ready} ready${waiting ? ` · ${waiting} waiting` : ""}${queued ? ` · ${queued} queued` : ""}`}</span>
+        <span>{editProgress || (status === "connecting" ? "Connecting…" : status === "disconnected" ? "Disconnected" : `${running} working · ${ready} ready${waiting ? ` · ${waiting} waiting` : ""}${queued ? ` · ${queued} queued` : ""}`)}</span>
       </button>
       {active ? <>
         <button type="button" aria-label={muted ? "Unmute microphone" : "Mute microphone"} title={muted ? "Unmute microphone" : "Mute microphone"}

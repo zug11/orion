@@ -1,4 +1,4 @@
-export const MAX_PROVIDER_CALLS = 6;
+export const MAX_PROVIDER_CALLS = 10;
 
 export interface ProviderCallOptions {
   /** A run or workload, not source text. FIFO inside each queue, fair between queues. */
@@ -134,5 +134,5 @@ function cancellationReason(signal?: AbortSignal): unknown {
   return signal?.reason ?? new Error("The provider request was cancelled.");
 }
 
-/** Orion has one renderer window; all of its AI transports share this instance. */
+/** All AI transports in this renderer window share this instance. */
 export const providerCallScheduler = new ProviderCallScheduler();

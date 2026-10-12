@@ -38,6 +38,7 @@ The result is a personal wiki that gets more coherent over time:
 - **Ideas define the structure.** One chapter can become several concepts; evidence from distant pages can become one coherent article.
 - **Links have destinations.** A durable phrase resolves to one canonical page inside its Space.
 - **Notes stay ordinary.** They are permanent, editable, portable Markdown from the moment they are created.
+- **Saving stays quiet.** Short typing pauses are grouped into one autosave, with a five-second checkpoint during continuous typing. Ordinary saves retain unchanged editor and Space objects. External edits still merge safely or ask you to resolve a conflict, and closing a window still waits for its save.
 - **Projects stay separate.** Spaces are hard boundaries for notes, sources, concepts, Chat, navigation, and AI context.
 - **Chat beside your writing.** A quiet glass circle in the bottom-right opens your Space conversation without leaving the document. It appears when the selected AI provider is configured, without an AI toggle, and stays hidden during Flow. Collapse it or expand into full Chat without losing your draft or pending reply. An attached-note picker makes the reading and editing target explicit; Orion searches, follows connections and reads exact passages before citing them. Stop interrupts the response. Ask naturally: Orion infers whether to answer in Chat, change specific passages, or revise the whole attached note. There is no editing-mode picker. **Review in note** shows highlighted replacements and gray additions in the actual editor. **Accept changes** saves through normal autosave with one Undo; **Discard** keeps the original. Existing chat replies also offer **Use in note**. Newer typing invalidates old suggestions. Creating notes still requires an explicit request.
 - **Chat reads as it goes.** Chat uses the Space hierarchy and compact note directories to find promising material, searches note and source bodies, then opens exact passages and follows connections as needed. Replies can cite the passages actually read; click a citation to inspect it or open the original item. Reading is bounded, can be stopped, and reports partial coverage. Chat can create notes only when explicitly asked. Created notes and **Keep as note** retain exact quoted passages and source links, including when an original later changes or is removed. This uses the selected OpenAI or Anthropic model and may make several requests for a question.
@@ -275,7 +276,7 @@ Generate shows **Use notes from this Space**, initially matching your context se
 
 Short sources read concurrently. In a fresh Space, a small batch with clear, separate ideas can go straight from validated readings to parallel writers, removing another provider planning round. Overlapping ideas, tasks, custom instructions, and existing-note integration retain shared planning. Writers keep your selected reasoning effort; reading and planning cap at medium. A single short source keeps its direct one-call path.
 
-Ready sources can proceed while other files download or transcribe; unfinished inputs stay queued after you apply the completed import. PDF pages extract in a separate four-slot local pool. Source readers share slots fairly, start at four, and grow to six after clean responses. All AI work shares a six-call cap, while recent successful provider calls avoid repeated credential probes. Actual latency still depends on the provider and the amount of writing needed.
+Ready sources can proceed while other files download or transcribe; unfinished inputs stay queued after you apply the completed import. PDF pages extract in a separate four-slot local pool. Source readers share slots fairly, start at four, and grow to six after clean responses. All AI work shares a ten-call cap, while recent successful provider calls avoid repeated credential probes. Actual latency still depends on the provider and the amount of writing needed.
 
 In **Settings → Voice**, save ElevenLabs voice IDs with names and choose the
 voice used by Play throughout Orion. You can rename or remove saved voices
@@ -330,12 +331,12 @@ New note and its generation chevron share a translucent control surface when
 native glass is active. It is slightly more opaque than the surrounding sidebar
 and returns to solid styling when glass is off. The sidebar brand mark is a
 freestanding O with no background tile.
-**Icon colours → Theme** colours this O and the macOS Dock and Finder icons from
+**Icon colours → Theme** colours this O and the running macOS Dock icon from
 the active accent, with a deeper dark-mode finish and a lighter daylight finish.
 Custom accents and live System-mode changes carry through. **Original** restores
-the teal/cobalt mark and removes the Finder custom icon. Finder retains the last
-colour after quitting; changes resume when Orion opens. Install Orion in a
-writable Applications folder to update Finder (a mounted DMG is read-only).
+the teal/cobalt mark. Finder uses the packaged icon. Theme changes affect only
+the running application, so the installed app bundle and its code signature
+remain unchanged.
 Selected navigation items, the Space switcher, and both dropdowns also follow
 the glass toggle. Dropdowns have stronger frosting to keep their content readable.
 
@@ -777,11 +778,42 @@ documents remain explicitly partial. Detailed text stays in the research worker,
 while voice receives compact findings and references.
 
 Each voice work order sends the original spoken request through the same Chat
-reading and edit flow, with recent conversation for follow-ups. There is no
-separate research planner rewriting it into a different question. Independent
+reading and edit flow, with recent conversation for follow-ups. The coordinator
+can choose complementary read-only scopes while every worker retains that exact
+request, rather than receiving a rewritten authorizing question. Independent
 work orders keep this work parallel; saves still require explicit authority and
 existing-note changes still require review. Provider failures retain their actual
 error message in the request's status.
+
+Explicit voice edits such as “rewrite this paragraph”, “make this tighter” or
+“add a paragraph” go directly to the captured note, using the same highlighted
+diff and Accept/Discard review as Chat. They do not create a research orb. The
+selected passage is priority context, and changed or unavailable targets cannot
+be silently replaced. A small preparing indicator and cancellation control cover
+the request; editing never applies or saves itself.
+
+Voice answers briefly and then listens. Each finished worker returns a short,
+cited finding through the central voice; opening its orb is optional deeper
+discussion. Its detailed answer stays in the work summary. Interim commentary
+remains limited so progress does not turn silence into a monologue. Final answers
+have their own delivery path and wait for both playback and arriving assistant
+speech to settle. The reading model names its assignment during the same research
+call. A circular indicator distinguishes thinking/research from speaking.
+Switching orbs immediately pauses the departing audio and retains its conversation.
+**Clear voice chat…** in the work summary asks before ending the call and removing
+voice conversations, workers and unsaved research. Saved notes and typed Chat stay
+intact; another call starts only through an explicit action. These safeguards do
+not substitute for live listening QA.
+
+Voice can organize a useful research team from a question without requiring
+worker commands or a separate topic for each worker. An explicit request such as
+“spawn 4 workers to read across all the notes” divides the notes into reading
+assignments directly when the groups fit the reader's reference budget. All four
+jobs appear and execute concurrently. Up to ten voice workers can execute at
+once; additional admitted work queues visibly. Broader
+or uneven requests use contextual scope planning. Each worker reports what it
+actually read and any missing coverage. An incomplete plan is retried internally
+rather than asking you to invent the workers' roles.
 
 Chat's audio-wave button occupies the send position while the composer is empty;
 typing replaces it with the send arrow. **Talk to Space** starts an optional online voice conversation using
@@ -830,14 +862,25 @@ prompts. Choosing one puts that exact prompt in the composer for you to adjust
 and send. Editing suggestions keep their original note target if you navigate
 before sending; all changes still use the usual review and acceptance.
 
+Fresh voice conversations offer one brief neutral welcome after a short pause,
+skipping it if you begin speaking. Reconnecting or switching orbs does not greet
+you again, and the open note never becomes an unsolicited opening topic.
 Voice research now uses identifiable work orders. Ordinary conversation leaves
 them running; a new assignment can run alongside earlier work. Name a request
 to cancel or correct it, or use its compact Cancel control. Ambiguous references
 receive one clarification question. Spoken turns are interpreted in order while
-up to three research calls run in parallel across at most six active requests.
+up to ten workers research in parallel. Additional assignments stay visible and
+cancellable in the queue; there is no six-worker admission cap.
+Unfinished phrases stay attached to their original note and selection across a
+thinking pause. Related completion arrivals are offered together through the
+main voice, with a short gap between groups. Every retained result is reachable
+in the work summary, which distinguishes waiting findings from those shared
+with the voice connection. **Read aloud** requests a result directly. Shared
+means sent to the connection; it does not claim that you heard it.
 Completed findings use transcript activity to find a quiet interval, with a
-12-second cap on offering commentary to the voice so background noise or unrelated
-routing cannot hold it indefinitely. Pending corrections resolve before their old
+12-second cap on input-noise waits so background noise or unrelated routing
+cannot hold it indefinitely. This cap never overrides audible output or an
+arriving user or assistant transcript. Pending corrections resolve before their old
 findings can be offered. Explicit spoken assignments start independent work orders even when a provider
 delegation is late or absent. Closely spaced new requests keep separate IDs; late
 delegation events cannot restart them. The voice still chooses when to speak; a transport send

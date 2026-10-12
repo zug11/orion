@@ -14,6 +14,7 @@ import { voiceContinuationRequest } from "./voiceWorkOrders";
 import { voiceWorkOrderSummary, voiceWorkOrderDetail, type VoiceExternalAuthority, type VoiceWorkOrderControlReceipt } from "./voiceWorkOrderAccess";
 
 export type VoiceDriver = (request: ChatRequest, signal?: AbortSignal) => Promise<ChatResult>;
+export const MAX_CONCURRENT_VOICE_WORKERS = 10;
 export interface VoiceCommit {
   id: string; spaceId: string; version: string; prompt: string; result: ChatResult;
 }
@@ -90,12 +91,12 @@ function lookupResult(snapshot: AppSnapshot, query: string, prompt: string, focu
 }
 
 /** A generated division of research, never additional user authority. */
-export interface VoiceResearchAssignment { subject: string; focus: string }
+export interface VoiceResearchAssignment { subject: string; focus: string; noteIds?: string[] }
 /** A fresh host-routed turn may continue this exact completed revision once. */
 export interface VoiceResearchContinuation { expectedRevision: number }
 
 function sameAssignment(left?: VoiceResearchAssignment, right?: VoiceResearchAssignment): boolean {
-  return left?.subject === right?.subject && left?.focus === right?.focus;
+  return left?.subject === right?.subject && left?.focus === right?.focus && JSON.stringify(left?.noteIds) === JSON.stringify(right?.noteIds);
 }
 
 function validateAssignment(assignment: VoiceResearchAssignment) {
@@ -103,6 +104,10 @@ function validateAssignment(assignment: VoiceResearchAssignment) {
     if (typeof value !== "string" || !value.trim() || value.length > limit || /[\u0000-\u001f\u007f]/.test(value)) {
       throw new Error("This worker needs a bounded subject and research focus. Please clarify its assignment.");
     }
+  }
+  if (assignment.noteIds && (assignment.noteIds.length < 1 || assignment.noteIds.length > 24 ||
+      new Set(assignment.noteIds).size !== assignment.noteIds.length || assignment.noteIds.some(id => typeof id !== "string" || !id || id.length > 200))) {
+    throw new Error("The worker's note assignment is invalid. Request fresh research.");
   }
 }
 
@@ -117,6 +122,8 @@ export interface VoiceWorkOrder {
   state: "running" | "completed" | "cancelled" | "failed";
   /** Host reservations are visible before admission, but are not research workers. */
   phase?: "routing" | "clarifying" | "queued";
+  /** Cancellable intent routing, before deciding whether to admit research. */
+  provisional?: boolean;
   progress: string;
   result?: ChatResult;
   receipt?: VoiceReceipt;
@@ -129,7 +136,7 @@ export interface VoiceWorkOrder {
   assignment?: VoiceResearchAssignment;
 }
 export interface VoiceResearchUpdate { sequence: number; reply: string; evidence: ChatEvidence[]; coverage: ChatCoverage }
-export interface VoiceDeliveryStamp { id: string; revision: number; sequence?: number; reference?: string }
+export interface VoiceDeliveryStamp { id: string; revision: number; sequence?: number; reference?: string; background?: boolean; completion?: boolean }
 export interface VoiceResearchOptions {
   snapshot: () => AppSnapshot;
   driver: VoiceDriver;
@@ -220,9 +227,9 @@ export class VoiceResearch {
   private readonly jobs = new Map<string, WorkRecord>();
   private readonly receipts = new Map<string, SavedWorkReceipt>();
   private readonly saves = new Map<string, { record: WorkRecord; promise: Promise<VoiceReceipt> }>();
-  // Admission is unlimited; only three workers execute at once. Waiting does
+  // Admission is unlimited; up to ten workers execute at once. Waiting does
   // not consume reader/transport deadlines or allocate a captured Space copy.
-  private readonly workers = new ProviderCallScheduler(3);
+  private readonly workers = new ProviderCallScheduler(MAX_CONCURRENT_VOICE_WORKERS);
   private disposed = false;
   private publicationQueued = false;
   private readonly spaceId: string;
@@ -455,11 +462,14 @@ export class VoiceResearch {
       throw new Error("This request's settings, target or supporting evidence changed. Ask again to use the current notes.");
     }
   }
-  private deliver(record: WorkRecord, kind: "commentary" | "thinking", text: string, reference?: string) {
+  isCurrentFinding(id: string, revision: number, sequence?: number) {
+    return this.isCurrent(id, revision) && (sequence === undefined || this.jobs.get(id)?.deliverySequence === sequence);
+  }
+  private deliver(record: WorkRecord, kind: "commentary" | "thinking", text: string, reference?: string, background?: boolean, completion?: boolean) {
     if (record.external || !this.isCurrent(record.job.id, record.job.revision)) return;
-    const sequence = kind === "commentary" ? (record.deliverySequence = (record.deliverySequence ?? 0) + 1) : undefined;
+    const sequence = kind === "commentary" ? record.deliverySequence : undefined;
     this.options.deliver(kind, text, record.delegationId, { id: record.job.id, revision: record.job.revision,
-      ...(sequence !== undefined ? { sequence } : {}), ...(reference ? { reference } : {}) });
+      ...(sequence !== undefined ? { sequence } : {}), ...(reference ? { reference } : {}), ...(background !== undefined ? { background } : {}), ...(completion ? { completion: true } : {}) });
   }
   private rememberReceipt(record: WorkRecord, receipt: VoiceReceipt) {
     record.job.receipt = receipt;
@@ -600,6 +610,9 @@ export class VoiceResearch {
     try {
       await this.assertExternal(record);
       if (assignment) validateAssignment(assignment);
+      if (assignment?.noteIds?.some(id => snapshot.notes.filter(note => note.id === id).length !== 1)) {
+        throw new Error("An assigned note is no longer available in this Space. Request a fresh reading group.");
+      }
       if (record.job.selection && (record.job.selection.spaceId !== snapshot.workspace.id ||
           spaceNoteVersionOrUndefined(snapshot, record.job.selection.noteId) !== record.job.selection.version)) {
         throw new Error("The selected passage changed before research began. Highlight its current text and ask again.");
@@ -610,7 +623,7 @@ export class VoiceResearch {
         this.finish(record, result);
         return;
       }
-      this.deliver(record, "thinking", `Orion can read this Space. Work order ${id} is reading independently. Continue the conversation while it runs; ordinary speech does not cancel it.`);
+      this.deliver(record, "thinking", `Work order ${id} has started reading the Space. Quiet status only; no spoken progress announcement is needed.`);
       const allowCreation = !readOnly && chatPromptAllowsNoteCreation(prompt);
       record.strict = allowCreation;
       // Use Chat's intent, reading and review path with the user's exact request.
@@ -618,13 +631,18 @@ export class VoiceResearch {
       // its newest part within Chat's per-message budget, rather than truncating
       // an older prefix and losing the latest correction.
       const result = await runChatReading(snapshot, prompt, driver, {
-        signal: controller.signal, focusNoteId, taskView, freshness: "evidence",
+        signal: controller.signal, focusNoteId: assignment?.noteIds ? undefined : focusNoteId, taskView, freshness: "evidence",
+        ...(assignment?.noteIds ? { referenceTargets: assignment.noteIds.map(id => ({ kind: "note" as const, id })) } : {}),
         ...(readOnly ? { purpose: "search" as const } : {}),
         conversationContext: conversation,
         referenceContext: voiceSelectionReference(record.job.selection, snapshot, selectionView),
         resume: record.checkpoint,
         onProgress: progress, currentSnapshot: () => this.options.snapshot(),
         onDependencies: dependencies => { record.dependencies = dependencies; },
+        onWorkLabel: label => {
+          this.assertCurrent(record);
+          if (record.job.subject !== label) { record.job.subject = label; this.publish(); }
+        },
         onCheckpoint: (checkpoint, finding) => {
           this.assertCurrent(record);
           record.checkpoint = checkpoint;
@@ -667,30 +685,30 @@ export class VoiceResearch {
     this.assertCurrent(record);
     record.job.state = "completed"; record.job.progress = "";
     this.publish(); if (!record.external) this.options.onResult(result, record.job.prompt, receipt, record.job.id);
-    this.announce(record);
+    this.announce(record, receipt ? "saved" : undefined);
   }
-  private offerFinding(record: WorkRecord, result: ChatResult, acknowledgement?: "saved" | "already-saved") {
+  private offerFinding(record: WorkRecord, result: ChatResult, acknowledgement?: "saved" | "already-saved", requested = false) {
     if (!this.isCurrent(record.job.id, record.job.revision)) return;
     const delivery = voiceFindingDelivery({ id: record.job.id, spaceId: this.spaceId, revision: record.job.revision,
-      sequence: (record.deliverySequence ?? 0) + 1, subject: record.job.subject,
+      sequence: (record.deliverySequence = (record.deliverySequence ?? 0) + 1), subject: record.job.subject, prompt: record.job.prompt,
       state: record.job.state === "completed" ? "completed" : "running", result,
-      receipt: record.job.receipt, acknowledgement });
+      receipt: record.job.receipt, acknowledgement, requested });
     // The transport maps these channels directly. JSON/status never enters the
     // commentary queue; its exact stamp and freshness guards remain unchanged.
     this.deliver(record, "thinking", delivery.quiet);
-    if (delivery.commentary) this.deliver(record, "commentary", delivery.commentary, delivery.quiet);
+    if (delivery.commentary) this.deliver(record, "commentary", delivery.commentary, delivery.quiet, delivery.background, delivery.completion);
   }
-  private announce(record: WorkRecord, acknowledgement?: "saved" | "already-saved") {
+  private announce(record: WorkRecord, acknowledgement?: "saved" | "already-saved", requested = false) {
     if (!record.job.result || !this.isCurrent(record.job.id, record.job.revision)) return;
-    this.offerFinding(record, record.job.result, acknowledgement);
+    this.offerFinding(record, record.job.result, acknowledgement, requested);
   }
-  announceResult(id: string) { const record = this.jobs.get(id); if (record) this.announce(record); }
+  announceResult(id: string) { const record = this.jobs.get(id); if (record) this.announce(record, undefined, true); }
   announceFinding(id: string) {
     const record = this.jobs.get(id);
     if (!record || !this.isCurrent(id, record.job.revision)) return;
-    if (record.job.state === "completed") { this.announce(record); return; }
+    if (record.job.state === "completed") { this.announce(record, undefined, true); return; }
     const finding = record.job.updates?.[record.job.updates.length - 1];
-    if (finding) this.offerFinding(record, finding);
+    if (finding) this.offerFinding(record, finding, undefined, true);
   }
 
   async keep(id?: string) {

@@ -13,7 +13,7 @@ beforeEach(() => {
   const noop = () => undefined;
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
     setTransform: noop, clearRect: noop, save: noop, restore: noop, translate: noop, scale: noop, rotate: noop,
-    beginPath: noop, arc: noop, ellipse: noop, fill: noop, createRadialGradient: () => ({ addColorStop: noop }),
+    beginPath: noop, arc: noop, ellipse: noop, fill: noop, stroke: noop, createRadialGradient: () => ({ addColorStop: noop }),
   } as unknown as CanvasRenderingContext2D);
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); nextFrame = undefined; });
@@ -26,6 +26,23 @@ function props(): VoiceConstellationProps {
     ] };
 }
 describe("live constellation controls", () => {
+  it("shows a thinking ring without flashing an orb for undecided conversation routing", () => {
+    const input = props(); input.jobs = [{ ...input.jobs[0], phase: "routing", provisional: true }];
+    const { container, rerender } = render(<VoiceConstellation {...input} thinking />); tick(100);
+    expect(container.firstElementChild).toHaveAttribute("data-visible-worker-count", "0");
+    expect(container.firstElementChild).toHaveAttribute("data-thinking", "true");
+    expect(screen.getByRole("button", { name: "Return to main voice conversation" })).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByRole("button", { name: /Read the draft/ })).toBeNull();
+    input.jobs = [{ ...input.jobs[0], phase: undefined, provisional: undefined }];
+    rerender(<VoiceConstellation {...input} />); tick(150);
+    expect(container.firstElementChild).toHaveAttribute("data-visible-worker-count", "1");
+    expect(container.firstElementChild).toHaveAttribute("data-working-rings", "1");
+    expect(screen.getByRole("button", { name: /Read the draft/ })).toHaveAttribute("aria-busy", "true");
+    input.jobs = [{ ...input.jobs[0], state: "completed", result: { reply: "A finding" } }];
+    rerender(<VoiceConstellation {...input} />); tick(200);
+    expect(container.firstElementChild).toHaveAttribute("data-working-rings", "0");
+    expect(screen.getByRole("button", { name: /Read the draft/ })).toHaveAttribute("aria-busy", "false");
+  });
   it("announces queued, routing and clarification states without claiming research or opening a conversation", () => {
     const input = props(); input.jobs = [input.jobs[0]];
     const { rerender } = render(<VoiceConstellation {...input} />); tick(100);

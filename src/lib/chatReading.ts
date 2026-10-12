@@ -22,7 +22,7 @@ import {
   MAX_CHAT_READING_CONTEXT_BYTES,
   parseChatReadRequests, parseChatReadingContext,
 } from "./chatReadingProtocol";
-import { parseChatReadingFinding } from "./chatReadingProtocol";
+import { parseChatReadingFinding, parseChatVoicePresentation } from "./chatReadingProtocol";
 import { boundedCheckpointFindingKeys, checkpointFindingKey, type ChatReadingCheckpoint, type ChatCompletedRead, type ChatCheckpointFinding } from "./chatReadingCheckpoint";
 
 export const MAX_CHAT_READING_TURNS = 6;
@@ -52,7 +52,9 @@ export interface ChatReadingOptions {
   /** Resolves the captured Space, independent of the window's navigation. */
   currentSnapshot?: () => AppSnapshot | undefined;
   /** Search is transient, grounded and read-only, with no conversation history. */
-  purpose?: "chat" | "search";
+  purpose?: "chat" | "search" | "edit";
+  /** Exact host-captured selection used to locate the initial editing passage. */
+  editPassage?: string;
   /** Read-only work may survive unrelated changes; creation and edits stay strict. */
   freshness?: "snapshot" | "evidence";
   /** Transient conversation reference; never replaces the current user prompt. */
@@ -65,6 +67,8 @@ export interface ChatReadingOptions {
   resume?: ChatReadingCheckpoint;
   /** Exact local continuity plus a new, citation-validated public finding if any. */
   onCheckpoint?: (checkpoint: ChatReadingCheckpoint, finding?: ChatResult) => void;
+  /** Adds presentation metadata to the existing reader call, never another worker. */
+  onWorkLabel?: (label: string) => void;
 }
 
 export interface ChatReadingDependency { kind: "note" | "source"; id: string; version: string }
@@ -502,7 +506,7 @@ class ChatReadingSession {
     ];
   }
 
-  packet(finalizing: boolean, correction?: string, checkpointsEnabled = false): string {
+  packet(finalizing: boolean, correction?: string, checkpointsEnabled = false, voiceEnabled = false): string {
     const workerContinuity = {
       completedOperations: [...this.operations],
       findings: this.findings.map(item => ({ finding: item.summary.finding, evidenceIds: item.result.evidence?.map(evidence => evidence.id) })),
@@ -517,6 +521,7 @@ class ChatReadingSession {
     }
     const serialize = () => JSON.stringify({
       finalizing,
+      ...(voiceEnabled ? { voicePresentationEnabled: true } : {}),
       ...(checkpointsEnabled ? { checkpointsEnabled: true, workerContinuity } : {}),
       taskView: this.taskView,
       ...(this.referenceRecords.length ? { referenceRecords: this.referenceRecords,
@@ -549,6 +554,13 @@ class ChatReadingSession {
   finish(result: ChatResult, limited: boolean, editNoteId?: string): ChatResult {
     const cited = new Map<string, ChatEvidence>();
     const reply = resolveChatEvidenceMarkers(result.reply, this.evidence, cited);
+    const voice = parseChatVoicePresentation(result.voice);
+    if (voice?.summary) {
+      const supporting = new Map<string, ChatEvidence>();
+      voice.summary = resolveChatEvidenceMarkers(voice.summary, this.evidence, supporting);
+      if (this.evidence.length && !supporting.size) throw new Error("The brief spoken finding also needs an exact evidence citation. Preserve its material uncertainty and scope limits.");
+      for (const [id, passage] of supporting) cited.set(id, passage);
+    }
     const noteActions = normalizeChatNoteActions(result.noteActions);
     // Validate/register each citation now. Expand markers and append retained
     // quotes only after the model's original action passes the host firewall.
@@ -568,7 +580,7 @@ class ChatReadingSession {
     if (editNoteId && !editProposal && intent !== "none") {
       throw new Error("This request needs document changes, not a chat-only draft. Read the target passage and return focused noteEdits, or choose rewrite and request the complete body. Infer the appropriate scope without asking the user to pick a mode.");
     }
-    return { reply, ...(noteActions.length ? { noteActions } : {}), ...(editProposal ? { editProposal } : {}),
+    return { reply, ...(voice ? { voice } : {}), ...(noteActions.length ? { noteActions } : {}), ...(editProposal ? { editProposal } : {}),
       evidence: [...cited.values()], coverage: this.coverage(limited) };
   }
 }
@@ -578,8 +590,13 @@ export async function runChatReading(
 ): Promise<ChatResult> {
   const frozen = structuredClone(snapshot);
   const searching = options.purpose === "search";
+  const editing = options.purpose === "edit";
   if (searching) frozen.studio.messages = [];
   const request = buildChatRequest(frozen, prompt);
+  if (editing) {
+    if (!options.focusNoteId || !frozen.notes.some(note => note.id === options.focusNoteId)) throw new Error("Open the note you want to edit first.");
+    request.allowNoteActions = false;
+  }
   if (!searching && options.focusNoteId && frozen.notes.some(note => note.id === options.focusNoteId) && !request.allowNoteActions) {
     request.editNoteId = options.focusNoteId;
     request.allowNoteActions = false;
@@ -626,7 +643,7 @@ export async function runChatReading(
   try {
     assertCurrent();
     const previousQuestion = frozen.studio.messages.filter((message) => message.role === "user").slice(-1)[0]?.content ?? "";
-    const query = truncateUnicode(searching ? prompt : `${request.prompt}\n${previousQuestion.slice(0, 400)}`, 600);
+    const query = truncateUnicode(editing && options.editPassage ? options.editPassage : searching ? prompt : `${request.prompt}\n${previousQuestion.slice(0, 400)}`, 600);
     session = new ChatReadingSession(frozen, query, options.focusNoteId, options.taskView ?? requestedTaskView(prompt), options.referenceTargets, options.referenceRecords);
     const restoredInitialSearch = options.resume ? session.restore(options.resume) : false;
     const checkpoint = (finding?: ChatResult) => {
@@ -635,17 +652,33 @@ export async function runChatReading(
       options.onCheckpoint?.(session!.checkpoint(prompt), finding);
     };
     options.onProgress?.("Finding relevant material");
-    if (!restoredInitialSearch) await session.read([{ kind: "search", id: "", query, start: 0 }], controller.signal);
+    if (!restoredInitialSearch) await session.read([{ kind: editing ? "note" : "search", id: editing ? options.focusNoteId! : "", query, start: editing ? null : 0 }], controller.signal);
     checkpoint();
     let noProgress = 0;
-    let correction: string | undefined;
+    let formatRepairUsed = false;
+    let correction: string | undefined = editing ? "The current user explicitly requested an unsaved revision to the captured note. Use the exact current-note evidence to return an edit proposal for review, not a draft only in the reply. Infer focused versus rewrite from the request; never save or choose a different target." : undefined;
     for (let turn = 0; turn < MAX_CHAT_READING_TURNS; turn += 1) {
       assertCurrent();
       const finalizing = turn === MAX_CHAT_READING_TURNS - 1 || noProgress >= 2;
       options.onProgress?.(finalizing ? "Writing an answer" : "Considering the evidence");
-      const result = await driver({ ...request, mode: "chat-reading", readingContext: session.packet(finalizing, correction, !!options.onCheckpoint) }, controller.signal);
+      const readAnswer = () => driver({ ...request, mode: "chat-reading", readingContext: session!.packet(finalizing, correction, !!options.onCheckpoint, !!options.onWorkLabel) }, controller.signal);
+      let result: ChatResult;
+      try { result = await readAnswer(); }
+      catch (error) {
+        assertCurrent();
+        const message = error instanceof Error ? error.message : String(error);
+        if (formatRepairUsed || !/\((?:CHAT_JSON|CHAT_STRUCTURE|CHAT_FINAL_MISSING|CHAT_VOICE)\)/.test(message)) throw error;
+        // Repeat only a rejected structured answer. Reads, checkpoints and write
+        // authority stay intact; never repair malformed prose into an action.
+        formatRepairUsed = true;
+        correction = "The preceding response could not be parsed. Return one complete JSON object matching the supplied schema, without Markdown fences or prose outside it. Keep the current evidence, request and permissions unchanged.";
+        options.onProgress?.("Retrying the answer format");
+        result = await readAnswer();
+      }
       assertCurrent();
       try {
+        const voice = parseChatVoicePresentation(result.voice);
+        if (voice) options.onWorkLabel?.(voice.label);
         const reads = parseChatReadRequests(result.readRequests ?? []);
         const editIntent = request.editNoteId ? parseChatEditIntent(result.editIntent) : "none";
         if (editIntent !== "none") {
@@ -675,6 +708,7 @@ export async function runChatReading(
         }
         if (!result.reply.trim()) throw new Error("Chat returned no answer. Answer with the available evidence or explain the gap.");
         const finished = session.finish({ ...result, noteActions: request.allowNoteActions ? result.noteActions : undefined }, finalizing, request.editNoteId);
+        if (editing && !finished.editProposal) throw new Error("Prepare reviewable changes to the attached note using noteEdits or noteRewrite. A reply alone does not fulfill the user's editing request.");
         checkpoint();
         options.onDependencies?.(session.dependencies());
         if (searching && !finished.evidence?.length) {

@@ -65,7 +65,7 @@ import {
   normalizeChatNoteActions,
 } from "./chat";
 import {
-  CHAT_READING_INSTRUCTIONS, CHAT_READ_REQUESTS_SCHEMA, CHAT_READING_CHECKPOINT_SCHEMA, parseChatReadingFinding, MAX_CHAT_EVIDENCE,
+  CHAT_READING_INSTRUCTIONS, CHAT_READ_REQUESTS_SCHEMA, CHAT_READING_CHECKPOINT_SCHEMA, CHAT_VOICE_PRESENTATION_SCHEMA, parseChatReadingFinding, parseChatVoicePresentation, MAX_CHAT_EVIDENCE,
   isChatCoverage, isChatEvidence, parseChatReadingContext, parseChatReadRequests,
 } from "./chatReadingProtocol";
 
@@ -100,6 +100,7 @@ interface OpenAIResponse {
   output_text?: string;
   output?: Array<{
     type?: string;
+    phase?: string | null;
     content?: Array<{ type?: string; text?: string; refusal?: string }>;
   }>;
   incomplete_details?: { reason?: string };
@@ -1394,6 +1395,7 @@ export async function chatWithOrion(
   return { reply: result.reply,
     ...(result.readRequests ? { readRequests: result.readRequests } : {}),
     ...(result.checkpoint ? { checkpoint: result.checkpoint } : {}),
+    ...(result.voice ? { voice: result.voice } : {}),
     ...(chatRequestAllowsNoteActions(request) && result.noteActions ? { noteActions: result.noteActions } : {}),
     ...(chatRequestAllowsEdits(request) && result.editIntent ? { editIntent: result.editIntent } : {}),
     ...(chatRequestAllowsEdits(request) && result.noteEdits ? { noteEdits: result.noteEdits } : {}),
@@ -1809,7 +1811,7 @@ async function chatInBrowser(
       throw new Error(
         inlineWriting
           ? "OpenAI returned malformed writing data."
-          : "OpenAI returned malformed Chat data.",
+          : "OpenAI returned malformed Chat data (CHAT_JSON). Try again.",
       );
     }
     throw error;
@@ -1927,7 +1929,7 @@ async function chatInBrowserWithAnthropic(
       throw new Error(
         inlineWriting
           ? "Anthropic returned malformed writing data."
-          : "Anthropic returned malformed Chat data.",
+          : "Anthropic returned malformed Chat data (CHAT_JSON). Try again.",
       );
     }
     throw error;
@@ -2004,7 +2006,6 @@ export function extractBrowserOutputText(
   data: OpenAIResponse,
   operation: string,
 ): string {
-  const parts = data.output?.flatMap((item) => item.content ?? []) ?? [];
   if (data.status === "incomplete") {
     throw new Error(
       `OpenAI could not ${operation} (${
@@ -2012,8 +2013,15 @@ export function extractBrowserOutputText(
       }).`,
     );
   }
+  // SDK output_text can combine commentary and the final structured answer.
+  // Prefer the explicitly final message; retain legacy unphased multipart output.
+  const phased = data.output?.some(item => item.phase != null) ?? false;
+  const parts = data.output?.filter(item => !phased || item.phase === "final_answer")
+    .flatMap(item => item.content ?? []) ?? [];
+  const refusal = parts.find((item) => item.type === "refusal")?.refusal;
+  if (refusal) throw new Error(refusal);
   const outputText =
-    data.output_text ??
+    (!phased ? data.output_text : undefined) ??
     parts
       .filter((item) => item.type === "output_text")
       .map((item) => item.text ?? "")
@@ -2021,10 +2029,7 @@ export function extractBrowserOutputText(
   if (outputText) {
     return outputText;
   }
-  const refusal = parts.find((item) => item.type === "refusal")?.refusal;
-  if (refusal) {
-    throw new Error(refusal);
-  }
+  if (phased) throw new Error("OpenAI returned progress without a final answer. Try again (CHAT_FINAL_MISSING).");
   throw new Error(data.error?.message ?? "OpenAI returned an empty response.");
 }
 
@@ -2726,7 +2731,7 @@ export function parseChatResult(value: unknown, reading = false, editing = false
   if (
     !isRecord(value) ||
     Object.keys(value).some(
-      (key) => key !== "reply" && key !== "noteActions" && !(reading && (key === "readRequests" || key === "checkpoint" || key === "noteEdits" || key === "noteRewrite" || key === "editIntent")),
+      (key) => key !== "reply" && key !== "noteActions" && !(reading && (key === "readRequests" || key === "checkpoint" || key === "voice" || key === "noteEdits" || key === "noteRewrite" || key === "editIntent")),
     ) ||
     typeof value.reply !== "string" ||
     (!reading && !value.reply.trim())
@@ -2739,12 +2744,14 @@ export function parseChatResult(value: unknown, reading = false, editing = false
   }
   const editIntent = editing ? parseChatEditIntent(value.editIntent) : undefined;
   const checkpoint = reading ? parseChatReadingFinding(value.checkpoint) : undefined;
-  if (readRequests?.length) return { reply: "", readRequests, ...(checkpoint ? { checkpoint } : {}), ...(editIntent ? { editIntent } : {}) };
+  const voice = reading ? parseChatVoicePresentation(value.voice) : undefined;
+  if (readRequests?.length) return { reply: "", readRequests, ...(checkpoint ? { checkpoint } : {}), ...(voice ? { voice: { ...voice, summary: "" } } : {}), ...(editIntent ? { editIntent } : {}) };
   const noteActions = normalizeChatNoteActions(value.noteActions);
   const noteEdits = editing ? parseChatNoteEdits(value.noteEdits) : [];
   const noteRewrite = editing ? parseChatRewrite(value.noteRewrite) : undefined;
   return {
     reply: value.reply,
+    ...(voice ? { voice } : {}),
     ...(editIntent ? { editIntent } : {}),
     ...(noteEdits.length ? { noteEdits } : {}),
     ...(noteRewrite !== undefined ? { noteRewrite } : {}),
@@ -3194,7 +3201,8 @@ function chatResponseSchema(request: ChatRequest): Record<string, unknown> {
     schema.properties.reply = { type: "string", maxLength: 6_000 };
     schema.properties.readRequests = CHAT_READ_REQUESTS_SCHEMA;
     schema.properties.checkpoint = CHAT_READING_CHECKPOINT_SCHEMA;
-    schema.required.push("readRequests", "checkpoint");
+    schema.properties.voice = CHAT_VOICE_PRESENTATION_SCHEMA;
+    schema.required.push("readRequests", "checkpoint", "voice");
     if (chatRequestAllowsEdits(request)) {
       schema.properties.editIntent = CHAT_EDIT_INTENT_SCHEMA;
       schema.properties.noteEdits = CHAT_EDIT_SCHEMA;

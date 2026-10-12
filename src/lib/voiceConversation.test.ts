@@ -3,6 +3,16 @@ import { VoiceConversation, VoiceDeliveryQueue, type VoiceDelivery } from "./voi
 
 describe("voice conversation assembly", () => {
   const speech = (delta: string, start_ms: number, end_ms: number, role = "input") => ({ type: "session." + role + "_transcript.delta", delta, start_ms, end_ms });
+  it("claims an opening only once per fresh conversation, including an empty reconnect", () => {
+    const history = new VoiceConversation();
+    expect(history.reconnect()).toBe(true);
+    expect(history.reconnect()).toBe(false);
+    history.receive(speech("My thought", 0, 100));
+    expect(history.reconnect()).toBe(false); expect(history.text()).toContain("My thought");
+    history.clear(); expect(history.reconnect()).toBe(true);
+    const alreadySpeaking = new VoiceConversation(); alreadySpeaking.receive(speech("Let's begin", 0, 100));
+    expect(alreadySpeaking.reconnect()).toBe(false);
+  });
   it("preserves separate requests when transcript delivery batches two silence-separated turns", () => {
     const history = new VoiceConversation();
     history.receive(speech("Research alpha", 0, 200));
@@ -63,13 +73,13 @@ describe("voice conversation assembly", () => {
     expect(history.takeTurns()[0]).toMatchObject({ prompt: "New question", delegationId: "new" });
     expect(history.receive(delegation)).toBe(false); expect(history.takeTurns()).toEqual([]);
   });
-  it("reroutes a later fragment of the same delegated utterance using the same turn identity", () => {
+  it("holds an incomplete delegated utterance and preserves its target through a thinking pause", () => {
     const history = new VoiceConversation();
-    history.receive(speech("Read", 0, 200));
+    history.receive(speech("Read", 0, 200), "first-note");
     history.receive({ type: "session.delegation.created", delegation: { id: "d" }, offset_ms: 200 });
-    const first = history.takeTurns()[0];
-    history.receive(speech(" the second note", 200, 500));
-    expect(history.takeTurns()[0]).toMatchObject({ key: first.key, delegated: true, prompt: "Read the second note" });
+    expect(history.takeTurns()).toEqual([]);
+    history.receive(speech("the second note", 3_000, 3_500), "different-note");
+    expect(history.takeTurns()[0]).toMatchObject({ key: 1, delegated: true, prompt: "Read the second note", focusNoteId: "first-note" });
   });
   it("exposes only retained exact user turns and their delegation state without replaying them", () => {
     const history = new VoiceConversation();

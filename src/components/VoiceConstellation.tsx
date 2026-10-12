@@ -9,6 +9,7 @@ export interface VoiceConstellationProps {
   status: VoiceStatus;
   activity: VoiceActivity;
   muted: boolean;
+  thinking?: boolean;
   jobs: readonly VoiceWorkOrder[];
   focusedJobId?: string;
   dismissedJobIds?: readonly string[];
@@ -40,7 +41,7 @@ function cssPalette(element: HTMLElement): IconPalette {
 /** Live voice presence. PCM levels and real work transitions drive the animation;
  * it never starts a microphone, provider request, timer demo, or note mutation. */
 export function VoiceConstellation(props: VoiceConstellationProps) {
-  const latest = useRef(props); latest.current = props;
+  const latest = useRef(props); latest.current = { ...props, jobs: props.jobs.filter(job => !job.provisional) };
   const host = useRef<HTMLDivElement>(null), canvas = useRef<HTMLCanvasElement>(null);
   const model = useRef<VoiceOrbMotion | null>(null);
   if (model.current === null) model.current = new VoiceOrbMotion();
@@ -118,6 +119,16 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
         context.restore();
       }
       const tint = (slot: number) => blend(palette.body, workerTint[slot % workerTint.length], [.34, .52, .45, .36, .35, .35][slot % workerTint.length]);
+      const ring = (point: OrbCircle, rgb: RGB, slot: number) => {
+        const radius = point.radius + (sidebar ? 1 : small ? 2 : 4);
+        const angle = reduced ? -.8 : scene.phase * 1.7 + slot * .65;
+        context.save(); context.lineWidth = sidebar ? 1 : small ? 1.4 : 2; context.lineCap = "round";
+        context.strokeStyle = color(rgb, contrast ? .5 : .18);
+        context.beginPath(); context.arc(point.x, point.y, radius, 0, Math.PI * 2); context.stroke();
+        context.strokeStyle = color(blend(rgb, palette.highlight, .4), contrast ? 1 : .88);
+        context.beginPath(); context.arc(point.x, point.y, radius, angle, angle + Math.PI * 1.2); context.stroke(); context.restore();
+      };
+      const working = new Set(current.jobs.filter(job => job.state === "running" && job.phase !== "queued" && job.phase !== "clarifying").map(job => job.id));
       companions.forEach(point => sphere(point, point.slot < 6 ? tint(point.slot) : blend(palette.body, palette.highlight, .25), 1, contrast ? .72 : .48));
       const drawWorker = (index: number) => {
         const body = scene.workers[index], point = projected.get(body.slot);
@@ -126,6 +137,7 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
         sphere(point, ready ? blend(tint(body.slot), palette.highlight, .14) : tint(body.slot), body.stretch,
           body.returned ? 1 : body.state === "failed" || body.state === "cancelled" ? .48 : live ? 1 : .55,
           body.finished * .55 + (ready ? .25 : 0), current.focusedJobId === body.id);
+        if (!body.returned && (working.has(body.id) || current.thinking && current.focusedJobId === body.id && !current.activity.outputActive)) ring(point, tint(body.slot), body.slot);
       };
       scene.workers.forEach((body, index) => { if (body.y < 0) drawWorker(index); });
       for (const packet of scene.packets) {
@@ -139,6 +151,7 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
       if (scene.receivingSlot >= 0) mainColor = blend(mainColor, tint(scene.receivingSlot), scene.central.receiving * .28);
       if (current.muted) mainColor = blend(mainColor, palette.shadow, .3);
       sphere(centre, mainColor, scene.central.stretch, live ? 1 : .55, scene.central.receiving * .4 + scene.central.level * .2, !current.focusedJobId, scene.central.angle);
+      if (!current.focusedJobId && (current.status === "connecting" || current.thinking && !current.activity.outputActive)) ring(centre, mainColor, -1);
       scene.workers.forEach((body, index) => { if (body.y >= 0) drawWorker(index); });
       let needsWorkList = workers.length < scene.workers.filter(body => !body.returned).length;
       targetStyles.current.clear();
@@ -162,6 +175,8 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
       element.dataset.workerCount = String(scene.workers.length); element.dataset.visibleWorkerCount = String(workers.length);
       element.dataset.inputLevel = (current.activity.inputLevel ?? 0).toFixed(3); element.dataset.outputLevel = (current.activity.outputLevel ?? 0).toFixed(3);
       element.dataset.receiving = scene.central.receiving.toFixed(3);
+      element.dataset.thinking = String(!!current.thinking || current.status === "connecting");
+      element.dataset.workingRings = String(workers.filter(point => working.has(scene.workers.find(body => body.slot === point.slot)?.id ?? "")).length);
     };
     animation = requestAnimationFrame(draw);
     return () => { cancelAnimationFrame(animation); abandonDrag(); observer?.disconnect(); intersection?.disconnect(); motionPreference.removeEventListener("change", preferences); contrastPreference.removeEventListener("change", preferences); window.removeEventListener("blur", abandonDrag); };
@@ -189,10 +204,12 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
     <canvas ref={canvas} aria-hidden="true" />
     {interactive && <>
       <button type="button" ref={centreTarget} className="voice-constellation__target" aria-label="Return to main voice conversation" aria-pressed={!props.focusedJobId}
+        aria-busy={!props.focusedJobId && !!props.thinking} aria-description={props.focusedJobId ? "Main conversation paused; select to resume." : undefined}
         onPointerDown={event => event.preventDefault()} onClick={() => props.onFocus(undefined)} />
       {props.jobs.filter(job => visibleIds.includes(job.id)).map(job => <button type="button" key={job.id} ref={element => { if (element) { targets.current.set(job.id, element); Object.assign(element.style, targetStyles.current.get(job.id)); } else targets.current.delete(job.id); }}
         className="voice-constellation__target" aria-label={`${job.subject}. ${workerLabel(job)}`} title={job.subject}
         aria-disabled={job.state !== "completed" || !job.result} aria-pressed={props.focusedJobId === job.id}
+        aria-busy={job.state === "running" && job.phase !== "queued" && job.phase !== "clarifying"}
         onPointerDown={event => { if (event.button !== 0 || !motion.beginDrag(job.id)) return; event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); gesture.current = { id: job.id, pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false }; }}
         onPointerUp={event => endDrag(event, false)} onPointerCancel={event => endDrag(event, true)}
         onLostPointerCapture={event => endDrag(event, true)}

@@ -241,6 +241,7 @@ import {
   spacesNeedingOverviewRefresh,
 } from "./lib/externalVault";
 import { mergeWindowVault, persistWindowVault, preserveWindowNavigation, vaultValuesEqual, WindowVaultConflict, type ConflictChoice } from "./lib/windowVault";
+import { publishWindowVault } from "./lib/windowVaultPublication";
 import { SaveConflictDialog } from "./components/SaveConflictDialog";
 import type {
   AppSnapshot,
@@ -380,6 +381,7 @@ function App() {
     noteEditingModes.current.set(snapshot.workspace.id, spaceEditingModes);
   }
   const saveTimer = useRef<number | null>(null);
+  const autosaveDirtySince = useRef<number | null>(null);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const pendingSaveCount = useRef(0);
   const persistedVaultUpdatedAt = useRef<string | null>(null);
@@ -817,7 +819,7 @@ function App() {
       setSaveConflict(null);
       const live = vaultRef.current;
       const merged = mergeWindowVault(before, live, saved, "local");
-      const reconciled = { ...merged, spaces: merged.spaces.map(reconcileSnapshotConceptVocabulary) };
+      const reconciled = publishWindowVault(live, merged);
       if (live === before) skipAutosaveVault.current = reconciled;
       flushSync(() => { vaultRef.current = reconciled; setVault(reconciled); });
     } catch (error) {
@@ -1093,20 +1095,24 @@ function App() {
     if (!hydrated || !persistenceEnabled || closing) return;
     if (skipAutosaveVault.current === vault) {
       skipAutosaveVault.current = null;
+      autosaveDirtySince.current = null;
       return;
     }
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    const now = performance.now();
+    autosaveDirtySince.current ??= now;
     const timer = window.setTimeout(() => {
       if (saveTimer.current === timer) {
         saveTimer.current = null;
       }
+      autosaveDirtySince.current = null;
       void queueSnapshotSave(vault).catch((error) =>
         showToast(
           "Couldn’t save",
           error instanceof Error ? error.message : String(error),
         ),
       );
-    }, 420);
+    }, Math.min(800, Math.max(0, 5_000 - (now - autosaveDirtySince.current))));
     saveTimer.current = timer;
     return () => {
       if (saveTimer.current === timer) {
@@ -1185,10 +1191,7 @@ function App() {
           const base = persistedVault.current;
           const hadLocalChanges = !vaultValuesEqual(previousVault, base);
           const merged = base ? mergeWindowVault(base, previousVault, latest) : preserveWindowNavigation(latest, previousVault);
-          const reconciledLatest: OrionVault = {
-            ...merged,
-            spaces: merged.spaces.map(reconcileSnapshotConceptVocabulary),
-          };
+          const reconciledLatest = publishWindowVault(previousVault, merged);
           const overviewSpaceIds = spacesNeedingOverviewRefresh(
             previousVault,
             reconciledLatest,

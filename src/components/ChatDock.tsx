@@ -104,7 +104,11 @@ export function ChatDock({ fullPage, flowActive, onExpand, allowExpand = true, v
     {chat.onVoiceCommit && <SpaceVoice snapshot={chat.snapshot} focusNoteId={chat.focusNoteId}
       enabled={!flowActive} floating presence={voicePresence} voicePalette={voicePalette} voiceSelection={voiceSelection}
       toggleRequest={voiceToggle} onActiveChange={setVoiceActive} commit={chat.onVoiceCommit}
-      onProposal={result => { if (result.editProposal) void chat.onReviewEdit?.(result.editProposal); }}
+      onProposal={result => {
+        if (!result.editProposal) return;
+        if (!chat.onReviewEdit) throw new Error("The note review is unavailable in this view.");
+        return chat.onReviewEdit(result.editProposal);
+      }}
       onOpenNote={chat.onOpenNote} onOpenSource={chat.onOpenSource} onOpenSettings={chat.onOpenSettings}
       chatVisible={visible} sceneHost={voiceSceneHost} controlsHost={voiceControlsHost}
       onCloseChat={!fullPage ? close : undefined}

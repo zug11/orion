@@ -250,7 +250,7 @@ export interface Settings {
   noteTypeface: NoteTypeface;
   /** Optional in older vaults; hydrated to a complete appearance preference. */
   windowGlass: WindowGlassSettings;
-  /** Optional in older vaults; recolours the mark and macOS Dock/Finder icons. */
+  /** Optional in older vaults; recolours the mark and running macOS Dock icon. */
   themeIcon: boolean;
   /** Independent of the app mode; only the Home hero can stay dark. */
   homeAtmosphereAppearance: "theme" | "dark";
@@ -672,10 +672,14 @@ export interface ChatResult {
   readRequests?: ChatReadRequest[];
   /** Optional public research finding. Never a hidden reasoning trace or write. */
   checkpoint?: ChatReadingFinding;
+  /** Transient worker-authored UI label and concise cited voice answer. No write authority. */
+  voice?: ChatVoicePresentation;
   /** Host-built citations and coverage, never accepted from provider output. */
   evidence?: ChatEvidence[];
   coverage?: ChatCoverage;
 }
+
+export interface ChatVoicePresentation { label: string; summary: string }
 
 export interface ChatReadingFinding {
   /** A concise useful update with exact [[eN]] citations, or empty while reading. */

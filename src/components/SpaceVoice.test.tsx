@@ -10,15 +10,17 @@ import { spaceNoteVersion } from "../lib/spaceKnowledge";
 import { createVoicePresence } from "../lib/voicePresence";
 import { voiceWorkOrderSummary } from "../lib/voiceWorkOrderAccess";
 import type { VoiceWorkOrderHost } from "../lib/assistant/voiceWorkOrderHost";
+import { explicitVoiceAssignment } from "../lib/voiceWorkOrders";
 
 const mock = vi.hoisted(() => ({
   options: undefined as any, engine: undefined as any, connections: [] as any[], jobs: [] as any[],
   run: vi.fn(), retry: vi.fn(), cancel: vi.fn(), dispose: vi.fn(), keep: vi.fn(), announce: vi.fn(), finding: vi.fn(), route: vi.fn(),
   close: vi.fn(), append: vi.fn(), context: vi.fn(), current: vi.fn(),
+  editDriver: vi.fn(),
   native: false, mailboxes: [] as { host: VoiceWorkOrderHost; dispose: ReturnType<typeof vi.fn> }[],
 }));
 vi.mock("../lib/storage", async importOriginal => ({
-  ...await importOriginal<typeof import("../lib/storage")>(), isTauriRuntime: () => mock.native,
+  ...await importOriginal<typeof import("../lib/storage")>(), isTauriRuntime: () => mock.native, chatWithOrion: mock.editDriver,
 }));
 vi.mock("../lib/assistant/voiceWorkOrders", () => ({ startVoiceWorkOrderMailbox: (host: VoiceWorkOrderHost) => {
   const mailbox = { host, dispose: vi.fn() }; mock.mailboxes.push(mailbox); return mailbox;
@@ -44,6 +46,7 @@ vi.mock("../lib/voiceResearch", async importOriginal => ({
     inventory(taskView: "working" | "history" = "working") { return mock.jobs.map(job => voiceWorkOrderSummary(job, taskView, true)); }
     getReceipts() { return mock.jobs.filter(job => job.receipt).map(job => ({ id: job.id, revision: job.revision, prompt: job.prompt, receipt: job.receipt })); }
     isCurrent = mock.current;
+    isCurrentFinding = mock.current;
   },
 }));
 vi.mock("../lib/voiceWorkOrders", async importOriginal => ({
@@ -53,9 +56,10 @@ beforeEach(() => {
   vi.useFakeTimers(); mock.jobs = []; mock.connections = [];
   mock.native = false; mock.mailboxes = [];
   mock.append.mockReset().mockReturnValue(true);
+  mock.editDriver.mockReset().mockResolvedValue({ reply: "No edit was requested.", readRequests: [], editIntent: "none" });
   mock.context.mockReset().mockImplementation(() => JSON.stringify({ jobs: mock.jobs }));
   mock.current.mockReset().mockImplementation((id, revision) => mock.jobs.some(job => job.id === id && job.revision === revision && job.state !== "cancelled" && job.state !== "failed"));
-  mock.route.mockReset().mockImplementation(async input => input.delegated ? { action: "new", prompt: input.prompt } : { action: "conversation" });
+  mock.route.mockReset().mockImplementation(async input => input.delegated || explicitVoiceAssignment(input.prompt) ? { action: "new", prompt: input.prompt } : { action: "conversation" });
   mock.run.mockReset().mockImplementation((id, prompt, _conversation, focusNoteId, _delegation, _retry, _selection, assignment) => {
     const previous = mock.jobs.find(job => job.id === id);
     mock.jobs = [...mock.jobs.filter(job => job.id !== id), { id, prompt, subject: assignment?.subject ?? prompt, focusNoteId, revision: (previous?.revision ?? 0) + 1, state: "running", progress: "Researching" }];
@@ -88,6 +92,120 @@ function finished(id = "climate", subject = "Climate", revision = 1): VoiceWorkO
 function commentary() { return mock.append.mock.calls.filter(call => call[0] === "commentary"); }
 
 describe("Space voice work-order integration", () => {
+  it("keeps all 24 ready results reachable and distinguishes queued findings from offers to voice", async () => {
+    setup();
+    const jobs = Array.from({ length: 24 }, (_, i) => finished(`job-${i}`, `Investigation ${i}`)); publish(jobs);
+    expect(screen.getAllByRole("button", { name: "Research & references" })).toHaveLength(24);
+    expect(screen.getAllByText("Ready in work summary")).toHaveLength(24);
+    event({ type: "session.input_transcript.delta", delta: "I was thinking", start_ms: 0, end_ms: 400 });
+    act(() => { for (const job of jobs) mock.engine.deliver("commentary", job.result!.reply, null,
+      { id: job.id, revision: 1, sequence: 1, background: true, completion: true }); });
+    await settle(2_000);
+    expect(screen.getAllByText("Waiting for a pause")).toHaveLength(24);
+    expect(mock.run).not.toHaveBeenCalled(); expect(mock.route).not.toHaveBeenCalled();
+    await settle(1_500);
+    expect(screen.getAllByText("Shared with voice")).toHaveLength(4);
+    expect(screen.getAllByText("Waiting for a pause")).toHaveLength(20);
+    const batches = mock.append.mock.calls.filter(call => call[0] === "thinking" && String(call[1]).includes('"type":"worker_findings_batch"'));
+    expect(batches).toHaveLength(1); expect(JSON.parse(batches[0][1]).findings).toHaveLength(4);
+    expect(commentary()).toEqual([]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Read aloud" })[23]);
+    expect(mock.announce).toHaveBeenCalledWith("job-23");
+  });
+  it("waits for a paused incomplete request and keeps the original note for its continuation", async () => {
+    const { props, rerender } = setup();
+    rerender(<SpaceVoice {...props} focusNoteId="original-note" />);
+    speak("Research the relationship between", 0);
+    await settle(4_000); expect(mock.run).not.toHaveBeenCalled(); expect(mock.route).not.toHaveBeenCalled();
+    rerender(<SpaceVoice {...props} focusNoteId="later-note" />);
+    speak("the narrator and the setting", 4_000); await settle();
+    expect(mock.run).toHaveBeenCalledOnce();
+    expect(mock.run.mock.calls[0][1]).toBe("Research the relationship between the narrator and the setting");
+    expect(mock.run.mock.calls[0][3]).toBe("original-note");
+  });
+  it("welcomes only a fresh main conversation, never on navigation, reconnect, or worker handoff", async () => {
+    const initial = setup(), props = { ...initial.props, floating: true }, { rerender } = initial;
+    rerender(<SpaceVoice {...props} />);
+    const openings = () => mock.append.mock.calls.filter(call => call[0] === "instructions" && String(call[1]).includes("One-time opening"));
+    await settle(1_500); expect(openings()).toEqual([]);
+    rerender(<SpaceVoice {...props} focusNoteId="another-note" />);
+    await settle(500); expect(openings()).toHaveLength(1);
+    expect(mock.run).not.toHaveBeenCalled(); expect(mock.route).not.toHaveBeenCalled();
+    rerender(<SpaceVoice {...props} toggleRequest={2} />);
+    rerender(<SpaceVoice {...props} toggleRequest={3} />);
+    await settle(3_000); expect(openings()).toHaveLength(1);
+    publish([finished()]);
+    fireEvent.click(screen.getByRole("button", { name: /Talk to Space.*1 ready/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Talk to worker" }));
+    await settle(3_000); expect(openings()).toHaveLength(1);
+    fireEvent.click(within(screen.getByTestId("orbs-pill")).getByRole("button", { name: "Focus main conversation" }));
+    await settle(3_000); expect(openings()).toHaveLength(1);
+  });
+  it("confirms clearing the voice chat, ends audio, removes transient work, and starts fresh only on request", async () => {
+    const { props, rerender } = setup(), presence = createVoicePresence();
+    rerender(<SpaceVoice {...props} presence={presence} floating />);
+    speak("My earlier private idea"); await settle();
+    publish([finished(), { ...finished("running"), state: "running", result: undefined }]);
+    const oldConnection = mock.options, oldEngine = mock.engine;
+    fireEvent.click(screen.getByRole("button", { name: /Talk to Space.*1 working.*1 ready/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear voice chat…" }));
+    expect(presence.getSnapshot().jobs).toHaveLength(2); expect(mock.close).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Keep voice chat" }));
+    expect(presence.getSnapshot().jobs).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Clear voice chat…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear voice chat" }));
+    expect(mock.close).toHaveBeenCalledOnce(); expect(mock.dispose).toHaveBeenCalled();
+    expect(presence.getSnapshot()).toMatchObject({ status: "idle", jobs: [], focusedJobId: undefined });
+    expect(props.commit).not.toHaveBeenCalled(); expect(props.onProposal).not.toHaveBeenCalled();
+    event({ type: "session.input_transcript.delta", delta: "A late request", start_ms: 2_000, end_ms: 2_500 }, oldConnection);
+    act(() => { oldEngine.onJobs([finished("late")]); oldEngine.deliver("commentary", "Late finding", null); });
+    await settle(2_000); expect(presence.getSnapshot().jobs).toEqual([]);
+    expect(mock.connections).toHaveLength(1);
+    mock.jobs = []; rerender(<SpaceVoice {...props} presence={presence} floating toggleRequest={2} />);
+    expect(mock.connections).toHaveLength(2);
+    expect(mock.connections[1].options.context).not.toContain("My earlier private idea");
+    expect(mock.connections[1].options.context).not.toContain("Climate finding");
+  });
+  it("opens a real note proposal from speech without reserving workers or using the research router", async () => {
+    const { props, rerender } = setup();
+    props.snapshot.notes = [{ id: "draft", title: "Draft", slug: "draft", body: "An awkward sentence.", summary: "", kind: "article", status: "ready", tags: [], aliases: [], sourceIds: [], conceptIds: [], createdAt: "now", updatedAt: "now" }];
+    mock.editDriver.mockResolvedValue({ reply: "Review the change.", readRequests: [], editIntent: "focused", noteEdits: [{ before: "An awkward sentence.", after: "A clearer sentence." }] });
+    const presence = createVoicePresence();
+    rerender(<SpaceVoice {...props} focusNoteId="draft" presence={presence} floating />);
+    speak("Make this sentence clearer", 0); await settle(2_000);
+    expect(props.onProposal).toHaveBeenCalledWith(expect.objectContaining({ editProposal: expect.objectContaining({ noteId: "draft", baseBody: "An awkward sentence.", edits: [{ before: "An awkward sentence.", after: "A clearer sentence." }] }) }));
+    expect(mock.editDriver).toHaveBeenCalledOnce();
+    expect(mock.route).not.toHaveBeenCalled(); expect(mock.run).not.toHaveBeenCalled();
+    expect(presence.getSnapshot().jobs).toEqual([]); expect(props.commit).not.toHaveBeenCalled();
+    event({ type: "session.delegation.created", delegation: { id: "late-edit", target: "client" }, offset_ms: 100 });
+    await settle(); expect(mock.editDriver).toHaveBeenCalledOnce();
+    expect(props.snapshot.notes[0].body).toBe("An awkward sentence.");
+  });
+  it("shows a rejected note-review handoff instead of silently losing the proposal", async () => {
+    const { props } = setup();
+    props.onProposal.mockRejectedValueOnce(new Error("Finish the current writing operation first."));
+    act(() => mock.engine.onResult({ reply: "Review changes.", editProposal: { noteId: "draft", title: "Draft" } }));
+    await settle();
+    expect(screen.getByRole("alert")).toHaveTextContent("Finish the current writing operation first.");
+  });
+  it("uses the real router for four all-notes workers, keeps all four visible, and ignores a late delegation", async () => {
+    const { routeVoiceTurn } = await vi.importActual<typeof import("../lib/voiceWorkOrders")>("../lib/voiceWorkOrders");
+    mock.route.mockImplementation(routeVoiceTurn);
+    const { props, rerender } = setup(), presence = createVoicePresence();
+    props.snapshot.notes = Array.from({ length: 9 }, (_, i) => ({ id: `note-${i}`, title: `Note ${i}`, body: `Passage ${i}`, summary: "", aliases: [], tags: [], sourceIds: [], conceptIds: [], kind: "article", status: "ready", slug: `note-${i}`, createdAt: "2026-10-11", updatedAt: "2026-10-11" }));
+    rerender(<SpaceVoice {...props} presence={presence} />);
+    speak("spawn 4 workers to read across all the notes"); await settle();
+    expect(mock.run).toHaveBeenCalledTimes(4);
+    const ids = presence.getSnapshot().jobs.map(job => job.id);
+    expect(new Set(ids).size).toBe(4);
+    expect(mock.run.mock.calls.flatMap(call => call[7].noteIds)).toEqual(props.snapshot.notes.map(note => note.id));
+    expect(commentary()).toEqual([]);
+    speak("That is interesting", 2_500); await settle();
+    event({ type: "session.delegation.created", delegation: { id: "late-four" }, offset_ms: 200 }); await settle();
+    expect(mock.run).toHaveBeenCalledTimes(4);
+    expect(presence.getSnapshot().jobs.map(job => job.id)).toEqual(ids);
+    expect(props.commit).not.toHaveBeenCalled(); expect(props.onProposal).not.toHaveBeenCalled();
+  });
   it("registers one native worker owner through note navigation without starting audio and withdraws on Space change", () => {
     mock.native = true;
     const snapshot = createEmptySnapshot("Research", "2026-10-11", "a"); snapshot.settings.apiKeyConfigured = true;
@@ -496,6 +614,20 @@ describe("Space voice work-order integration", () => {
     expect(mock.jobs.find(job => job.id === climateId).revision).toBe(2); expect(mock.jobs.find(job => job.id === astronomyId).revision).toBe(1);
     expect(mock.cancel).not.toHaveBeenCalled();
   });
+  it("does not let assistant speech rearm a batch of background findings", async () => {
+    setup();
+    speak("Research climate", 0); await settle();
+    publish([finished("one", "Climate"), finished("two", "Astronomy")]);
+    act(() => {
+      mock.engine.deliver("commentary", "Climate finding.", null, { id: "one", revision: 1, background: true });
+      mock.engine.deliver("commentary", "Astronomy finding.", null, { id: "two", revision: 1, background: true });
+    });
+    await settle(2_000); expect(commentary()).toHaveLength(1);
+    event({ type: "session.output_transcript.delta", delta: "Climate finding.", offset_ms: 3_000 });
+    await settle(30_000); expect(commentary()).toHaveLength(1);
+    speak("That connection is interesting", 34_000); await settle(2_000);
+    expect(commentary()).toHaveLength(2);
+  });
   it("buffers a complete finding during transcript activity, then sends it after a quiet interval", async () => {
     setup(); publish([finished()]);
     act(() => mock.options.onActivity({ inputActive: true, outputActive: false, measured: true }));
@@ -549,13 +681,15 @@ describe("Space voice work-order integration", () => {
     await settle(3_000);
     expect(commentary()).toEqual([["commentary", "Current finding", null]]);
   });
-  it("caps the local commentary wait even when transcript events keep arriving", async () => {
+  it("waits for the assistant to finish even when output metering is unavailable and a finding is overdue", async () => {
     setup(); publish([finished()]);
     act(() => mock.engine.deliver("commentary", "Ready finding", null, { id: "climate", revision: 1 }));
-    for (let index = 0; index < 30; index++) {
+    for (let index = 0; index < 50; index++) {
       event({ type: "session.output_transcript.delta", delta: " Continuing.", start_ms: index * 400, end_ms: index * 400 + 200 });
       await settle(400);
+      expect(commentary()).toEqual([]);
     }
+    await settle(1_500);
     expect(commentary()).toEqual([["commentary", "Ready finding", null]]);
   });
   it("suppresses a delayed delegation after its exact earlier request was cancelled", async () => {
@@ -742,7 +876,7 @@ describe("Space voice work-order integration", () => {
   it("updates current-note context without replacing the running research target", async () => {
     const { props, rerender } = setup();
     const note = { id: "n", title: "Open draft", slug: "n", body: "The lighthouse went dark.", summary: "", kind: "article" as const, status: "ready" as const, aliases: [], tags: [], sourceIds: [], conceptIds: [], createdAt: "2026-10-09", updatedAt: "2026-10-09" };
-    rerender(<SpaceVoice {...props} snapshot={{ ...props.snapshot, notes: [note] }} focusNoteId="n" />); await settle();
+    rerender(<SpaceVoice {...props} snapshot={{ ...props.snapshot, notes: [note] }} focusNoteId="n" />); await settle(2_000);
     expect(mock.append.mock.calls.some(call => call[0] === "thinking" && String(call[1]).includes("The lighthouse went dark."))).toBe(true);
     expect(mock.cancel).not.toHaveBeenCalled(); expect(mock.run).not.toHaveBeenCalled();
     mock.append.mockClear();
@@ -855,16 +989,40 @@ describe("selected passage during a live Space call", () => {
     rerender(<SpaceVoice {...props} focusNoteId={note.id} voiceSelection={store} floating />);
     return { props, rerender, store, selected };
   }
-  it("acknowledges selection without speech, research or note mutation; mute controls retain it", async () => {
+  it("acknowledges selection locally without sending it, speech, research or mutation; mute controls retain it", async () => {
     const { props, store, selected } = selectionSetup();
+    mock.append.mockClear();
     act(() => store.capture(selected)); await settle();
     expect(screen.getByText("Selected text")).toBeTruthy();
     expect(mock.run).not.toHaveBeenCalled(); expect(mock.route).not.toHaveBeenCalled(); expect(commentary()).toEqual([]);
     expect(props.commit).not.toHaveBeenCalled(); expect(props.onProposal).not.toHaveBeenCalled();
-    const packet = mock.append.mock.calls.map(call => { try { return JSON.parse(call[1]); } catch { return null; } }).find(value => value?.type === "selection_update");
-    expect(packet.selectedText.passage).toBe("First passage."); expect(packet.referenceOnly).toBe(true);
+    expect(mock.append).not.toHaveBeenCalled();
     const before = store.getSnapshot(); fireEvent.click(screen.getByRole("button", { name: "Mute microphone" }));
     expect(store.getSnapshot()).toBe(before);
+  });
+  it("keeps replacement and deselection silent until the next spoken turn, including on a new call", async () => {
+    const { props, rerender, store, selected } = selectionSetup();
+    act(() => store.capture(selected)); await settle();
+    fireEvent.click(screen.getByRole("button", { name: "End voice call" }));
+    rerender(<SpaceVoice {...props} toggleRequest={2} focusNoteId="story" voiceSelection={store} floating />); await settle();
+    const connection = mock.connections[mock.connections.length - 1];
+    expect(JSON.parse(connection.options.context)).not.toHaveProperty("selectedText");
+    mock.append.mockClear();
+    act(() => store.capture({ ...selected, text: "Second passage.", range: { ...selected.range, from: 15, to: 30 } })); await settle();
+    act(() => store.clear()); await settle();
+    expect(mock.append).not.toHaveBeenCalled();
+    act(() => store.capture(selected)); await settle();
+    event({ type: "session.input_transcript.delta", delta: "What do you think of this?", start_ms: 0, end_ms: 100 });
+    const packets = () => mock.append.mock.calls.filter(call => call[0] === "thinking").flatMap(call => {
+      try { const packet = JSON.parse(call[1]); return packet.type === "selection_update" ? [packet] : []; } catch { return []; }
+    });
+    expect(packets()).toHaveLength(1);
+    expect(packets()[0].selectedText.passage).toBe(selected.text);
+    act(() => store.clear()); await settle();
+    expect(packets()).toHaveLength(1);
+    event({ type: "session.input_transcript.delta", delta: "Something else", start_ms: 2000, end_ms: 2100 });
+    expect(packets()).toHaveLength(2);
+    expect(packets()[1].selectedText).toBeNull();
   });
   it("dispatches the original selection despite a replacement and navigation before the spoken question finishes", async () => {
     const { props, rerender, store, selected } = selectionSetup();

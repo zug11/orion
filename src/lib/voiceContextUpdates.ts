@@ -12,6 +12,8 @@ interface VoiceContextBaseline {
 export interface VoiceContextReceipt { id: string; revision: number; prompt: string; receipt: VoiceReceipt }
 interface VoiceContextUpdate extends VoiceContextBaseline {
   conversation: string;
+  /** Only an accepted user transcript may publish its bound selection. */
+  userSpeaking?: boolean;
   /** Validated provider usage only; local estimates must not select pressure mode. */
   usageRatio?: number;
 }
@@ -97,8 +99,8 @@ export class VoiceContextUpdates {
     let sent = 0;
     const selectedText = voiceSelectionContext(input.selection, input.snapshot);
     const selectionKey = JSON.stringify(selectedText);
-    if (selectionKey !== this.selection && send(JSON.stringify({ type: "selection_update", referenceOnly: true,
-      instruction: "Reference update only. Do not speak or start work because the selection changed or cleared.",
+    if (input.userSpeaking && selectionKey !== this.selection && send(JSON.stringify({ type: "selection_update", referenceOnly: true,
+      instruction: "Reference for the current spoken turn only. Do not speak or start work because this reference arrived. Use it only if the user refers to this passage; unrelated speech is not a request to discuss it.",
       spaceId: input.snapshot.workspace.id, selectedText }))) {
       this.selection = selectionKey; sent++;
     }

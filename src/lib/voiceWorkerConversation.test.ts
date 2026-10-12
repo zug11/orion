@@ -115,6 +115,8 @@ describe("finished worker conversation references", () => {
     expect(context.resultOmittedChars).toBeGreaterThan(0);
     expect(context.evidence[0]).toMatchObject({ complete: false, originalEnd: expect.any(Number) });
     expect(context.evidence[0].end).toBe(context.evidence[0].start + context.evidence[0].text.length);
+    expect(f.deliver.mock.calls.filter(call => call[0] === "commentary")).toEqual([]);
+    f.engine.announceResult("original");
     const commentary = f.deliver.mock.calls.filter(call => call[0] === "commentary").pop()!;
     const paired = JSON.parse(commentary[3].reference);
     expect(paired).toMatchObject({ id: "original", revision: 1, sequence: commentary[3].sequence, stage: "complete" });

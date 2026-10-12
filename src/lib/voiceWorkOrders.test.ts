@@ -3,6 +3,7 @@ import { createEmptySnapshot } from "../data/defaults";
 import type { VoiceDriver, VoiceWorkOrder } from "./voiceResearch";
 import { VoiceReservations } from "./voiceReservations";
 import { spaceNoteVersion } from "./spaceKnowledge";
+import { directVoiceNoteEdit } from "./voiceWorkOrders";
 import { deferredVoiceCancellation, explicitVoiceAssignment, likelyVoiceControl, localVoiceTurnDecision, requestedVoiceWorkerCount, resolveVoiceClarification, routeVoiceTurn, voiceContinuationRequest, voiceControlAction, voiceCorrectionMayAffect, type VoiceTurnInput } from "./voiceWorkOrders";
 
 function job(id: string, subject = id, state: VoiceWorkOrder["state"] = "running", revision = 1): VoiceWorkOrder {
@@ -13,6 +14,15 @@ function options(overrides: Partial<VoiceTurnInput> = {}): VoiceTurnInput {
     driver: vi.fn(async () => ({ reply: '{"action":"new"}' })), snapshot: createEmptySnapshot("Space", "2026-10-09", "space-a"), delegated: false, ...overrides };
 }
 function driverDecision(value: unknown) { return vi.fn<VoiceDriver>(async () => ({ reply: JSON.stringify(value) })); }
+
+describe("direct note editing intent", () => {
+  it.each(["Rewrite this paragraph", "Could you edit the note and add a paragraph?", "Make this tighter", "Fix the grammar", "Please add a paragraph", "I want you to revise this", "Replace this sentence", "Um, can you polish the draft?"])("routes an explicit revision directly: %s", prompt => {
+    expect(directVoiceNoteEdit(prompt)).toBe(true);
+  });
+  it.each(["What do you think of this paragraph?", "Why is this sentence awkward?", "Don't rewrite it", "Maybe rewrite this", '"Rewrite this paragraph"', "Create a new note", "Write a new note about the paragraph", "Spawn four workers to read all the notes", "Research the ending"])("does not treat reference, critique or research as an edit: %s", prompt => {
+    expect(directVoiceNoteEdit(prompt)).toBe(false);
+  });
+});
 const threeScopes = [
   { subject: "Plot", focus: "Investigate the story's plot and causal structure." },
   { subject: "Characters", focus: "Investigate the characters' motivations and development." },
@@ -23,6 +33,69 @@ function manyScopes(count: number, start = 1) {
 }
 
 describe("plural voice worker assignments", () => {
+  it("gives routing the captured finished finding so discussion does not need another research worker", async () => {
+    const focused = { ...job("finished", "The connection", "completed", 2), result: { reply: "The evidence shows a relationship, but not a cause." } };
+    const input = options({ prompt: "Why do you say it is not a cause?", delegated: true,
+      focusedWorker: { id: focused.id, revision: 2 }, jobs: [focused], driver: driverDecision({ action: "conversation" }) });
+    expect(await routeVoiceTurn(input)).toEqual({ action: "conversation" });
+    const driver = vi.mocked(input.driver), packet = JSON.parse(driver.mock.calls[0][0].notes[0].body);
+    expect(packet.focusedConversation).toMatchObject({ id: "finished", revision: 2, finding: focused.result.reply, referenceOnly: true });
+    expect(driver.mock.calls[0][0].allowNoteActions).toBe(false);
+    input.focusedWorker = { id: focused.id, revision: 1 }; driver.mockClear();
+    await routeVoiceTurn(input);
+    expect(JSON.parse(driver.mock.calls[0][0].notes[0].body)).not.toHaveProperty("focusedConversation");
+  });
+  it.each([[4, 4], [4, 9], [4, 96], [10, 18], [10, 240]])("starts %i workers across %i notes without a planning call", async (count, total) => {
+    const input = options({ prompt: `spawn ${count} workers to read across all the notes`, jobs: [] });
+    input.snapshot.notes = Array.from({ length: total }, (_, i) => ({ id: `note-${i}` } as typeof input.snapshot.notes[number]));
+    const result = await routeVoiceTurn(input);
+    expect(result).toMatchObject({ action: "batch", prompt: input.prompt });
+    if (result.action !== "batch") throw new Error("Workers were not admitted");
+    expect(result.assignments).toHaveLength(count);
+    expect(result.assignments.flatMap(item => item.noteIds)).toEqual(input.snapshot.notes.map(note => note.id));
+    expect(result.assignments.every(item => item.noteIds!.length >= 1 && item.noteIds!.length <= 24)).toBe(true);
+    expect(input.driver).not.toHaveBeenCalled();
+  });
+
+  it("plans complementary readings when the requested team is larger than the note count", async () => {
+    const assignments = [...threeScopes, { subject: "Voice", focus: "Read the prose and narrative voice." }];
+    const input = options({ prompt: "spawn 4 workers to read across all the notes", jobs: [], driver: driverDecision({ action: "batch", assignments }) });
+    input.snapshot.notes = [{ id: "story" } as typeof input.snapshot.notes[number]];
+    expect(await routeVoiceTurn(input)).toMatchObject({ action: "batch", assignments });
+    expect(input.driver).toHaveBeenCalledOnce();
+  });
+
+  it("repairs a missing worker internally instead of asking the user for topics", async () => {
+    const driver = driverDecision({ action: "batch", assignments: threeScopes });
+    driver.mockResolvedValueOnce({ reply: JSON.stringify({ action: "batch", assignments: threeScopes.slice(0, 2) }) });
+    const input = options({ prompt: "Spawn three workers for this story", jobs: [], driver });
+    expect(await routeVoiceTurn(input)).toMatchObject({ action: "batch", assignments: threeScopes });
+    expect(driver).toHaveBeenCalledTimes(2);
+    expect(driver.mock.calls[1][0].prompt).toContain("REPAIR THE PLAN");
+    expect(driver.mock.calls[1][0].allowNoteActions).toBe(false);
+  });
+
+  it("uses captured conversation to repair a needless topic clarification", async () => {
+    const driver = driverDecision({ action: "batch", assignments: threeScopes });
+    driver.mockResolvedValueOnce({ reply: JSON.stringify({ action: "clarify", question: "What should the workers do?" }) });
+    const input = options({ prompt: "Spawn three workers", conversation: "user: Let's explore the story's motivations and setting.", jobs: [], driver });
+    expect(await routeVoiceTurn(input)).toMatchObject({ action: "batch", assignments: threeScopes });
+    expect(driver).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets ordinary research form a team without requiring explicit parallel wording", async () => {
+    const input = options({ prompt: "Read the story and explore its characters and historical setting", jobs: [], driver: driverDecision({ action: "batch", assignments: threeScopes }) });
+    expect(await routeVoiceTurn(input)).toMatchObject({ action: "batch", assignments: threeScopes, prompt: input.prompt });
+  });
+
+  it("aborts an internal repair without returning a partial batch", async () => {
+    const controller = new AbortController();
+    const driver = driverDecision({ action: "batch", assignments: threeScopes });
+    driver.mockResolvedValueOnce({ reply: JSON.stringify({ action: "new" }) });
+    driver.mockImplementationOnce(async () => { controller.abort(new Error("cancelled")); return { reply: JSON.stringify({ action: "batch", assignments: threeScopes }) }; });
+    await expect(routeVoiceTurn(options({ prompt: "Spawn three workers for this story", driver, signal: controller.signal }))).rejects.toThrow("cancelled");
+  });
+
   it.each([
     ["Spawn 3 orbs to research the story", 3], ["Can you send three research workers?", 3],
     ["I meant four different orbs", 4], ["Use 2 more agents", 2],
@@ -57,19 +130,21 @@ describe("plural voice worker assignments", () => {
     const input = options({ prompt: "Spawn three orbs", jobs: [], driver: driverDecision({ action: "clarify", question: "What should the three workers investigate?", workerCount: 99 }) });
     expect(await routeVoiceTurn(input)).toEqual({ action: "clarify", question: "What should the three workers investigate?", workerCount: 3 });
     input.driver = driverDecision({ action: "new" });
-    expect(await routeVoiceTurn(input)).toEqual({ action: "clarify", question: "What should each research worker investigate?", workerCount: 3 });
+    await expect(routeVoiceTurn(input)).rejects.toThrow("after retrying");
   });
 
   it("does not quietly convert three requested workers into two assignments", async () => {
-    expect(await routeVoiceTurn(options({ prompt: "Spawn three orbs for this story", jobs: [], driver: driverDecision({ action: "batch", assignments: threeScopes.slice(0, 2) }) })))
-      .toMatchObject({ action: "clarify", workerCount: 3 });
+    const driver = driverDecision({ action: "batch", assignments: threeScopes.slice(0, 2) });
+    await expect(routeVoiceTurn(options({ prompt: "Spawn three orbs for this story", jobs: [], driver })))
+      .rejects.toThrow("exactly 3 distinct scopes");
+    expect(driver).toHaveBeenCalledTimes(2);
   });
 
   it("keeps three requested slots when a one-topic answer receives an incomplete model route", async () => {
     const input = options({ prompt: "Climate", jobs: [], clarification: { prompt: "Spawn three orbs", question: "What should they investigate?", workerCount: 3 }, driver: driverDecision({ action: "new" }) });
-    expect(await routeVoiceTurn(input)).toMatchObject({ action: "clarify", workerCount: 3 });
+    await expect(routeVoiceTurn(input)).rejects.toThrow("after retrying");
     input.driver = driverDecision({ action: "batch", assignments: [threeScopes[0]] });
-    expect(await routeVoiceTurn(input)).toMatchObject({ action: "clarify", workerCount: 3 });
+    await expect(routeVoiceTurn(input)).rejects.toThrow("after retrying");
   });
 
   it("completes one worker's clarification through the same reserved-ID batch path", async () => {
@@ -92,7 +167,7 @@ describe("plural voice worker assignments", () => {
     expect(JSON.parse(driver.mock.calls[0][0].notes[0].body).clarification.workerCount).toBe(3);
     expect(driver.mock.calls[0][0].allowNoteActions).toBe(false);
     input.driver = driverDecision({ action: "new" });
-    expect(await routeVoiceTurn(input)).toMatchObject({ action: "clarify", workerCount: 3 });
+    await expect(routeVoiceTurn(input)).rejects.toThrow("after retrying");
   });
 
   it.each(["This note is interesting", "That passage should be removed", "What I highlighted should be saved", "This selected text and cancel the others"])("does not extend deictic topic recognition into a fresh statement or control: %s", async prompt => {
@@ -159,7 +234,7 @@ describe("plural voice worker assignments", () => {
       clarification: { prompt: "Spawn three orbs", question: "What should they investigate?", workerCount: 2 } });
     expect(await routeVoiceTurn(input)).toEqual({ action: "batch", prompt: input.prompt, assignments });
     input.clarification!.workerCount = 6;
-    expect(await routeVoiceTurn(input)).toMatchObject({ action: "clarify", workerCount: 3 });
+    await expect(routeVoiceTurn(input)).rejects.toThrow("exactly 3 distinct scopes");
     input.clarification!.workerCount = 1;
     input.driver = driverDecision({ action: "batch", assignments: [threeScopes[0]] });
     expect(await routeVoiceTurn(input)).toMatchObject({ action: "batch", assignments: [threeScopes[0]] });
@@ -169,7 +244,7 @@ describe("plural voice worker assignments", () => {
     const input = options({ prompt, jobs: [], clarification: { prompt: "Spawn three orbs", question: "What should they investigate?", workerCount: 3 } });
     const expected = /^(Research|Save)/.test(prompt) ? { action: "new", prompt } : { action: "conversation" };
     expect(await routeVoiceTurn(input)).toEqual(expected);
-    expect(input.driver).not.toHaveBeenCalled();
+    expect(input.driver).toHaveBeenCalledTimes(prompt.startsWith("Research") ? 1 : 0);
   });
 
   it("expands a clarified sole assignment while retaining that worker's identity", async () => {
@@ -181,9 +256,9 @@ describe("plural voice worker assignments", () => {
     expect(jobs[0]).toMatchObject({ state: "running", revision: 2 });
   });
 
-  it("requires the existing worker to be included in its count correction", async () => {
+  it("retains the host-resolved worker when the planner omits its identity from a count correction", async () => {
     expect(await routeVoiceTurn(options({ prompt: "I meant three orbs", jobs: [job("story")], driver: driverDecision({ action: "batch", assignments: threeScopes }) })))
-      .toMatchObject({ action: "clarify", workerCount: 3 });
+      .toMatchObject({ action: "batch", assignments: [{ ...threeScopes[0], jobId: "story", revision: 1 }, ...threeScopes.slice(1)] });
   });
 
   it("adds explicitly additional workers without replacing an existing one", async () => {
@@ -311,11 +386,13 @@ describe("plural voice worker assignments", () => {
     await expect(pending).rejects.toThrow("User cancelled");
   });
 
-  it("continues clarification when a later page cannot find enough distinct work", async () => {
+  it("repairs an unnecessary topic question on a later planning page", async () => {
     const driver = vi.fn<VoiceDriver>().mockResolvedValueOnce({ reply: JSON.stringify({ action: "batch", assignments: manyScopes(24) }) })
-      .mockResolvedValueOnce({ reply: JSON.stringify({ action: "clarify", question: "Which further aspect should the last worker investigate?" }) });
+      .mockResolvedValueOnce({ reply: JSON.stringify({ action: "clarify", question: "Which further aspect should the last worker investigate?" }) })
+      .mockResolvedValueOnce({ reply: JSON.stringify({ action: "batch", assignments: manyScopes(1, 25) }) });
     expect(await routeVoiceTurn(options({ prompt: "Spawn 25 workers for this story", jobs: [], driver })))
-      .toEqual({ action: "clarify", question: "Which further aspect should the last worker investigate?", workerCount: 25 });
+      .toMatchObject({ action: "batch", assignments: manyScopes(25) });
+    expect(driver).toHaveBeenCalledTimes(3);
   });
 
   it("keeps a uniquely named older correction target in bounded context while checking every job for ambiguity", async () => {
@@ -335,9 +412,9 @@ describe("plural voice worker assignments", () => {
     expect(input.driver).not.toHaveBeenCalled();
   });
 
-  it("ignores an unrequested model batch on a delegated conversational question", async () => {
+  it("allows a useful team for a delegated question without a worker keyword", async () => {
     expect(await routeVoiceTurn(options({ prompt: "What about this story?", delegated: true, driver: driverDecision({ action: "batch", assignments: threeScopes }) })))
-      .toEqual({ action: "conversation" });
+      .toEqual({ action: "batch", prompt: "What about this story?", assignments: threeScopes });
   });
 
   it("recognizes orb terminology for targeted cancellation without cancelling siblings", async () => {
@@ -427,7 +504,7 @@ describe("voice work-order routing", () => {
   it.each(["Research another note", "Also, compare the two drafts", "And can you read the whole story?", "Now summarize this note", "Please save this as a note"])("admits an explicit independent request without a provider delegation: %s", async prompt => {
     const input = options({ prompt });
     expect(await routeVoiceTurn(input)).toEqual({ action: "new", prompt });
-    expect(input.driver).not.toHaveBeenCalled();
+    expect(input.driver).toHaveBeenCalledTimes(prompt.includes("save") ? 0 : 1);
     expect(input.jobs.every(job => job.state === "running")).toBe(true);
   });
   it.each(["That is interesting", "I think this could improve the experience", "Actually, this is a cool idea", "Please don't cancel the climate research", "Oh, um, don't cancel climate", "I don't want a modal", "Keep researching while we talk", "stop speaking"])("does not launch calls or interrupt work for ordinary speech: %s", async prompt => {
@@ -437,10 +514,30 @@ describe("voice work-order routing", () => {
     expect(input.jobs.map(item => item.state)).toEqual(["running", "running"]);
   });
 
-  it.each(["Maybe we could research the climate", "What if we cancelled the astronomy job", "Perhaps save this as a note", "We could add this feature", "Thanks!", '"Cancel climate"', "‘Save this as a note’"])("does not turn speculation or acknowledgements into delegated work: %s", async prompt => {
+  it.each(["What if we cancelled the astronomy job", "Perhaps save this as a note", "We could add this feature", "Thanks!", "I was thinking", "Research the relationship between", '"Cancel climate"', "‘Save this as a note’"])("does not turn speculative actions or acknowledgements into delegated work: %s", async prompt => {
     const input = options({ prompt, delegated: true });
     expect(await routeVoiceTurn(input)).toEqual({ action: "conversation" });
     expect(input.driver).not.toHaveBeenCalled();
+  });
+
+  it("supplies retained bounded findings so the router can answer from existing evidence instead of duplicating work", async () => {
+    const completed = { ...job("climate"), state: "completed" as const, result: { reply: "Long private body".repeat(100), voice: { label: "Climate", summary: "The two samples disagree; only the coastal sample supports the claim." } } };
+    const input = options({ prompt: "So is that enough to support the idea?", delegated: true, jobs: [completed],
+      driver: vi.fn(async request => {
+        const context = JSON.parse(request.notes[0].body);
+        expect(context.jobs[0].completedFinding).toMatchObject({ summary: completed.result.voice.summary, referenceOnly: true });
+        expect(request.notes[0].body).not.toContain("Long private body");
+        expect(request.allowNoteActions).toBe(false);
+        return { reply: '{"action":"conversation"}' };
+      }) });
+    expect(await routeVoiceTurn(input)).toEqual({ action: "conversation" });
+  });
+
+  it.each(["Maybe we could research the climate", "What if attachment theory explains this relationship?"])("can investigate a delegated tentative idea read-only: %s", async prompt => {
+    const input = options({ prompt, delegated: true });
+    expect(await routeVoiceTurn(input)).toEqual({ action: "batch", prompt, assignments: [{ subject: prompt, focus: prompt }] });
+    expect(input.driver).toHaveBeenCalledOnce();
+    expect(await routeVoiceTurn({ ...input, delegated: false })).toEqual({ action: "conversation" });
   });
 
   it.each(["Cancel the climate research", "Could you please stop the climate job?", "I don't want to know about climate anymore", "Never mind the climate investigation", "Oh, um, okay, stop the climate research", "I, uh, don't need the climate research anymore"])("immediately cancels only the named work order: %s", async prompt => {
@@ -504,7 +601,7 @@ describe("voice work-order routing", () => {
     const prompt = "  Can you research astronomy?  ";
     const driver = driverDecision({ action: "new", prompt: "Save astronomy as a new note" });
     expect(await routeVoiceTurn(options({ prompt, driver, delegated: true }))).toEqual({ action: "new", prompt });
-    expect(driver).not.toHaveBeenCalled();
+    expect(driver).toHaveBeenCalledOnce();
   });
 
   it("allows an explicitly worded speculative courtesy request", async () => {

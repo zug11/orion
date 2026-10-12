@@ -16,7 +16,7 @@ beforeEach(() => {
   vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Macintosh");
   mocks.native.mockReturnValue(true);
   mocks.render.mockResolvedValue({ mark: "themed.png", dock: "encoded-png" });
-  mocks.invoke.mockResolvedValue({ applied: true, finder: "updated" });
+  mocks.invoke.mockResolvedValue({ applied: true });
 });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.clearAllMocks(); });
 
@@ -50,7 +50,7 @@ it("ignores a late render after selecting Original and restores the native icon"
 });
 
 it("serializes native updates so an older theme cannot overwrite an Original reset", async () => {
-  let finish!: (value: { applied: boolean; finder: string }) => void;
+  let finish!: (value: { applied: boolean }) => void;
   mocks.invoke.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
   const { rerender, unmount } = renderHook(({ enabled }) => useThemeIcon(palette, enabled), { initialProps: { enabled: true } });
   await advance(120);
@@ -59,17 +59,21 @@ it("serializes native updates so an older theme cannot overwrite an Original res
   rerender({ enabled: false });
   await advance(350);
   expect(mocks.invoke).toHaveBeenCalledTimes(1);
-  await act(async () => finish({ applied: true, finder: "updated" }));
+  await act(async () => finish({ applied: true }));
   expect(mocks.invoke).toHaveBeenLastCalledWith("set_theme_icon", { png: null });
   unmount();
 });
 
-it("reports Finder failure without discarding the in-app icon", async () => {
-  mocks.invoke.mockResolvedValue({ applied: true, finder: "read-only" });
+it("retains the in-app mark after a Dock failure and clears the error on a successful retry", async () => {
+  mocks.invoke.mockRejectedValueOnce(new Error("Dock unavailable"));
   const { result, unmount } = renderHook(() => useThemeIcon(palette, true));
   await advance(120);
   await advance(350);
   expect(result.current.mark).toBe("themed.png");
-  expect(result.current.message).toContain("writable Applications folder");
+  expect(result.current.message).toContain("could not update");
+  act(() => window.dispatchEvent(new Event("focus")));
+  await advance(350);
+  expect(result.current.message).toBeNull();
+  expect(mocks.invoke).toHaveBeenLastCalledWith("set_theme_icon", { png: "encoded-png" });
   unmount();
 });

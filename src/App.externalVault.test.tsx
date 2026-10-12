@@ -104,6 +104,25 @@ function appendInEditor(editor: Editor, text: string) {
 }
 
 describe("external MCP changes with a note already open", () => {
+  it("coalesces short typing pauses while checkpointing continuous typing within five seconds", async () => {
+    const editor = await launch();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    try {
+      for (let i = 0; i < 9; i++) {
+        appendInEditor(editor, " word");
+        await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      }
+      expect(runtime.save).not.toHaveBeenCalled();
+      appendInEditor(editor, " checkpoint");
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(runtime.save).toHaveBeenCalledOnce();
+      expect(diskNote().body).toBe(originalBody + " word".repeat(9) + " checkpoint");
+      appendInEditor(editor, " latest");
+      await act(async () => { await vi.advanceTimersByTimeAsync(800); });
+      expect(diskNote().body).toBe(originalBody + " word".repeat(9) + " checkpoint latest");
+      expect(openEditor()).toBe(editor);
+    } finally { vi.useRealTimers(); }
+  });
   it.each(["focus", "native"])("refreshes the retained rich editor through %s and preserves the remote addition in a subsequent prose save", async signal => {
     const editor = await launch();
     const body = originalBody + remoteAddition;
@@ -115,7 +134,7 @@ describe("external MCP changes with a note already open", () => {
     expect(screen.getByRole("textbox", { name: "Note title" })).toHaveValue("Open draft");
 
     appendInEditor(editor, localAddition);
-    await waitFor(() => expect(diskNote().body).toBe(body + localAddition));
+    await waitFor(() => expect(diskNote().body).toBe(body + localAddition), { timeout: 3_000 });
     expect(runtime.save).toHaveBeenCalled();
     expect(openEditor()).toBe(editor);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();

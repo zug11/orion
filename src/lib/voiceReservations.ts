@@ -1,6 +1,6 @@
 import type { VoiceTurn } from "./voiceConversation";
 import type { VoiceWorkOrder } from "./voiceResearch";
-import { MAX_VOICE_WORKERS_PER_REQUEST } from "./voiceWorkOrders";
+import { explicitVoiceAssignment, MAX_VOICE_WORKERS_PER_REQUEST } from "./voiceWorkOrders";
 import { requestedTaskView, type TaskView } from "./taskWorkingView";
 import { voiceWorkOrderSummary } from "./voiceWorkOrderAccess";
 
@@ -77,6 +77,7 @@ export class VoiceReservations {
     const jobs = Array.from({ length: count }, (_, index): VoiceWorkOrder => ({
       id: previous?.jobs[index]?.id ?? this.createId(), revision: 1, prompt: source.prompt,
       subject: count > 1 ? `Worker ${index + 1}` : source.prompt.slice(0, 120), state: "running", phase,
+      provisional: phase === "routing" && !explicitVoiceAssignment(source.prompt),
       taskView: requestedTaskView(source.prompt),
       progress: phase === "clarifying" ? "Waiting for details" : "Understanding request", focusNoteId: source.focusNoteId,
       ...(source.selection ? { selection: source.selection } : {}),

@@ -9,7 +9,7 @@ function deferred<T = void>() {
 }
 
 describe("shared physical provider scheduler", () => {
-  it("caps mixed runs and foreground/background workloads at six actual transports", async () => {
+  it("caps mixed runs and foreground/background workloads at ten actual transports", async () => {
     const scheduler = new ProviderCallScheduler();
     const gates = Array.from({ length: 20 }, () => deferred());
     const started: number[] = [];
@@ -22,7 +22,7 @@ describe("shared physical provider scheduler", () => {
       await gate.promise;
       active -= 1;
     }, { queueKey: ["import-a", "import-b", "overview", "chat"][index % 4] }));
-    expect(started).toHaveLength(MAX_PROVIDER_CALLS);
+    expect(started).toHaveLength(10);
     gates.forEach((gate) => gate.resolve());
     await Promise.all(jobs);
     expect(peak).toBe(MAX_PROVIDER_CALLS);

@@ -413,6 +413,12 @@ replacement. Retries are bounded; failed writes leave local edits available.
 Native save/workflow events refresh other windows without changing their
 navigation; browser preview uses storage events and Web Locks. JSON object key
 order is not a content change. New save revisions must advance monotonically.
+Autosave coalesces 800 ms typing pauses with a five-second ceiling during
+continuous input; explicit navigation/window/quit flushes retain their save
+handshake. `windowVaultPublication.ts` reuses equal immutable Space, note and
+vocabulary objects after disk round trips. Only incoming note/concept changes
+need external vocabulary reconciliation. Do not rebuild every Space's vocabulary
+or invalidate rich-editor linking after an ordinary local autosave.
 
 Deep links target one preferred window, not every renderer. The native workflow
 lease remains shared across windows. Automatic overview generation also claims
@@ -1234,14 +1240,14 @@ provider call after local assembly begins.
 
 Import has four phases: Add, Review, Organize, Results.
 
-`src/lib/providerScheduler.ts` owns one six-call physical provider budget for
-Orion's single renderer, shared by imports, maintenance, Chat, generation,
+`src/lib/providerScheduler.ts` owns one ten-call physical provider budget per
+Orion renderer, shared by imports, maintenance, Chat, generation,
 images, and speech. Run/workload queues rotate fairly; source reading also
 rotates locally among sources. Slots wrap actual native/fetch transport
 lifetimes, including response-body reads. A cancelled caller may stop waiting,
 but an uncancellable transport keeps its slot until completion; cancelled
 queued calls must never dispatch. Local extraction, fingerprints, cache IO,
-and key-status metadata do not enter this pool. A future second renderer must
+and key-status metadata do not enter this pool. Multiple windows each own a pool;
 move this authority into the native host before claiming an app-wide cap.
 Fixed-import transport deadlines begin at physical dispatch through the
 driver's `onProviderStart` hook; queue wait is not a provider timeout. The hook
@@ -3052,17 +3058,17 @@ renders, waits for vault hydration, and follows live resolved System colours.
 Original restores the original mark. `theme_icon.rs` accepts only a bounded
 512-pixel PNG (or nil reset), never a file path. On the main thread, only the
 preferred library window may update the app-global icon. The public
-`NSApplication.applicationIconImage` owns the running Dock image; public
-`NSWorkspace.setIcon` adds/removes Finder custom-icon metadata only on the running
-app's own verified bundle path. Never replace packaged ICNS, re-sign an installed
+`NSApplication.applicationIconImage` owns the in-memory running Dock image.
+Finder always uses the packaged icon. Never call `NSWorkspace.setIcon` on the
+app bundle: its FinderInfo/ResourceFork metadata invalidates strict signature
+verification after launch. Never replace packaged ICNS, re-sign an installed
 app, elevate permissions, target another installation, or modify a vault for this.
-Read-only/translocated/unbundled cases leave Dock working and report the Finder
-limitation in Appearance. Finder keeps the last colour while the app is closed.
-Apple's custom-icon metadata is accepted by normal signature checks and Gatekeeper,
-but `codesign --strict` flags it as Finder detritus until Original removes it.
-Release artifacts must remain clean and pass the existing strict verification;
-check installed theme icons with normal signature verification, and verify strict
-checks again after resetting Original. Do not strip user metadata during launch.
+The same runtime-only path works from writable, read-only and translocated
+bundles. Keep `set_theme_icon`'s bounded PNG/nil input and applied receipt;
+Appearance must not promise Finder recolouring or request a writable install.
+Release verification must pass `codesign --verify --deep --strict` before and
+after launch and theme changes. Do not strip user metadata during launch;
+reinstall the clean app to replace a legacy bundle carrying a custom Finder icon.
 
 With native glass active, New note and its generation chevron share one light
 rim and translucent surface that exposes the existing AppKit material. Keep
@@ -3672,16 +3678,42 @@ the microphone or reconnect automatically. Authenticate the fixed-endpoint nativ
 SDP handshake with the OpenAI Keychain entry, never a renderer key. Keep audio
 storage off, input/output lifecycle bounded, and the selected Intelligence model
 for research. Voice receives compact context and cited assignment results, not an
-entire Space. Startup context includes bounded exact working passages of the open
+entire Space. A fresh main conversation offers one neutral welcome after two
+connected seconds, with microphone input continuing. The call lifecycle cancels
+it on user/assistant transcripts, measured input/output activity, delegation,
+commentary, mute, Stop or disconnection. Repeated connection status, reconnect,
+worker switches and navigation cannot replay it; Clear resets the conversation's
+opening eligibility. Existing work also suppresses a new welcome. Send the
+trusted opening once through `instructions`, never as a synthetic user request.
+The native policy stays quiet until user speech or that explicit opening; context
+cannot initiate a topic. Natural pauses and unfinished thoughts remain listening
+opportunities. Available worker capacity alone is not a research reason; retain
+organic investigation of useful evidence gaps and exact requested counts.
+Startup context includes bounded exact working passages of the open
 note, note/source counts and up to twelve note titles; it must never mistake a
 missing excerpt for missing note access. Send new note passages only when the
 open note identity changes (or clear the context when it is deleted), never after
 typing pauses, title changes or directory refreshes. Those passages are a
 navigation-time snapshot; retrieve fresh evidence for later edits. Basic access questions resolve locally, while broader
 questions retrieve evidence through independent work orders. Explicit spoken
-assignments can start directly from their exact transcript without waiting for a
-provider delegation or a separate intent-model call. Non-imperative delegated
-turns still use the intent router. Quiet updates from application-started work
+assignments do not wait for a provider delegation. Read requests use the ordered
+intent router to choose one useful worker or a complementary team; do not require
+literal worker/parallel keywords or ask the user to specify each worker's topic.
+An explicit count plus reading all notes partitions the actual Space-local note
+IDs without a planning call when each worker has 1–24 notes. Other distributions
+use the bounded router. These references are read-only and bypass the unrelated
+open-note focus; full document reads and honest coverage remain the reader's job.
+Single explicit writing requests retain the direct authorizing transcript path.
+`voiceNoteEdits.ts` owns a direct unsaved-edit lane for explicit note revisions,
+independent of research workers and orb reservations. Capture the original note
+and selection, deduplicate delayed delegation, and cancel only a superseded edit.
+Use `runChatReading` with `purpose: edit`: read the target first, disable creation,
+retain strict freshness, and require a validated proposal rather than a chat-only
+draft. The current user request stays verbatim. Reuse the ordinary note review,
+Accept/Discard and Undo; this lane has no persistence callback. Surface rejected
+review promises. Space teardown cancels preparation; ending audio alone does not
+discard an already admitted edit. Explicit cancellation remains available.
+Quiet updates from application-started work
 use a null delegation ID. Each admitted voice work order uses `runChatReading`
 with the original transcript, the same automatic intent/reading/edit handling as
 typed Chat, and bounded recent conversation reference. Do not insert a second
@@ -3690,7 +3722,13 @@ history. Transient conversation augments request history without masking the las
 Chat answer's evidence. Independent work orders provide parallelism. Never
 substitute a couple of excerpts for a full-note request. Preserve delegation IDs
 when the event arrives before transcription. Native string errors must retain
-their actionable message in the work order rather than a generic failure.
+their actionable message in the work order rather than a generic failure. OpenAI
+phased output is parsed from final-answer content without commentary or SDK
+aggregation; reject a missing final answer. Preserve legacy unphased multipart
+output. Native reading offsets accept integral JSON numbers such as 0.0 and 1e3
+within the same bound as browser validation. Static CHAT_* error categories
+distinguish JSON, structure, reads, checkpoints, reply and edit failures without
+logging or echoing raw provider output or note contents.
 Only the current user transcript or explicit Keep action grants creation authority;
 edit proposals retain their captured target and existing Accept/Discard/Undo flow.
 
@@ -3703,7 +3741,12 @@ user-authored prompt as authority; never authorize writes from a rewritten
 model prompt. `voiceConversation.ts` groups same-speaker fragments across duplex
 backchannels and associates delegation offsets with the original utterance and
 captured note. Once dispatched, another explicit assignment or a silence of at
-least the 900 ms routing debounce starts a separate turn; short continuations
+least the 900 ms routing debounce starts a separate complete turn. Conservative
+`voiceUtterance.ts` hints hold dangling clauses for 3.2 seconds and do not admit
+unfinished text even if delegated. A continuation within eight seconds retains
+its original note/selection/worker; independent explicit assignments stay separate.
+This is bounded transcript assembly, not a general semantic completion detector
+or control over the provider's natural spoken turn-taking. Short continuations
 retain the original job. Late delegation replays for unchanged dispatched text
 cannot restart work. Overlong utterances retain their opening and require clarification.
 When talking to a finished worker, the first transcript fragment also captures
@@ -3740,6 +3783,13 @@ Reference-only clarification answers such as “this note” and “what I highl
 may complete that original request. They still require a complete validated batch
 of scopes; a generic comment or a compound new instruction is not a reference-only
 answer. Do not use blanket deictic-word rejection to strand pending workers.
+Broad subjects, current conversation and the captured note are sufficient for
+the router to choose research angles. Incomplete counts or unnecessary topic
+questions get one internal repair attempt rather than becoming user planning
+questions. A repeated planning failure is an explicit error, never a claim that
+research started. Count corrections retain a uniquely resolved existing worker
+for the first scope if the model omitted its ID. Ambiguous cancellation/steering
+targets still require identification; generated scopes never grant write authority.
 Scope planning receives the original captured note's ID, title bounded to 200
 Unicode characters and current content version as reference metadata. Keep its
 body/summary with the research reader. Missing or duplicate original note IDs
@@ -3765,7 +3815,7 @@ the admitted research engine, conversation references, selection and UI
 publication. Ending audio preserves admitted work; leaving the Space disposes
 its coordinator. None of these transient owners adds vault state.
 
-There is no six-worker or cumulative admission limit. Three workers execute at
+There is no six-worker or cumulative admission limit. Up to ten workers execute at
 once; additional jobs remain visible and cancellable as queued, with execution
 deadlines beginning only on dispatch. Retention bounds 24 terminal records,
 never running/queued jobs. Router responses plan at most 24 distinct scopes per
@@ -3810,8 +3860,25 @@ quoted user decisions/corrections, jobs and receipts without rerunning them.
 
 `voiceFindingScheduler.ts` buffers whole commentary updates and rechecks job revisions
 before transport chunking. Quiet context is separate from spoken delivery.
+It retains one current pending finding per retained worker, with no smaller
+twelve-result speech cap. Prune queued updates and deduplication records with the
+research engine's current revision/sequence, including already offered entries.
+All retained terminal jobs appear in the scrollable work summary. Completed
+results distinguish Ready in work summary, Waiting for a pause and Shared with
+voice; the last means locally sent, never provider acceptance or audible proof.
+Read aloud explicitly requests a retained answer without opening its worker.
+`voiceFindingBatch.ts` groups up to four eligible automatic completions after a
+1.2-second collection window, with eight seconds between group offers. Quiet
+batch reference is capped at 18 KB, retains complete summaries, original bounded
+questions and worker-local attribution, and reports omitted source identities.
+One fixed instruction under the transport's 480-byte chunk bound asks the main
+voice to connect, combine or distinguish those findings in a short update. Worker
+text never enters trusted instructions. Explicit results/saves bypass this
+grouping and retain exact provenance pairing. No extra model call is inserted.
+Actual synthesis and natural timing still require live-provider acceptance.
 `voiceFindingDelivery.ts` keeps worker identity, stage, evidence/coverage and
-confirmed-save/proposal state in quiet reference metadata. Commentary carries
+confirmed-save/proposal state and complete bounded answers in quiet reference
+metadata. Detailed answers are not automatically copied into speech. Commentary carries
 its exact quiet packet so delivery can pair current worker/revision/sequence and
 bounded exact source identities/titles immediately before the finding, even when
 several workers finish out of order. A rejected reference send holds commentary;
@@ -3819,10 +3886,23 @@ retries repeat the pair. Remap delegation IDs against the receiving audio call.
 Switching between finished workers and the centre preserves admitted findings
 while resetting old audio pacing; only the main conversation offers them. Stop
 and explicit reconnect still clear pending speech. Capture the exact completed
-revision when opening a worker, including for later transcript binding. Stale,
+revision when opening a worker, including for later transcript binding. A newer
+quiet-only finding supersedes older queued speech from the same worker through
+its delivery sequence. Stale,
 revised or evicted focused results hand an ongoing call back to the centre, but
-cannot restart a stopped or disconnected call. Commentary carries the useful
-finding with its qualifications and any necessary review action;
+cannot restart a stopped or disconnected call. Automatic stale-result handback
+waits for output audio and arriving assistant transcripts to settle; explicit
+orb selection closes the departing audio immediately while retaining its text.
+Voice-enabled reading packets request a validated `voice` presentation object:
+an 80-character assignment label and a 360-character final spoken summary with
+exact evidence citations. This is transient presentation, never write authority.
+Reading steps retain only the label. Rename the existing job without changing
+its ID, scope or original prompt. Offer the short final finding automatically
+through the centre; opening the finished orb remains optional. Its encoded
+commentary budget is 1,600 bytes including qualifications. Legacy/no-summary
+answers retain the 480-byte complete-finding rule; never clip a long answer.
+Explicit result requests may offer the full bounded
+answer; confirmed saves and proposal review keep short actionable acknowledgments;
 do not prepend repeated research-status or unsaved-status announcements. Keep
 partial coverage explicit where it limits the finding, preserve ending caveats,
 and never turn an oversized reply into a misleading prefix. Explicit Keep gets
@@ -3839,9 +3919,16 @@ local mic/output energy can extend only a short quiet interval. Unrelated intent
 routing never holds a completed result. A finding held for its own correction
 stays queued while the oldest eligible unrelated finding can pass it. Recheck
 its revision after correction and retain pacing between actual accepted sends.
-Commentary is offered to the provider
-within 12 seconds even with continued noise/speech; this is an offer, not forced
-playback or proof of audible delivery. Pending corrections still resolve first
+Quiet findings reach voice immediately. Speech offers wait for actual output
+audio to finish and a 1.5-second quiet interval. Input-noise waits retain a
+12-second cap, but it cannot override audible output or a recent user or
+assistant transcript. Continuous human speech always retains the floor; quiet
+reference context remains immediately available. Interim commentary is limited to one unsolicited short
+finding after user speech, at least twelve seconds apart. Each completed worker
+answer bypasses that interim allowance, retaining output pacing and exact
+revision/sequence deduplication. Assistant transcripts, mic noise, time passing and orb handoffs
+cannot renew that budget. Explicit result requests and confirmed actions bypass
+the unsolicited limit. This is an offer, not forced playback or proof of hearing. Pending corrections still resolve first
 under the bounded routing timeout, and every offered result rechecks its revision.
 Transport chunks prefer sentences, then words/graphemes; the conservative 480-byte
 fallback remains until a verified GPT-Live tokenizer mapping is available for the
@@ -3875,8 +3962,13 @@ withhold all selected text at the context boundary and fail clearly before
 starting research. Ranges crossing unaccepted Chat/AI proposal widgets are not
 authored-note selections and clear the captured reference. Completed tasks and their descendants
 remain masked in selected reference text unless the actual current user request
-explicitly asks for history. A highlight sends quiet context and a Selected text
-cue only, never speech, research or editing permission. Explicit editing still
+explicitly asks for history. A highlight produces a local Selected text cue only;
+it sends no provider update until a user transcript publishes the reference bound
+to that utterance. Replacement and deselection also wait for the next spoken
+turn. Starting a call never publishes an unmentioned highlight. The voice uses
+selection only when the user refers to it; unrelated speech must not prompt
+commentary on the passage. Selection never starts speech, research or editing.
+Explicit editing still
 uses the ordinary proposal and actual-note Accept/Discard/Undo path.
 
 `taskWorkingView.ts` and MCP `working_view.rs` construct transient working views
@@ -3928,3 +4020,24 @@ Update sequences and completion drive distinct visual transitions. Returning a
 completed orb to the swarm is visual dismissal, never result deletion; returning
 a researching orb cancels only its job. No result opens a panel or captures the
 writing cursor automatically.
+
+### Voice follow-up lifecycle and recovery
+
+The work summary's Clear voice chat action requires an inline confirmation and
+ends audio before replacing its transient coordinator. Clear routing, retained
+voice conversations, results, motion and queued commentary; cancel research and
+edit preparation. Do not delete saved notes, typed Chat or already prepared note
+review. A save already admitted to the native atomic writer can finish. Fence
+old transport and coordinator callbacks; clearing must never start capture.
+An undecided ordinary delegation can retain an internal cancellable reservation
+but `provisional` jobs must not render as research orbs. Explicit reservations
+remain visible. Circular indicators reflect actual routing/research or edit
+preparation, independently of speech; reduced motion retains a static ring.
+
+Structured reading permits one format-only retry for CHAT_JSON, CHAT_STRUCTURE,
+CHAT_FINAL_MISSING or CHAT_VOICE under its existing deadline and authority. Keep
+successful reads and checkpoints; never interpret malformed prose as actions.
+The separate knowledge orchestrator reserves each assignment's final permitted
+turn for grounded synthesis, forbids further coordination there, and preserves
+its hard cap, validators and diagnostics. Automated fixtures do not establish
+that the live provider delivered speech or explain an unrecorded failed response.

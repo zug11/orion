@@ -8,6 +8,7 @@ export interface VoicePresence {
   status: VoiceStatus;
   activity: VoiceActivity;
   muted: boolean;
+  thinking?: boolean;
   jobs: readonly VoiceWorkOrder[];
   focusedJobId?: string;
   dismissedJobIds?: readonly string[];
