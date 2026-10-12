@@ -1,55 +1,78 @@
 {
   "version": "0.5.0",
-  "source_commit": "eaa7209569bed5ef77b0398e7511287a4eb3024d",
-  "verified_source_files": 749,
+  "rebuilt_at": "2026-10-12T08:28:53.910024+00:00",
+  "source_commit": "22a6c6e466a0aea5f842e4117394d92a9548a18a",
+  "source_capture": "Clean git archive; bundled LFS models and helpers verified against committed object hashes.",
   "artifacts": [
     {
       "edition": "small",
       "version": "0.5.0",
       "bundle_id": "app.orion.knowledge",
       "artifact": "Orion-0.5.0-Apple-Silicon.dmg",
-      "bytes": 537105335,
-      "sha256": "a3b15b23c5bc33dd63cc2aa17951f6f45c1a8d8a9fda7757b3f40ffd846edf92",
+      "bytes": 537123558,
+      "sha256": "aede8a6f35c6fca6551571404076047dcef39878c9349d5366abba01249956b9",
       "model_bytes": 487601967,
       "model_sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
-      "main_executable_sha256": "4f0c286de5e8aade85bded7163831474c6687e23612c91b8839a20370bb4bba1",
+      "main_executable_sha256": "65c3b9cfef1b97d5b9a578326b9b7bfb168fa3962bc3adbc995c13144aa3602f",
       "stamps": {
-        "orion-source.sha256": "2bc545047381ecdf7e5794ba8e275023c0016b40e9ee07dfb273b2ce6402c823",
-        "orion-renderer.sha256": "3cdcaa3ab0c98d9d46dae443aaa14917c58e230911d38a0187d568ab3bef82d1"
+        "orion-source.sha256": "fe766043038c3dd2f7788860275df83c103c2cc924032c2796fa62da17c81ad7",
+        "orion-renderer.sha256": "d48b8df54ca421deac5287de5b8e59dad7bfd1d9ef9cef715ef58be405ac3c15"
       },
       "notarization": {
-        "id": "70f26caa-8226-4b32-a581-64794b57ae8c",
+        "id": "74542fe6-c518-4113-9fb6-e0dc4f207b89",
         "status": "Accepted",
-        "createdDate": "2026-10-11T08:56:33.327Z"
+        "createdDate": "2026-10-12T08:14:00.789Z"
       },
       "stapled": true,
       "dmg_gatekeeper": "accepted",
       "copied_app_gatekeeper": "accepted",
-      "deep_strict_signature": "passed"
+      "deep_strict_signature": "passed",
+      "post_launch": {
+        "states": [
+          "launched exact copied-out app with Theme enabled",
+          "Original",
+          "Theme restored"
+        ],
+        "deep_strict_signature": "passed",
+        "gatekeeper": "accepted",
+        "finder_info_or_resource_fork_added": false,
+        "microphone_started": false
+      }
     },
     {
       "edition": "medium",
       "version": "0.5.0",
       "bundle_id": "app.orion.knowledge",
       "artifact": "Orion-0.5.0.m-Apple-Silicon.dmg",
-      "bytes": 1505307167,
-      "sha256": "97e300fb1d47db56cd153c22af0a1b6edc267abffb2484170315fbf7ab14174f",
+      "bytes": 1505144060,
+      "sha256": "e8a1b9b21cc24d4f7136982ef7f36685e3e4a978b3295d6749b7814b30d1aa92",
       "model_bytes": 1533763059,
       "model_sha256": "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
-      "main_executable_sha256": "beea9a7925648afee375458c9e34881a531e05aad893f77c98e2011cca20bfed",
+      "main_executable_sha256": "1de07f703a1d12d7160945d6750f6876af597f2ce38475dc572e1190f484c97b",
       "stamps": {
-        "orion-source.sha256": "3afa819c7d673704302c4cbaf51b3bfec1f9d8a64a323d21659594084d9295a9",
-        "orion-renderer.sha256": "3215438c9cf731ce68ed2405a5901e26aa561ab88a6b021f4ed06f963bbf260d"
+        "orion-source.sha256": "03e7547646cf816f6204d515834902cd4f7c0e86b177a73f1749d64d95be7a59",
+        "orion-renderer.sha256": "2026c9531045b10fe057eba0403862b541a0717b2c9bf12dd8079b46933bec32"
       },
       "notarization": {
-        "id": "5ca02a4f-12bb-4aff-a9a1-c4131a2f516b",
+        "id": "6e9c1639-4a18-4388-8da7-fcea29865868",
         "status": "Accepted",
-        "createdDate": "2026-10-11T09:02:52.535Z"
+        "createdDate": "2026-10-12T08:21:44.311Z"
       },
       "stapled": true,
       "dmg_gatekeeper": "accepted",
       "copied_app_gatekeeper": "accepted",
-      "deep_strict_signature": "passed"
+      "deep_strict_signature": "passed",
+      "post_launch": {
+        "states": [
+          "launched exact copied-out app with Theme enabled",
+          "Original",
+          "Theme restored"
+        ],
+        "deep_strict_signature": "passed",
+        "gatekeeper": "accepted",
+        "finder_info_or_resource_fork_added": false,
+        "microphone_started": false
+      }
     }
   ]
 }

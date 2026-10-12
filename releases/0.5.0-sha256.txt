@@ -1,2 +1,2 @@
-a3b15b23c5bc33dd63cc2aa17951f6f45c1a8d8a9fda7757b3f40ffd846edf92  Orion-0.5.0-Apple-Silicon.dmg
-97e300fb1d47db56cd153c22af0a1b6edc267abffb2484170315fbf7ab14174f  Orion-0.5.0.m-Apple-Silicon.dmg
+aede8a6f35c6fca6551571404076047dcef39878c9349d5366abba01249956b9  Orion-0.5.0-Apple-Silicon.dmg
+e8a1b9b21cc24d4f7136982ef7f36685e3e4a978b3295d6749b7814b30d1aa92  Orion-0.5.0.m-Apple-Silicon.dmg
