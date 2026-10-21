@@ -1,17 +1,15 @@
 import {
   BookOpen,
-  AudioLines,
   ChevronDown,
   GalleryVerticalEnd,
   Home,
-  MessageCircle,
   PanelLeft,
   PanelLeftClose,
   Plus,
   Settings,
   Trash2,
 } from "../lib/icons";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ComponentType } from "react";
 import type { AppSnapshot, Note } from "../types";
 import {
   GENERATE_KINDS,
@@ -25,6 +23,7 @@ import {
   linkedArticleStageLabel,
   type LinkedArticleJob,
 } from "../lib/linkedArticle";
+import { ChatVoiceMark } from "./icons/ChatVoiceMark";
 import { FavoriteMark } from "./icons/FavoriteMark";
 import { SpaceSwitcher } from "./SpaceSwitcher";
 import { SidebarVoiceIndicator } from "./SidebarVoiceIndicator";
@@ -65,18 +64,17 @@ interface SidebarProps {
   onToggleCollapsed?: () => void;
   voicePresence?: VoicePresenceStore;
   voicePalette?: IconPalette;
-  onStartVoice?: () => void;
 }
 
 const navigation = [
   { id: "home", label: "Home", icon: Home },
   { id: "notes", label: "Notes", icon: BookOpen },
   { id: "sources", label: "Sources", icon: GalleryVerticalEnd },
-  { id: "chat", label: "Chat", icon: MessageCircle },
+  { id: "chat", label: "Chat", icon: ChatVoiceMark },
 ] satisfies Array<{
   id: WorkspaceView;
   label: string;
-  icon: typeof Home;
+  icon: ComponentType<{ size?: number }>;
 }>;
 
 interface SidebarNoteRowProps {
@@ -145,7 +143,6 @@ export function Sidebar({
   onToggleCollapsed,
   voicePresence,
   voicePalette,
-  onStartVoice,
 }: SidebarProps) {
   const [generateOpen, setGenerateOpen] = useState(false);
   const [generateKind, setGenerateKind] = useState<GenerateKind>("note");
@@ -296,19 +293,17 @@ export function Sidebar({
 
       <nav className="primary-nav" aria-label="Workspace">
         {navigation.map(({ id, label, icon: Icon }) => (
-          <div key={id} className={id === "chat" ? "sidebar-chat-nav" : "sidebar-nav-row"}>
+          <div key={id} className="sidebar-nav-row">
           <button
             className={view === id ? "nav-item active" : "nav-item"}
             type="button"
             aria-label={label}
             onClick={() => onViewChange(id)}
           >
-            {id === "chat" && voicePresence ? <SidebarVoiceIndicator presence={voicePresence} voicePalette={voicePalette} /> : <Icon size={17} />}
+            {id === "chat" && voicePresence ? <SidebarVoiceIndicator presence={voicePresence} voicePalette={voicePalette} /> : id === "chat" ? <ChatVoiceMark /> : <Icon size={17} />}
             <span>{label}</span>
             {id === "notes" && <em>{notes.length}</em>}
           </button>
-          {id === "chat" && onStartVoice && <button type="button" className="sidebar-start-voice"
-            aria-label="Talk to Space" title="Talk to Space" onClick={onStartVoice}><AudioLines size={17} /></button>}
           </div>
         ))}
       </nav>

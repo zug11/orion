@@ -1,3 +1,9 @@
+import { visibleNoteSummary } from "../lib/importSummary";
+import type { Editor } from "@tiptap/core";
+import { PassageThreads } from "./PassageThreads";
+import { usePassageComment } from "./PassageCommentComposer";
+import type { PassageCommentHandler } from "../lib/passageThreads";
+import type { PassageThreadHandler } from "../lib/passageThreads";
 import { chatProposalBody, type ChatEditApplication, type ChatEditorChange } from "../lib/chatEdits";
 import { parseNoteExcerptTitle } from "../lib/noteExcerpts";
 import { requestNoteExcerptNavigation, consumeNoteExcerptNavigation, revealNoteExcerptPassage, clearNoteExcerptHighlight, NOTE_PASSAGE_NAVIGATION_EVENT } from "../lib/noteExcerptNavigation";
@@ -114,6 +120,8 @@ function withoutTaskMarker(children: ReactNode): ReactNode {
 }
 
 interface NoteViewProps {
+  onCreateComment?: PassageCommentHandler;
+  onThreadAction?: PassageThreadHandler;
   voiceSelection?: VoiceSelectionStore;
   chatEdit?: ChatEditApplication;
   onChatEditComplete?: (id: string, error?: string, accepted?: boolean) => void;
@@ -186,6 +194,8 @@ function safeUrl(url: string) {
 }
 
 export function NoteView({
+  onCreateComment,
+  onThreadAction,
   voiceSelection,
   chatEdit,
   onChatEditComplete,
@@ -266,6 +276,7 @@ export function NoteView({
   const editButtonRef = useRef<HTMLButtonElement>(null);
   const findButtonRef = useRef<HTMLButtonElement>(null);
   const findInputRef = useRef<HTMLInputElement>(null);
+  const [threadEditor, setThreadEditor] = useState<Editor | null>(null);
   const findScopeRef = useRef<HTMLElement>(null);
   const currentNoteRef = useRef(note);
   currentNoteRef.current = note;
@@ -321,6 +332,9 @@ export function NoteView({
     return () => onEditorContextChange?.(note.id, null);
   }, [note.id, onEditorContextChange]);
   useVoiceSelection(findScopeRef, note, voiceSelection, voiceSelection?.spaceId, displayedNote, { state: captureState });
+  const shownSummary = useMemo(() => visibleNoteSummary(note, sources), [note.summary, note.sourceIds, sources]);
+  const comment = usePassageComment({ note, getNote: displayedNote, root: findScopeRef, store: voiceSelection,
+    editing, available: () => captureState().available, onCreate: onCreateComment });
   const dirtyEditingRef = useRef(false);
   const [selectedPassageId, setSelectedPassageId] = useState<string | null>(null);
   const passageTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -1310,7 +1324,7 @@ export function NoteView({
       onClickCapture={(event) => {
         if (!narrationActive || !narrationRef.current || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.detail === 0) return;
         const target = event.target as HTMLElement;
-        if (!target.closest("[data-narration-text]") || target.closest("input,textarea,.source-citation-marker,.chat-citation")) return;
+        if (!target.closest("[data-narration-text]") || target.closest("input,textarea,[data-passage-thread],.source-citation-marker,.chat-citation")) return;
         if (window.getSelection()?.isCollapsed === false) return;
         const index = narrationCharacterAtPoint(narrationRef.current, event.clientX, event.clientY);
         if (index === null) return;
@@ -1435,16 +1449,16 @@ export function NoteView({
         {editing ? (
           <textarea
             className="note-summary-input"
-            value={note.summary}
+            value={shownSummary}
             onChange={(event) => update({ summary: event.target.value })}
             rows={2}
             aria-label="Note summary"
           />
-        ) : (
+        ) : shownSummary ? (
           <p className="note-summary" data-narration-text="summary">
-            {highlightFindText(note.summary, "note-summary")}
+            {highlightFindText(shownSummary, "note-summary")}
           </p>
-        )}
+        ) : null}
         {listenError ? <p className="note-listen-error" role="status">{listenError}</p> : null}
         </header>
 
@@ -1527,6 +1541,9 @@ export function NoteView({
             }
           >
             <RichNoteEditor
+              onAddComment={comment.openComment}
+              commentComposerActive={comment.active}
+              onThreadEditor={setThreadEditor}
               chatEdit={chatEdit?.id === chatEditorChange?.id ? chatEditorChange : undefined}
               onChatEditComplete={onChatEditComplete}
               onChatEditBeforeAccept={onChatEditBeforeAccept}
@@ -1705,6 +1722,8 @@ export function NoteView({
         </div>
       ) : null}
       {narrationDownload && <span className="sr-only" role="status">Preparing narration download{narrationDownload.total ? `: ${narrationDownload.completed} of ${narrationDownload.total} passages` : ""}.</span>}
-    </article>
+    {onThreadAction && <PassageThreads draftThread={comment.draftThread} onDraftMarker={comment.setDraftMarker} key={note.id} openThreadId={comment.openThreadId} reviewActive={!!chatEdit} note={note} root={findScopeRef} editor={editing ? threadEditor : null} onAction={onThreadAction} references={{ notes, sources, onOpenNote, onOpenSource }} />}
+    {comment.ui}
+      </article>
   );
 }

@@ -505,7 +505,7 @@ Preserve these trust boundaries:
 
 ### Additional local library tools
 
-The independent MCP crate also exposes 21 tools from `src/library`:
+The independent MCP crate also exposes 23 tools from `src/library`:
 `orion_list_sources`, `orion_search_sources`, `orion_get_source_passage`,
 `orion_get_note_section`, `orion_get_notes`, `orion_list_concepts`,
 `orion_get_concept`, `orion_resolve_link`, `orion_get_related_notes`,
@@ -607,7 +607,7 @@ provider calls, under the existing direct local-library access contract.
 
 ### Optional native desktop workflows
 
-The shared connector now exposes 55 tools: 30 local library tools, 14 desktop
+The shared connector now exposes 57 tools: 32 local library tools, 14 desktop
 workflow/capability/job tools, three native edit-review tools and one read-only
 active-editor-context tool, plus three finite voice work-order tools and four
 captured-editor-generation tools. The optional workflows are
@@ -2586,7 +2586,7 @@ document changed while the composer was open.
   context; only **Enrich** may retrieve additional active-Space knowledge.
 
 A non-empty text selection exposes compact **Rewrite ▾**, **Generate image**,
-and **Link** controls beside the passage. Link remains available without keys.
+**Link**, and **Comment** controls beside the passage. Link and Comment remain available without keys.
 `src/lib/editorAICapabilities.ts` gates writing and rewriting on the selected
 provider's configured key. Image generation also requires an OpenAI key for
 rendering, including when its selected planning provider is Anthropic. Check
@@ -3461,9 +3461,20 @@ this integration's scope.
   slash prefix at a word boundary within ordinary text, including the middle of
   an existing paragraph. Replace only the command range and preserve surrounding
   prose. Keep URLs, paths and code literal.
-  Commands are write, block, heading, todo, bullet, numbered, divider, image,
+  Commands are write, comment, block, heading, todo, bullet, numbered, divider, image,
   code, link, excerpt and table; H1–H6 also have direct shortcuts. `/write` opens
   **Write with AI** and requires an explicit Write submission before generation.
+  `/comment` selects the current paragraph after removing only its command token,
+  or the immediately preceding nonempty non-code text block on the next line. A blank
+  paragraph between them (two Enters), or an empty note, creates a standalone note
+  comment in the same modal. Its optional anchor `scope: "note"` requires empty
+  quote/text, persists as metadata without invented prose, and remains current as
+  the note evolves. Renderer and MCP validators accept this additive schema; legacy
+  passage anchors retain exact quote requirements. Note comments can continue in
+  Chat or generate an article; text additions/rewrites require explicit passage
+  attachment first. Opening/saving makes no provider call. Stale command ranges remain unchanged. The command is available only when the comment
+  handler is mounted, is excluded from block insertion, and is suspended while its
+  modal is open. `passageCommentSelection.ts` owns the one-step undoable selection.
   In tables, `/delete` offers row, column or table. The menu stays below the caret with a bounded,
   scrollable height and aligned icon/text columns. Preserve keyboard choice,
   Escape, the captured insertion point and single-transaction replacement. Reject deferred insertion
@@ -4041,3 +4052,141 @@ The separate knowledge orchestrator reserves each assignment's final permitted
 turn for grounded synthesis, forbids further coordination there, and preserves
 its hard cap, validators and diagnostics. Automated fixtures do not establish
 that the live provider delivered speech or explain an unrecorded failed response.
+
+### Passage-anchored Chat discussions
+
+Typed Chat captures the settled editor selection on Send, including its exact
+Space/note/version. `runChatReading` treats it as bounded reference data and reads
+that note for evidence; highlight alone grants no edit authority. Expanding Chat
+retains the captured note and selection. Replies retain their original passage
+anchor; later highlighting cannot retarget an existing reply.
+
+`Note.discussionThreads` is optional, bounded metadata (32 threads, 30 messages
+per thread, 12,000 UTF-16 units per text). Older notes require no migration.
+Threads never become Markdown, note exports, narration, or model document nodes.
+The small passage icon previews on hover/focus with explicit left-aligned text.
+Clicking opens a compact floating modal with a frosted WebView surface and
+an auto-growing pill composer. Use one translucent, blurred surface with quiet
+controls rather than stacking opaque Chat fills. Reduce Transparency, Increase
+Contrast and forced colours use solid surfaces. Live text and input stay in the
+WebView; never send them to the native toolbar's static bitmap painter.
+Comment creation renders a transient marker through the same placement path as the saved
+thread. Anchor both modal states to that marker; never use the whole note bounds
+as the creation anchor. Keep the panel origin independent of content height,
+with bounded scrolling near the viewport edge. Draft markers are not persisted.
+Initial comments have no response header; only
+actual assistant follow-ups use Chat response styling. A human opening comment
+is rendered as plain annotation prose with a subtle **You** label; subsequent user
+prompts stay in the bounded persisted context but are not rendered in the comment
+conversation. Its portal lives outside the prose; opening it must
+not change paragraph geometry. Escape/outside click closes it, keyboard focus is
+contained while open and returns to the icon on close. Unsent replies survive
+closing; generated note actions close the chat to reveal the ordinary review.
+**Continue in Chat** binds the main Chat surface to the exact Space/note/thread
+and carries the unsent reply. The note metadata stays the single conversation
+source; never clone the exchange into `studio.messages` or introduce a chat-history
+list. Replies in either surface commit to the same thread with the same approval,
+version and Space guards. **Back to the note** uses exact passage navigation;
+**Space chat** restores the ordinary Chat and its draft. Thread reader history is
+projected from that thread only, with saved citations restored and unaccepted
+messages excluded. Cached history remains withheld when task masking is active.
+`PassageThreads` uses ProseMirror decorations while editing and separate DOM portal
+hosts while reading. Comment controls preserve the authored selection. Exact
+unique quote matching fails closed after ambiguous or missing edits, retaining the
+thread for explicit reattachment. Keep text model offsets free of comment widgets.
+
+`useVoiceSelection` paints the captured range with a CSS Custom Highlight (an
+inert geometry overlay on older WebKit). It never restores the native selection
+or inserts markup into the note when a composer takes focus. A released range
+is captured before focus leaves even inside the settling delay; unfinished drags
+remain uncommitted. Deselecting inside the prose, changing its authored version,
+navigation and unmount remove the highlight along with the captured reference.
+
+**Comment** on a selected passage opens a local draft through the same
+`PassageThreadModal` as existing discussions. Reading view exposes a small
+selection-adjacent Comment button; editing includes it in the existing selection
+menu. `PassageCommentComposer` captures the original Space/note/version and keeps
+its unsaved draft on dismissal until another passage or note replaces it. Enter
+adds a line; Save comment or Cmd/Ctrl+Enter saves locally. Opening, typing, saving
+and reopening never call a provider. The first persisted message has role `user`
+in the existing thread schema, with no new attribution field or migration.
+`addHumanPassageComment` validates the exact current anchor, bounds and Space;
+its stable draft ID prevents duplicates after a failed save. The normal serialized
+vault save remains authoritative. The source prose, exports and Space Chat history
+stay unchanged. An explicitly submitted follow-up is the request boundary; there
+is no separate Ask Orion action pill. Existing action pills may use the human opening annotation as reference;
+later hidden user prompts are not standalone actionable comments. Proposal review,
+completed-task filtering and article-generation authority remain unchanged.
+
+The Chat reply action **Comment on passage** saves the captured reply as an open
+thread. MCP **orion_propose_passage_comment** requires exact Space, note version,
+unique visible quote, thread ID and fresh message ID. It atomically writes pending
+metadata only, optionally carrying addition/rewrite text. Existing-thread proposals
+return to pending review. **orion_get_passage_threads** reads scoped metadata;
+working views omit cached discussions when task masking could expose completed
+work. These two local tools need no provider or running desktop app. They never
+change prose or silently accept a review. Pending comments expose Accept comment
+and Discard; acceptance does not accept a document change.
+
+Follow-up discussion reuses the bounded Chat reader, revokes on unmount/cancellation
+and changed Space, and validates the captured passage/thread before saving. Add to
+Note inserts after the containing block through normal Accept/Discard/Undo review.
+Only the comment's prose enters that edit: remove its validated portable citation
+footer and temporary citation links, preserving evidence on the thread. Keep
+the shared focused-edit limits and provide a shorter-passage/Generate article
+recovery message when the authored change itself exceeds them.
+Suggest Rewrite uses the same review path. Focused proposals explicitly record
+their mode; an omitted legacy mode still means focused, as in the ordinary
+editor review. Passage discussions pass an exact `editBoundary` to the reader,
+separately from voice's reference-only `editPassage`. Validate that boundary
+against current authored text and the requested task view before a provider
+call. Every reading packet retains the exact boundary and scope instruction.
+Validate proposed ranges inside the existing bounded correction loop, rejecting
+full-note rewrites without admitting a broader rewrite target. Only a valid
+proposal may enter thread history and the ordinary review; retain the App's
+final scope check and all stale-body/Space guards.
+**Generate article** is explicit
+authority to queue a new article through the existing Generate pipeline, not a
+raw reply-copy form. Capture the accepted comment and its exact original passage
+as bounded, untrusted reference material; strip the portable citation footer and
+internal citation markers before generation. A configured selected provider is
+required. The explicit passage remains available when general Space context is
+off; other notes still follow that preference and completed-task filtering.
+Create the placeholder and comment's saved note receipt together, preserve the
+current note/Chat route, and expose Writing/Ready or actionable failure in the
+existing sidebar queue. **Open article** recovers that destination. Restart keeps
+the same note ID and captured reference; repeat clicks or a save retry cannot
+create duplicates. Generation commits only to its captured Space and placeholder,
+never over intervening user prose. The new article gets an AI-written title and
+body, while the source note and Chat history remain unchanged. No new vault writer,
+provider endpoint, or persisted generation schema is introduced.
+
+Human comments support local **Edit comment** with Save/Cancel in the floating
+thread, preserving replies, identity and passage context. **Delete comment** removes
+only that thread through the ordinary serialized save. Backspace/Delete on a focused
+marker removes it; at an adjacent writing cursor the first key selects the marker,
+leaving prose untouched. Keyboard events inside the modal edit text normally.
+Slash-created comments carry an optional bounded `anchor.cursor` with 256 UTF-16
+units of authored text before and after the insertion point. Their icons render at
+that cursor (including empty paragraphs), independent of their passage reference.
+Renderer and MCP validators accept older anchors without it. Resolve exact unique
+neighbours and fail closed on ambiguity; never persist raw ProseMirror positions.
+Comments still remain metadata and are excluded from exports and narration.
+
+### Sidebar navigation sizing and Chat mark
+
+Collapsed and responsive icon-only navigation gives `.sidebar-nav-row` an explicit
+44 px width. Preserve this wrapper width: the voice stylesheet sets its child to
+100%, and an intrinsic wrapper shrinks the selected background to the icon.
+`ChatVoiceMark.tsx` uses the user-supplied Group 3-4 SVG with currentColor for the idle
+Chat icon, including SidebarVoiceIndicator. The combined mark is the single Chat entry; do not add a separate sidebar voice
+button. Start voice through the existing Chat composer. Chat uses the same row
+width as the other navigation entries; active calls still show the constellation.
+
+### Markdown import subtitles
+
+Plain Markdown imports leave the note summary empty. Preserve frontmatter and
+body text in the source and note; do not turn their first characters into a
+subtitle. `importSummary.ts` hides legacy mechanical Markdown excerpts only
+when they exactly match their linked original source. Authored summaries and
+explicit AI-organized summaries remain supported; no vault migration is needed.

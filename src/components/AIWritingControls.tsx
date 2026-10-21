@@ -18,6 +18,7 @@ import {
   Image,
   LoaderCircle,
   Link2,
+  MessageCircle,
   RefreshCw,
   X,
 } from "../lib/icons";
@@ -38,6 +39,7 @@ interface AIWritingControlsProps {
   onCloseWriteComposer?: (restoreFocus?: boolean) => void;
   onComposerActiveChange?: (active: boolean) => void;
   onOpenLink?: () => void;
+  onAddComment?: () => void;
   writingUnavailableReason?: string;
   imageUnavailableReason?: string;
   suspended: boolean;
@@ -116,6 +118,7 @@ export function AIWritingControls({
   onCloseWriteComposer,
   onComposerActiveChange,
   onOpenLink,
+  onAddComment,
   writingUnavailableReason = "Add a key for the selected writing provider in Settings to write and rewrite.",
   imageUnavailableReason = "Add an OpenAI key and configure the selected planning provider in Settings to generate images.",
   suspended,
@@ -585,6 +588,10 @@ export function AIWritingControls({
                 onClick={() => { setUnavailableNotice(undefined); onOpenLink?.(); }}>
                 <Link2 size={13} /><span>Link</span>
               </button>
+              {onAddComment && <button type="button" className="ai-writing-link-button" aria-label="Comment on selected text"
+                onMouseDown={preserveEditorSelection} onClick={() => { setUnavailableNotice(undefined); onAddComment(); }}>
+                <MessageCircle size={13} /><span>Comment</span>
+              </button>}
             </div>
           )}
           {unavailableNotice ? <p className="ai-writing-unavailable-notice" role="status">{unavailableNotice}</p> : null}

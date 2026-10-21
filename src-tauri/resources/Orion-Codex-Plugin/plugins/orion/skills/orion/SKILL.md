@@ -30,7 +30,7 @@ Use the `orion` MCP server to work directly with the user's local Orion library.
 
 ## Inspect and edit precise library content
 
-- The 21 additional library tools work while Orion is closed. They make no provider calls and retain the installed connector's existing local access.
+- The 23 additional library tools work while Orion is closed. They make no provider calls and retain the installed connector's existing local access.
 - Use `orion_list_sources`, `orion_search_sources`, and `orion_get_source_passage` to find and verify preserved source evidence beyond an opening preview. Source search is literal and case-sensitive. Range offsets count Unicode scalar values, not bytes or JavaScript UTF-16 positions.
 - Use `orion_get_note_section` for a named section; choose `occurrence` when headings repeat. `orion_get_notes` reads up to 12 notes from one snapshot and returns the versions needed for guarded edits.
 - Explore `orion_list_concepts`, `orion_get_concept`, and `orion_resolve_link` for exact vocabulary and canonical destinations. Keep ambiguous resolutions explicit. `orion_get_related_notes` ranks stored connections; `orion_get_link_path` returns a bounded directed path, not proof that ideas agree.
@@ -111,3 +111,16 @@ Use the `orion` MCP server to work directly with the user's local Orion library.
 - Only report saved results after `state: "succeeded"`. Read `freshness`, `coverage`, warnings, and recovery diagnostics. A recovered local import is not completed AI synthesis. Unknown token usage is unknown, never zero. Citations identify exact notes; structurally valid evidence references do not prove a model's claim is correct.
 - A research follow-up can provide `previous_job_id` from the same Space; Orion rejects it if the Space version changed. Never automatically import or save a research answer without the user's write instruction.
 - Provider credentials stay in Orion's native app. The MCP executable uses only its private local connection; it cannot read keys or call providers. Orion's existing-note AI-context preference remains authoritative, and tool arguments cannot override it.
+
+## Passage comments and reviewed additions
+
+When asked to comment on a passage or suggest contextual changes, read the exact
+note and current version, then use `orion_propose_passage_comment` with explicit
+`space_id`, `note_id`, `expected_version`, a unique exact `quote`, a stable
+`thread_id`, a fresh `message_id`, and `comment`. Optional `proposal` is
+`{ "kind": "addition" | "rewrite", "text": "..." }`. This saves pending discussion
+metadata, not prose. Report it as awaiting user review, never as an applied edit.
+Use `orion_get_passage_threads` to inspect current discussions; a deliberate
+completed-work audit may request `task_view: "history"`. Existing-thread proposals
+must keep the original anchor. Re-read after a version conflict; do not silently
+fall back to a direct note update to bypass review.

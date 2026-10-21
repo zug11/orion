@@ -16,6 +16,7 @@ export function parseChatEditIntent(value: unknown): "none" | ChatEditMode {
 }
 export const CHAT_EDIT_SCHEMA = protocol.schema;
 export const CHAT_REWRITE_SCHEMA = protocol.rewriteSchema;
+export const MAX_CHAT_EDIT_CHARS = 6_000;
 export const MAX_CHAT_REWRITE_CHARS = 24_000;
 
 export function chatRequestAllowsEdits(request: ChatRequest): boolean {
@@ -30,7 +31,7 @@ export function parseChatNoteEdits(value: unknown): ChatNoteEdit[] {
   return value.map(item => {
     if (!item || typeof item !== "object" || Object.keys(item).sort().join(",") !== "after,before" ||
       typeof item.before !== "string" || !item.before.trim() || typeof item.after !== "string" ||
-      [item.before, item.after].some(text => [...text].length > 6_000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]|<!--\s*\/?orion-/iu.test(text))) {
+      [item.before, item.after].some(text => [...text].length > MAX_CHAT_EDIT_CHARS || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]|<!--\s*\/?orion-/iu.test(text))) {
       throw new Error("Chat returned an invalid text change.");
     }
     if (/\[\[e\d+\]\]/u.test(item.after)) throw new Error("Text changes cannot contain temporary Chat citations.");
@@ -85,7 +86,21 @@ export function createChatEditProposal(snapshot: AppSnapshot, noteId: string | u
     }
   }
   applyChatTextEdits(note.body, edits);
-  return { spaceId: snapshot.workspace.id, noteId, title: note.title, baseBody: note.body, edits };
+  return { spaceId: snapshot.workspace.id, noteId, title: note.title, baseBody: note.body, mode: "focused", edits };
+}
+
+/** A discussion can only revise its captured passage, even after broader reads. */
+export function validateChatEditPassage(proposal: ChatEditProposal, quote: string): void {
+  const uniqueOffset = (text: string) => {
+    const at = proposal.baseBody.indexOf(text);
+    return text && at >= 0 && proposal.baseBody.indexOf(text, at + 1) < 0 ? at : undefined;
+  };
+  const start = uniqueOffset(quote);
+  // Missing mode has always meant focused in the shared edit/review contract.
+  if (start === undefined || proposal.mode === "rewrite" || !proposal.edits.length || proposal.edits.some(edit => {
+    const at = uniqueOffset(edit.before);
+    return at === undefined || at < start || at + edit.before.length > start + quote.length;
+  })) throw new Error("The suggested rewrite extended beyond this passage. Keep every change inside the attached passage and leave surrounding text unchanged.");
 }
 
 /** Keep frontmatter and generated evidence outside the model's replacement. */

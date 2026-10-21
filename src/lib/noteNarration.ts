@@ -5,7 +5,7 @@ export interface NarrationDocument {
   words: { from: number; to: number }[];
 }
 
-const SKIP = "script,style,textarea,pre,[aria-hidden='true'],[hidden],.source-citation-marker,.chat-citation,.source-references,.chat-evidence,sup";
+const SKIP = "[data-passage-thread],script,style,textarea,pre,[aria-hidden='true'],[hidden],.source-citation-marker,.chat-citation,.source-references,.chat-evidence,sup";
 
 /** Build the audio script from the displayed words, preserving their DOM positions.
  * Formatting, source markers and hidden Markdown metadata never become narration. */

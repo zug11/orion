@@ -79,3 +79,13 @@ describe("voice selected reference", () => {
     expect(voiceSelectionContext({ ...selected, spaceId: "foreign" }, snapshot)).toBeNull();
   });
 });
+
+it("excludes inline discussion widgets from authored offsets and rejects selecting comment text", () => {
+  const { snapshot, note, root } = fixture();
+  const widget = document.createElement("div"); widget.dataset.passageThread = "t"; widget.textContent = "Private discussion text";
+  root.prepend(widget);
+  const strong = root.querySelector("strong")!;
+  const captured = captureVoiceSelection(root, select(strong), note, snapshot.workspace.id);
+  expect(captured?.range.from).toBe(7);
+  expect(captureVoiceSelection(root, select(widget), note, snapshot.workspace.id)).toBeUndefined();
+});

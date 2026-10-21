@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) fn call(scope: &Space, name: &str, args: &Map<String, Value>) -> ToolResult {
     match name {
+        "orion_get_passage_threads" => threads::read(scope, args),
         "orion_list_sources" => {
             let query = arg(args, "query").to_lowercase();
             let kind = arg(args, "kind");

@@ -13,6 +13,8 @@ export type NoteKind =
 export type NoteStatus = "draft" | "ready" | "archived";
 
 export interface Note {
+  /** Passage discussions are separate from authored Markdown and exports. */
+  discussionThreads?: PassageThread[];
   id: EntityId;
   title: string;
   slug: string;
@@ -32,6 +34,25 @@ export interface Note {
   lastOpenedAt?: ISODateString;
   pinned?: boolean;
   color?: string;
+}
+
+export interface PassageAnchor { quote: string; text: string; scope?: "note"; cursor?: import("./lib/commentCursor").CommentCursor }
+export interface PassageThreadMessage {
+  pending?: boolean;
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: ISODateString;
+  proposal?: { kind: "addition" | "rewrite"; text: string };
+  createdNoteId?: string;
+}
+export interface PassageThread {
+  id: string;
+  anchor: PassageAnchor;
+  state: "proposed" | "open" | "resolved";
+  messages: PassageThreadMessage[];
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
 }
 
 export type SourceKind =
@@ -371,6 +392,8 @@ export interface StudioCard {
 }
 
 export interface StudioMessage {
+  /** Captured when this answer was requested; later highlights cannot retarget it. */
+  passage?: { noteId: string; anchor: PassageAnchor };
   id: EntityId;
   role: "user" | "assistant";
   content: string;

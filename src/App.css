@@ -1641,6 +1641,15 @@ kbd {
   border-bottom: 1px solid var(--line);
 }
 
+.sidebar.is-collapsed .sidebar-nav-row {
+  width: 44px;
+  flex: none;
+}
+
+.sidebar.is-collapsed .sidebar-nav-row > .nav-item {
+  width: 100%;
+}
+
 .sidebar.is-collapsed .nav-item {
   width: 38px;
   min-height: 38px;
@@ -13482,6 +13491,11 @@ button.source-citation-marker:focus-visible {
   animation: chat-arrive 340ms var(--ease) both;
 }
 
+::highlight(orion-selected-passage) { background-color:color-mix(in srgb,var(--periwinkle) 28%,transparent); }
+.orion-selection-highlight { position:fixed; inset:0; z-index:3; pointer-events:none; user-select:none; overflow:hidden; }
+.orion-selection-highlight > i { position:absolute; background:color-mix(in srgb,var(--periwinkle) 24%,transparent); border-radius:2px; }
+@media (prefers-contrast:more) { ::highlight(orion-selected-passage) { background-color:Highlight; color:HighlightText; } }
+
 .chat-message--assistant {
   margin-right: auto;
 }
@@ -14111,6 +14125,13 @@ button.source-citation-marker:focus-visible {
     min-height: 24px;
     justify-content: center;
     padding: 4px 0;
+  }
+
+  /* Rows must have an explicit width: the voice stylesheet makes their
+     buttons 100%, which otherwise resolves against icon-sized wrappers. */
+  .sidebar-nav-row {
+    width: 44px;
+    flex: none;
   }
 
   .nav-item {

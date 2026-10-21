@@ -52,7 +52,9 @@ pub(super) fn call(path: &Path, name: &str, args: &Map<String, Value>) -> ToolRe
                 return Err(conflict());
             }
             let mut fields = Map::new();
-            if name == "orion_batch_update_metadata" {
+            if name == "orion_propose_passage_comment" {
+                fields.insert("discussionThreads".into(), threads::propose(current, args)?);
+            } else if name == "orion_batch_update_metadata" {
                 if args.contains_key("tags") {
                     let tags = optional_string_array(args, "tags", 50, 100)?.unwrap();
                     if tags != current.tags {

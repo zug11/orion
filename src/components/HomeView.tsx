@@ -146,8 +146,8 @@ export function HomeView({
         />
         <div className="home-hero-shade" />
         <div className="home-hero-content">
-          <h1 aria-label="Everything you know, in context.">
-            Everything you know,
+          <h1 aria-label="Everything you care about, in context.">
+            Everything you care about,
             <br />
             in context.
           </h1>

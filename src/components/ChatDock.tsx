@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Maximize2, MessageCircle, Minus, Plus, X } from "../lib/icons";
 import { isSelectedAIConfigured } from "../lib/ai";
 import { ChatView, type ChatViewProps } from "./ChatView";
@@ -8,6 +8,8 @@ import type { VoicePresenceStore } from "../lib/voicePresence";
 import type { VoiceSelectionStore } from "../lib/voiceSelection";
 import type { IconPalette } from "../lib/themeIcon";
 import "./ChatDock.css";
+const noSelection = () => undefined;
+const noSubscription = () => () => {};
 
 interface ChatDockProps extends ChatViewProps {
   fullPage: boolean;
@@ -26,6 +28,8 @@ export function ChatDock({ fullPage, flowActive, onExpand, allowExpand = true, v
   const [hasOpened, setHasOpened] = useState(fullPage);
   const [conversationKey, setConversationKey] = useState(0);
   const [expandedContext, setExpandedContext] = useState(chat.focusNoteId);
+  const selection = useSyncExternalStore(voiceSelection?.subscribe ?? noSubscription, voiceSelection?.getSnapshot ?? noSelection);
+  const [expandedSelection, setExpandedSelection] = useState(selection);
   const [voiceToggle, setVoiceToggle] = useState(0);
   const [voiceActive, setVoiceActive] = useState(false);
   const [voiceSceneHost, setVoiceSceneHost] = useState<HTMLDivElement | null>(null);
@@ -50,12 +54,12 @@ export function ChatDock({ fullPage, flowActive, onExpand, allowExpand = true, v
   useEffect(() => { if (visible) setHasOpened(true); }, [visible]);
   useEffect(() => { if (!available) setOpen(false); }, [available]);
   // Expanding a drafted "this note" question must retain its visible context.
-  useEffect(() => { if (!fullPage) setExpandedContext(chat.focusNoteId); }, [fullPage, chat.focusNoteId]);
+  useEffect(() => { if (!fullPage) { setExpandedContext(chat.focusNoteId); setExpandedSelection(selection); } }, [fullPage, chat.focusNoteId, selection]);
   useEffect(() => {
     if (visible && !chat.busy) panelRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus({ preventScroll: true });
     // Opening changes focus; a completed response must not steal it from the document.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, fullPage, conversationKey]);
+  }, [visible, fullPage, conversationKey, chat.passageChat?.key]);
   useEffect(() => {
     if (visible || !restoreFocus.current) return;
     restoreFocus.current = false;
@@ -79,16 +83,18 @@ export function ChatDock({ fullPage, flowActive, onExpand, allowExpand = true, v
         event.stopPropagation(); close();
       }}>
       {!fullPage && <header className="chat-dock__header">
-        <div><strong>Chat</strong><span title={chat.snapshot.workspace.name}>{chat.snapshot.workspace.name}</span></div>
+        <div><strong>Chat</strong><span title={chat.passageChat?.note.title ?? chat.snapshot.workspace.name}>{chat.passageChat?.note.title ?? chat.snapshot.workspace.name}</span></div>
         <nav aria-label="Chat controls">
-          <button type="button" aria-label="New chat" title="New chat" disabled={chat.busy || !chat.snapshot.studio.messages.length} onClick={() => { chat.onClear(); setConversationKey(value => value + 1); }}><Plus size={15} /></button>
+          {chat.passageChat ? <button type="button" aria-label="Back to passage" title="Back to passage" onClick={chat.passageChat.onReturn}><MessageCircle size={15} /></button> : <button type="button" aria-label="New chat" title="New chat" disabled={chat.busy || !chat.snapshot.studio.messages.length} onClick={() => { chat.onClear(); setConversationKey(value => value + 1); }}><Plus size={15} /></button>}
           {allowExpand && <button type="button" aria-label="Expand chat" title="Expand chat" onClick={onExpand}><Maximize2 size={14} /></button>}
           <button type="button" aria-label="Collapse chat" title="Collapse chat" onClick={close}><Minus size={17} /></button>
         </nav>
       </header>}
       {(hasOpened || visible) && <ChatView key={conversationKey} {...chat} suggestionSeed={conversationKey * 2} focusNoteId={fullPage ? expandedContext : chat.focusNoteId} compact={!fullPage} visible={visible} voiceEnabled={!flowActive}
+        selection={fullPage ? expandedSelection : selection}
         voiceControl={{ active: voiceActive, toggle: () => setVoiceToggle(value => value + 1) }}
         voiceSceneRef={setVoiceSceneHost} voiceControlsRef={setVoiceControlsHost} voicePalette={voicePalette}
+        onCommentReply={chat.onCommentReply ? async (id, selected) => { await chat.onCommentReply!(id, selected); setOpen(false); } : undefined}
         onReviewEdit={chat.onReviewEdit ? proposal => { setOpen(false); return chat.onReviewEdit!(proposal); } : undefined} />}
     </div>
     <div ref={circleRef} className="chat-dock__circle" data-native-chat-glass={nativeGlass || undefined} hidden={!available || fullPage || voiceActive}>

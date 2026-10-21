@@ -1499,6 +1499,23 @@ describe("browser persistence fallback", () => {
     });
   });
 
+  it("round-trips optional passage threads and rejects malformed metadata without replacing the vault", async () => {
+    const vault = createEmptyVault("Discussions", TEST_NOW);
+    vault.spaces[0] = createPopulatedSnapshot(); vault.activeSpaceId = vault.spaces[0].workspace.id;
+    const note = vault.spaces[0].notes[0];
+    note.discussionThreads = [{ id: "t", anchor: { quote: note.body.slice(0, 20), text: "A passage" }, state: "open", createdAt: TEST_NOW, updatedAt: TEST_NOW,
+      messages: [{ id: "m", role: "assistant", content: "Comment", createdAt: TEST_NOW, createdNoteId: "saved-note", proposal: { kind: "rewrite", text: "Suggested passage" } }] }];
+    await saveSnapshot(vault);
+    expect((await loadSnapshot())?.spaces[0].notes[0]).toEqual(note);
+    note.discussionThreads!.push({ id: "note-comment", anchor: { scope: "note", quote: "", text: "" }, state: "open", createdAt: TEST_NOW, updatedAt: TEST_NOW, messages: [{ id: "human", role: "user", content: "An independent thought", createdAt: TEST_NOW }] });
+    await saveSnapshot(vault);
+    expect((await loadSnapshot())?.spaces[0].notes[0]).toEqual(note);
+    const broken = structuredClone(vault); broken.spaces[0].notes[0].discussionThreads![0].messages = [];
+    window.localStorage.setItem("orion:vault:v2", JSON.stringify(broken));
+    await expect(loadSnapshot()).rejects.toThrow();
+    expect(window.localStorage.getItem("orion:vault:v2")).toBe(JSON.stringify(broken));
+  });
+
   it("round-trips both shader colours without changing notes or other appearance settings", async () => {
     const vault = createEmptyVault("Two-tone", TEST_NOW);
     vault.spaces[0] = createPopulatedSnapshot();

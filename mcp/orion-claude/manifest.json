@@ -5,7 +5,7 @@
   "display_name": "Orion",
   "version": "0.5.0",
   "description": "Search, edit, research, import, and generate in your local Orion Spaces.",
-  "long_description": "Connect Claude Desktop to Orion's local library and optional native AI workflows. Read and edit notes without an API key, or enable scoped research, source import/reprocessing, generation, concept development, enrichment, and overview refresh while Orion is open. The app retains credentials, provider settings, and atomic writes. Jobs report evidence, coverage, freshness, and cancellation. Includes exact source passages, note sections, concept and link-path navigation, provenance, tasks, guarded text edits, atomic metadata batches, duplicate detection, and integrity checks. All 30 local library tools work while Orion is closed. Includes guarded writing blocks and slash-command formatting. The 55-tool surface also includes exact open-editor context, in-note edit review, and finite inspection/cancellation/read-only continuation of existing voice workers, and capture/start/status/cancel for real inline Write, Rewrite and image previews; it never automates microphone or call controls.",
+  "long_description": "Connect Claude Desktop to Orion's local library and optional native AI workflows. Read and edit notes without an API key, or enable scoped research, source import/reprocessing, generation, concept development, enrichment, and overview refresh while Orion is open. The app retains credentials, provider settings, and atomic writes. Jobs report evidence, coverage, freshness, and cancellation. Includes exact source passages, note sections, concept and link-path navigation, provenance, tasks, guarded text edits, atomic metadata batches, duplicate detection, and integrity checks. All 32 local library tools work while Orion is closed. Includes guarded writing blocks and slash-command formatting. The 57-tool surface also includes exact open-editor context, in-note edit review, and finite inspection/cancellation/read-only continuation of existing voice workers, and capture/start/status/cancel for real inline Write, Rewrite and image previews; it never automates microphone or call controls. Passage comments and optional additions/rewrites stay pending in the note until the user reviews them.",
   "author": {
     "name": "Orion"
   },
@@ -238,6 +238,14 @@
     {
       "name": "orion_cancel_editor_action",
       "description": "Cancel one captured/generating action or withdraw its unaccepted preview. Never accepts, replays or undoes an already accepted action."
+    },
+    {
+      "name": "orion_propose_passage_comment",
+      "description": "Propose a passage-anchored comment, addition or rewrite for user review without changing prose."
+    },
+    {
+      "name": "orion_get_passage_threads",
+      "description": "Read scoped passage discussions and pending proposals."
     }
   ],
   "tools_generated": false,

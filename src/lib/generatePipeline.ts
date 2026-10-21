@@ -1,6 +1,6 @@
 import type { AppSnapshot, ChatRequest, ChatResult } from "../types";
 import { buildGenerationContext, generationNoteEvidence } from "./generationContext";
-import { buildGenerateWritingRequest, extractSlideHeadings, GENERATE_TIMEOUT_MS, type GenerateKind, type GeneratedContent, parseGeneratedNote, writingPromptForGenerateKind } from "./generate";
+import { buildGenerateWritingRequest, extractSlideHeadings, GENERATE_TIMEOUT_MS, type GenerateKind, type GeneratedContent, type GeneratePassageReference, parseGeneratedNote, writingPromptForGenerateKind } from "./generate";
 import { runPresentationWaves } from "./knowledgeOrchestration/waves";
 import { normalizeAIWritingReply } from "./aiWriting";
 
@@ -9,6 +9,7 @@ export interface GenerateInput {
   kind: GenerateKind;
   instruction: string;
   useSpaceNotes?: boolean;
+  passage?: GeneratePassageReference;
 }
 interface OutlineSection { title: string; brief: string; noteIds: string[] }
 interface Outline { thesis: string; sections: OutlineSection[] }

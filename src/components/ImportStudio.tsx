@@ -1,3 +1,4 @@
+import { cleanPlainText, manualSummary } from "../lib/importSummary";
 import {
   useEffect,
   useId,
@@ -52,7 +53,7 @@ import {
 } from "../lib/storage";
 import { partitionImportSourcesForSynthesis } from "../lib/importBatching";
 import { importNoteExcerpt, IMPORT_NOTE_TRUNCATION_NOTICE } from "../lib/importNoteExcerpt";
-import { restoreMarkdownFrontmatter, splitMarkdownFrontmatter, stripMarkdownComments } from "../lib/markdown";
+import { restoreMarkdownFrontmatter, splitMarkdownFrontmatter } from "../lib/markdown";
 import {
   buildCompactOrganizerContext,
   mergeGeneratedOrganizerArticles,
@@ -665,23 +666,6 @@ function uniqueSlug(title: string, reserved: Set<string>): string {
   return candidate;
 }
 
-function cleanPlainText(text: string): string {
-  return stripMarkdownComments(text)
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/!?\[((?:\\.|[^\]\\])*)\]\([^)]*\)/g, "$1")
-    .replace(/[#>*_`~[\]()|]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function manualSummary(text: string): string {
-  const plain = cleanPlainText(text);
-  if (plain.length <= 190) {
-    return plain || "Imported source ready for review.";
-  }
-  return `${plain.slice(0, 189).trimEnd()}…`;
-}
-
 function manualOrganizedNote(parsed: ParsedImport): OrganizedNote {
   const excerpt = importNoteExcerpt(parsed.text);
   const body = excerpt.text.trim();
@@ -690,7 +674,7 @@ function manualOrganizedNote(parsed: ParsedImport): OrganizedNote {
 
   return {
     title: parsed.title || "Untitled import",
-    summary: manualSummary(body),
+    summary: parsed.format === "markdown" ? "" : manualSummary(body),
     body: restoreMarkdownFrontmatter(document.prefix,
       [needsHeading ? `# ${parsed.title}` : "", document.content,
         excerpt.truncated ? IMPORT_NOTE_TRUNCATION_NOTICE : ""].filter(Boolean).join("\n\n")),
@@ -925,7 +909,7 @@ export function buildImportPayload(
           title: organized.title.trim() || parsed.title,
           slug: uniqueSlug(organized.title || parsed.title, reservedSlugs),
           summary:
-            organized.summary.trim() || manualSummary(organized.body),
+            !result && parsed.format === "markdown" ? "" : organized.summary.trim() || manualSummary(organized.body),
           body: organized.body.trim(),
           aliases: unique(organized.aliases).slice(0, 12),
           tags: unique(organized.tags).slice(0, 10),

@@ -20,8 +20,8 @@ This local Claude Desktop extension gives Claude direct access to Orion.
 
 ## Additional local tools
 
-The connector also exposes 21 additional local library tools (55 tools total:
-30 local library tools, 14 desktop workflows, three edit-review tools, one
+The connector also exposes 23 additional local library tools (57 tools total:
+32 local library tools, 14 desktop workflows, three edit-review tools, one
 active-editor-context reader, three voice work-order tools and four selected-editor-action tools):
 exact source passages and note sections, batch reads, concepts, link resolution
 and paths, provenance, tags, Markdown tasks, duplicate detection, integrity,

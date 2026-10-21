@@ -1,3 +1,4 @@
+import { isPassageAnchor, isPassageThreads } from "./passageThreads";
 import { CHAT_EDIT_INSTRUCTIONS, CHAT_EDIT_SCHEMA, CHAT_EDIT_INTENT_SCHEMA, parseChatEditIntent, CHAT_REWRITE_SCHEMA, chatRequestAllowsEdits, parseChatNoteEdits, parseChatRewrite } from "./chatEdits";
 import type {
   ApiKeyStatus,
@@ -2225,6 +2226,7 @@ function isOptionalStudio(value: unknown): boolean {
 function isStudioMessage(value: unknown): boolean {
   return (
     isRecord(value) &&
+    (value.passage === undefined || isRecord(value.passage) && typeof value.passage.noteId === "string" && isPassageAnchor(value.passage.anchor)) &&
     typeof value.id === "string" &&
     isOneOf(value.role, ["user", "assistant"]) &&
     typeof value.content === "string" &&
@@ -2340,6 +2342,7 @@ function isSpaceKnowledgeBlueprint(value: unknown): boolean {
 function isNote(value: unknown): boolean {
   return (
     isRecord(value) &&
+    (value.discussionThreads === undefined || isPassageThreads(value.discussionThreads)) &&
     typeof value.id === "string" &&
     typeof value.title === "string" &&
     typeof value.slug === "string" &&

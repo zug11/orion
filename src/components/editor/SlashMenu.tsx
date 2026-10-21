@@ -1,13 +1,13 @@
 import type { Editor } from "@tiptap/core";
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { FileText, ListTodo, List, ListOrdered, Image, FileCode2, Link2, Quote, Sheet, Trash2, ChevronRight } from "../../lib/icons";
+import { FileText, ListTodo, List, ListOrdered, Image, FileCode2, Link2, Quote, Sheet, Trash2, ChevronRight, MessageCircle } from "../../lib/icons";
 import { getSlashMatch, matchingSlashItems, type SlashMatch, type SlashCommand } from "./slashCommands";
 import { AIWritingMark } from "../icons/AIWritingMark";
 import { BlocksMark } from "../icons/BlocksMark";
 
-export const slashCommandIcons = {write:AIWritingMark,heading:FileText,block:BlocksMark,todo:ListTodo,bullet:List,numbered:ListOrdered,divider:FileText,image:Image,code:FileCode2,link:Link2,excerpt:Quote,table:Sheet};
-export function SlashMenu({editor, suspended, onCommand}:{editor:Editor;suspended:boolean;onCommand:(command:SlashCommand,range:{from:number;to:number})=>void}) {
+export const slashCommandIcons = {write:AIWritingMark,comment:MessageCircle,heading:FileText,block:BlocksMark,todo:ListTodo,bullet:List,numbered:ListOrdered,divider:FileText,image:Image,code:FileCode2,link:Link2,excerpt:Quote,table:Sheet};
+export function SlashMenu({editor, suspended, onCommand, canComment = false}:{editor:Editor;suspended:boolean;onCommand:(command:SlashCommand,range:{from:number;to:number})=>void;canComment?:boolean}) {
   const [match, setMatch] = useState<SlashMatch|null>(null);
   const [active,setActive] = useState(0);
   const [heading,setHeading] = useState(false);
@@ -18,7 +18,7 @@ export function SlashMenu({editor, suspended, onCommand}:{editor:Editor;suspende
   const [editorDOM, setEditorDOM] = useState<HTMLElement|null>(null);
   const previousMatch = useRef<string|null>(null);
   const id = useId();
-  const items = match ? heading ? [1,2,3,4,5,6].map(level=>({id:`h${level}` as SlashCommand,title:`Heading ${level}`,description:""})) : matchingSlashItems(match) : [];
+  const items = match ? heading ? [1,2,3,4,5,6].map(level=>({id:`h${level}` as SlashCommand,title:`Heading ${level}`,description:""})) : matchingSlashItems(match).filter(item => item.id !== "comment" || canComment) : [];
   function choose(command:SlashCommand) {
     if (!match) return;
     if (command === "heading") {setHeading(true);setActive(0);return;}

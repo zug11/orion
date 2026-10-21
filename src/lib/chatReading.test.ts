@@ -383,6 +383,49 @@ describe("adaptive Chat reading", () => {
 
 
 describe("Chat current-note edit proposals", () => {
+  it.each(["focused", "rewrite"] as const)("corrects a %s response outside the passage before returning a review", async firstIntent => {
+    const snapshot = fixture();
+    snapshot.notes[119].body += "\n\nSurrounding prose stays intact.";
+    const original = snapshot.notes[119].body, passage = "14 November";
+    const driver = vi.fn(async (request: ChatRequest): Promise<ChatResult> => {
+      const context = packet(request);
+      expect(context.editBoundary).toEqual({ noteId: "renewal", passage });
+      expect(context.correction).toContain("focused");
+      expect(context.editTarget).toBeUndefined();
+      if (driver.mock.calls.length === 1) return firstIntent === "focused"
+        ? { reply: "Review this.", editIntent: "focused", noteEdits: [{ before: "Surrounding prose stays intact.", after: "Unrequested change." }] }
+        : { reply: "", editIntent: "rewrite", noteRewrite: "Whole-note replacement." };
+      return { reply: "Review the selected date.", editIntent: "focused", noteEdits: [{ before: passage, after: "15 November" }] };
+    });
+    const result = await runChatReading(snapshot, "Suggest a rewrite.", driver, { purpose: "edit", focusNoteId: "renewal", editBoundary: passage });
+    expect(driver).toHaveBeenCalledTimes(2);
+    expect(result.editProposal).toMatchObject({ mode: "focused", edits: [{ before: passage, after: "15 November" }] });
+    expect(snapshot.notes[119].body).toBe(original);
+  });
+
+  it("keeps the exact boundary across read steps and refuses repeated scope expansion", async () => {
+    const snapshot = fixture();
+    const driver = vi.fn(async (request: ChatRequest): Promise<ChatResult> => {
+      const context = packet(request);
+      expect(context.editBoundary.passage).toBe("14 November");
+      expect(context.correction).toContain("focused");
+      if (driver.mock.calls.length === 1) return { reply: "", readRequests: [read("note", "renewal", "", 0)] };
+      return { reply: "Review this.", editIntent: "focused", noteEdits: [{ before: "The contract deadline", after: "The unrequested change" }] };
+    });
+    await expect(runChatReading(snapshot, "Suggest a rewrite.", driver, { purpose: "edit", focusNoteId: "renewal", editBoundary: "14 November" })).rejects.toThrow(/beyond this passage/);
+    expect(driver.mock.calls.length).toBeLessThanOrEqual(MAX_CHAT_READING_TURNS);
+    expect(snapshot.notes[119].body).toBe("The contract deadline is 14 November.");
+  });
+
+  it("rejects unavailable, ambiguous and hidden passage boundaries before a provider call", async () => {
+    for (const body of ["New text.", "14 November, then 14 November.", "- [x] 14 November"]) {
+      const snapshot = fixture(); snapshot.notes[119].body = body;
+      const driver = vi.fn();
+      await expect(runChatReading(snapshot, "Suggest a rewrite.", driver, { purpose: "edit", focusNoteId: "renewal", editBoundary: "14 November" })).rejects.toThrow(/passage/);
+      expect(driver).not.toHaveBeenCalled();
+    }
+  });
+
   it("reads the target before proposing edits and keeps the note unchanged", async () => {
     const snapshot = fixture();
     let turn = 0;

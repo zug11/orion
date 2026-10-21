@@ -66,7 +66,7 @@ describe("HomeView atmosphere", () => {
 
     expect(
       screen.getByRole("heading", {
-        name: "Everything you know, in context.",
+        name: "Everything you care about, in context.",
       }),
     ).toBeVisible();
     expect(

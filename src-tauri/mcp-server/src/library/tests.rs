@@ -567,13 +567,13 @@ fn read_cases() -> Vec<(&'static str, Value)> {
 fn all_library_tools_have_distinct_validated_contracts_and_read_calls_preserve_the_vault() {
     let (_dir, server) = server(&fixture());
     let before = fs::read(&server.vault_path).unwrap();
-    assert_eq!(definitions().len(), 21);
-    assert_eq!(tool_definitions().len(), 55);
+    assert_eq!(definitions().len(), 23);
+    assert_eq!(tool_definitions().len(), 57);
     let unique: BTreeSet<_> = definitions()
         .iter()
         .map(|def| def["name"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(unique.len(), 21);
+    assert_eq!(unique.len(), 23);
     for (name, args) in read_cases() {
         let value = run(&server, name, args.clone());
         assert_eq!(value["spaceId"], "a", "{name}");
@@ -2508,4 +2508,109 @@ fn source_citation_preserves_exact_unicode_ids_and_javascript_title_whitespace()
             .is_err());
         assert_eq!(fs::read(&server.vault_path).unwrap(), before);
     }
+}
+
+#[test]
+fn passage_comments_are_pending_metadata_with_scoped_atomic_version_guards() {
+    let initial = fixture();
+    let (_dir, server) = server(&initial);
+    let args = json!({"space_id":"a","note_id":"n1","expected_version":version(&server,"n1"),"thread_id":"t1","message_id":"m1","quote":"alpha 🧭 evidence","comment":"Clarify this evidence.","proposal":{"kind":"rewrite","text":"Stronger evidence."}});
+    run(&server, "orion_propose_passage_comment", args.clone());
+    assert_eq!(
+        saved_body(&server),
+        initial["spaces"][0]["notes"][0]["body"]
+    );
+    let saved: Value = serde_json::from_slice(&fs::read(&server.vault_path).unwrap()).unwrap();
+    assert_eq!(saved["spaces"][1], initial["spaces"][1]);
+    assert_eq!(
+        saved["spaces"][0]["spaceOverview"],
+        initial["spaces"][0]["spaceOverview"]
+    );
+    let read = run(
+        &server,
+        "orion_get_passage_threads",
+        json!({"note_id":"n1"}),
+    );
+    assert_eq!(read["threads"][0]["state"], "proposed");
+    assert_eq!(read["threads"][0]["anchorCurrent"], true);
+    assert_eq!(
+        read["threads"][0]["messages"][0]["proposal"]["text"],
+        "Stronger evidence."
+    );
+    let before = fs::read(&server.vault_path).unwrap();
+    assert!(server
+        .call_tool("orion_propose_passage_comment", args.as_object().unwrap())
+        .is_err());
+    let mut foreign = args.clone();
+    foreign["space_id"] = json!("b");
+    assert!(server
+        .call_tool(
+            "orion_propose_passage_comment",
+            foreign.as_object().unwrap()
+        )
+        .is_err());
+    let mut duplicate = args;
+    duplicate["expected_version"] = json!(version(&server, "n1"));
+    assert!(server
+        .call_tool(
+            "orion_propose_passage_comment",
+            duplicate.as_object().unwrap()
+        )
+        .is_err());
+    assert_eq!(fs::read(&server.vault_path).unwrap(), before);
+}
+
+#[test]
+fn passage_comments_reject_ambiguous_hidden_and_malformed_targets() {
+    let mut initial = fixture();
+    initial["spaces"][0]["notes"][0]["body"] =
+        json!("Same. Same.\n\nVisible.\n\n- [x] Hidden task");
+    let (_dir, server) = server(&initial);
+    let mut args = json!({"space_id":"a","note_id":"n1","expected_version":version(&server,"n1"),"thread_id":"t","message_id":"m","quote":"Same.","comment":"Discuss."});
+    for quote in ["Same.", "Hidden task", "missing"] {
+        args["quote"] = json!(quote);
+        assert!(server
+            .call_tool("orion_propose_passage_comment", args.as_object().unwrap())
+            .is_err());
+    }
+    args["quote"] = json!("Visible.");
+    run(&server, "orion_propose_passage_comment", args);
+    let read = run(
+        &server,
+        "orion_get_passage_threads",
+        json!({"note_id":"n1"}),
+    );
+    assert_eq!(read["threads"], json!([]));
+    assert_eq!(read["discussionOmitted"], true);
+    let history = run(
+        &server,
+        "orion_get_passage_threads",
+        json!({"note_id":"n1","task_view":"history"}),
+    );
+    assert_eq!(history["threads"].as_array().unwrap().len(), 1);
+    let mut raw: Value = serde_json::from_slice(&fs::read(&server.vault_path).unwrap()).unwrap();
+    raw["spaces"][0]["notes"][0]["discussionThreads"][0]["messages"] = json!([]);
+    assert!(validate_vault_value(raw).is_err());
+}
+
+#[test]
+fn standalone_note_comments_validate_without_fake_passages() {
+    let thread = json!({"id":"general","anchor":{"scope":"note","quote":"","text":""},"state":"open","createdAt":"now","updatedAt":"now","messages":[{"id":"m","role":"user","content":"A thought for later.","createdAt":"now"}]});
+    assert!(threads::valid(&[thread.clone()]));
+    let mut malformed = thread.clone();
+    malformed["anchor"]["quote"] = json!("invented");
+    assert!(!threads::valid(&[malformed]));
+    let mut initial = fixture();
+    initial["spaces"][0]["notes"][0]["discussionThreads"] = json!([thread]);
+    assert!(validate_vault_value(initial).is_ok());
+}
+
+#[test]
+fn comment_cursor_metadata_is_bounded_and_optional() {
+    let mut thread = json!({"id":"cursor","anchor":{"scope":"note","quote":"","text":"","cursor":{"before":"Earlier.\n\n","after":"Later."}},"state":"open","createdAt":"now","updatedAt":"now","messages":[{"id":"m","role":"user","content":"A thought.","createdAt":"now"}]});
+    assert!(threads::valid(&[thread.clone()]));
+    thread["anchor"]["cursor"]["before"] = json!("x".repeat(257));
+    assert!(!threads::valid(&[thread.clone()]));
+    thread["anchor"]["cursor"] = json!({"before":""});
+    assert!(!threads::valid(&[thread]));
 }

@@ -14,7 +14,7 @@ function Surface({ store, current = note, editor = false, displayed, preview = f
   return <><article ref={scope}><div data-voice-note-body={editor ? "editor" : "reading"}>
     {editor ? <div className="tiptap" contentEditable suppressContentEditableWarning>{current.body}</div> : current.body}
     {preview && <span data-chat-addition="true">Unsaved addition</span>}
-  </div></article><button>Mute microphone</button></>;
+  </div></article><button>Mute microphone</button><textarea aria-label="Message Orion" /></>;
 }
 function range(root: HTMLElement, from: number, to: number) {
   const range = document.createRange(); range.setStart(root.firstChild!, from); range.setEnd(root.firstChild!, to);
@@ -22,7 +22,7 @@ function range(root: HTMLElement, from: number, to: number) {
 }
 async function settle() { await act(() => vi.advanceTimersByTimeAsync(VOICE_SELECTION_SETTLE_MS)); }
 beforeEach(() => vi.useFakeTimers());
-afterEach(() => { cleanup(); window.getSelection()?.removeAllRanges(); vi.useRealTimers(); });
+afterEach(() => { cleanup(); window.getSelection()?.removeAllRanges(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 describe("settled voice selection capture", () => {
   it.each([false, true])("captures once after drag settles on the %s editor surface; voice controls preserve it", async editor => {
     const store = createVoiceSelectionStore("s"), listener = vi.fn(); store.subscribe(listener);
@@ -117,10 +117,46 @@ describe("settled voice selection capture", () => {
   it("clears an unfinished range when controls take over rather than leaving pending indefinitely", async () => {
     const store = createVoiceSelectionStore("s"), { container } = render(<Surface store={store} />);
     const body = container.querySelector<HTMLElement>('[data-voice-note-body="reading"]')!;
-    fireEvent.pointerDown(body); range(body, 0, 5); fireEvent.pointerUp(body);
+    fireEvent.pointerDown(body); range(body, 0, 5);
     expect(store.getEditorSnapshot().state).toBe("pending");
     fireEvent.pointerDown(screen.getByRole("button")); window.getSelection()?.removeAllRanges(); fireEvent(document, new Event("selectionchange")); fireEvent.pointerUp(screen.getByRole("button")); await settle();
     expect(store.getEditorSnapshot().state).toBe("none"); expect(store.getSnapshot()).toBeUndefined();
     expect(store.getEditorSnapshot()).not.toHaveProperty("text");
+  });
+  it.each([false, true])("retains the visible passage when the %s surface gives focus to Chat, without selecting its input", async editor => {
+    const registry = new Map<string, { ranges: Range[] }>();
+    vi.stubGlobal("CSS", { highlights: registry });
+    vi.stubGlobal("Highlight", class { constructor(...ranges: Range[]) { this.ranges = ranges; } ranges: Range[]; });
+    const store = createVoiceSelectionStore("s"), { container, unmount } = render(<Surface store={store} editor={editor} />);
+    const body = container.querySelector<HTMLElement>(editor ? ".tiptap" : '[data-voice-note-body="reading"]')!;
+    const original = body.innerHTML;
+    fireEvent.pointerDown(body); range(body, 0, 5); fireEvent.pointerUp(body); await settle();
+    const composer = screen.getByRole("textbox", { name: "Message Orion" });
+    // Programmatic Chat focus is covered as well as a pointer click.
+    composer.focus(); window.getSelection()?.removeAllRanges(); fireEvent(document, new Event("selectionchange")); await settle();
+    expect(document.activeElement).toBe(composer);
+    expect(window.getSelection()?.rangeCount).toBe(0);
+    expect(registry.get("orion-selected-passage")?.ranges[0].toString()).toBe("Alpha");
+    expect(store.getSnapshot()?.text).toBe("Alpha"); expect(body.innerHTML).toBe(original);
+    fireEvent.pointerDown(body); range(body, 6, 10); fireEvent.pointerUp(body); await settle();
+    expect(registry.get("orion-selected-passage")?.ranges[0].toString()).toBe("Beta");
+    fireEvent.pointerDown(body); range(body, 1, 1); fireEvent.pointerUp(body); await settle();
+    expect(registry.size).toBe(0);
+    fireEvent.pointerDown(body); range(body, 0, 5); fireEvent.pointerUp(body); await settle();
+    unmount(); expect(registry.size).toBe(0);
+  });
+  it("finishes a released highlight when Chat is opened before the debounce expires", async () => {
+    const store = createVoiceSelectionStore("s"), { container } = render(<Surface store={store} />);
+    const body = container.querySelector<HTMLElement>('[data-voice-note-body="reading"]')!;
+    fireEvent.pointerDown(body); range(body, 0, 5); fireEvent.pointerUp(body);
+    const composer = screen.getByRole("textbox", { name: "Message Orion" });
+    fireEvent.pointerDown(composer); composer.focus(); window.getSelection()?.removeAllRanges();
+    fireEvent(document, new Event("selectionchange")); fireEvent.pointerUp(composer); await settle();
+    expect(store.getEditorSnapshot()).toMatchObject({ state: "selected", text: "Alpha" });
+    expect(store.getSnapshot()?.text).toBe("Alpha");
+    expect(document.activeElement).toBe(composer);
+    expect(body.querySelector(".orion-selection-highlight")).toBeNull();
+    expect(document.querySelector(".orion-selection-highlight")).not.toBeNull();
+    act(() => store.clear()); expect(document.querySelector(".orion-selection-highlight")).toBeNull();
   });
 });

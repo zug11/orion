@@ -81,7 +81,7 @@ try {
   await request("initialize", { protocolVersion: "2025-06-18", clientInfo: { name: "isolated-workflow-harness", version: "1" }, capabilities: {} });
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const definitions = (await request("tools/list")).result.tools;
-  assert.equal(definitions.length, 55);
+  assert.equal(definitions.length, 57);
   const proposedTool = definitions.find((item) => item.name === "orion_propose_note_edit");
   assert.equal(proposedTool.inputSchema.additionalProperties, false);
   assert.equal(proposedTool.inputSchema.properties.edit.oneOf[0].properties.edits.maxItems, 8);
@@ -632,7 +632,7 @@ try {
   assert.equal(calls.length, beforeMismatch, "A voice request reached a mismatched library.");
   assert.equal((await tool(actionTools[2], actionLookup)).isError, true);
   assert.equal(calls.length, beforeMismatch, "An editor action reached a mismatched library.");
-  console.log(`MCP workflow/review/context/voice/editor-action transport verified: 55 tool schemas, typed dispatch, strict bounded validation, ${actualProjections.length} actual renderer projections through native validation (Unicode exact titles, 1-character budget, history/stale withholding), target/revision and pagination transport, separate acceptance/save receipts, permission-error propagation, bounded nonblocking mailbox polling, exact replay after timeout, capture-before-start and immutable action transport, strict result validation, no automatic acceptance, descriptor protection, vault identity, zero fixture writes and no credential output. Native/UI states and permissions are simulated; no live acceptance claimed.`);
+  console.log(`MCP workflow/review/context/voice/editor-action transport verified: 57 tool schemas, typed dispatch, strict bounded validation, ${actualProjections.length} actual renderer projections through native validation (Unicode exact titles, 1-character budget, history/stale withholding), target/revision and pagination transport, separate acceptance/save receipts, permission-error propagation, bounded nonblocking mailbox polling, exact replay after timeout, capture-before-start and immutable action transport, strict result validation, no automatic acceptance, descriptor protection, vault identity, zero fixture writes and no credential output. Native/UI states and permissions are simulated; no live acceptance claimed.`);
 } finally {
   child?.kill();
   if (server) await new Promise((resolve) => server.close(resolve));

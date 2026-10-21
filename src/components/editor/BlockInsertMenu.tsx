@@ -17,7 +17,7 @@ export function BlockInsertMenu({ editor, anchor, onChoose, onClose }: {
   const [position, setPosition] = useState({ left: 0, top: 0, maxHeight: 430 });
   const items = heading
     ? [1, 2, 3, 4, 5, 6].map(level => ({ id: `h${level}` as BlockInsertCommand, title: `Heading ${level}` }))
-    : [{ id: "paragraph" as const, title: "Text" }, ...matchingSlashItems({ from: 0, to: 0, query: "", inTable: false }).filter(item => item.id !== "block" && item.id !== "write")];
+    : [{ id: "paragraph" as const, title: "Text" }, ...matchingSlashItems({ from: 0, to: 0, query: "", inTable: false }).filter(item => item.id !== "block" && item.id !== "write" && item.id !== "comment")];
   useEffect(() => {
     const dom = editor.view.dom;
     dom.setAttribute("data-block-insert-open", "true");

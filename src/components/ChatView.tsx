@@ -18,6 +18,9 @@ import {
   type KeyboardEvent,
   type RefCallback,
 } from "react";
+import type { VoiceSelection } from "../lib/voiceSelection";
+import { PassageThreadConversation, type PassageChatContext } from "./PassageThreads";
+import { passageIsCurrent } from "../lib/passageThreads";
 import { ChatReply } from "./ChatReply";
 import type { AppSnapshot, ChatResult, ChatEditProposal } from "../types";
 import { SpaceVoice } from "./SpaceVoice";
@@ -34,6 +37,7 @@ import {
 } from "../lib/ai";
 
 export interface ChatViewProps {
+  passageChat?: PassageChatContext;
   onVoiceCommit?: (request: VoiceCommit) => Promise<VoiceReceipt>;
   voiceEnabled?: boolean;
   voiceControl?: { active: boolean; toggle: () => void };
@@ -45,7 +49,9 @@ export interface ChatViewProps {
   busy: boolean;
   progress?: string;
   onCancel?: () => void;
-  onSend: (prompt: string, focusNoteId?: string) => Promise<ChatResult>;
+  onSend: (prompt: string, focusNoteId?: string, selection?: VoiceSelection) => Promise<ChatResult>;
+  selection?: VoiceSelection;
+  onCommentReply?: (messageId: string, selection?: VoiceSelection) => Promise<void>;
   onReviewEdit?: (proposal: ChatEditProposal) => Promise<boolean>;
   compact?: boolean;
   visible?: boolean;
@@ -66,6 +72,7 @@ const noVoiceAction = () => {};
 
 export function ChatView({
   snapshot,
+  passageChat,
   onVoiceCommit,
   voiceEnabled = true,
   voiceControl,
@@ -82,13 +89,16 @@ export function ChatView({
   onOpenSource,
   onSaveReply,
   onUseReply,
+  onCommentReply,
   onOpenSettings,
   compact = false,
   visible = true,
   suggestionSeed = 0,
   focusNoteId,
+  selection,
 }: ChatViewProps) {
   const [draft, setDraft] = useState("");
+  const [threadBusy, setThreadBusy] = useState(false);
   const [voiceToggle, setVoiceToggle] = useState(0);
   const [localVoiceActive, setVoiceActive] = useState(false);
   const voiceActive = voiceControl?.active ?? localVoiceActive;
@@ -115,11 +125,11 @@ export function ChatView({
   const providerName = selectedAIProviderName(snapshot.settings);
   const isSending = busy || submitting;
   const externalVoiceActive = voiceControl?.active === true;
-  const hasThreadContent = messages.length > 0 || Boolean(pendingPrompt || error || editProposal) || isSending;
+  const hasThreadContent = !!passageChat || messages.length > 0 || Boolean(pendingPrompt || error || editProposal) || isSending;
   const focusNote = focusNoteId ? noteById.get(focusNoteId) : undefined;
   const suggestionCount = compact ? 2 : 4;
   const suggestions = useChatSuggestions(snapshot, {
-    enabled: visible && canSend && messages.length === 0 && !draft.trim() && !voiceActive && !isSending,
+    enabled: !passageChat && visible && canSend && messages.length === 0 && !draft.trim() && !voiceActive && !isSending,
     focusNoteId: focusNote?.id,
     seed: suggestionSeed + suggestionRevision,
   });
@@ -146,13 +156,16 @@ export function ChatView({
       return;
     }
     const sendNoteId = target ? target.noteId : focusNote?.id;
+    const capturedSelection = selection?.spaceId === snapshot.workspace.id && selection.noteId === sendNoteId
+      ? structuredClone(selection) : undefined;
 
     setDraft("");
     setError(null);
     setPendingPrompt(normalized);
     setSubmitting(true);
     try {
-      const result = await (sendNoteId ? onSend(normalized, sendNoteId) : onSend(normalized));
+      const result = await (capturedSelection ? onSend(normalized, sendNoteId, capturedSelection)
+        : sendNoteId ? onSend(normalized, sendNoteId) : onSend(normalized));
       setEditProposal(result.editProposal);
       setEditRevision(revision => revision + 1);
       setSuggestedContext(undefined);
@@ -191,23 +204,22 @@ export function ChatView({
   }
 
   return (
-    <section className={`chat-view view${compact ? " chat-view--compact" : ""}`}
+    <section className={`chat-view view${passageChat ? " passage-chat" : ""}${compact ? " chat-view--compact" : ""}`}
       data-voice-active={externalVoiceActive} data-voice-empty={!hasThreadContent}>
       <header className="chat-view__header">
         <div className="chat-view__title">
           <span className="eyebrow">
             <MessageCircle size={12} />
-            Space intelligence
+            {passageChat ? "Passage conversation" : "Space intelligence"}
           </span>
           <h1>Chat</h1>
-          <p>
-            Ask across everything in{" "}
-            <strong>{snapshot.workspace.name}</strong>.
-          </p>
+          {passageChat ? <p><button type="button" className="passage-chat__return" disabled={threadBusy} onClick={passageChat.onReturn}>Back to {passageChat.note.title}</button></p> : <p>
+            Ask across everything in{" "}<strong>{snapshot.workspace.name}</strong>.
+          </p>}
         </div>
 
         <div className="chat-view__header-actions">
-          <div className="chat-view__scope" aria-label="Chat knowledge scope">
+          {!passageChat && <div className="chat-view__scope" aria-label="Chat knowledge scope">
             <span>
               <strong>{snapshot.notes.length}</strong>
               notes
@@ -220,8 +232,9 @@ export function ChatView({
               <strong>{snapshot.concepts.length}</strong>
               concepts
             </span>
-          </div>
-          {messages.length > 0 && (
+          </div>}
+          {passageChat && <button type="button" className="chat-view__new" disabled={threadBusy} onClick={passageChat.onLeave}><MessageCircle size={14} />Space chat</button>}
+          {!passageChat && messages.length > 0 && (
             <button
               type="button"
               className="chat-view__new"
@@ -237,6 +250,12 @@ export function ChatView({
 
       <div className="chat-view__stage">
         <div className="chat-view__voice-scene" ref={voiceSceneRef} />
+        {passageChat ? <PassageThreadConversation key={passageChat.key} thread={passageChat.thread}
+          current={passageIsCurrent(passageChat.note, passageChat.thread.anchor)} onAction={passageChat.onAction}
+          references={{ notes: snapshot.notes, sources: snapshot.sources, onOpenNote, onOpenSource }}
+          initialDraft={passageChat.draft} active={visible} onBusyChange={setThreadBusy}
+          intro={<blockquote className="passage-chat__anchor">{passageChat.thread.anchor.scope === "note" ? "About this note" : passageChat.thread.anchor.text.slice(0, 600)}</blockquote>}
+          between={<div className="chat-view__voice-controls" ref={voiceControlsRef} />} /> : <>
         <div className="chat-view__thread" aria-live="polite" hidden={externalVoiceActive && !hasThreadContent}>
           {!externalVoiceActive && messages.length === 0 && !pendingPrompt ? (
             <div className="chat-welcome">
@@ -321,6 +340,10 @@ export function ChatView({
                   {message.role === "assistant" ? (
                     <>
                       <ChatReply snapshot={snapshot} message={message} onOpenNote={onOpenNote} onOpenSource={onOpenSource} />
+                      {onCommentReply && (message.passage || selection) && <button type="button" className="button quiet" disabled={submitting} onClick={() => {
+                        setSubmitting(true); setError(null);
+                        void onCommentReply(message.id, selection).catch(error => setError(error instanceof Error ? error.message : String(error))).finally(() => setSubmitting(false));
+                      }}>Comment on passage</button>}
                       <ChatNoteActions key={`${snapshot.workspace.id}:${message.id}`} snapshot={snapshot} message={message}
                         focusNote={focusNote} busy={isSending} onUseReply={onUseReply} onSaveReply={onSaveReply}
                         onOpenNote={onOpenNote} onReviewEdit={onReviewEdit} />
@@ -371,6 +394,11 @@ export function ChatView({
 
         <div className="chat-view__voice-controls" ref={voiceControlsRef} />
         <form className="chat-composer" onSubmit={handleSubmit}>
+          {selection?.spaceId === snapshot.workspace.id && selection.noteId === focusNote?.id && (
+            <div className="chat-composer__suggested-target" title={selection.text.slice(0, 240)}>
+              <span>Selected text</span><span>{selection.noteTitle}</span>
+            </div>
+          )}
           {suggestedContext?.noteId && draft.trim() && suggestedContext.noteId !== focusNote?.id && (
             <div className="chat-composer__suggested-target">
               <span>{suggestedContext.editing ? "Editing" : "Attached"}</span>
@@ -441,6 +469,7 @@ export function ChatView({
             <span>Enter to send · Shift Enter for a new line</span>
           </div>
         </form>
+        </>}
       </div>
     </section>
   );

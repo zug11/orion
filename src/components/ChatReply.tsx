@@ -1,11 +1,11 @@
 import { createContext, memo, useContext, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { AppSnapshot, ChatEvidence, StudioMessage } from "../types";
+import type { ChatEvidence, StudioMessage, Note, Source } from "../types";
 import { CitedPassage } from "./CitedPassage";
 
 interface ChatReplyProps {
-  snapshot: AppSnapshot;
+  snapshot: { notes: readonly Note[]; sources: readonly Source[] };
   message: StudioMessage;
   context?: "chat" | "search";
   onOpenNote: (id: string) => void;

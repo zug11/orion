@@ -112,3 +112,12 @@ describe("shared vault, independent windows", () => {
     }, { choice: "local", revision: base.updatedAt })).rejects.toThrow(WindowVaultConflict);
   });
 });
+
+it("merges passage-comment metadata with prose edited in another window", () => {
+  const base = fixture(), local = copy(base), remote = copy(base);
+  local.spaces[0].notes[0].discussionThreads = [{ id: "thread", anchor: { quote: "Original one", text: "Original one" }, state: "proposed", createdAt: base.updatedAt, updatedAt: base.updatedAt, messages: [{ id: "m", role: "assistant", content: "A comment", createdAt: base.updatedAt }] }];
+  remote.spaces[0].notes[0].body += "\n\nNew paragraph.";
+  const merged = mergeWindowVault(base, local, remote).spaces[0].notes[0];
+  expect(merged.body).toBe(remote.spaces[0].notes[0].body);
+  expect(merged.discussionThreads).toEqual(local.spaces[0].notes[0].discussionThreads);
+});

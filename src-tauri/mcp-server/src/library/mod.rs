@@ -13,9 +13,10 @@ mod read;
 #[cfg(test)]
 mod tests;
 pub(super) mod text;
+pub(crate) mod threads;
 mod write;
 
-pub const NAMES: [&str; 21] = [
+pub const NAMES: [&str; 23] = [
     "orion_list_sources",
     "orion_search_sources",
     "orion_get_source_passage",
@@ -37,13 +38,16 @@ pub const NAMES: [&str; 21] = [
     "orion_get_recent_changes",
     "orion_get_link_path",
     "orion_apply_note_command",
+    "orion_propose_passage_comment",
+    "orion_get_passage_threads",
 ];
-const WRITES: [&str; 5] = [
+const WRITES: [&str; 6] = [
     "orion_set_task_completion",
     "orion_edit_note_text",
     "orion_append_to_note",
     "orion_batch_update_metadata",
     "orion_apply_note_command",
+    "orion_propose_passage_comment",
 ];
 const MAX_SCAN_NOTES: usize = 2_000;
 const MAX_SCAN_BYTES: usize = 8 * 1024 * 1024;
@@ -250,6 +254,8 @@ pub fn definitions() -> Vec<Value> {
         (NAMES[18], "List current notes changed since an RFC3339 timestamp, sorted chronologically. This is current-state metadata, not a historical audit log; deletions and prior bodies are unavailable.", json!({"since":string(80)}), vec!["since"], true),
         (NAMES[19], "Find one shortest directed connection path between two exact notes using existing Orion links and persisted relationships. Search has explicit node, edge, text, and hop bounds; returns cited steps and no graph UI.", json!({"from_note_id":id,"to_note_id":id,"max_hops":integer(4,1,8)}), vec!["from_note_id","to_note_id"], false),
         (NAMES[20], "Apply a bounded local note formatting command, using the same portable Markdown as editor blocks and slash commands. Requires an exact Space and current destination note version. This does not execute slash text, editor UI, shell commands, pickers, or AI. Block accepts Markdown; other text/labels/cells are literal. Supports text, block, heading/h1-h6, todo, bullet, numbered, divider, quote, code, table, link, excerpt, image, paragraph_format, document_margins, image_layout, table_layout, and table_edit. inline_format applies/removes one bold, italic, strike or code mark with explicit enabled, an exact unique anchor of at most 20000 characters, and no replacement text or placement. It preserves visible text and unrelated marks; removal requires complete marked spans. Only ordinary paragraphs/ATX headings of at most 50000 characters are supported, including inside writing blocks. Code applies only to unformatted single-line text without literal backticks or whitespace at either edge, matching current editor serialization. unlink removes exactly one complete ordinary HTTP(S), note or concept inline link wrapper, preserving its label and marks; automatic concept vocabulary is unchanged. Reference links, bare URL/email paragraphs, generated source References footers, source citations, excerpt/passage metadata, images, HTML, lists, quotes, tables, code blocks and structural selections require their own operation or an explicit exact edit. Commands fail without saving if semantic preservation cannot be proven. Table commands require an exact complete standalone table anchor including adjacent metadata. table_layout patches width/header/banding/column widths. table_edit supports indexed row/column insertion and deletion, literal set_cell, guarded resize and delete; zero-based logical rows exclude synthetic headerless padding. Resize of occupied cells needs allow_content_removal:true. Explicit delete operations remove their addressed content; deleting the last row or column removes the table. New growth is limited to 20 rows/12 columns; existing larger imported axes remain intact. Layout commands patch only supplied fields; explicit zero/false resets, while omitted fields remain unchanged. Paragraph formatting requires one exact complete paragraph or heading, alignment left/justify and integer margin percentages 0-25. Document margins use the same bounded percentages. Image layout requires the exact standalone managed image in this note and a partial layout object; no asset import or new ownership. Layout commands accept no insertion placement or replacement text. Link accepts exactly one of target_note_id or url. HTTP/HTTPS URLs and bare domains are normalized locally with no credentials or network access; text is a literal label. Note link/excerpt targets must exist in this Space; excerpt also requires current target_expected_version and unique exact text from that note body. Image reuses a managed image URL already referenced in this Space. Use the finite table_edit operations for ordinary complete tables; unsupported nested structures remain exact version-guarded text edits. Placement inserts separated blocks; link replacement is inline. Stale retries cannot duplicate content.", editor::input_fields(), vec!["note_id","expected_version","command"], false),
+        (NAMES[21], "Propose an inline comment on an exact unique passage in a note, optionally including an addition or rewrite. Writes only pending discussion metadata; never changes the note body. Orion shows Accept comment/Discard and separate document review. Use stable thread_id and a fresh message_id; reuse a thread_id only to append at its original passage. Requires exact Space and current note version. No provider calls.", threads::fields(), vec!["note_id","expected_version","thread_id","message_id","quote","comment"], false),
+        (NAMES[22], "Read bounded passage discussions and pending proposals for one note. Working view omits cached discussions when completed tasks have been filtered; explicit task_view history is available for deliberate history lookup.", json!({"note_id":string(200),"expected_version":string(100),"offset":integer(0,0,32),"limit":integer(4,1,4),"message_offset":integer(0,0,30),"max_messages":integer(4,1,4)}), vec!["note_id"], false),
     ];
     specs.into_iter().map(|(name, description, mut fields, mut required, paged)| {
         let writes = WRITES.contains(&name);
@@ -274,6 +280,7 @@ fn output_schema(name: &str) -> Value {
         "orion_list_concepts" => ("concepts", "array"),
         "orion_list_tags" => ("tags", "array"),
         "orion_list_tasks" => ("tasks", "array"),
+        "orion_get_passage_threads" => ("threads", "array"),
         "orion_find_duplicate_notes" => ("groups", "array"),
         "orion_check_space_integrity" => ("issues", "array"),
         "orion_get_link_path" => ("path", "array"),

@@ -400,3 +400,41 @@ describe("ChatView", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Chat was stopped.");
   });
 });
+
+it("captures highlighted text with the typed request and offers passage comments on the reply", async () => {
+  const snapshot = fixture(), callbacks = handlers(), onCommentReply = vi.fn().mockResolvedValue(undefined);
+  const selection = { id: "selection-1", spaceId: snapshot.workspace.id, noteId: "a", noteTitle: "Wetland recovery", version: "version", text: "reed beds", range: { from: 7, to: 16, unit: "dom-text-utf16" as const }, hiddenTaskRanges: [] };
+  snapshot.studio.messages = [{ id: "answer", role: "assistant", content: "Consider the reed density.", cardIds: [], contextCardIds: [], createdAt: NOW, passage: { noteId: "a", anchor: { quote: "reed beds", text: "reed beds" } } }];
+  render(<ChatView {...callbacks} snapshot={snapshot} busy={false} focusNoteId="a" selection={selection} onCommentReply={onCommentReply} />);
+  expect(screen.getByText("Selected text")).toBeVisible();
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "What do you think of this?" } });
+  fireEvent.submit(screen.getByRole("textbox").closest("form")!);
+  await waitFor(() => expect(callbacks.onSend).toHaveBeenCalledWith("What do you think of this?", "a", selection));
+  expect(callbacks.onSend.mock.calls[0][2]).not.toBe(selection);
+  fireEvent.click(screen.getByRole("button", { name: "Comment on passage" }));
+  await waitFor(() => expect(onCommentReply).toHaveBeenCalledWith("answer", selection));
+});
+
+it("uses the same passage conversation in Chat while preserving the ordinary composer", async () => {
+  const snapshot = fixture(), callbacks = handlers();
+  snapshot.studio.messages = [{ id: "ordinary", role: "assistant", content: "Ordinary Space answer", createdAt: NOW, cardIds: [], contextCardIds: [] }];
+  const thread = { id: "thread", state: "open" as const, anchor: { quote: snapshot.notes[0].body, text: snapshot.notes[0].body }, createdAt: NOW, updatedAt: NOW,
+    messages: [{ id: "comment", role: "assistant" as const, content: "An anchored observation", createdAt: NOW }] };
+  const onAction = vi.fn().mockResolvedValue(undefined), onReturn = vi.fn(), onLeave = vi.fn();
+  const { rerender } = render(<ChatView {...callbacks} snapshot={snapshot} busy={false} />);
+  fireEvent.change(screen.getByRole("textbox", { name: "Message Orion" }), { target: { value: "My separate Space draft" } });
+  const passageChat = { key: "open-thread", note: snapshot.notes[0], thread, draft: "Follow this comment", onAction, onReturn, onLeave };
+  rerender(<ChatView {...callbacks} snapshot={snapshot} busy={false} passageChat={passageChat} />);
+  expect(screen.queryByText("Ordinary Space answer")).toBeNull();
+  expect(screen.getByRole("textbox", { name: "Discuss this passage" })).toHaveValue("Follow this comment");
+  expect(screen.queryByRole("button", { name: "Comment on passage" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+  await waitFor(() => expect(onAction).toHaveBeenCalledWith(expect.objectContaining({ kind: "reply", text: "Follow this comment" })));
+  expect(callbacks.onSend).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Space chat" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Back to Wetland recovery" })); expect(onReturn).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole("button", { name: "Space chat" })); expect(onLeave).toHaveBeenCalledOnce();
+  expect(callbacks.onClear).not.toHaveBeenCalled();
+  rerender(<ChatView {...callbacks} snapshot={snapshot} busy={false} />);
+  expect(screen.getByRole("textbox", { name: "Message Orion" })).toHaveValue("My separate Space draft");
+});

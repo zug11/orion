@@ -49,7 +49,7 @@ function readingText(root: HTMLElement): { text: string; positions: TextPosition
     const parent = node.parentElement;
     // Orion renders in-document concept/note links as buttons. Their visible
     // words remain part of the passage; the caller supplies only the prose root.
-    if (!parent || parent.closest("script, style, textarea, [aria-hidden='true']")) continue;
+    if (!parent || parent.closest("script, style, textarea, [aria-hidden='true'], [data-passage-thread]")) continue;
     const block = parent.closest("p, li, h1, h2, h3, h4, h5, h6, pre, td, th, blockquote");
     if (previousBlock !== undefined && previousBlock !== block && text && !text.endsWith(" ")) {
       text += " "; positions.push({ node, from: 0, to: 0 });

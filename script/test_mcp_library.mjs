@@ -133,8 +133,8 @@ try {
   await request("initialize", { protocolVersion: "2025-06-18", clientInfo: { name: "isolated-library-harness", version: "1" }, capabilities: {} });
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   definitions = (await request("tools/list")).result.tools;
-  assert.equal(definitions.length, 55);
-  assert.equal(new Set(definitions.map((tool) => tool.name)).size, 55);
+  assert.equal(definitions.length, 57);
+  assert.equal(new Set(definitions.map((tool) => tool.name)).size, 57);
   const sources = await tool("orion_list_sources", { query: "Contract evidence" }); assert.equal(sources.sources[0].id, "knowledge-source");
   const evidence = await tool("orion_search_sources", { query: "evidence", source_ids: ["knowledge-source"] }); assert.equal(evidence.matches[0].matchStart, 3);
   const passage = await tool("orion_get_source_passage", { source_id: "knowledge-source", start: 1, max_chars: 2 }); assert.equal(passage.text, "😀 ");
@@ -417,6 +417,18 @@ try {
   await tool("orion_apply_note_command", { ...invalidCitation, note_id: "citation-autolink", expected_version: await version("citation-autolink"), source_expected_version: await sourceVersion("citation-source"), placement: "after", anchor: "word" }, true);
   await tool("orion_apply_note_command", { ...invalidCitation, source_id: "source&copy;" }, true);
   assert.equal(await readFile(vaultPath, "utf8"), beforeInvalid);
+  const commentBefore = JSON.parse(await readFile(vaultPath, "utf8")).spaces.find(item => item.workspace.id === scope).notes.find(item => item.id === b.id).body;
+  const commentArgs = { space_id: scope, note_id: b.id, expected_version: await version(b.id), thread_id: "passage-thread-contract", message_id: "comment-contract", quote: "A focused search view keeps the answer readable and the evidence close.", comment: "Keep this balance in the next paragraph.", proposal: { kind: "addition", text: "An addition awaiting approval." } };
+  await tool("orion_propose_passage_comment", commentArgs);
+  const discussion = await tool("orion_get_passage_threads", { note_id: b.id, task_view: "history" });
+  assert.equal(discussion.threads[0].state, "proposed");
+  assert.equal(discussion.threads[0].messages[0].pending, true);
+  assert.equal(discussion.threads[0].messages[0].proposal.kind, "addition");
+  assert.equal(discussion.threads[0].anchorCurrent, true);
+  const commentSaved = await readFile(vaultPath, "utf8");
+  assert.equal(JSON.parse(commentSaved).spaces.find(item => item.workspace.id === scope).notes.find(item => item.id === b.id).body, commentBefore);
+  await tool("orion_propose_passage_comment", commentArgs, true);
+  assert.equal(await readFile(vaultPath, "utf8"), commentSaved);
   const saved = JSON.parse(await readFile(vaultPath, "utf8"));
   assert.deepEqual(saved.spaces.filter((space) => space.workspace.id !== scope), original.spaces.filter((space) => space.workspace.id !== scope));
   const updated = saved.spaces.find((space) => space.workspace.id === scope);
@@ -444,8 +456,8 @@ try {
   if (process.env.ORION_EDITOR_FIXTURE_OUT) {
     await writeFile(resolve(process.env.ORION_EDITOR_FIXTURE_OUT), JSON.stringify({ spaceId: scope, note: editorNote, sourceNote: updated.notes.find((note) => note.id === b.id), tableStates, inlineStates, citationStates, citationSources: updated.sources.filter(source => source.id.startsWith("citation-")) }, null, 2) + "\n");
   }
-  assert.equal(exercised.size, 21, "Not every new tool was exercised against the packaged executable.");
-  console.log("All 21 library tools verified against the exact executable: working/history visibility, fresh completion reads, original versions/scalar offsets/line indices, unchanged Markdown, guarded edits, safe external links, portable paragraph/document/image/table layout, structured table edits, inline marks/unlink, source citations and atomic attachments, rejected semantic hazards, atomicity, citations, and Space isolation.");
+  assert.equal(exercised.size, 23, "Not every new tool was exercised against the packaged executable.");
+  console.log("All 23 library tools verified against the exact executable: working/history visibility, fresh completion reads, original versions/scalar offsets/line indices, unchanged Markdown, guarded edits, pending passage comments without prose changes, safe external links, portable paragraph/document/image/table layout, structured table edits, inline marks/unlink, source citations and atomic attachments, rejected semantic hazards, atomicity, citations, and Space isolation.");
 } finally {
   child.kill();
   await rm(directory, { recursive: true, force: true });

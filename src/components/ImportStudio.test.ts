@@ -143,7 +143,7 @@ describe("buildImportPayload", () => {
     const payload = buildImportPayload([
       makeOrganizedSource("excerpt-import", makeParsedImport("Excerpt draft", "excerpt.md", text)),
     ], snapshot);
-    expect(payload.notes[0].summary).toBe("Exact quoted words. Original note");
+    expect(payload.notes[0].summary).toBe("");
     expect(payload.notes[0].body).toContain(text);
     expect(payload.sources[0].text).toBe(text);
   });
@@ -154,8 +154,7 @@ describe("buildImportPayload", () => {
     const payload = buildImportPayload([
       makeOrganizedSource("table-import", makeParsedImport("Table draft", "table.md", text)),
     ], snapshot);
-    expect(payload.notes[0].summary).toContain("Material");
-    expect(payload.notes[0].summary).toContain("Glass");
+    expect(payload.notes[0].summary).toBe("");
     expect(payload.notes[0].summary).not.toContain("orion-table");
     expect(payload.notes[0].summary).not.toContain("banded");
     expect(payload.notes[0].body).toContain(text);

@@ -202,7 +202,7 @@ const byId = new Map(responses.map((response) => [response.id, response]));
 if (byId.get(1)?.result?.serverInfo?.name !== "orion") {
   throw new Error("MCP initialize response is invalid.");
 }
-if (byId.get(2)?.result?.tools?.length !== 55) {
+if (byId.get(2)?.result?.tools?.length !== 57) {
   throw new Error("MCP tool list is invalid.");
 }
 const runtimeToolNames = byId.get(2).result.tools.map(tool => tool.name).sort();

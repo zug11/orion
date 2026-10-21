@@ -74,6 +74,10 @@ Import supports:
 
 Choose **Manual** to create one editable note per source without an AI request. Choose **Organize with AI** to turn the material into idea-first notes, reusable concepts, source-backed links, and integrated canonical articles.
 
+Manual Markdown imports leave the subtitle empty rather than copying the opening
+text or frontmatter beneath the title. Older automatic Markdown excerpts are
+hidden when they match the preserved source; custom summaries remain available.
+
 Media imports can be cancelled by removing the queued input. If one file fails,
 completed siblings remain available and Orion reports each failure. Long media
 is decoded in bounded overlapping windows with one loaded Whisper model.
@@ -555,7 +559,7 @@ Enable **Settings → Connections → Orion workflows**, select allowed Spaces,
 and independently allow API use and workflow writes. Older libraries start with
 these workflows disabled. The existing direct read/write tools keep their access.
 
-The expanded MCP surface has **55 tools**: 30 local library tools, fourteen
+The expanded MCP surface has **57 tools**: 32 local library tools, fourteen
 workflow/capability/job tools, three edit-review tools, one active-editor-context
 reader, three existing voice work-order tools and four selected-editor-action tools. It can build local evidence packets; research,
 compare, review, find gaps, or prepare briefs using Orion's configured AI;
@@ -826,7 +830,9 @@ partial coverage remain available on screen. Explicit save requests create norma
 notes, with confirmation after disk persistence; editing opens the existing note
 review with Accept changes, Discard and Undo. Voice and research incur API usage.
 
-The sidebar also starts voice without leaving your note. A glass pill follows
+The sidebar uses one combined chat-and-waveform mark to open Chat. Start voice
+from Chat’s composer. Collapsed navigation keeps a 44 px selection background
+around Home, Notes, Sources and Chat. A glass pill follows
 you through notes and views in the same Space and window, with microphone mute,
 end call, Chat and an expandable work summary. Collapsing Chat keeps the call;
 changing Space ends it. Dictation into a note remains a separate control.
@@ -909,3 +915,60 @@ include completed tasks in that request's instructions. It never rewrites a
 filtered selection and silently drops its hidden tasks. Manual page naming and
 local links remain available; generated writing still requires acceptance, with
 one Undo restoring the original.
+
+### Discuss a passage in place
+
+Highlight text in a note, open Chat and ask about it. The passage stays visibly
+highlighted while you type in Chat, and the **Selected text** cue identifies the
+reference attached to your next question. On a reply, choose
+**Comment on passage** to keep that response beside its original passage. A small
+comment icon sits below the passage; hover for a left-aligned preview or click
+to open a compact floating comment on a softly frosted glass surface,
+with a pill composer that grows as you type. Reduced transparency or increased
+contrast uses a solid surface. The initial comment is plain prose;
+only Orion's follow-up replies use the usual response styling. Your questions stay
+in the conversation context without appearing as message bubbles. Escape or a
+click outside closes it; reopening preserves an unsent reply. Enter sends and
+Shift+Enter adds a line. Creating a comment and reopening it use the same
+passage marker and panel placement, including cursor-placed comments.
+
+**Continue in Chat** carries the same thread and unsent reply into main Chat. New
+replies remain attached to that passage, so its comment icon recovers the discussion
+later. The note link returns to the passage, and **Space chat** restores your
+ordinary conversation and its draft without deleting the comment thread.
+
+You can also highlight a passage and choose **Comment** to write your own
+annotation in the same floating modal. This works in reading and editing views
+without an API key. In the editor, **/comment** opens the same draft for the current
+paragraph, or the paragraph directly above when you press Enter once. Leave a blank
+line (two Enters), or start in an empty note, for a standalone comment about the note.
+You can later attach it to highlighted text; until then it stays independent of the prose.
+Only the command text is removed; the surrounding prose stays intact.
+**Save comment** (or Cmd/Ctrl+Enter) saves it locally, labelled
+**You**; Enter adds a line. Closing and reopening retains your unsaved draft for
+that passage. Orion stays silent until you send a follow-up
+question, or explicitly choose an AI action such as Suggest Rewrite. Your original
+comment stays visible when the discussion continues beside the note or in Chat.
+
+**Add to Note** and **Suggest Rewrite** open the ordinary in-note Accept/Discard
+review, with Undo after acceptance. Add to Note inserts the comment text, keeping
+its saved citation excerpts in the discussion. Suggest Rewrite stays inside the
+attached passage, and Orion retries a response that strays beyond it before
+showing a review. **Generate article** queues an AI-written article
+from the comment and its original passage, using the existing generation queue.
+You can keep reading or discussing while it writes; Orion chooses the article's
+title. The action then becomes **Open article**, and a failed job offers Restart
+and Delete in the sidebar. Restart retains the same article and reference.
+Comments are stored separately from your
+prose and stay out of Markdown exports. If a passage changes or becomes ambiguous,
+its discussion remains available for reattachment to a fresh highlight.
+
+MCP agents can propose the same comments and optional additions/rewrites using
+`orion_propose_passage_comment`, and read them with `orion_get_passage_threads`.
+Agent comments remain pending until accepted; their document changes need a
+separate approval. Use exact Space/note IDs and the latest note version.
+
+Passage comments can be edited locally through **Edit comment**, or removed with
+**Delete comment** or Backspace/Delete on their focused marker. Slash comments
+retain their cursor position, including between passages. MCP agents can propose
+passage comments and read their discussions; document changes still require review.

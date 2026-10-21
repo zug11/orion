@@ -124,6 +124,7 @@ describe("combined portable MCP-content import and editor round trip", () => {
       byteSize: parsed.byteSize, status: "ready", included: true, parsed,
     } }], createEmptySnapshot(mcpFixture.spaceId, NOW));
     expect(payload.sources[0].text).toBe(scenario.markdown);
+    expect(payload.notes[0].summary).toBe("");
     let saved = payload.notes[0].body;
     for (let cycle = 0; cycle < 3; cycle += 1) {
       const editor = createEditor(saved);
@@ -146,6 +147,7 @@ describe("combined portable MCP-content import and editor round trip", () => {
       saved = editor.getMarkdown();
     }
     expect(payload.sources[0].text).toBe(scenario.markdown);
+    expect(payload.notes[0].summary).toBe("");
   });
 
   it("preserves one combined document through parsing, source creation, editor serialization and repeated reopen", () => {
@@ -201,6 +203,7 @@ describe("executable inline formatting through Markdown import and editor reopen
       byteSize: parsed.byteSize, status: "ready", included: true, parsed,
     } }], createEmptySnapshot(mcpFixture.spaceId, NOW));
     expect(payload.sources[0].text).toBe(scenario.markdown);
+    expect(payload.notes[0].summary).toBe("");
     let saved = payload.notes[0].body;
     let baseline: ReturnType<typeof inlineCharacters> | undefined;
     for (let cycle = 0; cycle < 3; cycle += 1) {

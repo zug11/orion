@@ -113,6 +113,7 @@ export function applyChatResult(
   now: string,
   messageIdFactory: () => string,
   noteIdFactory: () => string = messageIdFactory,
+  passage?: StudioMessage["passage"],
 ): AppSnapshot {
   const studio = normalizeStudio(snapshot.studio);
   const evidence = normalizeSourceEvidenceVersions((result.evidence ?? []).filter(isChatEvidence).filter((item) =>
@@ -138,6 +139,7 @@ export function applyChatResult(
     {
       id: messageIdFactory(),
       role: "assistant",
+      ...(passage ? { passage } : {}),
       content: result.reply.trim(),
       cardIds: [],
       contextCardIds: [],
@@ -348,7 +350,7 @@ function chatActionCharacterCount(action: ChatNoteAction): number {
   ].reduce((total, item) => total + [...item].length, 0);
 }
 
-function chatNoteFromAction(
+export function chatNoteFromAction(
   action: ChatNoteAction,
   now: string,
   id: string,

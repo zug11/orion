@@ -1,0 +1,91 @@
+.passage-thread-host { display:block; clear:both; width:100%; margin:2px 0 10px; }
+.passage-thread, .passage-thread-modal { font:13px/1.5 var(--ui-font, sans-serif); color:var(--text); text-align:left; user-select:text; }
+.passage-thread button, .passage-thread-modal button { font-family:var(--ui-font, sans-serif); cursor:pointer; }
+.passage-thread-modal button:disabled { cursor:default; }
+.passage-thread button:focus-visible, .passage-thread-modal :is(button,input,summary):focus-visible { outline:2px solid var(--periwinkle); outline-offset:3px; }
+.passage-thread__icon { position:relative; display:inline-flex; align-items:center; padding:5px; border:0; color:inherit; background:transparent; opacity:.58; border-radius:8px; text-align:left; }
+.passage-thread__icon:hover, .passage-thread__icon:focus-visible, .passage-thread__icon[aria-expanded=true] { opacity:1; background:color-mix(in srgb,var(--periwinkle) 12%,transparent); }
+.passage-thread[data-state=proposed] .passage-thread__icon { color:var(--periwinkle); opacity:1; }
+.passage-thread[data-state=resolved] .passage-thread__icon { opacity:.3; }
+.passage-thread__hover { display:none; position:absolute; left:0; bottom:calc(100% + 6px); box-sizing:border-box; width:min(280px,60vw); padding:11px 13px; border:1px solid var(--line); border-radius:14px; background:var(--surface-raised); color:var(--text-soft); box-shadow:0 5px 22px #0002; z-index:8; pointer-events:none; white-space:pre-wrap; text-align:left; font:400 12px/1.65 var(--ui-font,sans-serif); letter-spacing:normal; text-transform:none; overflow-wrap:anywhere; }
+.passage-thread__icon:not([aria-expanded=true]):hover .passage-thread__hover, .passage-thread__icon:not([aria-expanded=true]):focus-visible .passage-thread__hover { display:block; }
+
+/* Only the marker participates in document layout. Live text stays in the
+   WebView, on a frosted surface instead of the native toolbar's bitmap plane. */
+.chat-dock.passage-thread-modal { position:fixed; inset:0; z-index:120; background:transparent; }
+.passage-thread-modal .passage-thread__panel { position:absolute; display:flex; flex-direction:column; width:min(368px,calc(100vw - 32px)); height:auto; max-height:min(500px,calc(100dvh - 32px)); margin:0; text-align:left; }
+.passage-thread-modal .passage-thread__panel, .passage-thread__hover {
+  background:color-mix(in srgb,var(--surface-raised) 72%,transparent);
+  border:1px solid var(--line-strong);
+  box-shadow:0 16px 48px rgb(0 0 0 / .18);
+  backdrop-filter:blur(32px) saturate(135%);
+  -webkit-backdrop-filter:blur(32px) saturate(135%);
+}
+.passage-thread-modal .chat-dock__header { flex:none; padding:11px 12px 8px 14px; gap:8px; cursor:default; }
+.passage-thread-modal .chat-dock__header > div > span { max-width:305px; }
+.passage-thread-modal .chat-view--compact, .passage-thread-modal .chat-view__stage { display:flex; flex-direction:column; height:auto; min-height:0; flex:1 1 auto; }
+.passage-thread-modal .chat-view--compact .chat-view__thread { padding:6px 14px 10px; flex:1 1 auto; }
+.passage-thread-modal .chat-view--compact .chat-composer { padding:5px 10px 10px; flex:none; }
+.passage-thread-modal .chat-view__stage > .chat-view__thread { grid-row:1; }
+.passage-thread-modal .chat-view__stage > .chat-composer { grid-row:2; }
+.passage-thread-modal .chat-message { animation:none; }
+.passage-thread__comment { margin:0 0 12px; }
+.passage-thread-modal .chat-view--compact .chat-message { margin-bottom:16px; }
+.passage-thread-modal .chat-message__identity { font-size:10px; }
+.passage-thread-modal .chat-message__avatar { width:20px; height:20px; border-radius:7px; }
+.passage-thread-modal .chat-message__body { overflow-wrap:anywhere; }
+.passage-thread-modal .chat-message__body :is(h1,h2,h3,h4) { font-size:14px; line-height:1.5; margin:12px 0 6px; }
+.passage-thread-modal .passage-thread__actions { display:flex; flex-wrap:wrap; gap:5px; }
+.passage-thread-modal .passage-thread__actions button { min-height:27px; border:1px solid var(--line); border-radius:99px; padding:4px 9px; font-size:10px; font-weight:500; color:var(--text-soft); background:color-mix(in srgb,var(--surface-raised) 28%,transparent); }
+.passage-thread-modal .passage-thread__actions button:hover { color:var(--text); border-color:var(--line-strong); background:var(--periwinkle-wash); }
+.passage-thread-modal .chat-composer__field:focus-within { transform:none; }
+.passage-thread-modal .chat-composer__field { background:color-mix(in srgb,var(--surface-raised) 35%,transparent); backdrop-filter:none; -webkit-backdrop-filter:none; }
+.passage-thread-modal .chat-composer__field textarea:focus-visible { outline:none; }
+.passage-thread__warning button { border:1px solid var(--line-strong); border-radius:9px; padding:6px 10px; background:var(--surface-raised); color:inherit; }
+.passage-thread__notice { margin:0 4px 8px; color:var(--text-soft); font-size:11px; line-height:1.5; }
+.passage-thread__resolve { margin-top:4px; padding:0; border:0; background:none; color:var(--muted); font-size:10px; }
+.passage-thread__detached-label { font-size:11px; color:var(--muted); margin-left:8px; }
+.passage-thread-detached { margin:8px 0; }
+.passage-thread__warning { padding:8px 0; }
+.passage-thread__warning blockquote { margin:8px 0; padding-left:10px; border-left:2px solid var(--line-strong); }
+@media (prefers-contrast:more) { .passage-thread__icon { opacity:1; } .passage-thread-modal .passage-thread__panel, .passage-thread__hover { border:2px solid currentColor; } }
+@media (prefers-reduced-transparency:reduce), (prefers-contrast:more), (forced-colors:active) {
+  .passage-thread-modal .passage-thread__panel, .passage-thread__hover, .passage-thread-modal .chat-composer__field {
+    background:var(--surface-raised); backdrop-filter:none; -webkit-backdrop-filter:none;
+  }
+}
+
+/* The comment begins as prose. Only an actual follow-up uses Chat's reply header. */
+.passage-thread__input, .chat-dock .chat-view--compact .passage-thread__input,
+.passage-thread__input:focus-within, .chat-dock .chat-view--compact .passage-thread__input:focus-within {
+  min-height:40px; padding:4px 5px 4px 10px; border-radius:22px; gap:5px;
+  grid-template-columns:minmax(0,1fr) 28px; box-shadow:none; transform:none;
+}
+.passage-chat .passage-thread__input textarea, .passage-thread__input textarea, .chat-dock .chat-view--compact .passage-thread__input textarea {
+  min-height:30px; max-height:96px; padding:5px 4px; font-size:13px; line-height:20px; resize:none;
+}
+.passage-chat .passage-thread__input > button, .passage-thread__input > button, .chat-dock .chat-view--compact .passage-thread__input > button {
+  width:28px; height:28px; border-radius:50%; box-shadow:none;
+}
+.passage-chat__return { border:0; background:none; padding:0; color:var(--text-soft); font:inherit; cursor:pointer; text-decoration:underline; text-underline-offset:3px; }
+.passage-chat__anchor { margin:0 0 22px; padding:0 0 0 12px; border-left:2px solid var(--line-strong); color:var(--muted); font-size:13px; line-height:1.6; }
+.passage-chat .passage-thread__actions { gap:6px; }
+.passage-chat .passage-thread__actions button { min-height:28px; border-radius:99px; font-size:11px; font-weight:500; }
+.passage-chat .passage-thread__comment { margin-bottom:24px; }
+
+.passage-chat .chat-view__title p { display:block; }
+.passage-chat .chat-view__title { min-width:0; }
+.passage-thread__author { display:block; color:var(--muted); font:500 11px/1.5 var(--ui-font,sans-serif); margin-bottom:6px; }
+.passage-comment-selection { position:fixed; z-index:70; display:flex; align-items:center; gap:6px; padding:8px 12px; border:1px solid var(--line-strong); border-radius:99px; background:var(--surface-raised); color:var(--text); box-shadow:0 5px 20px #0002; font:500 12px var(--ui-font,sans-serif); cursor:pointer; }
+.passage-comment-selection:focus-visible { outline:2px solid var(--periwinkle); outline-offset:3px; }
+.passage-thread-modal .passage-comment-create { padding:8px 14px 14px; }
+.passage-comment-create .passage-thread__input { display:block; border-radius:20px; padding:8px; }
+.passage-comment-create .passage-thread__input textarea { width:100%; min-height:66px; max-height:160px; }
+.passage-comment-create .passage-thread__notice { margin:9px 2px 12px; }
+.passage-comment-create__actions { justify-content:flex-end; }
+.passage-chat__return { text-align:left; overflow-wrap:anywhere; }
+
+.passage-thread-host--inline { display:inline; clear:none; width:auto; margin:0 3px; vertical-align:baseline; }
+.passage-thread__delete { float:right; border:0; background:transparent; padding:4px; color:var(--muted); border-radius:6px; }
+.passage-thread__delete:hover { color:var(--text); background:var(--periwinkle-wash); }
+.passage-thread__edit textarea { box-sizing:border-box; width:100%; min-height:90px; resize:vertical; padding:9px; font:inherit; color:var(--text); background:color-mix(in srgb,var(--surface-raised) 40%,transparent); border:1px solid var(--line-strong); border-radius:12px; }

@@ -75,3 +75,11 @@ describe("excerpt source navigation", () => {
     expect(revealNoteExcerptPassage(root, { ...source, body: text }, request)).toBe(false);
   });
 });
+
+it("ignores comment previews when locating a returned passage", () => {
+  const root = document.createElement("div");
+  root.innerHTML = '<p>First paragraph.</p><div data-passage-thread="t"><button><span role="tooltip">First paragraph.</span></button></div>';
+  document.body.append(root);
+  expect(revealNoteExcerptPassage(root, source, { noteId: source.id, passages: [{ locator: "unique-text", text: "First paragraph." }], requestedAt: Date.now() })).toBe(true);
+  expect(window.getSelection()?.toString()).toBe("First paragraph.");
+});

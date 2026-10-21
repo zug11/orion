@@ -1,3 +1,4 @@
+import { captureCommentCursor, type CommentCursor } from "../lib/commentCursor";
 import type { ChatEditorChange } from "../lib/chatEdits";
 import { prepareChatEditorChange, applyPreparedChatChange, type PreparedChatChange } from "./editor/chatEditTransaction";
 import { ChatNoteReview, showChatNoteReview, clearChatNoteReview } from "./editor/ChatNoteReview";
@@ -17,6 +18,7 @@ import { insertNoteBlockContent, listNoteBlocks, wrapNoteBlock, wrapSlashNoteBlo
 import { NoteBlock as NoteBlockFrame } from "./editor/NoteBlock";
 import type { BlockInsertCommand } from "./editor/BlockInsertMenu";
 import type { SlashCommand } from "./editor/slashCommands";
+import { selectSlashCommentPassage } from "./editor/passageCommentSelection";
 import { ExcerptPicker } from "./editor/ExcerptPicker";
 import { NoteExcerpt } from "./editor/NoteExcerpt";
 import { requestNoteExcerptNavigation } from "../lib/noteExcerptNavigation";
@@ -118,6 +120,9 @@ export interface AIImageGenerationCallbacks {
 export interface RichEditorContextState extends EditorCaptureState { markdown: string; authored: boolean }
 
 interface RichNoteEditorProps {
+  onAddComment?: (scope?: "note", cursor?: CommentCursor) => void;
+  commentComposerActive?: boolean;
+  onThreadEditor?: (editor: Editor | null) => void;
   chatEdit?: ChatEditorChange;
   onChatEditComplete?: (id: string, error?: string, accepted?: boolean) => void;
   onChatEditBeforeAccept?: (id: string) => Promise<void>;
@@ -243,6 +248,9 @@ function sameCitationReferences(
 }
 
 export function RichNoteEditor({
+  onAddComment,
+  commentComposerActive = false,
+  onThreadEditor,
   chatEdit,
   onChatEditComplete,
   onChatEditBeforeAccept,
@@ -513,6 +521,7 @@ export function RichNoteEditor({
     [noteId],
   );
   editorRef.current = editor;
+  useEffect(() => { onThreadEditor?.(editor); return () => onThreadEditor?.(null); }, [editor, onThreadEditor]);
   const flowActive = useEditorState({ editor, selector: ({ editor: current }) => Boolean(current && getInlineFlow(current)) }) ?? false;
   useEffect(() => { onFlowActiveChange?.(flowActive); }, [flowActive, onFlowActiveChange]);
   useEffect(() => () => onFlowActiveChange?.(false), [onFlowActiveChange]);
@@ -1007,6 +1016,13 @@ export function RichNoteEditor({
 
   function runSlashCommand(command:SlashCommand, range:{from:number;to:number}) {
     if (!editor?.isEditable) return;
+    if (command === "comment") {
+      if (!onAddComment) return;
+      const target = selectSlashCommentPassage(editor, range);
+      if (target) onAddComment(target === "note" ? "note" : undefined, captureCommentCursor(editor.state.doc, range.from));
+      else setAnnouncement("The command changed. Type /comment again.");
+      return;
+    }
     if (command === "write") {
       editor.chain().focus().deleteRange(range).run();
       openWriteComposer();
@@ -2047,7 +2063,7 @@ export function RichNoteEditor({
       </div>
       {marginsVisible && <MarginsControl editor={editor} disabled={Boolean(aiOperation) || imageBusy || linkTitleBusy} onClose={closeMargins}/>}
       </NativeFormattingDock>}
-      <SlashMenu editor={editor} suspended={Boolean(chatReview || pendingInsert || linkDraft || citationDraft || writeComposerOpen || aiOperation || imageBusy || flowActive)} onCommand={runSlashCommand}/>
+      <SlashMenu editor={editor} canComment={Boolean(onAddComment)} suspended={Boolean(chatReview || pendingInsert || linkDraft || citationDraft || writeComposerOpen || aiOperation || imageBusy || flowActive || commentComposerActive)} onCommand={runSlashCommand}/>
       <input ref={slashImageInputRef} type="file" className="sr-only" accept={NOTE_IMAGE_ACCEPT} multiple tabIndex={-1} aria-hidden="true"
         onChange={(event) => {
           const files=Array.from(event.currentTarget.files??[]);event.currentTarget.value="";
@@ -2095,6 +2111,7 @@ export function RichNoteEditor({
         onOpenSource={onOpenSource}
       />
       <AIWritingControls
+        onAddComment={onAddComment}
         onComposerActiveChange={onAIComposerActiveChange}
         active
         writeComposerOpen={writeComposerOpen}
@@ -2102,7 +2119,7 @@ export function RichNoteEditor({
         onOpenLink={openLinkComposer}
         writingUnavailableReason={aiWritingUnavailableReason ?? `Add an ${aiProviderName ?? "AI provider"} key in Settings to write and rewrite.`}
         imageUnavailableReason={aiImageUnavailableReason}
-        suspended={Boolean(chatReview || flowActive || pendingInsert || linkDraft || citationDraft || linkTitleBusy || editor.isActive("image") || (editor.isActive("table") && editor.state.selection.empty))}
+        suspended={Boolean(commentComposerActive || chatReview || flowActive || pendingInsert || linkDraft || citationDraft || linkTitleBusy || editor.isActive("image") || (editor.isActive("table") && editor.state.selection.empty))}
         phase={aiOperation?.phase ?? "idle"}
         hasSelection={!aiSelectionEmpty}
         selectionPosition={aiSelectionPosition}

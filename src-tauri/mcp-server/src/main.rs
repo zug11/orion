@@ -133,6 +133,8 @@ struct Workspace {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Note {
+    #[serde(default)]
+    discussion_threads: Vec<Value>,
     #[serde(skip)]
     view_version: Option<String>,
     id: String,
@@ -1078,6 +1080,16 @@ fn validate_vault_value(value: Value) -> Result<Vault, ToolFailure> {
     {
         return Err(ToolFailure::new(
             "Orion's active Space ID does not exist in the vault.",
+        ));
+    }
+    if vault
+        .spaces
+        .iter()
+        .flat_map(|space| &space.notes)
+        .any(|note| !library::threads::valid(&note.discussion_threads))
+    {
+        return Err(ToolFailure::new(
+            "Orion's passage discussion metadata is invalid.",
         ));
     }
     Ok(vault)
@@ -3092,7 +3104,7 @@ mod tests {
                 "params": {}
             }))
             .expect("response");
-        assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(55));
+        assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(57));
         let definitions = tools["result"]["tools"].as_array().expect("tools");
         let browse = definitions
             .iter()
