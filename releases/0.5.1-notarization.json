@@ -1,0 +1,78 @@
+{
+  "version": "0.5.1",
+  "built_at": "2026-10-22T04:56:22.495436+00:00",
+  "source_head": "bd2ad136560aeb374080b6b933f249a42b9200ad",
+  "source_capture": "Built from the working implementation, then committed as source_commit without application changes. Both source fingerprints and final DMG hashes were rechecked before publication. Unused retained local conflict copies contributed to the full source fingerprints but are excluded from compilation and the Git commit. Subsequent publication changes are README and release records only.",
+  "artifacts": [
+    {
+      "edition": "small",
+      "version": "0.5.1",
+      "bundle_id": "app.orion.knowledge",
+      "artifact": "Orion-0.5.1-Apple-Silicon.dmg",
+      "bytes": 537292201,
+      "sha256": "30de538b5befd138440acabffd3fc04dbab466f2decae95022e9ea272b60965c",
+      "model_bytes": 487601967,
+      "model_sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+      "main_executable_sha256": "90da14581e57a533e63c8c263cec7c65252d667e247b34b1bebeca1b7e2fda5f",
+      "stamps": {
+        "orion-source.sha256": "07aa717712c06a9be1dd7d7b188f79f3140aa8088b69e0a5baf239b55368053e",
+        "orion-renderer.sha256": "e9a6d8d959fed4ac7d32693f6af0967e0a7548aecc079690553f8a97f687e2ba"
+      },
+      "notarization": {
+        "name": "Orion-0.5.1-Apple-Silicon.dmg",
+        "createdDate": "2026-10-22T04:34:57.065Z",
+        "status": "Accepted",
+        "id": "722177f3-ad47-4460-8c38-b6015399cfce"
+      },
+      "stapled": true,
+      "dmg_gatekeeper": "accepted",
+      "copied_app_gatekeeper": "accepted",
+      "deep_strict_signature": "passed",
+      "identity": "Developer ID Application: zac klugman (NX592DPNHM)",
+      "hardened_runtime": true,
+      "connectors_version": "0.5.1",
+      "verified_at": "2026-10-22T04:41:42.629938+00:00",
+      "launched_during_packaging": false
+    },
+    {
+      "edition": "medium",
+      "version": "0.5.1",
+      "bundle_id": "app.orion.knowledge",
+      "artifact": "Orion-0.5.1.m-Apple-Silicon.dmg",
+      "bytes": 1505355381,
+      "sha256": "6892207e1600dd518c228ae1a5d7a45a0a564008d6a37ca2bff2273a6393633f",
+      "model_bytes": 1533763059,
+      "model_sha256": "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+      "main_executable_sha256": "108b653a9439356e87b82d2a1dcd4b0c06ff0e1bd589a2ed8e1d3e0dd1a400bc",
+      "stamps": {
+        "orion-source.sha256": "3d740997b2e273c138f754f58a4b1016cbf9c1b53de65d7f0b5087be59baecff",
+        "orion-renderer.sha256": "aea17e843ef29ccd4a3a65205e1acf0c671e883ceb7c7d2210303b7a9af9812c"
+      },
+      "notarization": {
+        "status": "Accepted",
+        "createdDate": "2026-10-22T04:40:41.097Z",
+        "name": "Orion-0.5.1.m-Apple-Silicon.dmg",
+        "id": "0b059088-c2c2-47e2-93f9-245d0f714f43"
+      },
+      "stapled": true,
+      "dmg_gatekeeper": "accepted",
+      "copied_app_gatekeeper": "accepted",
+      "deep_strict_signature": "passed",
+      "identity": "Developer ID Application: zac klugman (NX592DPNHM)",
+      "hardened_runtime": true,
+      "connectors_version": "0.5.1",
+      "verified_at": "2026-10-22T04:56:14.737953+00:00",
+      "launched_during_packaging": false
+    }
+  ],
+  "implementation_verification": {
+    "renderer_passed": 2882,
+    "renderer_skipped": 1,
+    "native_passed": 221,
+    "native_ignored": 1,
+    "mcp_passed": 114,
+    "timing": "Implementation tests before the 0.5.1 metadata update; release pipelines rebuild the renderer/native app and rerun MCP tests and exact bundled connector checks."
+  },
+  "live_voice_acceptance": "Outstanding; no microphone or paid provider run during packaging.",
+  "source_commit": "59422781d07c62abc7aef2028152552cdff15eff"
+}

@@ -13,9 +13,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.5.0-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/zug11/orion/releases/download/v0.5.1/Orion-0.5.1-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
   ·
-  <a href="https://github.com/zug11/orion/releases/latest/download/Orion-0.5.0.m-Apple-Silicon.dmg">Whisper Medium edition</a>
+  <a href="https://github.com/zug11/orion/releases/download/v0.5.1/Orion-0.5.1.m-Apple-Silicon.dmg">Whisper Medium edition</a>
   ·
   <a href="#the-orchestration-topology">How it works</a>
   ·
@@ -24,7 +24,7 @@
   <a href="#local-first-by-construction">Privacy</a>
 </p>
 
-> Orion 0.5.0 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
+> Orion 0.5.1 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
 
 ## Knowledge work should produce knowledge, not another inbox
 
@@ -89,16 +89,16 @@ decoded audio; longer material can be split into separate files.
 **Settings → Intelligence** includes **GPT-6 Astra** for complex research and
 synthesis through your OpenAI connection, with Low through Extra high reasoning.
 
-## Orion 0.5.1 — local release
+## Orion 0.5.1
 
 Version 0.5.1 adds optional Perplexity web research and background consolidation
 of voice-worker findings. Voice can research automatically when useful; text
 Chat uses the **Web** pill. Related findings are combined incrementally and wait
 for the current spoken thought to settle before joining the conversation.
 Both Whisper editions contain the same application features. See the
-[0.5.1 release notes](releases/0.5.1.md) for local installers, verification and
-the remaining live-voice acceptance check. Public download links above continue
-to point to the published 0.5.0 release until 0.5.1 is uploaded.
+[0.5.1 release notes](releases/0.5.1.md) for downloads, verification and
+the remaining live-voice acceptance check. Both installers are Developer ID
+signed, Apple-notarized, stapled and Gatekeeper-accepted.
 
 ## Orion 0.5.0
 
@@ -270,7 +270,7 @@ There is no Markdown mode and no read/write split. Click **Edit**, write with a 
 
 While editing a note, the microphone in the sticky writing toolbar records dictation and inserts the transcript at the preserved text cursor. The control remains available as the note scrolls. Recording and transcription stay on-device; the temporary M4A is deleted when bundled Whisper finishes.
 
-The ordinary `0.5.0` download bundles Whisper Small and processes two-minute segments. The `0.5.0.m` download bundles Whisper Medium, loads it once per dictation, and transcribes overlapping 30-second windows in the background. Both keep all generated text hidden until you press Stop, and neither imposes a fixed recording-duration cap.
+The ordinary `0.5.1` download bundles Whisper Small and processes two-minute segments. The `0.5.1.m` download bundles Whisper Medium, loads it once per dictation, and transcribes overlapping 30-second windows in the background. Both keep all generated text hidden until you press Stop, and neither imposes a fixed recording-duration cap.
 
 AI actions are available when their provider keys are configured, without an editor AI toggle. Type `/write` or choose **More → Write with AI** to open a compact frosted composer at your captured cursor. Choose **Sentence**, **Paragraph**, or **Section**, optionally add a direction, then press **Write**. Leave the direction blank to continue from that cursor. Escape or Cancel returns you to writing; merely selecting text or opening the composer makes no AI request.
 
@@ -638,9 +638,9 @@ See [all 21 tools and their contracts](docs/mcp-library-tools.md).
 
 ## Download
 
-[**Download Orion 0.5.0 for Apple Silicon**](https://github.com/zug11/orion/releases/latest/download/Orion-0.5.0-Apple-Silicon.dmg)
+[**Download Orion 0.5.1 for Apple Silicon**](https://github.com/zug11/orion/releases/download/v0.5.1/Orion-0.5.1-Apple-Silicon.dmg)
 
-[**Download Orion 0.5.0 with Whisper Medium**](https://github.com/zug11/orion/releases/latest/download/Orion-0.5.0.m-Apple-Silicon.dmg)
+[**Download Orion 0.5.1 with Whisper Medium**](https://github.com/zug11/orion/releases/download/v0.5.1/Orion-0.5.1.m-Apple-Silicon.dmg)
 
 The standard installer includes Whisper Small. The larger Medium edition includes Whisper Medium and its persistent dictation worker. Both contain the same app features, two-tone shader picker, Claude connector, and Codex plugin.
 
