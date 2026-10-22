@@ -2,9 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createEmptySnapshot } from "../data/defaults";
 import type { ChatRequest } from "../types";
 import { voiceFindingDelivery } from "./voiceFindingDelivery";
-import { preparedFindingReference, synthesizeVoiceFindings, voiceSynthesisContext, VOICE_SYNTHESIS_DELIVERY_INSTRUCTION } from "./voiceFindingSynthesis";
+import { preparedFindingReference, synthesizeVoiceFindings, voiceSynthesisContext } from "./voiceFindingSynthesis";
 import { parseVoiceSynthesisContext, parseVoiceSynthesisResult } from "./voiceSynthesisProtocol";
-import { voiceAppendChunks } from "./liveVoice";
 
 function finding(id: string, text = "Evidence supports this, but only in the material checked.") {
   const delivery = voiceFindingDelivery({ id, spaceId: "space", revision: 2, sequence: 3, subject: "Question", prompt: "Compare these accounts", state: "completed",
@@ -24,7 +23,6 @@ describe("background synthesis contract", () => {
     const packet = JSON.parse(preparedFindingReference(prepared));
     expect(packet.findings.map((item: any) => item.provenance.sourceReferences[0].entityId)).toEqual(["note-a", "note-b"]);
     expect(packet.summary).toContain("disagree");
-    expect(voiceAppendChunks(VOICE_SYNTHESIS_DELIVERY_INSTRUCTION)).toHaveLength(1);
   });
   it("requires an exact partition and permits a quiet deferred result", () => {
     const context = voiceSynthesisContext("space", [finding("a"), finding("b")], "A different topic", []);

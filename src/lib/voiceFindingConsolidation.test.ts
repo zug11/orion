@@ -19,7 +19,7 @@ function setup() {
   const options = { enabled: () => true, valid: (item: VoiceDelivery) => !item.id || live.get(item.id)?.sequence === item.sequence,
     correcting: (_item: VoiceDelivery) => false, conversation: () => turn,
     synthesize: vi.fn(async (items: readonly VoiceDelivery[], conversation: VoiceSynthesisConversation, previous: readonly string[], _signal: AbortSignal) => prepared(items, conversation, previous)),
-    sendPrepared: vi.fn((_packet: string) => true), sendReference: vi.fn((_item: VoiceDelivery) => true), send: vi.fn((_item: VoiceDelivery) => true), flushContext: vi.fn() };
+    sendPrepared: vi.fn((_packet: string, _summary: string, _delegationId: string | null) => true), sendReference: vi.fn((_item: VoiceDelivery) => true), send: vi.fn((_item: VoiceDelivery) => true), flushContext: vi.fn() };
   const scheduler = new VoiceFindingScheduler(options);
   return { options, scheduler, live, changeTopic: () => { turn = { key: "second", text: "user: A completely different topic." }; scheduler.transcript("user", 900, "A completely different topic."); },
     add: (item: VoiceDelivery) => { live.set(item.id!, item); scheduler.enqueue(item); } };
@@ -28,7 +28,7 @@ beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(0); });
 afterEach(() => vi.useRealTimers());
 
 describe("incremental synthesis and the conversation floor", () => {
-  it("synthesizes while the voice speaks, holds a mid-sentence gap indefinitely, then sends one contribution", async () => {
+  it("synthesizes while the voice speaks, protects a short mid-sentence gap, then sends one contribution", async () => {
     const { options, scheduler, add } = setup();
     scheduler.transcript("assistant", 0, "The useful distinction here is");
     scheduler.audio({ ...silentVoiceActivity(), outputActive: true });
@@ -36,13 +36,31 @@ describe("incremental synthesis and the conversation floor", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     expect(options.synthesize).toHaveBeenCalledOnce(); expect(options.sendPrepared).not.toHaveBeenCalled();
     scheduler.audio(silentVoiceActivity());
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(4_000);
     expect(options.sendPrepared).not.toHaveBeenCalled(); expect(options.flushContext).not.toHaveBeenCalled();
     scheduler.transcript("assistant", 0, " how the evidence changes the idea.");
     await vi.advanceTimersByTimeAsync(2_500); expect(options.sendPrepared).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(500); expect(options.sendPrepared).toHaveBeenCalledOnce();
     expect(JSON.parse(options.sendPrepared.mock.calls[0][0]).findings.map((f: any) => f.id)).toEqual(["b", "a"]);
     expect(options.send).not.toHaveBeenCalled(); expect(options.flushContext).toHaveBeenCalledOnce();
+    scheduler.reset();
+  });
+  it("releases a prepared finding and pending context after sustained silence without terminal punctuation", async () => {
+    const { options, scheduler, add } = setup();
+    scheduler.transcript("assistant", 0, "I'm still thinking about what you said");
+    scheduler.audio({ ...silentVoiceActivity(), outputActive: true });
+    add(finding("a")); scheduler.contextChanged();
+    scheduler.reference({ ...finding("a"), reference: "Research is complete." });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(options.sendPrepared).not.toHaveBeenCalled(); expect(options.sendReference).not.toHaveBeenCalled();
+    scheduler.audio(silentVoiceActivity());
+    await vi.advanceTimersByTimeAsync(7_500);
+    expect(options.sendPrepared).not.toHaveBeenCalled(); expect(options.flushContext).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(options.sendPrepared).toHaveBeenCalledOnce(); expect(options.flushContext).toHaveBeenCalledOnce();
+    expect(options.sendReference).toHaveBeenCalledOnce();
+    expect(scheduler.status("a", 1)).toBe("shared");
+    await vi.advanceTimersByTimeAsync(30_000); expect(options.sendPrepared).toHaveBeenCalledOnce();
     scheduler.reset();
   });
   it("keeps interim updates incremental and coalesces newer updates without waiting for unfinished workers", async () => {
@@ -55,6 +73,17 @@ describe("incremental synthesis and the conversation floor", () => {
     add(finding("a", 3, true));
     await vi.advanceTimersByTimeAsync(10_000); expect(options.sendPrepared).toHaveBeenCalledTimes(2);
     expect(options.synthesize.mock.calls[1][2]).toEqual(["A combined finding, with its qualifications."]);
+    scheduler.reset();
+  });
+  it.each([
+    ["delegation-a", "delegation-a", "delegation-a"],
+    ["delegation-a", "delegation-b", null],
+    ["delegation-a", null, null],
+  ])("returns the consolidated substance with the shared delegation only: %s / %s", async (first, second, expected) => {
+    const { options, scheduler, add } = setup();
+    add({ ...finding("a"), delegationId: first }); add({ ...finding("b"), delegationId: second });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(options.sendPrepared).toHaveBeenCalledExactlyOnceWith(expect.any(String), "A combined finding, with its qualifications.", expected);
     scheduler.reset();
   });
   it("does not let a throttled interim batch strand a later completed worker", async () => {

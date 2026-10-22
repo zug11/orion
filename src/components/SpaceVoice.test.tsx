@@ -93,9 +93,9 @@ function finished(id = "climate", subject = "Climate", revision = 1): VoiceWorkO
   return { id, subject, revision, prompt: `Research ${subject}`, state: "completed", progress: "", result: { reply: `${subject} finding.` } };
 }
 function commentary() { return mock.append.mock.calls.filter(call => call[0] === "commentary"); }
-function backgroundFinding(job: VoiceWorkOrder, spaceId: string, sequence = 1) {
+function backgroundFinding(job: VoiceWorkOrder, spaceId: string, sequence = 1, delegationId: string | null = null) {
   const delivery = voiceFindingDelivery({ id: job.id, spaceId, revision: job.revision, sequence, subject: job.subject, state: job.state === "completed" ? "completed" : "running", result: job.result! });
-  mock.engine.deliver("commentary", delivery.commentary, null, { id: job.id, revision: job.revision, sequence, reference: delivery.quiet, background: true, completion: delivery.completion });
+  mock.engine.deliver("commentary", delivery.commentary, delegationId, { id: job.id, revision: job.revision, sequence, reference: delivery.quiet, background: true, completion: delivery.completion });
 }
 const synthesized = () => mock.append.mock.calls.filter(call => call[0] === "thinking" && String(call[1]).includes('"type":"consolidated_worker_finding"'));
 
@@ -112,15 +112,15 @@ describe("Space voice work-order integration", () => {
     expect(mock.editDriver.mock.calls[0][0].mode).toBe("voice-synthesis");
     expect(mock.append).not.toHaveBeenCalled();
     act(() => mock.options.onActivity({ inputActive: false, outputActive: false, measured: true }));
-    await settle(20_000); expect(mock.append).not.toHaveBeenCalled();
-    event({ type: "session.output_transcript.delta", delta: " how memory affects the narrator.", start_ms: 22_000, end_ms: 22_800 });
+    await settle(4_000); expect(mock.append).not.toHaveBeenCalled();
+    event({ type: "session.output_transcript.delta", delta: " how memory affects the narrator.", start_ms: 6_000, end_ms: 6_800 });
     await settle(2_500); expect(synthesized()).toHaveLength(0);
     await settle(500);
     expect(synthesized()).toHaveLength(1);
     expect(JSON.parse(synthesized()[0][1]).findings.map((f: any) => f.id)).toEqual(["one", "two"]);
-    expect(mock.append.mock.calls.filter(([kind]) => kind === "instructions")).toHaveLength(1);
+    expect(mock.append.mock.calls.filter(([kind]) => kind === "instructions")).toHaveLength(0);
     expect(mock.append.mock.calls.some(([, text]) => String(text).includes('"type":"worker_finding"'))).toBe(false);
-    expect(commentary()).toEqual([]);
+    expect(commentary()).toEqual([["commentary", "A combined finding with its caveats.", null]]);
   });
   it("keeps a failed synthesis actionable without hiding the research or automatically retrying", async () => {
     const { props } = setup(); const job = finished(); publish([job]);
@@ -137,6 +137,34 @@ describe("Space voice work-order integration", () => {
     expect(screen.getByText("Shared with voice")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Retry voice summary" })).toBeNull();
   });
+  it("delivers the actual summary after a missing final transcript delta, keeping the current task's delegation and retrying the pair", async () => {
+    const { props } = setup(); speak("Research climate", 0, "current-task"); await settle();
+    const job = finished(mock.jobs[0].id);
+    event({ type: "session.output_transcript.delta", delta: "I'm still thinking about what you said", start_ms: 1_000, end_ms: 1_500 });
+    act(() => mock.options.onActivity({ inputActive: false, outputActive: true, measured: true }));
+    publish([job]); act(() => backgroundFinding(job, props.snapshot.workspace.id, 1, "current-task"));
+    await settle(2_000);
+    mock.append.mockClear();
+    act(() => mock.options.onActivity({ inputActive: false, outputActive: false, measured: true }));
+    await settle(7_500); expect(mock.append).not.toHaveBeenCalled();
+    let rejectCommentary = true;
+    mock.append.mockImplementation(kind => {
+      if (kind === "commentary" && rejectCommentary) return false;
+      return true;
+    });
+    // Pending job context, exact reference, and then a rejected commentary.
+    await settle(1_500); expect(screen.getByText("Waiting for a pause")).toBeInTheDocument();
+    const rejectedOffers = commentary().length; expect(rejectedOffers).toBeGreaterThan(0);
+    rejectCommentary = false;
+    await settle(500);
+    expect(synthesized()).toHaveLength(rejectedOffers + 1);
+    expect(commentary()).toEqual(Array.from({ length: rejectedOffers + 1 }, () => ["commentary", "A combined finding with its caveats.", "current-task"]));
+    expect(synthesized().every(call => call[2] === "current-task")).toBe(true);
+    expect(mock.append.mock.calls.filter(([kind]) => kind === "instructions")).toHaveLength(0);
+    expect(mock.editDriver).toHaveBeenCalledOnce();
+    expect(screen.getByText("Shared with voice")).toBeInTheDocument();
+    await settle(20_000); expect(commentary()).toHaveLength(rejectedOffers + 1);
+  });
   it("keeps all 24 ready results reachable and distinguishes queued findings from offers to voice", async () => {
     const { props } = setup();
     const jobs = Array.from({ length: 24 }, (_, i) => finished(`job-${i}`, `Investigation ${i}`)); publish(jobs);
@@ -152,7 +180,7 @@ describe("Space voice work-order integration", () => {
     expect(screen.getAllByText(/Waiting for a pause|Combining findings/)).toHaveLength(20);
     const batches = synthesized();
     expect(batches).toHaveLength(1); expect(JSON.parse(batches[0][1]).findings).toHaveLength(4);
-    expect(commentary()).toEqual([]);
+    expect(commentary()).toEqual([["commentary", "A combined finding with its caveats.", null]]);
     fireEvent.click(screen.getAllByRole("button", { name: "Read aloud" })[23]);
     expect(mock.announce).toHaveBeenCalledWith("job-23");
   });
@@ -670,7 +698,7 @@ describe("Space voice work-order integration", () => {
     event({ type: "session.output_transcript.delta", delta: "Climate finding.", offset_ms: 3_000 });
     await settle(30_000); expect(synthesized()).toHaveLength(1);
     speak("That connection is interesting", 34_000); await settle(2_000);
-    expect(synthesized()).toHaveLength(1); expect(commentary()).toEqual([]);
+    expect(synthesized()).toHaveLength(1); expect(commentary()).toHaveLength(1);
   });
   it("buffers a complete finding during transcript activity, then sends it after a quiet interval", async () => {
     setup(); publish([finished()]);

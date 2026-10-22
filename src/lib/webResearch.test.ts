@@ -47,7 +47,7 @@ describe("bounded web research in the shared reader", () => {
       return { reply: "Finding [[e2]]." };
     }, { webResearch: research });
     expect(research).toHaveBeenCalledTimes(1);
-    expect(research.mock.calls[0]).toHaveLength(2);
+    expect(research).toHaveBeenCalledWith(webRead.query, expect.any(AbortSignal), "standard");
     expect(result.evidence?.[0]).toMatchObject({ id: "e2", kind: "web", text: "Second supported finding.", web: { url: "https://example.org/replication" } });
     expect(result.coverage).toMatchObject({ webSearches: 1, openedSources: 0, openedNotes: 0 });
     expect(result.webResearch).toEqual({ attempted: 1, completed: 1 });
@@ -106,16 +106,21 @@ describe("bounded web research in the shared reader", () => {
     expect(noResearch).not.toHaveProperty("webResearch");
   });
 
-  it("limits research attempts without silently repeating a failed or already-read query", async () => {
-    const research = vi.fn(async () => response()); let turn = 0;
+  it("admits all four useful research requests in one planning step", async () => {
+    let lookups = 0;
+    const research = vi.fn(async () => {
+      const index = ++lookups;
+      return { ...response(), responseId: `response_${index}`, sources: [{ ...response().sources[0], url: `https://example.org/paper-${index}` }] };
+    }); let turn = 0;
     await runChatReading(snapshot(), "Research", async request => {
       const packet = JSON.parse(request.readingContext!);
       if (turn++ === 0) return { reply: "", readRequests: Array.from({ length: 4 }, (_, i) => ({ ...webRead, query: `Question ${i}` })) };
-      expect(packet.webResearch.remainingRequests).toBe(0);
-      expect(packet.results.at(-1).error).toContain("three web research requests");
+      expect(packet.webResearch).not.toHaveProperty("remainingRequests");
+      expect(packet.webResearch.completedSearches).toBe(4);
+      expect(packet.results.every((item: { error?: string }) => !item.error)).toBe(true);
       return { reply: "Finding [[e1]]." };
     }, { webResearch: research });
-    expect(research).toHaveBeenCalledTimes(3);
+    expect(research).toHaveBeenCalledTimes(4);
   });
 
   it("automatically enables the same research path for voice workers, with attributable findings", async () => {

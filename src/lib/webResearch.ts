@@ -1,4 +1,12 @@
-import type { ChatEvidence } from "../types";
+import type { ChatEvidence, WebResearchDepth } from "../types";
+import profiles from "./webResearchProfiles.json";
+
+export { profiles as WEB_RESEARCH_PROFILES };
+export function webResearchDepth(value: unknown): WebResearchDepth {
+  if (value == null) return "standard";
+  if (value === "quick" || value === "standard" || value === "deep") return value;
+  throw new Error("Web research returned an invalid research depth.");
+}
 
 export interface WebResearchResult {
   responseId: string;
@@ -6,7 +14,7 @@ export interface WebResearchResult {
   retrievedAt: string;
   sources: { id: number; title: string; url: string; snippet: string; publishedAt?: string }[];
 }
-export type WebResearch = (query: string, signal: AbortSignal) => Promise<WebResearchResult>;
+export type WebResearch = (query: string, signal: AbortSignal, depth?: WebResearchDepth) => Promise<WebResearchResult>;
 
 /** Remote text is reference data. Only provider search-result URLs may become citations. */
 export function safeWebUrl(value: unknown): value is string {

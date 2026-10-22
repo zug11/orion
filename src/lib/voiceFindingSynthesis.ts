@@ -60,5 +60,3 @@ export function preparedFindingReference(prepared: PreparedVoiceFinding): string
   if (reference.length > 24_000) throw new Error("The finding batch needs a smaller voice summary. Research remains in the work summary. (VOICE_SYNTHESIS)");
   return reference;
 }
-
-export const VOICE_SYNTHESIS_DELIVERY_INSTRUCTION = "When your current thought is complete and the user has the floor free, bring in the prepared consolidated_worker_finding if relevant. Keep its qualifications, avoid repeating what you have already said, and then listen. If the user has moved on, keep it for a relevant reply. Do not interrupt, restart your answer, read metadata, start work, or promise another update.";

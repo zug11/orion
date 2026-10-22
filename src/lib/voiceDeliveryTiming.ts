@@ -4,6 +4,7 @@ export const VOICE_FINDING_MAX_WAIT_MS = 12_000;
 const QUIET_MS = 1_500;
 const BACKGROUND_GAP_MS = 12_000;
 const THOUGHT_QUIET_MS = 2_800;
+const INCOMPLETE_THOUGHT_QUIET_MS = 8_000;
 
 /** Controls when to offer commentary, never claims that the provider spoke it.
  * Transcript arrivals are the primary speech signal. Audio energy only extends
@@ -27,7 +28,8 @@ export class VoiceDeliveryTiming {
     if (role === "user") {
       this.userGeneration++; this.userHoldUntil = now + Math.max(QUIET_MS, quietForMs);
       // An actual human turn can take the floor from an interrupted fragment.
-      // Noise and elapsed time cannot clear this unfinished-thought latch.
+      // Noise cannot take the floor; missing punctuation has its own longer
+      // silence fallback rather than requiring the user to rescue delivery.
       this.assistantTail = "";
     } else {
       this.lastAssistantTranscript = now;
@@ -45,12 +47,14 @@ export class VoiceDeliveryTiming {
   }
   outputQuiet(now = Date.now()) {
     const tail = this.assistantTail.trim();
-    // GPT-Live has no turn-done event. Require both settled playback and a
-    // completed transcript sentence; a network gap is not a sentence ending.
+    // GPT-Live has no turn-done event. Punctuation shortens the quiet guard;
+    // missing punctuation or a dropped final delta cannot latch it forever.
+    // The fallback starts after the latest playback OR transcript, never the
+    // finding's arrival. Active audio and fresh deltas always retain the floor.
     // Do not apply the user's dangling-word routing heuristic here: a complete
     // answer such as "That's what it is for." must not latch delivery forever.
-    if (tail && (!/[.!?。！？]["'”’\)\]]*$/.test(tail) || /(?:\.{2,}|…)\s*["'”’\)\]]*$/.test(tail))) return false;
-    const quiet = tail ? THOUGHT_QUIET_MS : QUIET_MS;
+    const incomplete = tail && (!/[.!?。！？]["'”’\)\]]*$/.test(tail) || /(?:\.{2,}|…)\s*["'”’\)\]]*$/.test(tail));
+    const quiet = incomplete ? INCOMPLETE_THOUGHT_QUIET_MS : tail ? THOUGHT_QUIET_MS : QUIET_MS;
     return !this.activity.outputActive && now - this.lastOutput >= quiet && now - this.lastAssistantTranscript >= quiet;
   }
   inputSettled(now = Date.now()) { return now >= this.userHoldUntil; }

@@ -12,7 +12,7 @@ import { VoiceConversation, type VoiceTurn, type VoiceDelivery } from "../lib/vo
 import { VoiceReservations } from "../lib/voiceReservations";
 import { VoiceTurnRouter, type RoutingVoiceTurn } from "../lib/voiceTurnRouter";
 import { VoiceFindingScheduler } from "../lib/voiceFindingScheduler";
-import { synthesizeVoiceFindings, VOICE_SYNTHESIS_DELIVERY_INSTRUCTION } from "../lib/voiceFindingSynthesis";
+import { synthesizeVoiceFindings } from "../lib/voiceFindingSynthesis";
 import { VoiceNoteEdits } from "../lib/voiceNoteEdits";
 import { directVoiceNoteEdit } from "../lib/voiceWorkOrders";
 import { VoiceCallLifecycle } from "../lib/voiceCallLifecycle";
@@ -88,7 +88,10 @@ export function SpaceVoice(props: Props) {
     conversation: () => ({ key: JSON.stringify([activeSpace.current, liveProps.current.snapshot.settings.model,
       liveProps.current.snapshot.settings.reasoningEffort, conversation.current.recentTurns().slice(-1).map(({ key, prompt }) => [key, prompt])]), text: conversation.current.text() }),
     synthesize: (items, current, previous, signal) => synthesizeVoiceFindings(liveProps.current.snapshot, items, current, previous, signal, chatWithOrion),
-    sendPrepared: reference => voiceCall.append("thinking", reference) && voiceCall.append("instructions", VOICE_SYNTHESIS_DELIVERY_INSTRUCTION),
+    // The scheduler has already waited for the conversational floor. Send the
+    // actual contribution as speakable data, not another instruction to wait.
+    sendPrepared: (reference, summary, id) => voiceCall.append("thinking", reference, voiceCall.delegation(id))
+      && voiceCall.append("commentary", summary, voiceCall.delegation(id)),
     flushContext: () => syncContext(),
     onChange: () => { if (alive.current) setFindingVersion(value => value + 1); },
   }));

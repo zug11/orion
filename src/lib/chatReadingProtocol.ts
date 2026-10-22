@@ -39,11 +39,12 @@ export function parseChatReadingFinding(value: unknown): ChatReadingFinding | un
 
 export function parseChatReadRequests(value: unknown): ChatReadRequest[] {
   if (!Array.isArray(value) || value.length > 4 || value.some((item) =>
-    !record(item) || Object.keys(item).sort().join(",") !== "id,kind,query,start" ||
+    !record(item) || !["id,kind,query,start", "depth,id,kind,query,start"].includes(Object.keys(item).sort().join(",")) ||
     !["search", "cluster", "note", "source", "note-full", "source-full", "related", "web"].includes(String(item.kind)) ||
     typeof item.id !== "string" || [...item.id].length > 200 ||
     typeof item.query !== "string" || [...item.query].length > 600 ||
     (item.start !== null && (!Number.isSafeInteger(item.start) || Number(item.start) < 0 || Number(item.start) > 1_000_000_000)) ||
+    (item.depth != null && (!(["quick", "standard", "deep"] as unknown[]).includes(item.depth) || item.kind !== "web" || item.id !== "")) ||
     (item.kind === "search" ? !item.query.trim() || item.id !== ""
       : item.kind === "web" ? item.id === "" ? !item.query.trim() || item.start !== null
         : !/^[\w-]{1,200}$/.test(item.id) || item.start === null || item.query !== ""
@@ -80,6 +81,6 @@ export function isChatEvidence(value: unknown): value is ChatEvidence {
 export function isChatCoverage(value: unknown): value is ChatCoverage {
   return record(value) && ["availableNotes", "availableSources", "openedNotes", "openedSources", "searches"]
     .every((key) => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0) &&
-    (value.webSearches === undefined || (Number.isSafeInteger(value.webSearches) && Number(value.webSearches) >= 0 && Number(value.webSearches) <= 3)) &&
+    (value.webSearches === undefined || (Number.isSafeInteger(value.webSearches) && Number(value.webSearches) >= 0)) &&
     typeof value.limited === "boolean";
 }

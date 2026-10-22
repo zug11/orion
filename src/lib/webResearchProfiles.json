@@ -1,0 +1,36 @@
+{
+  "quick": {
+    "model": "openai/gpt-6-luna",
+    "maxSteps": 5,
+    "reasoningEffort": "minimal",
+    "maxOutputTokens": 3000,
+    "searchType": "fast",
+    "maxResults": 8,
+    "searchTokens": 4000,
+    "pageTokens": 1200,
+    "fetchUrls": 1,
+    "timeoutMs": 110000
+  },
+  "standard": {
+    "model": "openai/gpt-6-luna",
+    "maxSteps": 12,
+    "reasoningEffort": "medium",
+    "maxOutputTokens": 6000,
+    "maxResults": 10,
+    "searchTokens": 8000,
+    "pageTokens": 2000,
+    "fetchUrls": 3,
+    "timeoutMs": 240000
+  },
+  "deep": {
+    "model": "openai/gpt-6.1-sol",
+    "maxSteps": 24,
+    "reasoningEffort": "high",
+    "maxOutputTokens": 12000,
+    "maxResults": 12,
+    "searchTokens": 12000,
+    "pageTokens": 3000,
+    "fetchUrls": 6,
+    "timeoutMs": 480000
+  }
+}

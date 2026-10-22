@@ -13,9 +13,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zug11/orion/releases/download/v0.5.1/Orion-0.5.1-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/zug11/orion/releases/download/v0.5.2/Orion-0.5.2-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
   ·
-  <a href="https://github.com/zug11/orion/releases/download/v0.5.1/Orion-0.5.1.m-Apple-Silicon.dmg">Whisper Medium edition</a>
+  <a href="https://github.com/zug11/orion/releases/download/v0.5.2/Orion-0.5.2.m-Apple-Silicon.dmg">Whisper Medium edition</a>
   ·
   <a href="#the-orchestration-topology">How it works</a>
   ·
@@ -24,7 +24,7 @@
   <a href="#local-first-by-construction">Privacy</a>
 </p>
 
-> Orion 0.5.1 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
+> Orion 0.5.2 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
 
 ## Knowledge work should produce knowledge, not another inbox
 
@@ -42,7 +42,7 @@ The result is a personal wiki that gets more coherent over time:
 - **Projects stay separate.** Spaces are hard boundaries for notes, sources, concepts, Chat, navigation, and AI context.
 - **Chat beside your writing.** A quiet glass circle in the bottom-right opens your Space conversation without leaving the document. It appears when the selected AI provider is configured, without an AI toggle, and stays hidden during Flow. Collapse it or expand into full Chat without losing your draft or pending reply. An attached-note picker makes the reading and editing target explicit; Orion searches, follows connections and reads exact passages before citing them. Stop interrupts the response. Ask naturally: Orion infers whether to answer in Chat, change specific passages, or revise the whole attached note. There is no editing-mode picker. **Review in note** shows highlighted replacements and gray additions in the actual editor. **Accept changes** saves through normal autosave with one Undo; **Discard** keeps the original. Existing chat replies also offer **Use in note**. Newer typing invalidates old suggestions. Creating notes still requires an explicit request.
 - **Chat reads as it goes.** Chat uses the Space hierarchy and compact note directories to find promising material, searches note and source bodies, then opens exact passages and follows connections as needed. Replies can cite the passages actually read; click a citation to inspect it or open the original item. Reading is bounded, can be stopped, and reports partial coverage. Chat can create notes only when explicitly asked. Created notes and **Keep as note** retain exact quoted passages and source links, including when an original later changes or is removed. This uses the selected OpenAI or Anthropic model and may make several requests for a question.
-- **Optional web research.** Add your Perplexity API key in **Settings → Web research**, then use **Test connection** to check it. Voice workers can look up external evidence automatically when useful, while the conversation continues. Text Chat uses web research only when its **Web** pill is selected; it starts off and resets when you change Spaces. Your selected OpenAI or Anthropic model still handles conversation and proposed edits. Web citations show the website, retrieval date and retained search excerpt, and survive **Keep as note**. Long research stays with its worker and is read in sections internally without repeating the web lookup. Research that cannot produce supported findings shows a retryable failure instead of an empty ready result. Research questions are sent to Perplexity and incur API usage. The key stays in macOS Keychain; this connection requires the desktop app.
+- **Optional web research.** Add your Perplexity API key in **Settings → Web research**, then use **Test connection** to check it. Voice workers can look up external evidence automatically when useful, while the conversation continues. Text Chat uses web research only when its **Web** pill is selected; it starts off and resets when you change Spaces. Orion chooses quick, standard or deep research from your request, with more reasoning, source coverage and time for complex investigations. It can deepen an insufficient lookup while reusing completed research when it is enough; no separate depth control is needed. Your selected OpenAI or Anthropic model still handles conversation and proposed edits. Web citations show the website, retrieval date and retained search excerpt, and survive **Keep as note**. Long research stays with its worker and is read in sections internally without repeating the web lookup. Research that cannot produce supported findings shows a retryable failure instead of an empty ready result. Research questions are sent to Perplexity and incur API usage. The key stays in macOS Keychain; this connection requires the desktop app.
 - **Search reaches the original text.** Search finds phrases and relevant combinations of words throughout note bodies and preserved sources. Filter Notes, Sources, or Concepts, see highlighted matches, and jump to the passage. Choose **Ask AI** at the right of the search field for a cited answer from the current Space. Switch between Matches and Answer without repeating the request; ordinary search stays local and works without a key.
 - **AI stays optional.** Manual organization and the entire local knowledge layer work without OpenAI or Anthropic.
 
@@ -88,6 +88,18 @@ decoded audio; longer material can be split into separate files.
 
 **Settings → Intelligence** includes **GPT-6 Astra** for complex research and
 synthesis through your OpenAI connection, with Low through Extra high reasoning.
+
+## Orion 0.5.2
+
+Version 0.5.2 makes web research adapt to the question: quick checks, ordinary
+research and deeper investigations receive different reasoning and search
+allowances. Research can continue beyond the former three-lookup quota while
+useful evidence is still needed. Repeated failures or unchanged evidence bring
+the assignment back to a supported answer with its remaining gaps stated.
+Voice findings also reach the main conversation more reliably, with substantive
+answers replacing holding phrases while preserving the current spoken turn.
+Both Whisper editions contain the same application features. See the
+[0.5.2 release notes](releases/0.5.2.md) for changes and verification.
 
 ## Orion 0.5.1
 
@@ -270,7 +282,7 @@ There is no Markdown mode and no read/write split. Click **Edit**, write with a 
 
 While editing a note, the microphone in the sticky writing toolbar records dictation and inserts the transcript at the preserved text cursor. The control remains available as the note scrolls. Recording and transcription stay on-device; the temporary M4A is deleted when bundled Whisper finishes.
 
-The ordinary `0.5.1` download bundles Whisper Small and processes two-minute segments. The `0.5.1.m` download bundles Whisper Medium, loads it once per dictation, and transcribes overlapping 30-second windows in the background. Both keep all generated text hidden until you press Stop, and neither imposes a fixed recording-duration cap.
+The ordinary `0.5.2` download bundles Whisper Small and processes two-minute segments. The `0.5.2.m` download bundles Whisper Medium, loads it once per dictation, and transcribes overlapping 30-second windows in the background. Both keep all generated text hidden until you press Stop, and neither imposes a fixed recording-duration cap.
 
 AI actions are available when their provider keys are configured, without an editor AI toggle. Type `/write` or choose **More → Write with AI** to open a compact frosted composer at your captured cursor. Choose **Sentence**, **Paragraph**, or **Section**, optionally add a direction, then press **Write**. Leave the direction blank to continue from that cursor. Escape or Cancel returns you to writing; merely selecting text or opening the composer makes no AI request.
 
@@ -638,9 +650,9 @@ See [all 21 tools and their contracts](docs/mcp-library-tools.md).
 
 ## Download
 
-[**Download Orion 0.5.1 for Apple Silicon**](https://github.com/zug11/orion/releases/download/v0.5.1/Orion-0.5.1-Apple-Silicon.dmg)
+[**Download Orion 0.5.2 for Apple Silicon**](https://github.com/zug11/orion/releases/download/v0.5.2/Orion-0.5.2-Apple-Silicon.dmg)
 
-[**Download Orion 0.5.1 with Whisper Medium**](https://github.com/zug11/orion/releases/download/v0.5.1/Orion-0.5.1.m-Apple-Silicon.dmg)
+[**Download Orion 0.5.2 with Whisper Medium**](https://github.com/zug11/orion/releases/download/v0.5.2/Orion-0.5.2.m-Apple-Silicon.dmg)
 
 The standard installer includes Whisper Small. The larger Medium edition includes Whisper Medium and its persistent dictation worker. Both contain the same app features, two-tone shader picker, Claude connector, and Codex plugin.
 
@@ -709,7 +721,7 @@ Browser preview is a renderer-development convenience, not Orion's desktop secur
 | `cargo test --manifest-path src-tauri/Cargo.toml` | Run Rust host tests |
 | `cargo test --manifest-path src-tauri/mcp-server/Cargo.toml` | Run MCP server tests |
 
-Native bundles are written below `src-tauri/target/release/bundle/`. Public release packaging additionally requires Developer ID signing and notarization. Use `./script/package_release.sh 0.5.1` for Small and `ORION_WHISPER_MODEL=medium ./script/package_release.sh 0.5.1.m` for Medium rather than treating a local ad-hoc build as a distributable release. Set `ORION_NOTARY_PROFILE=orion-notary` on the maintainer's Mac to submit and verify the finished installers with Apple.
+Native bundles are written below `src-tauri/target/release/bundle/`. Public release packaging additionally requires Developer ID signing and notarization. Use `./script/package_release.sh 0.5.2` for Small and `ORION_WHISPER_MODEL=medium ./script/package_release.sh 0.5.2.m` for Medium rather than treating a local ad-hoc build as a distributable release. Set `ORION_NOTARY_PROFILE=orion-notary` on the maintainer's Mac to submit and verify the finished installers with Apple.
 
 ## Architecture
 
@@ -901,12 +913,15 @@ Every retained result is reachable in the work summary, which distinguishes
 findings being combined, waiting for a pause, unavailable for voice summary, or shared
 with the voice connection. **Read aloud** requests a result directly. Shared
 means sent to the connection; it does not claim that you heard it.
-Prepared contributions wait for playback to settle and the assistant transcript
-to end a sentence. Findings and background context changes stay local through an
-unfinished spoken fragment. This approximates a finished thought because the
-voice provider does not expose a turn-completion event; natural delivery still
-needs a live listening check. Input-noise waits retain a 12-second cap, which
-never overrides speech or an unfinished assistant sentence. Topic changes,
+Prepared contributions wait for settled playback and a completed sentence, with
+an eight-second continuous-silence fallback if the final transcript punctuation
+never arrives. Active speech always keeps the floor. The actual consolidated
+summary then goes through the provider's spoken-update channel alongside its
+source context, rather than another instruction to wait. The main voice can
+answer from existing knowledge while research and consolidation continue.
+This approximates a finished thought because the voice provider does not expose
+a turn-completion event; natural delivery still needs a live listening check.
+Input-noise waits retain a 12-second cap, which never overrides speech. Topic changes,
 corrections and newer findings invalidate stale prepared contributions. A failed
 summary leaves the research available with **Retry voice summary**. Pending corrections resolve before their old
 findings can be offered. Explicit spoken assignments start independent work orders even when a provider

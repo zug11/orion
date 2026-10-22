@@ -16,7 +16,7 @@ import { truncateUnicode } from "./text";
 import { voiceSelectionContext, type VoiceSelection } from "./voiceSelection";
 import { resolveChatEvidenceMarkers } from "./chatCitations";
 import { sourceEvidenceVersion } from "./evidenceVersions";
-import { validateWebResult, validWebMetadata, webSynthesisPage, type WebResearch, type WebResearchResult } from "./webResearch";
+import { validateWebResult, validWebMetadata, webSynthesisPage, webResearchDepth, WEB_RESEARCH_PROFILES, type WebResearch, type WebResearchResult } from "./webResearch";
 import { stableKnowledgeHash } from "./spaceKnowledge";
 import { documentCoverage, documentPassages } from "./chatDocumentReading";
 import { resolveWikiLinks } from "./wiki";
@@ -30,6 +30,20 @@ import { boundedCheckpointFindingKeys, checkpointFindingKey, type ChatReadingChe
 
 export const MAX_CHAT_READING_TURNS = 6;
 export const CHAT_READING_DEADLINE_MS = 180_000;
+// Memory bounds, independent of how many new questions a worker may research.
+const RETAINED_WEB_RESULTS = 3;
+const WEB_LOOKUP_JOURNAL = 128;
+const WEB_EVIDENCE_KEYS = 2_048;
+const normalizedWebQuery = (query: string) => query.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+const webDepthRank = (depth: unknown) => ["quick", "standard", "deep"].indexOf(webResearchDepth(depth ?? "quick"));
+const readKey = (request: ChatReadRequest) => JSON.stringify(request.kind === "web"
+  ? { kind: request.kind, id: request.id, query: normalizedWebQuery(request.query), start: request.start,
+    depth: request.id ? null : webResearchDepth(request.depth) } : request);
+const webEvidenceKey = (url: string, snippet: string) => {
+  const address = new URL(url); address.hash = "";
+  // A new retrieval timestamp or provider response ID is not new evidence.
+  return stableKnowledgeHash(JSON.stringify([address.href, snippet.normalize("NFKC").trim().replace(/\s+/g, " ")]));
+};
 const DIRECTORY_PAGE = 12;
 const STOP_WORDS = new Set("a an and are as at be by can did do does for from how i in is it me my of on or our should that the their them these they this to was we what when where which who why with would you your".split(" "));
 
@@ -45,6 +59,8 @@ interface DirectoryEntry {
 export interface ChatReadingOptions {
   /** Host-granted capability, captured per submission. Absent means no web access. */
   webResearch?: WebResearch;
+  /** Host-only absolute deadline update when an actual web lookup needs longer. */
+  onDeadlineChanged?: (deadlineAt: number) => void;
   /** Immutable selected passage captured when the user sends a typed request. */
   selection?: VoiceSelection;
   /** Inline discussions never create notes as a side effect of a reply. */
@@ -157,7 +173,10 @@ class ChatReadingSession {
   private webAttempts = 0;
   private webSearches = 0;
   private webErrors: string[] = [];
-  private webResults: Array<{ query: string; result: WebResearchResult }> = [];
+  private webResults: NonNullable<ChatReadingCheckpoint["webResults"]> = [];
+  private webLookups: NonNullable<ChatReadingCheckpoint["webLookups"]> = [];
+  private webEvidenceKeys = new Set<string>();
+  private webUnproductiveLookups = 0;
 
   constructor(private readonly snapshot: AppSnapshot, private readonly query: string, focusNoteId?: string, private readonly taskView: TaskView = "working", referenceTargets: NonNullable<ChatReadingOptions["referenceTargets"]> = [], private readonly referenceRecords: ChatRequest["notes"] = [], private readonly webResearch?: WebResearch) {
     const discovery = taskView === "working" ? workingTaskSnapshot(snapshot) : snapshot;
@@ -219,8 +238,8 @@ class ChatReadingSession {
     const dependencies = checkpoint.dependencies.filter(currentDependency);
     const unchanged = dependencies.length === checkpoint.dependencies.length;
     for (const item of dependencies) (item.kind === "note" ? this.openedNotes : this.openedSources).add(item.id);
-    if (!this.webResearch && (checkpoint.evidence.some(item => item.kind === "web") || checkpoint.webResults?.length)) return false;
-    this.webResults = this.webResearch ? (checkpoint.webResults ?? []).slice(-3).map(item => ({ query: item.query, result: validateWebResult(item.result) })) : [];
+    if (!this.webResearch && (checkpoint.evidence.some(item => item.kind === "web") || checkpoint.webResults?.length || checkpoint.webAttempts)) return false;
+    this.webResults = this.webResearch ? (checkpoint.webResults ?? []).slice(-RETAINED_WEB_RESULTS).map(item => ({ query: item.query, depth: webResearchDepth(item.depth ?? "quick"), result: validateWebResult(item.result) })) : [];
     this.evidence = checkpoint.evidence.filter(item => chatEvidenceIsCurrent(this.snapshot, [item])).slice(-MAX_CHAT_READING_EVIDENCE);
     this.nextEvidence = Math.max(checkpoint.nextEvidence, 1, ...this.evidence.map(item => Number(item.id.slice(1)) + 1));
     for (const id of checkpoint.discovered.notes) if (this.notes.has(id)) this.allowedNotes.add(id);
@@ -232,11 +251,26 @@ class ChatReadingSession {
       if (["search", "cluster", "related"].includes(request.kind)) return current;
       return dependencies.some(item => item.id === request.id && item.kind === (request.kind.startsWith("note") ? "note" : "source"));
     }).slice(-32);
-    this.operations.forEach(item => { if (this.operationRetained(item)) this.readKeys.add(JSON.stringify(item.request)); });
+    this.operations.forEach(item => { if (this.operationRetained(item)) this.readKeys.add(readKey(item.request)); });
     this.searches = this.operations.filter(item => item.request.kind === "search").length;
-    this.webSearches = Math.max(this.webResults.length, this.operations.filter(item => item.request.kind === "web" && !item.request.id).length);
+    // Paging or reusing a deeper result is not another paid lookup. Count
+    // provider identities, not the number of read operations in the journal.
+    this.webSearches = Math.max(checkpoint.webSearches ?? 0, new Set([...this.webResults.map(item => item.result.responseId), ...this.operations.flatMap(item => {
+      const result = item.result as { responseId?: unknown } | null;
+      return item.request.kind === "web" && result && typeof result.responseId === "string" ? [result.responseId] : [];
+    })]).size);
     this.webAttempts = Math.max(this.webSearches, checkpoint.webAttempts ?? 0);
     this.webErrors = checkpoint.webErrors?.slice(-3) ?? [];
+    this.webLookups = (checkpoint.webLookups ?? this.operations.flatMap(item => {
+      const result = item.result as { responseId?: string; depth?: unknown };
+      return item.request.kind === "web" && !item.request.id && result.responseId
+        ? [{ query: normalizedWebQuery(item.request.query), depth: webResearchDepth(result.depth ?? item.request.depth ?? "quick"), responseId: result.responseId }] : [];
+    })).filter(item => !("error" in item && item.error)).slice(-WEB_LOOKUP_JOURNAL);
+    this.webEvidenceKeys = new Set([...(checkpoint.webEvidenceKeys ?? []),
+      ...this.evidence.flatMap(item => item.kind === "web" ? [webEvidenceKey(item.web!.url, item.text)] : [])].slice(-WEB_EVIDENCE_KEYS));
+    // A new user-authorized continuation/retry may try a previously failed
+    // lookup again. Within this run failed paid requests are never replayed.
+    this.webUnproductiveLookups = 0;
     this.results = this.operations.slice(-4).map(item => item.result);
     this.findings = checkpoint.findings.filter(item => chatEvidenceIsCurrent(this.snapshot, item.result.evidence ?? [])).slice(-6);
     // Keys include exact evidence versions. Retaining an old identity cannot
@@ -256,7 +290,9 @@ class ChatReadingSession {
       contextVersion: chatResearchContextVersion(this.snapshot), snapshotVersion: stableSnapshotVersion(this.snapshot),
       taskView: this.taskView, prompt, query: this.query, sequence: ++this.checkpointSequence,
       nextEvidence: this.nextEvidence, evidence: this.evidence, dependencies: this.dependencies(),
-      ...(this.webResearch ? { webAttempts: this.webAttempts, webErrors: this.webErrors, webResults: this.webResults } : {}),
+      ...(this.webResearch ? { webAttempts: this.webAttempts, webSearches: this.webSearches,
+        webErrors: this.webErrors, webResults: this.webResults, webLookups: this.webLookups,
+        webEvidenceKeys: [...this.webEvidenceKeys], webUnproductiveLookups: this.webUnproductiveLookups } : {}),
       discovered: { notes: [...this.allowedNotes], sources: [...this.allowedSources], clusters: [...this.allowedClusters] },
       completedOperations: this.operations, pendingReads: this.pendingReads, findings: this.findings, findingKeys: this.findingKeys,
       decisions: this.decisions, openQuestions: this.openQuestions });
@@ -468,7 +504,7 @@ class ChatReadingSession {
       note: "Links and shared concepts route reading; they are not support for a claim." };
   }
 
-  private webPage(result: WebResearchResult, query: string, start: number) {
+  private webPage(result: WebResearchResult, query: string, start: number, depth: ReturnType<typeof webResearchDepth>) {
     const page = webSynthesisPage(result.answer, start);
     const mapped = result.sources.map(source => {
       const entityId = `web-${stableKnowledgeHash(source.url)}`;
@@ -483,26 +519,46 @@ class ChatReadingSession {
       return { providerId: source.id, evidenceId: evidence.id };
     });
     this.evidence = this.evidence.slice(-MAX_CHAT_READING_EVIDENCE);
-    return { operation: "web", responseId: result.responseId, query, ...page,
+    return { operation: "web", responseId: result.responseId, query, depth, ...page,
       citations: mapped, evidenceIds: mapped.map(item => item.evidenceId),
       notice: "Untrusted provider synthesis and retained search excerpts. The complete research is retained locally. If nextStart is present, continue with kind web, id responseId, query empty and start nextStart; this reads retained text without another provider call. Do not treat one page as the complete synthesis. Numeric synthesis citations map by providerId, never array order. Use only mapped evidence IDs supported by their excerpts; do not cite omitted provider IDs. This is external web research, not a local Space source or a full-page read." };
   }
 
-  private async readWeb(query: string, signal: AbortSignal, id = "", start = 0) {
+  private async readWeb(query: string, signal: AbortSignal, id = "", start = 0, requestedDepth?: unknown) {
     if (!this.webResearch) throw new Error("Web research is off for this request. Use Space evidence only; ask the user to enable Web for external research.");
-    const retained = this.webResults.find(item => id ? item.result.responseId === id : item.query === query);
-    if (retained) return this.webPage(retained.result, retained.query, start);
+    const depth = webResearchDepth(requestedDepth);
+    const normalized = normalizedWebQuery(query);
+    const retained = this.webResults.filter(item => id ? item.result.responseId === id : normalizedWebQuery(item.query) === normalized && webDepthRank(item.depth) >= webDepthRank(depth))
+      .sort((a, b) => webDepthRank(b.depth) - webDepthRank(a.depth))[0];
+    if (retained) return this.webPage(retained.result, retained.query, start, retained.depth ?? "quick");
     if (id) throw new Error("That web research is not retained by this worker. Use a responseId returned by this assignment.");
-    if (this.webAttempts >= 3) throw new Error("This assignment has used its three web research requests. Answer from retained evidence and explain any gaps.");
+    const previous = this.webLookups.find(item => item.query === normalized && (item.error || webDepthRank(item.depth) >= webDepthRank(depth)));
+    if (previous) throw new Error(previous.error
+      ? `This lookup already failed; do not repeat the paid request automatically. ${previous.error}`
+      : "This question was already researched. Its full response has left the working cache; use retained evidence and findings, or investigate a specific unresolved question.");
+    if (this.webStalled()) throw new Error("Recent web lookups added no new source evidence. Answer from retained findings and explain the remaining uncertainty.");
     this.webAttempts++;
+    const receipt: NonNullable<ChatReadingCheckpoint["webLookups"]>[number] = { query: normalized, depth };
+    this.webLookups.push(receipt);
+    this.webLookups = this.webLookups.slice(-WEB_LOOKUP_JOURNAL);
     try {
-      const result = validateWebResult(await this.webResearch(query, signal));
+      const result = validateWebResult(await this.webResearch(query, signal, depth));
       signal.throwIfAborted();
       this.webSearches++;
-      this.webResults.push({ query, result });
-      return this.webPage(result, query, 0);
+      receipt.responseId = result.responseId;
+      const keys = result.sources.map(source => webEvidenceKey(source.url, source.snippet));
+      const newEvidence = keys.some(key => !this.webEvidenceKeys.has(key));
+      this.webUnproductiveLookups = newEvidence ? 0 : this.webUnproductiveLookups + 1;
+      this.webEvidenceKeys = new Set([...this.webEvidenceKeys, ...keys].slice(-WEB_EVIDENCE_KEYS));
+      this.webResults.push({ query, depth, result });
+      this.webResults = this.webResults.slice(-RETAINED_WEB_RESULTS);
+      return { ...this.webPage(result, query, 0, depth), newEvidence };
     } catch (error) {
-      if (!signal.aborted) this.webErrors.push([...(error instanceof Error ? error.message : "Web research was unavailable.")].slice(0, 600).join(""));
+      if (!signal.aborted) {
+        receipt.error = [...(error instanceof Error ? error.message : "Web research was unavailable.")].slice(0, 600).join("");
+        this.webErrors = [...this.webErrors, receipt.error].slice(-3);
+        this.webUnproductiveLookups++;
+      }
       throw error;
     }
   }
@@ -512,16 +568,17 @@ class ChatReadingSession {
     let progress = false;
     for (const request of requests) {
       if (signal.aborted) throw abortReason(signal);
-      const key = JSON.stringify(request);
-      const completed = this.operations.find(item => JSON.stringify(item.request) === key);
+      const key = readKey(request);
+      const completed = this.operations.find(item => readKey(item.request) === key);
       if (this.readKeys.has(key) && (!completed || this.operationRetained(completed))) {
         this.results.push({ operation: request.kind, error: "This exact read was already returned. Use another query or offset, or answer." });
         continue;
       }
       this.readKeys.add(key);
+      if (this.readKeys.size > 256) this.readKeys.delete(this.readKeys.values().next().value!);
       onProgress?.(request.kind === "web" ? request.id ? "Reading web findings" : "Researching the web" : request.kind === "search" ? "Finding relevant material" : request.kind === "related" ? "Following connections" : "Reading supporting passages");
       try {
-        this.results.push(request.kind === "web" ? await this.readWeb(request.query, signal, request.id, request.start ?? 0)
+        this.results.push(request.kind === "web" ? await this.readWeb(request.query, signal, request.id, request.start ?? 0, request.depth)
           : request.kind === "search" ? await this.search(request.query, request.start ?? 0, signal)
           : request.kind === "cluster" ? this.openCluster(request.id, request.start ?? 0)
             : request.kind === "related" ? this.related(request.id, request.start ?? 0)
@@ -530,7 +587,7 @@ class ChatReadingSession {
                 : this.openText(request.kind, request.id, request.query, request.start));
         this.operations.push({ request: { ...request }, result: this.results[this.results.length - 1] });
         this.operations = this.operations.slice(-32);
-        progress = true;
+        progress ||= (this.results[this.results.length - 1] as { newEvidence?: boolean }).newEvidence !== false;
       } catch (error) {
         if (signal.aborted) throw abortReason(signal);
         this.results.push({ operation: request.kind, error: error instanceof Error ? error.message : "This read was unavailable." });
@@ -548,6 +605,8 @@ class ChatReadingSession {
   }
 
   webFailed(): boolean { return this.webErrors.length > 0; }
+  hasWebResearch(): boolean { return !!this.webResearch && this.webAttempts > 0; }
+  webStalled(): boolean { return this.webUnproductiveLookups >= 2; }
 
   private documents() {
     return [
@@ -590,7 +649,10 @@ class ChatReadingSession {
     }
     const serialize = () => JSON.stringify({
       finalizing,
-      webResearch: { enabled: !!this.webResearch, remainingRequests: this.webResearch ? Math.max(0, 3 - this.webAttempts) : 0 },
+      webResearch: { enabled: !!this.webResearch,
+        ...(this.webResearch ? { depths: ["quick", "standard", "deep"], defaultDepth: "standard",
+          completedSearches: this.webSearches, recentLookups: this.webLookups.slice(-12),
+          stalled: this.webStalled(), policy: "Continue with new evidence needed for the current question; stop once adequately supported. Reuse prior research. Repeated lookups without new source evidence require a grounded answer with remaining gaps." } : {}) },
       ...(voiceEnabled ? { voicePresentationEnabled: true } : {}),
       ...(checkpointsEnabled ? { checkpointsEnabled: true, workerContinuity } : {}),
       taskView: this.taskView,
@@ -733,12 +795,28 @@ export async function runChatReading(
   const cancel = () => controller.abort(options.signal?.reason ?? new Error("Chat was stopped. Your message is ready to send again."));
   if (options.signal?.aborted) cancel();
   else options.signal?.addEventListener("abort", cancel, { once: true });
-  const timer = setTimeout(() => controller.abort(new Error("Chat reached its reading time limit. Try a narrower question.")), CHAT_READING_DEADLINE_MS);
+  const startedAt = Date.now();
+  let deadlineAt = startedAt + CHAT_READING_DEADLINE_MS;
+  const timedOut = () => controller.abort(new Error("Chat reached its reading time limit. Try a narrower question."));
+  let timer = setTimeout(timedOut, CHAT_READING_DEADLINE_MS);
+  const research: WebResearch | undefined = options.webResearch ? (query, signal, depth) => {
+    signal.throwIfAborted();
+    const selectedDepth = webResearchDepth(depth);
+    // Extend only when new provider work is actually admitted. Cached pages and
+    // a configured key alone never lengthen local research. Leave answer time.
+    const nextDeadline = Math.max(deadlineAt, Date.now() + WEB_RESEARCH_PROFILES[selectedDepth].timeoutMs + 60_000);
+    if (nextDeadline > deadlineAt) {
+      deadlineAt = nextDeadline;
+      clearTimeout(timer); timer = setTimeout(timedOut, Math.max(0, deadlineAt - Date.now()));
+      options.onDeadlineChanged?.(deadlineAt);
+    }
+    return options.webResearch!(query, signal, selectedDepth);
+  } : undefined;
   try {
     assertCurrent();
     const previousQuestion = frozen.studio.messages.filter((message) => message.role === "user").slice(-1)[0]?.content ?? "";
     const query = truncateUnicode(editBoundary?.passage ?? (editing && options.editPassage ? options.editPassage : searching ? prompt : `${request.prompt}\n${previousQuestion.slice(0, 400)}`), 600);
-    session = new ChatReadingSession(frozen, query, options.focusNoteId, taskView, options.referenceTargets, options.referenceRecords, options.webResearch);
+    session = new ChatReadingSession(frozen, query, options.focusNoteId, taskView, options.referenceTargets, options.referenceRecords, research);
     const restoredInitialSearch = options.resume ? session.restore(options.resume) : false;
     const checkpoint = (finding?: ChatResult) => {
       assertCurrent();
@@ -753,9 +831,9 @@ export async function runChatReading(
     let noProgress = 0;
     let formatRepairUsed = false;
     let correction: string | undefined = editing ? "The current user explicitly requested an unsaved revision to the captured note. Use the exact current-note evidence to return an edit proposal for review, not a draft only in the reply. Infer focused versus rewrite from the request; never save or choose a different target." : undefined;
-    for (let turn = 0; turn < MAX_CHAT_READING_TURNS; turn += 1) {
+    for (let turn = 0; ; turn += 1) {
       assertCurrent();
-      const finalizing = turn === MAX_CHAT_READING_TURNS - 1 || noProgress >= 2;
+      const finalizing = (!session.hasWebResearch() && turn >= MAX_CHAT_READING_TURNS - 1) || noProgress >= 2 || session.webStalled();
       options.onProgress?.(finalizing ? "Writing an answer" : "Considering the evidence");
       const readAnswer = () => driver({ ...request, mode: "chat-reading", readingContext: session!.packet(finalizing,
         [scopeInstruction, correction].filter(Boolean).join("\n\n") || undefined, !!options.onCheckpoint, !!options.onWorkLabel, editBoundary) }, controller.signal);
@@ -795,7 +873,7 @@ export async function runChatReading(
           continue;
         }
         if (reads.length) {
-          if (finalizing) throw new Error("Chat could not finish within its reading budget. Try a narrower question.");
+          if (finalizing) throw new Error("Research stopped making progress. Answer from retained evidence and explain the unresolved gaps.");
           // Only the distinct citation-validated checkpoint can be announced.
           // Accompanying ordinary prose and action payloads still grant no write.
           const finding = options.onCheckpoint ? session.acceptFinding(result.checkpoint, reads) : undefined;
@@ -835,7 +913,6 @@ export async function runChatReading(
         noProgress += 1;
       }
     }
-    throw new Error("Chat could not complete its answer. Try a narrower question.");
   } finally {
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", cancel);

@@ -28,6 +28,8 @@ pub(super) struct ChatReadRequest {
     query: String,
     #[serde(deserialize_with = "read_start")]
     start: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    depth: Option<String>,
 }
 
 // JSON Schema integers also include integral numeric spellings such as 0.0
@@ -185,7 +187,7 @@ pub(super) fn parse_response(
     if !requests_value.as_array().is_some_and(|items| {
         items.iter().all(|item| {
             item.as_object().is_some_and(|object| {
-                object.len() == 4
+                (4..=5).contains(&object.len())
                     && ["kind", "id", "query", "start"]
                         .iter()
                         .all(|key| object.contains_key(*key))
@@ -212,6 +214,11 @@ pub(super) fn parse_response(
                 || request.id.chars().count() > 200
                 || request.query.chars().count() > 600
                 || request.start.is_some_and(|start| start > 1_000_000_000)
+                || request.depth.as_deref().is_some_and(|depth| {
+                    !matches!(depth, "quick" | "standard" | "deep")
+                        || request.kind != "web"
+                        || !request.id.is_empty()
+                })
                 || if request.kind == "search" {
                     !request.id.is_empty() || request.query.trim().is_empty()
                 } else if request.kind == "web" {
@@ -272,6 +279,8 @@ mod tests {
     fn web_reads_distinguish_new_lookup_from_local_retained_pages() {
         for request in [
             json!({"kind":"web", "id":"", "query":"Public question", "start":null}),
+            json!({"kind":"web", "id":"", "query":"Public question", "start":null, "depth":"deep"}),
+            json!({"kind":"web", "id":"", "query":"Public question", "start":null, "depth":null}),
             json!({"kind":"web", "id":"response_123", "query":"", "start":12000}),
         ] {
             let response =
@@ -279,6 +288,9 @@ mod tests {
             assert!(parse_response(&response.to_string(), true, true).is_ok());
         }
         for request in [
+            json!({"kind":"web", "id":"", "query":"Public question", "start":null, "depth":"unlimited"}),
+            json!({"kind":"search", "id":"", "query":"Public question", "start":null, "depth":"deep"}),
+            json!({"kind":"web", "id":"response_123", "query":"", "start":12000, "depth":"deep"}),
             json!({"kind":"web", "id":"", "query":"Public question", "start":12000}),
             json!({"kind":"web", "id":"response_123", "query":"", "start":null}),
             json!({"kind":"web", "id":"response_123", "query":"Private new query", "start":12000}),

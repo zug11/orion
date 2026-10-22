@@ -8,6 +8,14 @@ it("preserves the native actionable failure without logging the key", async () =
   vi.mocked(invoke).mockRejectedValue("Perplexity needs API credit. (WEB_HTTP_402)");
   await expect(researchWithPerplexity("A public question", new AbortController().signal)).rejects.toThrow("WEB_HTTP_402");
 });
+it("passes only a validated research depth to the native host", async () => {
+  vi.mocked(invoke).mockRejectedValue("test transport stop");
+  await expect(researchWithPerplexity("Public question", new AbortController().signal, "deep")).rejects.toThrow("test transport stop");
+  expect(invoke).toHaveBeenCalledWith("research_perplexity", expect.objectContaining({ query: "Public question", depth: "deep" }));
+  vi.mocked(invoke).mockClear();
+  await expect(researchWithPerplexity("Question", new AbortController().signal, "unlimited" as "deep")).rejects.toThrow("invalid research depth");
+  expect(invoke).not.toHaveBeenCalled();
+});
 it("cancels only the admitted native request and releases the caller immediately", async () => {
   const controller = new AbortController();
   vi.mocked(invoke).mockImplementation((command) => command === "research_perplexity" ? new Promise(() => {}) : Promise.resolve(true));

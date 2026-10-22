@@ -608,7 +608,8 @@ export class VoiceResearch {
       await this.assertExternal(record);
       return result;
     };
-    const deadline = setTimeout(() => controller.abort(new Error("Voice research reached its three-minute limit. Try a narrower question.")), 180_000);
+    const timedOut = () => controller.abort(new Error("Voice research reached its time limit. Try a narrower question."));
+    let deadline = setTimeout(timedOut, 180_000);
     const progress = (message: string) => this.progress(record, message);
     try {
       await this.assertExternal(record);
@@ -641,6 +642,10 @@ export class VoiceResearch {
         referenceContext: voiceSelectionReference(record.job.selection, snapshot, selectionView),
         resume: record.checkpoint,
         webResearch: snapshot.settings.perplexityApiKeyConfigured ? researchWithPerplexity : undefined,
+        onDeadlineChanged: deadlineAt => {
+          clearTimeout(deadline);
+          deadline = setTimeout(timedOut, Math.max(0, deadlineAt - Date.now()));
+        },
         onProgress: progress, currentSnapshot: () => this.options.snapshot(),
         onDependencies: dependencies => { record.dependencies = dependencies; },
         onWorkLabel: label => {

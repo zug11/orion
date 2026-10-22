@@ -1,4 +1,4 @@
-import type { ChatEvidence, ChatReadRequest, ChatReadingFinding, ChatResult } from "../types";
+import type { ChatEvidence, ChatReadRequest, ChatReadingFinding, ChatResult, WebResearchDepth } from "../types";
 import type { TaskView } from "./taskWorkingView";
 import type { WebResearchResult } from "./webResearch";
 
@@ -13,9 +13,14 @@ export interface ChatReadingCheckpoint {
   query: string;
   sequence: number;
   webAttempts?: number;
+  webSearches?: number;
   webErrors?: string[];
+  /** Bounded receipts outlive full-result eviction; never a paid-lookup quota. */
+  webLookups?: Array<{ query: string; depth: WebResearchDepth; responseId?: string; error?: string }>;
+  webEvidenceKeys?: string[];
+  webUnproductiveLookups?: number;
   /** Complete provider results stay local; model packets contain exact pages. */
-  webResults?: Array<{ query: string; result: WebResearchResult }>;
+  webResults?: Array<{ query: string; depth?: WebResearchDepth; result: WebResearchResult }>;
   nextEvidence: number;
   evidence: ChatEvidence[];
   dependencies: Array<{ kind: "note" | "source"; id: string; version: string }>;

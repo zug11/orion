@@ -2837,8 +2837,10 @@ but discarded text is not current evidence. Oversized documents remain explicitl
 partial. Final replies/actions still retain at most 12 cited passages, independent
 of the larger transient reading workspace. These limits are shared through
 `chatReadingProtocol.json`; none enlarge live voice context. Each reply
-gets at most six sequential provider steps and three minutes. Each step may ask
-for at most four reads. Repeated reads cannot extend the budget. Finalization
+gets at most six sequential provider steps and three minutes for local reading.
+After actual web research starts, useful reading may continue without a fixed
+turn count under the adaptive policy below. Each step may ask for at most four
+reads. Repeated cached reads cannot renew the deadline. Finalization
 requires an answer or a clear failure; never silently claim exhaustive coverage.
 Simple conversation may answer immediately without opening knowledge bodies.
 
@@ -2877,11 +2879,35 @@ the distinct web provenance, within the same public-text budget.
 
 Send only a short public research question (600 code points maximum), never an
 entire Space packet. Instructions require the reader to generalize private or
-identifying material; this is not a deterministic privacy classifier. The native
-request fixes the documented low-style configuration (GPT-6 Luna, web search and
-URL fetch only), five steps and 3,000 output tokens. Each reader permits three
-web calls inside its existing three-minute deadline. Native admission/polling
-is bounded to 110 seconds plus best-effort remote cancellation. Cancellation is
+identifying material; this is not a deterministic privacy classifier. The existing
+reader chooses `depth: quick | standard | deep` for each new web request from
+the current user's question and actual evidence gaps. It uses null for local
+reads and retained web pages. Older responses without depth remain valid and
+default to standard. The shared `src/lib/webResearchProfiles.json` fixes model,
+reasoning, tools and budgets: quick uses GPT-6 Luna/minimal with 5 steps and
+110 seconds; standard uses Luna/medium with 12 steps and 240 seconds; deep uses
+GPT-6.1 Sol/high with 24 steps and 480 seconds. These are ceilings, not required
+work. All profiles permit only web search and URL fetch; no dynamic preset may
+silently add tools. There is no extra classifier call or user depth selector.
+There is no fixed paid-lookup quota or total web-research turn/time ceiling.
+The reader continues with specific evidence gaps in the current user question
+and is instructed to finish when adequately supported. Two consecutive lookups
+that fail or add no new source excerpts require final synthesis with remaining
+uncertainty; new retrieval timestamps and response IDs do not count as evidence
+progress. Exact repeated reads also retain their no-progress stop. Local-only
+reading keeps its three-minute deadline. An actual new lookup renews both the
+reader and outer voice-worker deadline to its profile allowance plus one minute
+for the answer; cached reads cannot renew it. Cancellation and individual
+provider timeouts remain effective throughout. Higher-depth requests may revisit
+insufficient lower-depth results; equal/lower-depth requests reuse retained
+evidence. Checkpoints retain cumulative attempts/completions separately from
+the bounded result cache and read journal. A normalized 128-entry lookup journal
+prevents silently paying again for recent evicted results or failed queries;
+2,048 evidence fingerprints track novelty separately from citation retention.
+An explicit resumed retry/continuation may retry a prior failure and starts a
+fresh no-progress streak. Source evidence and citation counts remain bounded.
+Legacy retained results are treated as quick. Native admission/polling remains
+bounded to the selected profile plus best-effort remote cancellation. Cancellation is
 window/request scoped, including cancel-before-admission; late output cannot
 publish. Provider cancellation acceptance is not confirmation of remote stop.
 Do not retry a paid POST automatically after an ambiguous network failure.
@@ -2915,7 +2941,8 @@ It supplies contiguous Unicode-safe synthesis pages of at most 12,000 UTF-16
 units, with exact range and `nextStart`. A `web` read with the returned response
 ID, empty query and numeric start reads that worker's retained result locally;
 it cannot access another worker or make a provider call. Only new lookups with
-empty ID, public query and null start consume the three-call allowance. Preserve
+empty ID, public query and null start make a new paid lookup. Cache retention is
+a memory bound, never an admission quota. Preserve
 source IDs across pages and resume without repeating paid searches. A partial
 page is not a full synthesis read. Source evidence remains usable when the
 provider returns excerpts without synthesis.
@@ -3987,8 +4014,13 @@ sequences invalidate stale preparation and prepared speech. Background
 preparation can run during assistant playback; delivery cannot. Fit fewer whole
 findings when needed rather than clipping caveats or source names, reserving the
 24,000 UTF-16 transport boundary for exact included provenance and the summary.
-One fixed instruction under the transport's 480-byte chunk bound offers the
-prepared contribution; worker text never enters trusted instructions. Explicit
+After the floor guard clears, pair exact included provenance in `thinking` with
+the actual consolidated summary in `commentary`, never another instruction to
+wait. Preserve the current client delegation ID when all included findings share
+it; use null for cross-task summaries. Rejected commentary retries the same pair
+without repeating synthesis. Worker text never enters trusted instructions.
+Background preparation cannot block the main voice's direct answer from existing
+knowledge or justify thinking/waiting placeholders. Explicit
 results/saves bypass synthesis and retain exact provenance pairing. Synthesis
 quality and natural timing still require live-provider acceptance.
 `voiceFindingDelivery.ts` keeps worker identity, stage, evidence/coverage and
@@ -4038,8 +4070,11 @@ Findings, job/status changes, navigation context and continuity checkpoints wait
 locally while voice is speaking. A selection bound to actual user speech retains
 its existing priority-context path. GPT-Live has no turn-done event, so delivery
 uses both playback activity and the accumulating assistant transcript: require
-a completed sentence and 2.8 seconds of settled playback/transcript; an unfinished
-fragment or ellipsis cannot be unlocked by a timer. With no assistant text, the
+a completed sentence needs 2.8 seconds of settled playback/transcript; an unfinished
+fragment or ellipsis needs eight seconds of continuous quiet since the latest
+playback or assistant transcript. Missing punctuation or a dropped final delta
+cannot hold findings/context indefinitely. Active output and fresh transcripts
+always reset the guard; a finding's age never overrides them. With no assistant text, the
 existing 1.5-second quiet guard remains. An actual human turn can take over an
 interrupted fragment; noise cannot. This is a conservative turn-boundary
 approximation, not a provider-confirmed semantic end of thought. Input-noise

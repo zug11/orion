@@ -363,8 +363,8 @@ fn coverage(v: &Value) -> Result<(), String> {
     ] {
         number(v, key)?;
     }
-    if v.get("webSearches").is_some() && number(v, "webSearches")? > 3 {
-        return Err("Invalid web search count.".into());
+    if v.get("webSearches").is_some() {
+        number(v, "webSearches")?;
     }
     boolean(v, "limited")?;
     Ok(())
@@ -722,7 +722,11 @@ mod tests {
         evidence["web"] =
             json!({"url":"https://example.org/paper", "retrievedAt":"2026-10-22T02:00:00Z"});
         value["workOrder"]["completedOperations"] = json!([{"kind":"web"}]);
+        value["workOrder"]["result"]["coverage"] = json!({"availableNotes":0,"availableSources":0,"openedNotes":0,"openedSources":0,"searches":1,"webSearches":12,"limited":false});
         assert!(validate_result(&request, &value).is_ok());
+        value["workOrder"]["result"]["coverage"]["webSearches"] = json!(-1);
+        assert!(validate_result(&request, &value).is_err());
+        value["workOrder"]["result"]["coverage"]["webSearches"] = json!(12);
         value["workOrder"]["result"]["evidence"][0]["web"]["url"] = json!("javascript:alert(1)");
         assert!(validate_result(&request, &value).is_err());
     }

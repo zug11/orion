@@ -302,12 +302,15 @@ navigation context and continuity checkpoints also wait locally while the voice
 is speaking; a passage bound to actual user speech keeps its existing priority
 context path. Local energy monitoring uses the existing mic and playback streams
 without another capture or duplicate playback. The accumulating assistant
-transcript must end a sentence, and playback/transcript activity must settle for
-2.8 seconds. An unfinished fragment or ellipsis stays held even during a long
-network gap. A real new human turn can take over an interrupted fragment; room
-noise cannot. When no assistant transcript exists, the existing 1.5-second quiet
-guard remains. Input noise has a twelve-second cap, but it never overrides
-audible output, an unfinished assistant fragment or arriving human speech.
+transcript ending in a sentence requires 2.8 seconds of quiet playback/transcript
+activity. An unfinished fragment or ellipsis requires eight seconds of continuous
+quiet since the latest playback or assistant transcript. Missing punctuation or a
+dropped final delta must not hold completed findings and job context indefinitely.
+Any new output or transcript restarts that guard; the age of the queued finding
+cannot override it. A real new human turn can take over an interrupted fragment;
+room noise cannot. When no assistant transcript exists, the existing 1.5-second
+quiet guard remains. Input noise has a twelve-second cap, but it never overrides
+audible output or arriving human speech.
 GPT-Live has no turn-completion/audio-done event, so this is a conservative
 approximation rather than proof that the speaker has semantically finished.
 Interim findings get at most one unsolicited offer after user speech, at least
@@ -338,8 +341,15 @@ Newer checkpoints, corrections, cancellation and user topic changes invalidate
 stale preparation and prepared speech. Batch fitting preserves whole findings
 and source names, reserving the voice packet's 24,000 UTF-16 limit before the
 provider call. After the floor guard clears, the host pairs exact included
-provenance with one fixed instruction to the speaking voice. Worker prose never
-enters trusted instructions. Prepared offers are at least eight seconds apart;
+provenance through `session.thinking.append` with the actual summary through
+`session.commentary.append`. Do not send another instruction to wait: quiet context
+does not request spoken delivery, and behavioral instructions can redirect speech.
+Both parts retain the current delegation ID when all included findings share it;
+cross-task summaries use null. Rejected sends retry the same provenance/summary
+pair without another synthesis. Worker prose never enters trusted instructions.
+Background preparation cannot block the main voice's direct answer from existing
+knowledge; avoid thinking/waiting placeholders and return to listening after a
+useful response. Prepared offers are at least eight seconds apart;
 explicit result/save requests take precedence and bypass synthesis.
 Combining findings, Waiting for a pause and Shared with voice describe local states,
 not provider acknowledgments, completed playback or hearing. Read aloud remains
@@ -521,3 +531,47 @@ reserves its last allowed assignment turn for final synthesis before its safety
 fuse, disables further coordination on that turn, and reports the final validation
 failure without an extra loop. This change does not establish which live request
 produced the user's earlier fuse error.
+
+### Adaptive Perplexity research depth
+
+The existing reading model chooses `quick`, `standard` or `deep` in each new
+web read request, using the current user question and identified evidence gaps.
+This choice shares the ordinary planning turn; there is no extra classifier
+call or depth picker. Simple facts and explicitly brief questions suit quick;
+ordinary comparisons suit standard; substantial investigations, literature
+reviews and conflicting evidence suit deep. Retrieved material cannot authorize
+greater scope. Non-web reads and local result pages use null depth. Older
+responses may omit depth and default to standard.
+
+`webResearchProfiles.json` is shared by the renderer and native host. Quick uses
+GPT-6 Luna with minimal reasoning, five steps, 3,000 output tokens and a
+110-second allowance. Standard uses Luna with medium reasoning, twelve steps,
+6,000 output tokens and four minutes. Deep uses GPT-6.1 Sol with high reasoning,
+twenty-four steps, 12,000 output tokens and eight minutes. These are ceilings;
+the researcher is instructed to stop when it has sufficient evidence. Profiles
+permit only web search and URL fetch. They are explicit configurations, so a
+provider preset update cannot silently enable additional tools. The documented
+[Agent API configuration controls](https://docs.perplexity.ai/docs/agent-api/presets)
+and [model catalog](https://docs.perplexity.ai/docs/agent-api/models) were checked
+on 22 October 2026.
+
+There is no fixed paid-lookup quota, six-turn cut-off after web work starts, or
+fifteen-minute total ceiling. The reader continues while it needs additional
+evidence for the current question, then answers when sufficiently supported.
+Each admitted lookup renews both the reader and outer voice-worker deadline to
+its profile allowance plus one minute for the answer. Cached reads do not renew
+it. Individual requests still time out and the user can cancel throughout.
+Local-only work stays at six turns and three minutes.
+
+Two consecutive failed or evidence-duplicating lookups trigger final synthesis
+with the unresolved uncertainty; a new timestamp or response ID alone is not
+progress. Exact duplicate reads are also suppressed. Higher-depth research can
+revisit insufficient lower-depth results; an equal or lower-depth read reuses
+retained research. Recent full responses stay in a bounded local cache, while
+source evidence, cumulative lookup counts and a normalized lookup journal survive
+full-result eviction and checkpoint resume. Memory limits do not restrict the
+number of distinct useful paid lookups. An explicit retry/continuation can retry
+a previously failed query; it is not automatically replayed within the same run.
+Legacy retained results count as quick.
+Cancellation, citation validation, read-only authority, and quiet consolidated
+voice delivery continue through their existing paths.

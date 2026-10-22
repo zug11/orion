@@ -726,12 +726,16 @@ export interface ChatPromptSuggestion {
   evidenceIds: string[];
 }
 
+export type WebResearchDepth = "quick" | "standard" | "deep";
+
 export interface ChatReadRequest {
   kind: "search" | "cluster" | "note" | "source" | "note-full" | "source-full" | "related" | "web";
   id: string;
   query: string;
   /** UTF-16 offset for exact text, directory offset for search/cluster. */
   start: number | null;
+  /** New web lookups only. Omission supports older in-flight reader responses. */
+  depth?: WebResearchDepth | null;
 }
 
 export interface ChatEvidence {

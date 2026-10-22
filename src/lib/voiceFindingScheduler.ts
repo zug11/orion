@@ -15,7 +15,7 @@ interface Options {
   send: (item: VoiceDelivery) => boolean;
   synthesize?: VoiceFindingSynthesizer;
   conversation?: () => VoiceSynthesisConversation;
-  sendPrepared?: (reference: string) => boolean;
+  sendPrepared?: (reference: string, summary: string, delegationId: string | null) => boolean;
   flushContext?: () => void;
   onChange?: () => void;
 }
@@ -159,7 +159,12 @@ export class VoiceFindingScheduler {
         for (const item of prepared.items) this.suppressed.set(item, conversation.key);
         this.mark(prepared.items, "deferred"); this.prepared = undefined;
       } else if (now - this.lastOffer >= OFFER_GAP_MS && this.timing.canOffer(Math.min(...included.map(item => item.queuedAt)), now, true, included.some(item => item.completion))) {
-        if (this.options.sendPrepared?.(preparedFindingReference(prepared.finding))) {
+        // One delegated task can own several workers. Preserve that identity
+        // when all included findings share it; a cross-task summary is general
+        // conversation context, never attributed to an arbitrary first worker.
+        const ids = new Set(included.map(item => item.delegationId));
+        const delegationId = ids.size === 1 ? included[0].delegationId : null;
+        if (this.options.sendPrepared?.(preparedFindingReference(prepared.finding), prepared.finding.result.reply, delegationId)) {
           this.queue.remove(included); this.mark(included, "shared");
           const deferred = prepared.items.filter(item => !included.includes(item));
           for (const item of deferred) this.suppressed.set(item, conversation.key);
