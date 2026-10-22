@@ -1,5 +1,6 @@
 import type { ChatEvidence, ChatReadRequest, ChatReadingFinding, ChatResult } from "../types";
 import type { TaskView } from "./taskWorkingView";
+import type { WebResearchResult } from "./webResearch";
 
 /** Session-local worker memory. Never stored in the vault or sent to live audio. */
 export interface ChatReadingCheckpoint {
@@ -11,6 +12,10 @@ export interface ChatReadingCheckpoint {
   prompt: string;
   query: string;
   sequence: number;
+  webAttempts?: number;
+  webErrors?: string[];
+  /** Complete provider results stay local; model packets contain exact pages. */
+  webResults?: Array<{ query: string; result: WebResearchResult }>;
   nextEvidence: number;
   evidence: ChatEvidence[];
   dependencies: Array<{ kind: "note" | "source"; id: string; version: string }>;

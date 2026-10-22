@@ -56,10 +56,11 @@ export const ChatReply = memo(function ChatReply({ snapshot, message, context = 
     </div>
     {selected && <CitedPassage evidence={selected} notes={snapshot.notes} sources={snapshot.sources}
       panelId={panelId} savedWith={context === "search" ? "answer" : "reply"} onClose={closeEvidence} onOpenNote={onOpenNote} onOpenSource={onOpenSource} />}
-    {coverage && (coverage.availableNotes > 0 || coverage.availableSources > 0) &&
+    {coverage && (coverage.availableNotes > 0 || coverage.availableSources > 0 || (coverage.webSearches ?? 0) > 0) &&
       <p className="chat-message__coverage">{context === "search"
         ? `Read ${searchCoverage || "no notes or sources"}`
         : `Read ${coverage.openedNotes} ${coverage.openedNotes === 1 ? "note" : "notes"} and ${coverage.openedSources} ${coverage.openedSources === 1 ? "source" : "sources"}`}
-        {coverage.limited ? " · Partial Space coverage" : ""}</p>}
+        {coverage.limited ? " · Partial Space coverage" : ""}
+        {(coverage.webSearches ?? 0) > 0 ? ` · ${coverage.webSearches} web ${coverage.webSearches === 1 ? "search" : "searches"}` : ""}</p>}
   </>;
 });

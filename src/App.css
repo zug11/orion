@@ -14805,3 +14805,24 @@ button.source-citation-marker:focus-visible {
   color: var(--muted);
   line-height: 1.6;
 }
+
+.chat-composer__footer .chat-web-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  border-radius: 999px;
+  padding: 4px 9px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.chat-composer__footer .chat-web-toggle[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: currentColor;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.chat-composer__footer .chat-web-toggle:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+.chat-composer__footer:has(.chat-web-toggle) { flex-wrap: wrap; gap: 7px; }

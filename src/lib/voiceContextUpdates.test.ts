@@ -15,6 +15,17 @@ const job = (id = "a", changes: Partial<VoiceWorkOrder> = {}): VoiceWorkOrder =>
 const packets = (send: ReturnType<typeof vi.fn<(text: string) => boolean>>) => send.mock.calls.map(([text]) => JSON.parse(text));
 
 describe("incremental voice context", () => {
+  it("sends a quiet capability delta when the Perplexity key changes without repeating the note", () => {
+    const input = fixture(), updates = new VoiceContextUpdates(); updates.reset(input);
+    const send = vi.fn((_text: string) => true);
+    input.snapshot.settings.perplexityApiKeyConfigured = true;
+    expect(updates.update(input, send)).toBe(1);
+    expect(packets(send)[0]).toMatchObject({ type: "capability_update", webResearchAvailable: true, referenceOnly: true });
+    expect(JSON.stringify(packets(send)[0])).not.toContain("Exact one passage");
+    expect(updates.update(input, send)).toBe(0);
+    input.snapshot.settings.perplexityApiKeyConfigured = false;
+    expect(updates.update(input, send)).toBe(1);
+  });
   it("does not repeat initial context for body edits, renamed notes, directory or conversation changes", () => {
     const input = fixture(); input.jobs = [job()];
     const updates = new VoiceContextUpdates(); updates.reset(input);

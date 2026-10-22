@@ -1,4 +1,5 @@
 import { isPassageAnchor, isPassageThreads } from "./passageThreads";
+import { parseVoiceSynthesisContext, parseVoiceSynthesisResult, VOICE_SYNTHESIS_INSTRUCTIONS, VOICE_SYNTHESIS_SCHEMA } from "./voiceSynthesisProtocol";
 import { CHAT_EDIT_INSTRUCTIONS, CHAT_EDIT_SCHEMA, CHAT_EDIT_INTENT_SCHEMA, parseChatEditIntent, CHAT_REWRITE_SCHEMA, chatRequestAllowsEdits, parseChatNoteEdits, parseChatRewrite } from "./chatEdits";
 import type {
   ApiKeyStatus,
@@ -1364,7 +1365,8 @@ export async function chatWithOrion(
     throw new Error("Ask Orion a question first.");
   }
   const suggestionContext = request.mode === "chat-suggestions" ? parseChatSuggestionContext(request.suggestionContext) : undefined;
-  const queueKey = suggestionContext ? "chat-suggestions" : "chat";
+  const synthesisContext = request.mode === "voice-synthesis" ? parseVoiceSynthesisContext(request.synthesisContext) : undefined;
+  const queueKey = synthesisContext ? "voice-synthesis" : suggestionContext ? "chat-suggestions" : "chat";
   let result: ChatResult;
   if (isTauriRuntime()) {
     const value = await invokeTauri<unknown>(
@@ -1376,7 +1378,7 @@ export async function chatWithOrion(
       // message for the same Chat/voice error path used by browser providers.
       throw typeof error === "string" ? new Error(error) : error;
     });
-    result = suggestionContext
+    result = synthesisContext ? { reply: "", synthesis: parseVoiceSynthesisResult(isRecord(value) ? value.synthesis : undefined, synthesisContext) } : suggestionContext
       ? parseChatSuggestionResult({ suggestions: isRecord(value) ? value.suggestions : undefined }, suggestionContext)
       : parseChatResult(value, request.mode === "chat-reading", chatRequestAllowsEdits(request));
   } else if (aiProviderForModel(request.model) === "anthropic") {
@@ -1393,6 +1395,7 @@ export async function chatWithOrion(
     );
   }
   if (suggestionContext) return { reply: "", suggestions: result.suggestions };
+  if (synthesisContext) return { reply: "", synthesis: result.synthesis };
   return { reply: result.reply,
     ...(result.readRequests ? { readRequests: result.readRequests } : {}),
     ...(result.checkpoint ? { checkpoint: result.checkpoint } : {}),
@@ -1772,7 +1775,7 @@ async function chatInBrowser(
   const body: Record<string, unknown> = {
     model: request.model || "gpt-5.6-sol",
     store: false,
-    max_output_tokens: request.mode === "chat-suggestions" ? 6_000 : inlineWriting || allowNoteActions || chatRequestAllowsEdits(request) ? 12_000 : 6_000,
+    max_output_tokens: request.mode === "voice-synthesis" || request.mode === "chat-suggestions" ? 6_000 : inlineWriting || allowNoteActions || chatRequestAllowsEdits(request) ? 12_000 : 6_000,
     instructions: chatProviderInstructions(request),
     input: JSON.stringify(chatProviderPayload(request)),
     text: {
@@ -1804,7 +1807,9 @@ async function chatInBrowser(
   const data = (await response.json()) as OpenAIResponse;
   const outputText = extractBrowserOutputText(data, operation);
   try {
-    return request.mode === "chat-suggestions"
+    return request.mode === "voice-synthesis"
+      ? { reply: "", synthesis: parseVoiceSynthesisResult(JSON.parse(outputText) as unknown, parseVoiceSynthesisContext(request.synthesisContext)) }
+      : request.mode === "chat-suggestions"
       ? parseChatSuggestionResult(JSON.parse(outputText) as unknown, parseChatSuggestionContext(request.suggestionContext))
       : parseChatResult(JSON.parse(outputText) as unknown, request.mode === "chat-reading", chatRequestAllowsEdits(request));
   } catch (error) {
@@ -1901,7 +1906,7 @@ async function chatInBrowserWithAnthropic(
   }
   const body = {
     model: request.model || "claude-sonnet-5",
-    max_tokens: request.mode === "chat-suggestions" ? 6_000 : inlineWriting || allowNoteActions || chatRequestAllowsEdits(request) ? 12_000 : 6_000,
+    max_tokens: request.mode === "voice-synthesis" || request.mode === "chat-suggestions" ? 6_000 : inlineWriting || allowNoteActions || chatRequestAllowsEdits(request) ? 12_000 : 6_000,
     system: chatProviderInstructions(request),
     messages: [
       {
@@ -1922,7 +1927,9 @@ async function chatInBrowserWithAnthropic(
     operation,
   );
   try {
-    return request.mode === "chat-suggestions"
+    return request.mode === "voice-synthesis"
+      ? { reply: "", synthesis: parseVoiceSynthesisResult(JSON.parse(outputText) as unknown, parseVoiceSynthesisContext(request.synthesisContext)) }
+      : request.mode === "chat-suggestions"
       ? parseChatSuggestionResult(JSON.parse(outputText) as unknown, parseChatSuggestionContext(request.suggestionContext))
       : parseChatResult(JSON.parse(outputText) as unknown, request.mode === "chat-reading", chatRequestAllowsEdits(request));
   } catch (error) {
@@ -2493,6 +2500,7 @@ function isSettings(value: unknown): boolean {
     typeof value.apiKeyConfigured === "boolean" &&
     (value.anthropicApiKeyConfigured === undefined ||
       typeof value.anthropicApiKeyConfigured === "boolean") &&
+    (value.perplexityApiKeyConfigured === undefined || typeof value.perplexityApiKeyConfigured === "boolean") &&
     (value.elevenLabsApiKeyConfigured === undefined ||
       typeof value.elevenLabsApiKeyConfigured === "boolean") &&
     (value.elevenLabsVoiceId === undefined ||
@@ -3166,6 +3174,7 @@ const INLINE_WRITING_RESULT_SCHEMA = {
 
 function chatRequestAllowsNoteActions(request: ChatRequest): boolean {
   return (
+    request.mode !== "voice-synthesis" &&
     request.mode !== "inline-writing" &&
     request.mode !== "chat-suggestions" &&
     request.allowNoteActions === true &&
@@ -3183,6 +3192,7 @@ function chatInstructions(allowNoteActions: boolean): string {
 }
 
 function chatProviderInstructions(request: ChatRequest): string {
+  if (request.mode === "voice-synthesis") return VOICE_SYNTHESIS_INSTRUCTIONS;
   if (request.mode === "chat-suggestions") return CHAT_SUGGESTIONS_INSTRUCTIONS;
   if (request.mode === "inline-writing") return INLINE_WRITING_INSTRUCTIONS;
   const allowed = chatRequestAllowsNoteActions(request);
@@ -3196,6 +3206,7 @@ function chatProviderInstructions(request: ChatRequest): string {
 }
 
 function chatResponseSchema(request: ChatRequest): Record<string, unknown> {
+  if (request.mode === "voice-synthesis") return VOICE_SYNTHESIS_SCHEMA;
   if (request.mode === "chat-suggestions") return CHAT_SUGGESTIONS_SCHEMA;
   if (request.mode === "inline-writing") return INLINE_WRITING_RESULT_SCHEMA;
   const base = chatRequestAllowsNoteActions(request) ? CHAT_RESULT_SCHEMA : CHAT_REPLY_ONLY_RESULT_SCHEMA;
@@ -3217,6 +3228,7 @@ function chatResponseSchema(request: ChatRequest): Record<string, unknown> {
 }
 
 function chatProviderPayload(request: ChatRequest): Record<string, unknown> {
+  if (request.mode === "voice-synthesis") return { synthesisContext: parseVoiceSynthesisContext(request.synthesisContext) };
   if (request.mode === "chat-suggestions") return { suggestionContext: parseChatSuggestionContext(request.suggestionContext) };
   const base = { question: request.prompt, workspaceName: request.workspaceName, conversation: request.history };
   return request.mode === "chat-reading"

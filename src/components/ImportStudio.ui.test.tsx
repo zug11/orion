@@ -1032,6 +1032,58 @@ describe("Import unified intake", () => {
     expect(screen.queryByText("Import notes")).not.toBeInTheDocument();
   });
 
+  it("automatically synthesizes a 14-group selection in bounded batches and preserves both sources", async () => {
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    vi.mocked(runKnowledgeAssignment).mockImplementation(async (request) => {
+      const result = fixedPipelineResponse(request);
+      const payload = result.response.payload;
+      if (payload.outputs) {
+        for (const output of payload.outputs) {
+          output.title = `Finding from ${request.context.runManifest!.sources[0].title}`;
+        }
+      }
+      return result;
+    });
+    const onApply = vi.fn();
+    const originals = [
+      { title: "First dense source", text: "界".repeat(80_000) },
+      { title: "Second dense source", text: "文".repeat(80_000) },
+    ];
+    render(<Harness testSnapshot={{ ...snapshot, settings: { ...snapshot.settings, apiKeyConfigured: true } }} onApply={onApply} />);
+    for (const { title, text } of originals) {
+      fireEvent.click(screen.getByRole("button", { name: "Paste text" }));
+      fireEvent.change(screen.getByLabelText(/Title/), { target: { value: title } });
+      fireEvent.change(screen.getByLabelText("Text"), { target: { value: text } });
+      fireEvent.click(screen.getByRole("button", { name: "Add to queue" }));
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Review sources" }));
+    fireEvent.click(screen.getByRole("button", { name: "Organize with AI" }));
+
+    expect(await screen.findByRole("heading", { name: "2 notes prepared" }, { timeout: 6_000 })).toBeVisible();
+    expect(screen.queryByText("AI synthesis is incomplete")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /(?:Retry|Resume) import/ })).not.toBeInTheDocument();
+    const plans = vi.mocked(runKnowledgeAssignment).mock.calls
+      .map(([request]) => request)
+      .filter(({ assignment }) => assignment.output.kind === "reading-blueprint");
+    expect(plans.map(({ context }) => context.runManifest!.sources.map(({ title }) => title)))
+      .toEqual(originals.map(({ title }) => [title]));
+    for (const { assignment } of plans) {
+      if (assignment.output.kind === "reading-blueprint") {
+        expect(assignment.output.sourceRanges.length).toBeLessThanOrEqual(12);
+      }
+    }
+    expect(onApply).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Add to Orion" }));
+    await waitFor(() => expect(onApply).toHaveBeenCalledOnce());
+    const applied = onApply.mock.calls[0][0] as ImportStudioApplyPayload;
+    expect(applied.sources.map(({ title, text }) => ({ title, text }))).toEqual(originals);
+    expect(applied.notes.map(({ title }) => title)).toEqual(originals.map(({ title }) => `Finding from ${title}`));
+    for (const source of applied.sources) {
+      expect(applied.notes.find(({ title }) => title === `Finding from ${source.title}`)?.sourceIds).toEqual([source.id]);
+    }
+    expect(organizeWithAI).not.toHaveBeenCalled();
+  });
+
   it("recovers a direct deadline automatically through planned reading", async () => {
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
       {};

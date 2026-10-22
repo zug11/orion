@@ -69,7 +69,9 @@ describe("single-recipient voice call lifecycle", () => {
       await vi.advanceTimersByTimeAsync(500);
     }
     expect(handback).not.toHaveBeenCalled(); expect(transport.dispose).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1_000); expect(handback).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(20_000); expect(handback).not.toHaveBeenCalled();
+    transport.options.onEvent({ type: "session.output_transcript.delta", delta: " and now finished." });
+    await vi.advanceTimersByTimeAsync(3_000); expect(handback).toHaveBeenCalledOnce();
     call.dispose(); expect(vi.getTimerCount()).toBe(0);
   });
   it("pauses the departing recipient immediately and cancels any deferred handback on an explicit switch", async () => {

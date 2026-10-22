@@ -24,6 +24,7 @@ export const defaultSettings: Settings = {
   apiKeyConfigured: false,
   anthropicApiKeyConfigured: false,
   elevenLabsApiKeyConfigured: false,
+  perplexityApiKeyConfigured: false,
   elevenLabsVoiceId: "",
   elevenLabsVoices: [],
   speechVoice: "system",

@@ -1,3 +1,4 @@
+import { PerplexitySettings } from "./PerplexitySettings";
 import {
   Bot,
   Cable,
@@ -8,6 +9,7 @@ import {
   EyeOff,
   ExternalLink,
   KeyRound,
+  Globe,
   Link2,
   LoaderCircle,
   LockKeyhole,
@@ -297,6 +299,7 @@ export function SettingsView({
   );
   const [activeSection, setActiveSection] = useState<
     | "intelligence"
+    | "web-research"
     | "voice"
     | "claude"
     | "transcription"
@@ -516,6 +519,7 @@ export function SettingsView({
           >
             <Volume2 size={15} /> Voice
           </a>
+          <a href="#web-research" className={activeSection === "web-research" ? "active" : ""} onClick={() => setActiveSection("web-research")}><Globe size={15} /> Web research</a>
           <a
             href="#claude"
             className={activeSection === "claude" ? "active" : ""}
@@ -969,6 +973,9 @@ export function SettingsView({
               ) : null}
             </div>
           </section>
+
+          <PerplexitySettings configured={settings.perplexityApiKeyConfigured === true}
+            onConfiguredChange={configured => onChange({ ...settings, perplexityApiKeyConfigured: configured })} />
 
           <section className="settings-section" id="claude">
             <div className="settings-section-title">

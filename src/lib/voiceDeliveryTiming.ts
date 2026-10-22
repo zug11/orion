@@ -3,6 +3,7 @@ import type { VoiceActivity } from "./liveVoice";
 export const VOICE_FINDING_MAX_WAIT_MS = 12_000;
 const QUIET_MS = 1_500;
 const BACKGROUND_GAP_MS = 12_000;
+const THOUGHT_QUIET_MS = 2_800;
 
 /** Controls when to offer commentary, never claims that the provider spoke it.
  * Transcript arrivals are the primary speech signal. Audio energy only extends
@@ -18,12 +19,20 @@ export class VoiceDeliveryTiming {
   private inputStarted = -Infinity;
   private lastOutput = -Infinity;
   private userHoldUntil = -Infinity;
+  private assistantTail = "";
   private activity = { inputActive: false, outputActive: false };
 
-  transcript(now = Date.now(), role: "user" | "assistant" = "user", quietForMs = 0) {
+  transcript(now = Date.now(), role: "user" | "assistant" = "user", quietForMs = 0, delta?: string) {
     this.lastTranscript = now;
-    if (role === "user") { this.userGeneration++; this.userHoldUntil = now + Math.max(QUIET_MS, quietForMs); }
-    else this.lastAssistantTranscript = now;
+    if (role === "user") {
+      this.userGeneration++; this.userHoldUntil = now + Math.max(QUIET_MS, quietForMs);
+      // An actual human turn can take the floor from an interrupted fragment.
+      // Noise and elapsed time cannot clear this unfinished-thought latch.
+      this.assistantTail = "";
+    } else {
+      this.lastAssistantTranscript = now;
+      if (delta) this.assistantTail = (this.assistantTail + delta).slice(-800);
+    }
   }
   audio(next: Pick<VoiceActivity, "inputActive" | "outputActive">, now = Date.now()) {
     if (next.inputActive && !this.activity.inputActive) this.inputStarted = now;
@@ -35,17 +44,29 @@ export class VoiceDeliveryTiming {
     if (background && !completion) { this.lastBackground = now; this.offeredGeneration = this.userGeneration; }
   }
   outputQuiet(now = Date.now()) {
-    return !this.activity.outputActive && now - this.lastOutput >= QUIET_MS && now - this.lastAssistantTranscript >= QUIET_MS;
+    const tail = this.assistantTail.trim();
+    // GPT-Live has no turn-done event. Require both settled playback and a
+    // completed transcript sentence; a network gap is not a sentence ending.
+    // Do not apply the user's dangling-word routing heuristic here: a complete
+    // answer such as "That's what it is for." must not latch delivery forever.
+    if (tail && (!/[.!?。！？]["'”’\)\]]*$/.test(tail) || /(?:\.{2,}|…)\s*["'”’\)\]]*$/.test(tail))) return false;
+    const quiet = tail ? THOUGHT_QUIET_MS : QUIET_MS;
+    return !this.activity.outputActive && now - this.lastOutput >= quiet && now - this.lastAssistantTranscript >= quiet;
+  }
+  inputSettled(now = Date.now()) { return now >= this.userHoldUntil; }
+  contextSafe(now = Date.now()) { return this.outputQuiet(now) && now - this.lastTranscript >= QUIET_MS && this.inputSettled(now); }
+  backgroundEligible(now = Date.now(), completion = false) {
+    return completion || this.userGeneration > this.offeredGeneration && now - this.lastBackground >= BACKGROUND_GAP_MS;
   }
   canOffer(queuedAt: number, now = Date.now(), background = false, completion = false) {
     // Limit unsolicited interim chatter. Each admitted assignment's one final
     // answer must still arrive, even if a checkpoint used the interim allowance.
     // Queue identity/revision/sequence deduplication prevents repeated finals.
-    if (background && !completion && (this.userGeneration <= this.offeredGeneration || now - this.lastBackground < BACKGROUND_GAP_MS)) return false;
+    if (background && !this.backgroundEligible(now, completion)) return false;
     // Pace independent findings even when several have reached their deadline.
     if (now - this.lastOffered < QUIET_MS) return false;
-    // Never stack another speech request onto audible playback. Factual context
-    // has already arrived quietly, so it does not depend on this speech queue.
+    // Never stack another speech request onto audible playback. Worker facts
+    // remain local until the same floor guard allows their prepared contribution.
     if (!this.outputQuiet(now)) return false;
     // A waiting finding never outranks an arriving human transcript. The cap
     // exists for flickering microphone noise, not for a person thinking aloud.
@@ -59,6 +80,7 @@ export class VoiceDeliveryTiming {
     // unsolicited-update budget. Switching orbs must not trigger a monologue.
     this.lastTranscript = this.lastAssistantTranscript = this.lastOffered = this.inputStarted = this.lastOutput = -Infinity;
     this.userHoldUntil = -Infinity;
+    this.assistantTail = "";
     this.activity = { inputActive: false, outputActive: false };
   }
   reset() {

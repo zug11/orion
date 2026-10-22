@@ -39,7 +39,7 @@ export function mergeSavedChatPassages(body: string, footer: string): string {
 }
 
 function isPortableEvidence(value: unknown): value is ChatEvidence {
-  return isChatEvidence(value) && Object.keys(value).length === EVIDENCE_KEYS.length &&
+  return isChatEvidence(value) && Object.keys(value).length === EVIDENCE_KEYS.length + (value.kind === "web" ? 1 : 0) &&
     EVIDENCE_KEYS.every((key) => Object.prototype.hasOwnProperty.call(value, key)) &&
     !/[\u0000-\u001f\u007f]/.test(value.entityId + value.title + value.version) &&
     !/[\uD800-\uDFFF]/u.test(value.entityId + value.title + value.version);
@@ -117,7 +117,7 @@ export function portableChatEvidence(markdown: string, evidence: readonly ChatEv
     if (encoded.length > MAX_ENCODED_PASSAGE_LENGTH) throw new Error("The cited passage is too large to keep safely.");
     return `[Passage ${index + 1}: ${literalMarkdown(item.title)}](#orion-passage-${item.id} "${SAVED_PASSAGE_PREFIX}${encoded}")\n\n` +
       item.text.split("\n").map((line) => `> ${literalMarkdown(line)}`).join("\n") +
-      `\n\nOriginal: [${literalMarkdown(item.title)}](orion-${item.kind}://${encodeURIComponent(item.entityId)})`;
+      `\n\nOriginal: [${literalMarkdown(item.title)}](${item.kind === "web" ? item.web!.url.replace(/[()]/g, char => char === "(" ? "%28" : "%29") : `orion-${item.kind}://${encodeURIComponent(item.entityId)}`})`;
   }).join("\n\n");
   if (new TextEncoder().encode(passages).length > MAX_SAVED_PASSAGE_BYTES) throw new Error("The cited passages are too large to keep safely.");
   return `${body}\n\n## Cited passages\n\n${passages}`;

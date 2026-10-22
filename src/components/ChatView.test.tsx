@@ -36,6 +36,33 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("ChatView", () => {
+  it("keeps Web opt-in for typed messages during voice and resets it across Spaces", async () => {
+    const state = fixture(), callbacks = handlers(); state.settings.perplexityApiKeyConfigured = true;
+    const props = { ...callbacks, snapshot: state, busy: false, voiceControl: { active: true, toggle: vi.fn() } };
+    const { rerender } = render(<ChatView {...props} />);
+    expect(screen.getByRole("button", { name: "Web" })).toHaveAttribute("aria-pressed", "false");
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "A typed question" } });
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    await waitFor(() => expect(callbacks.onSend).toHaveBeenCalledWith("A typed question"));
+    await waitFor(() => expect(screen.getByRole("textbox")).not.toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "Web" }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Research online" } });
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    await waitFor(() => expect(callbacks.onSend).toHaveBeenLastCalledWith("Research online", undefined, undefined, true));
+    await waitFor(() => expect(screen.getByRole("textbox")).not.toBeDisabled());
+    const other = { ...state, workspace: { ...state.workspace, id: "another-space" } };
+    rerender(<ChatView {...props} snapshot={other} />);
+    expect(screen.getByRole("button", { name: "Web" })).toHaveAttribute("aria-pressed", "false");
+    rerender(<ChatView {...props} />);
+    expect(screen.getByRole("button", { name: "Web" })).toHaveAttribute("aria-pressed", "false");
+  });
+  it("opens Settings from Web when the key is missing, without enabling research", () => {
+    const callbacks = handlers(); render(<ChatView {...callbacks} snapshot={fixture()} busy={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "Web" }));
+    expect(callbacks.onOpenSettings).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Web" })).toHaveAttribute("aria-pressed", "false");
+    expect(callbacks.onSend).not.toHaveBeenCalled();
+  });
   it.each([false, true])("shows a decorative idle orb without starting voice (compact=%s)", compact => {
     const callbacks = handlers(), toggle = vi.fn();
     const { container } = render(<ChatView {...callbacks} snapshot={fixture()} busy={false} compact={compact}

@@ -4,6 +4,9 @@ import { sourceEvidenceVersion } from "../lib/evidenceVersions";
 import { getNoteExcerptText } from "../lib/noteExcerpts";
 import { requestNoteExcerptNavigation } from "../lib/noteExcerptNavigation";
 import { requestSourcePassageNavigation } from "../lib/sourcePassageNavigation";
+import { openEditorExternalLink } from "../lib/openEditorExternalLink";
+import { validWebMetadata } from "../lib/webResearch";
+import { useState } from "react";
 
 interface CitedPassageProps {
   evidence: ChatEvidence;
@@ -17,6 +20,8 @@ interface CitedPassageProps {
 }
 
 export function citedPassageStatus(evidence: ChatEvidence, notes: readonly Note[], sources: readonly Source[], savedWith: "reply" | "note" | "answer") {
+  if (evidence.kind === "web") return { available: validWebMetadata(evidence.web),
+    description: validWebMetadata(evidence.web) ? `Web search excerpt · Retrieved ${new Date(evidence.web.retrievedAt).toLocaleDateString()}. This retained excerpt may not reflect later page changes.` : "This web reference is unavailable." };
   const note = evidence.kind === "note" ? notes.find((item) => item.id === evidence.entityId) : undefined;
   const source = evidence.kind === "source" ? sources.find((item) => item.id === evidence.entityId) : undefined;
   const currentVersion = note ? spaceNoteVersion(note) : source ? sourceEvidenceVersion(source) : undefined;
@@ -37,8 +42,13 @@ export function citedPassageStatus(evidence: ChatEvidence, notes: readonly Note[
 
 /** Always display the retained quote, even when its original changes or vanishes. */
 export function CitedPassage({ evidence, notes, sources, panelId, savedWith, onClose, onOpenNote, onOpenSource }: CitedPassageProps) {
+  const [openError, setOpenError] = useState("");
   const status = citedPassageStatus(evidence, notes, sources, savedWith);
   function openOriginal() {
+    if (evidence.kind === "web") {
+      if (validWebMetadata(evidence.web)) void openEditorExternalLink(evidence.web.url).catch(() => setOpenError("The web page could not be opened. Try again."));
+      return;
+    }
     if (evidence.kind === "source") {
       const source = sources.find((item) => item.id === evidence.entityId);
       if (source && sourceEvidenceVersion(source) === evidence.version) requestSourcePassageNavigation(source, { from: evidence.start, to: evidence.end, text: evidence.text });
@@ -61,9 +71,11 @@ export function CitedPassage({ evidence, notes, sources, panelId, savedWith, onC
     </div>
     <blockquote>{evidence.text}</blockquote>
     <p>{status.description}</p>
+    {evidence.kind === "web" && validWebMetadata(evidence.web) && <p>{new URL(evidence.web.url).hostname}{evidence.web.publishedAt ? ` · Published ${evidence.web.publishedAt}` : ""}</p>}
+    {openError && <p role="alert">{openError}</p>}
     <button type="button" disabled={!status.available || (evidence.kind === "source" && !onOpenSource)}
       onClick={openOriginal}>
-      {evidence.kind === "note" ? "Open note" : "Open source"}
+      {evidence.kind === "web" ? "Open website" : evidence.kind === "note" ? "Open note" : "Open source"}
     </button>
   </aside>;
 }

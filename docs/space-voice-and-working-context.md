@@ -118,18 +118,19 @@ a permanently running model process. Local fixtures exercise checkpoint/resume,
 stale evidence, cancellation, duplicate delivery and native/browser schema gates;
 audible live-provider quality remains a separate acceptance check.
 
-Finding delivery separates quiet reference metadata from conversational prose.
-`voiceFindingDelivery.ts` sends the job identity, revision, sequence, intermediate
-or complete state, coverage, and any confirmed save receipt or unapplied proposal
-through `session.thinking.append`. Exact source titles/identities and ranges are
+Finding delivery separates local reference metadata from conversational prose.
+`voiceFindingDelivery.ts` prepares the job identity, revision, sequence, intermediate
+or complete state, coverage, and any confirmed save receipt or unapplied proposal.
+Ordinary findings enter a local inbox rather than the speaking connection.
+Exact source titles/identities and ranges are
 bounded separately with explicit omissions; local evidence IDs are scoped to
-one worker/revision/update. Each queued commentary carries that exact packet and
-re-sends it immediately before its prose, so interleaved workers cannot inherit
+one worker/revision/update. Each explicit queued commentary carries that exact
+packet and sends it immediately before its prose, so interleaved workers cannot inherit
 each other's source mapping. A rejected reference send holds commentary; a
 rejected commentary retries both together. Current-call delegation IDs are
 resolved at delivery rather than carried blindly across audio connections.
-Complete bounded findings are available there immediately, including final
-answers. The same reading calls can return a validated `voice` object with a
+Complete bounded findings remain available in the local work summary, including
+final answers. The same reading calls can return a validated `voice` object with a
 short assignment label (80 Unicode characters) and a final spoken summary
 (360 Unicode characters). The label changes presentation only; the original
 prompt, identity, scope and write authority stay fixed. Final summary citations
@@ -295,34 +296,52 @@ useful current findings and confirmed receipts. It rearms only below 75%. This
 does not reconnect, rerun work or announce the checkpoint, and does not claim an
 engine handover occurred. Jobs and detailed evidence remain in the application.
 
-Complete spoken findings are
-buffered separately and checked against their work-order revision immediately
-before sending. Local energy monitoring uses the existing mic and playback
-streams without another capture or duplicate playback; transcript activity is a
-primary speech signal. A 1.5-second transcript quiet interval normally gates
-offering a finding. Actual playback holds new speech offers until it ends and
-a 1.5-second quiet interval passes. Arriving assistant transcripts keep that guard
-active even when the local output meter reports silence. Input noise has a
-twelve-second cap; arriving user or assistant transcripts and audible output
-always retain their quiet guard. An overdue finding cannot override a person
-still speaking, even when the input meter reports silence.
+Findings are buffered locally and checked against their work-order revision and
+sequence before synthesis and again before sending. Job/status changes,
+navigation context and continuity checkpoints also wait locally while the voice
+is speaking; a passage bound to actual user speech keeps its existing priority
+context path. Local energy monitoring uses the existing mic and playback streams
+without another capture or duplicate playback. The accumulating assistant
+transcript must end a sentence, and playback/transcript activity must settle for
+2.8 seconds. An unfinished fragment or ellipsis stays held even during a long
+network gap. A real new human turn can take over an interrupted fragment; room
+noise cannot. When no assistant transcript exists, the existing 1.5-second quiet
+guard remains. Input noise has a twelve-second cap, but it never overrides
+audible output, an unfinished assistant fragment or arriving human speech.
+GPT-Live has no turn-completion/audio-done event, so this is a conservative
+approximation rather than proof that the speaker has semantically finished.
 Interim findings get at most one unsolicited offer after user speech, at least
 twelve seconds apart. Assistant transcripts, noise, silence and orb handoffs do
 not renew it. A completed assignment's concise answer bypasses this interim
 allowance and remains paced behind existing speech. Revision/sequence guards
 prevent duplicate final announcements. Explicit requests and confirmed actions
-also remain eligible independently. Detailed results remain in quiet context
+also remain eligible independently. Detailed results remain in local context
 and the work summary; opening a worker is never required to receive its finding.
 The speech queue now follows research retention rather than dropping updates
 after twelve, and the work list exposes every retained result rather than six.
-At an eligible pause, automatic completions collect for 1.2 seconds, then up to
-four enter a bounded reference packet with exact complete summaries, original
-questions and worker-local sources. A fixed trusted instruction asks for one
-brief contribution connected to the current conversation, preserving overlap,
-disagreement and limited coverage. It is one transport chunk; worker prose is
-never interpolated into instructions. Groups have an eight-second spacing and
-never wait for the entire team. Explicit result/save responses take precedence.
-Waiting for a pause and Shared with voice describe the local queue/send states,
+After a 1.2-second collection window, up to four automatic interim/final findings
+enter one background synthesis call using the selected Intelligence provider,
+model and effort. It can prepare during assistant speech and never waits for
+every worker to finish. `voiceFindingSynthesis.ts` and the shared
+`voiceSynthesisProtocol.json` supply current conversation, up to three previous
+offers (not confirmed speech), whole findings, questions and exact worker-local
+provenance in a bounded 32 KB payload. `voice-synthesis` is a read-only Chat mode
+validated by the browser and `src-tauri/src/voice_synthesis.rs`; it cannot research,
+create notes or propose edits. It returns one contribution of at most 900 Unicode
+characters with an exact partition of included and deferred finding keys.
+Related findings are combined with uncertainty, disagreement, coverage and
+failed-web qualifications intact. Unrelated or redundant findings can wait
+locally until another relevant turn. A single preparation slot has a 45-second
+deadline. Failure preserves research, exposes Retry voice summary, and sleeps
+instead of repeatedly calling the provider. A new turn/update can reconsider it.
+Newer checkpoints, corrections, cancellation and user topic changes invalidate
+stale preparation and prepared speech. Batch fitting preserves whole findings
+and source names, reserving the voice packet's 24,000 UTF-16 limit before the
+provider call. After the floor guard clears, the host pairs exact included
+provenance with one fixed instruction to the speaking voice. Worker prose never
+enters trusted instructions. Prepared offers are at least eight seconds apart;
+explicit result/save requests take precedence and bypass synthesis.
+Combining findings, Waiting for a pause and Shared with voice describe local states,
 not provider acknowledgments, completed playback or hearing. Read aloud remains
 available on each finished job. Stop clears offers; internal orb handoffs retain
 them and their grouping budget. Revised/evicted findings cannot be replayed.

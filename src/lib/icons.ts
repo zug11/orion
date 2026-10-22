@@ -88,3 +88,5 @@ export { default as Video } from "lucide-react/dist/esm/icons/video.mjs";
 export { default as Square } from "lucide-react/dist/esm/icons/square.mjs";
 export { default as Volume2 } from "lucide-react/dist/esm/icons/volume-2.mjs";
 export { default as X } from "lucide-react/dist/esm/icons/x.mjs";
+
+export { default as Globe } from "lucide-react/dist/esm/icons/globe.mjs";

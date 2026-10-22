@@ -2,6 +2,28 @@ import { describe, expect, it } from "vitest";
 import { VoiceDeliveryTiming, VOICE_FINDING_MAX_WAIT_MS } from "./voiceDeliveryTiming";
 
 describe("voice finding delivery timing", () => {
+  it("requires a settled sentence as well as quiet playback, including quoted and non-English endings", () => {
+    for (const tail of ["The distinction is", "Consider this...", "Consider this…", "A complete sentence. Then the next thought"]) {
+      const timing = new VoiceDeliveryTiming(); timing.transcript(0, "assistant", 0, tail);
+      expect(timing.contextSafe(60_000)).toBe(false);
+      expect(timing.canOffer(0, 60_000, true, true)).toBe(false);
+    }
+    for (const tail of ['That is the distinction.”', "それが違いです。", "A complete thought.", "That's what it is for.", "That's the idea I'm referring to."]) {
+      const timing = new VoiceDeliveryTiming(); timing.transcript(0, "assistant", 0, tail);
+      timing.audio({ inputActive: false, outputActive: true }, 1_000);
+      timing.audio({ inputActive: false, outputActive: false }, 2_000);
+      expect(timing.contextSafe(4_799)).toBe(false);
+      expect(timing.contextSafe(4_800)).toBe(true);
+    }
+  });
+  it("lets an actual new human turn take over an interrupted fragment without letting microphone noise do so", () => {
+    const timing = new VoiceDeliveryTiming(); timing.transcript(0, "assistant", 0, "And the useful thing is");
+    timing.audio({ inputActive: true, outputActive: false }, 20_000);
+    expect(timing.contextSafe(60_000)).toBe(false);
+    timing.transcript(60_000, "user", 3_500, "Let's move on.");
+    expect(timing.contextSafe(63_499)).toBe(false);
+    expect(timing.contextSafe(63_500)).toBe(true);
+  });
   it("uses arriving transcripts for speech even when the meter reports silence", () => {
     const timing = new VoiceDeliveryTiming();
     timing.transcript(1_000);

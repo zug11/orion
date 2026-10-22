@@ -1,3 +1,4 @@
+import { researchWithPerplexity } from "./lib/perplexity";
 import { workingTaskSnapshot, requestedTaskView } from "./lib/taskWorkingView";
 import { addHumanPassageComment, passageComments, type PassageCommentHandler, passageAnchorFromSelection, passageIsCurrent, validatePassageRewrite, reviewPassageComment, threadEditProposal, isPassageThreads, MAX_PASSAGE_THREADS, MAX_THREAD_MESSAGES, type PassageThreadHandler, type PassageChatTarget, passageConversationSnapshot, passageArticleReference } from "./lib/passageThreads";
 import { portableChatEvidence } from "./lib/chatCitations";
@@ -1016,6 +1017,7 @@ function App() {
               elevenLabsApiKeyConfigured: isTauriRuntime()
                 ? (base.settings.elevenLabsApiKeyConfigured ?? false)
                 : false,
+              perplexityApiKeyConfigured: isTauriRuntime() && base.settings.perplexityApiKeyConfigured === true,
               speechVoice: normalizeSpeechVoice(base.settings.speechVoice),
               sidebarCollapsed: base.settings.sidebarCollapsed === true,
               elevenLabsVoiceId: normalizeElevenLabsVoiceId(
@@ -3209,7 +3211,7 @@ function App() {
   }, []);
 
   const sendChatMessage = useCallback(
-    async (prompt: string, focusNoteId?: string, selection?: VoiceSelection): Promise<ChatResult> => {
+    async (prompt: string, focusNoteId?: string, selection?: VoiceSelection, webEnabled = false): Promise<ChatResult> => {
       const workspaceId = vaultRef.current.activeSpaceId;
       const space = vaultRef.current.spaces.find(
         (candidate) => candidate.workspace.id === workspaceId,
@@ -3240,6 +3242,7 @@ function App() {
 
       try {
         const result = await runChatReading(space, prompt, chatWithOrion, {
+          webResearch: webEnabled && space.settings.perplexityApiKeyConfigured ? researchWithPerplexity : undefined,
           focusNoteId,
           selection,
           signal: controller.signal,

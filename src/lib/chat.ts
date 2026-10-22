@@ -117,7 +117,7 @@ export function applyChatResult(
 ): AppSnapshot {
   const studio = normalizeStudio(snapshot.studio);
   const evidence = normalizeSourceEvidenceVersions((result.evidence ?? []).filter(isChatEvidence).filter((item) =>
-    (item.kind === "note" ? snapshot.notes : snapshot.sources).some((entity) => entity.id === item.entityId),
+    item.kind === "web" || (item.kind === "note" ? snapshot.notes : snapshot.sources).some((entity) => entity.id === item.entityId),
   ).slice(0, MAX_CHAT_EVIDENCE), snapshot.sources);
   const noteActions = chatPromptAllowsNoteCreation(prompt)
     ? normalizeChatNoteActions(result.noteActions)

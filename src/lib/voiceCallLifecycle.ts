@@ -63,7 +63,7 @@ export class VoiceCallLifecycle {
       onEvent: event => {
         if (!current() || !this.accepting) return;
         if ((event.type.endsWith("transcript.delta") && event.delta?.trim()) || event.type === "session.delegation.created") this.cancelWelcome();
-        if (event.type === "session.output_transcript.delta" && event.delta?.trim()) this.outputTiming.transcript(Date.now(), "assistant");
+        if (event.type.endsWith("transcript.delta") && event.delta?.trim()) this.outputTiming.transcript(Date.now(), event.type === "session.output_transcript.delta" ? "assistant" : "user", 0, event.delta);
         options.onEvent(event);
       },
       onActivity: activity => { if (current() && this.accepting) {

@@ -1,3 +1,4 @@
+import { validWebMetadata } from "./webResearch";
 import type { ChatCoverage, ChatEvidence, ChatReadRequest, ChatReadingFinding, ChatVoicePresentation } from "../types";
 import protocol from "./chatReadingProtocol.json";
 
@@ -39,11 +40,14 @@ export function parseChatReadingFinding(value: unknown): ChatReadingFinding | un
 export function parseChatReadRequests(value: unknown): ChatReadRequest[] {
   if (!Array.isArray(value) || value.length > 4 || value.some((item) =>
     !record(item) || Object.keys(item).sort().join(",") !== "id,kind,query,start" ||
-    !["search", "cluster", "note", "source", "note-full", "source-full", "related"].includes(String(item.kind)) ||
+    !["search", "cluster", "note", "source", "note-full", "source-full", "related", "web"].includes(String(item.kind)) ||
     typeof item.id !== "string" || [...item.id].length > 200 ||
     typeof item.query !== "string" || [...item.query].length > 600 ||
     (item.start !== null && (!Number.isSafeInteger(item.start) || Number(item.start) < 0 || Number(item.start) > 1_000_000_000)) ||
-    (item.kind === "search" ? !item.query.trim() || item.id !== "" : !item.id.trim())
+    (item.kind === "search" ? !item.query.trim() || item.id !== ""
+      : item.kind === "web" ? item.id === "" ? !item.query.trim() || item.start !== null
+        : !/^[\w-]{1,200}$/.test(item.id) || item.start === null || item.query !== ""
+      : !item.id.trim())
   )) throw new Error("Chat returned an invalid reading request.");
   return value as ChatReadRequest[];
 }
@@ -62,7 +66,8 @@ export function parseChatReadingContext(value: string | undefined): Record<strin
 
 export function isChatEvidence(value: unknown): value is ChatEvidence {
   return record(value) && typeof value.id === "string" && /^e[1-9]\d{0,3}$/.test(value.id) &&
-    (value.kind === "note" || value.kind === "source") &&
+    (value.kind === "web" ? validWebMetadata(value.web) && value.start === 0
+      : (value.kind === "note" || value.kind === "source") && value.web === undefined) &&
     typeof value.entityId === "string" && value.entityId.length > 0 && value.entityId.length <= 200 &&
     typeof value.title === "string" && value.title.length <= 600 &&
     typeof value.version === "string" && value.version.length <= 200 &&
@@ -75,5 +80,6 @@ export function isChatEvidence(value: unknown): value is ChatEvidence {
 export function isChatCoverage(value: unknown): value is ChatCoverage {
   return record(value) && ["availableNotes", "availableSources", "openedNotes", "openedSources", "searches"]
     .every((key) => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0) &&
+    (value.webSearches === undefined || (Number.isSafeInteger(value.webSearches) && Number(value.webSearches) >= 0 && Number(value.webSearches) <= 3)) &&
     typeof value.limited === "boolean";
 }

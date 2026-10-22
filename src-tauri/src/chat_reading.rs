@@ -206,6 +206,7 @@ pub(super) fn parse_response(
                 "note-full",
                 "source-full",
                 "related",
+                "web",
             ]
             .contains(&request.kind.as_str())
                 || request.id.chars().count() > 200
@@ -213,6 +214,17 @@ pub(super) fn parse_response(
                 || request.start.is_some_and(|start| start > 1_000_000_000)
                 || if request.kind == "search" {
                     !request.id.is_empty() || request.query.trim().is_empty()
+                } else if request.kind == "web" {
+                    if request.id.is_empty() {
+                        request.query.trim().is_empty() || request.start.is_some()
+                    } else {
+                        !request
+                            .id
+                            .bytes()
+                            .all(|ch| ch.is_ascii_alphanumeric() || b"_-".contains(&ch))
+                            || request.start.is_none()
+                            || !request.query.is_empty()
+                    }
                 } else {
                     request.id.trim().is_empty()
                 }
@@ -234,6 +246,7 @@ pub(super) fn parse_response(
         // Reading responses cannot commit accompanying prose or note actions.
         return Ok(ChatResult {
             reply: String::new(),
+            synthesis: None,
             suggestions: None,
             note_actions: Vec::new(),
             note_edits: Vec::new(),
@@ -254,6 +267,31 @@ pub(super) fn parse_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn web_reads_distinguish_new_lookup_from_local_retained_pages() {
+        for request in [
+            json!({"kind":"web", "id":"", "query":"Public question", "start":null}),
+            json!({"kind":"web", "id":"response_123", "query":"", "start":12000}),
+        ] {
+            let response =
+                json!({"reply":"", "checkpoint":null, "voice":null, "readRequests":[request]});
+            assert!(parse_response(&response.to_string(), true, true).is_ok());
+        }
+        for request in [
+            json!({"kind":"web", "id":"", "query":"Public question", "start":12000}),
+            json!({"kind":"web", "id":"response_123", "query":"", "start":null}),
+            json!({"kind":"web", "id":"response_123", "query":"Private new query", "start":12000}),
+            json!({"kind":"web", "id":"../other", "query":"", "start":12000}),
+        ] {
+            let response =
+                json!({"reply":"", "checkpoint":null, "voice":null, "readRequests":[request]});
+            assert!(matches!(
+                parse_response(&response.to_string(), true, true),
+                Err(ParseError::Reads)
+            ));
+        }
+    }
 
     #[test]
     fn reading_offsets_accept_schema_valid_integer_spellings_and_reject_invalid_values() {

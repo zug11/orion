@@ -233,6 +233,8 @@ export interface Settings {
   anthropicApiKeyConfigured: boolean;
   /** Optional. Used only to speak notes and narrated decks. */
   elevenLabsApiKeyConfigured: boolean;
+  /** Non-secret status only; the credential lives in the desktop Keychain. */
+  perplexityApiKeyConfigured?: boolean;
   /**
    * ElevenLabs voice ID from the user's library. Empty uses Orion's default
    * editorial voice. This is not a secret.
@@ -661,7 +663,7 @@ export interface ChatHistoryItem {
 }
 
 export interface ChatRequest {
-  mode?: "chat" | "inline-writing" | "chat-reading" | "chat-suggestions";
+  mode?: "chat" | "inline-writing" | "chat-reading" | "chat-suggestions" | "voice-synthesis";
   prompt: string;
   workspaceName: string;
   notes: ChatNoteContext[];
@@ -676,12 +678,15 @@ export interface ChatRequest {
   readingContext?: string;
   /** Bounded read-only exact passages for contextual prompt synthesis. */
   suggestionContext?: string;
+  /** Transient read-only worker findings, never an action-authorizing prompt. */
+  synthesisContext?: string;
   model?: string;
   effort?: ReasoningEffort;
 }
 
 export interface ChatResult {
   reply: string;
+  synthesis?: import("./lib/voiceSynthesisProtocol").VoiceSynthesisResult;
   /** Transient prompt ideas. They carry no note-write authority. */
   suggestions?: ChatPromptSuggestion[];
   noteActions?: ChatNoteAction[];
@@ -700,6 +705,8 @@ export interface ChatResult {
   /** Host-built citations and coverage, never accepted from provider output. */
   evidence?: ChatEvidence[];
   coverage?: ChatCoverage;
+  /** Transient host-observed web outcome, never trusted from provider output. */
+  webResearch?: { attempted: number; completed: number; issue?: string };
 }
 
 export interface ChatVoicePresentation { label: string; summary: string }
@@ -720,7 +727,7 @@ export interface ChatPromptSuggestion {
 }
 
 export interface ChatReadRequest {
-  kind: "search" | "cluster" | "note" | "source" | "note-full" | "source-full" | "related";
+  kind: "search" | "cluster" | "note" | "source" | "note-full" | "source-full" | "related" | "web";
   id: string;
   query: string;
   /** UTF-16 offset for exact text, directory offset for search/cluster. */
@@ -729,7 +736,9 @@ export interface ChatReadRequest {
 
 export interface ChatEvidence {
   id: string;
-  kind: "note" | "source";
+  kind: "note" | "source" | "web";
+  /** Web offsets refer to the retained search excerpt, never the full remote page. */
+  web?: { url: string; retrievedAt: string; publishedAt?: string };
   entityId: EntityId;
   title: string;
   version: string;
@@ -745,6 +754,7 @@ export interface ChatCoverage {
   openedNotes: number;
   openedSources: number;
   searches: number;
+  webSearches?: number;
   limited: boolean;
 }
 

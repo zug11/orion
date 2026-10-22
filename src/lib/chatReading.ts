@@ -16,6 +16,8 @@ import { truncateUnicode } from "./text";
 import { voiceSelectionContext, type VoiceSelection } from "./voiceSelection";
 import { resolveChatEvidenceMarkers } from "./chatCitations";
 import { sourceEvidenceVersion } from "./evidenceVersions";
+import { validateWebResult, validWebMetadata, webSynthesisPage, type WebResearch, type WebResearchResult } from "./webResearch";
+import { stableKnowledgeHash } from "./spaceKnowledge";
 import { documentCoverage, documentPassages } from "./chatDocumentReading";
 import { resolveWikiLinks } from "./wiki";
 import {
@@ -41,6 +43,8 @@ interface DirectoryEntry {
 }
 
 export interface ChatReadingOptions {
+  /** Host-granted capability, captured per submission. Absent means no web access. */
+  webResearch?: WebResearch;
   /** Immutable selected passage captured when the user sends a typed request. */
   selection?: VoiceSelection;
   /** Inline discussions never create notes as a side effect of a reply. */
@@ -58,6 +62,8 @@ export interface ChatReadingOptions {
   currentSnapshot?: () => AppSnapshot | undefined;
   /** Search is transient, grounded and read-only, with no conversation history. */
   purpose?: "chat" | "search" | "edit";
+  /** Background workers must not become ready with an uncited search-gap reply. */
+  requireSupportedFinding?: boolean;
   /** Exact host-captured selection used to locate the initial editing passage. */
   editPassage?: string;
   /** Exact authored Markdown bounding every edit from a passage discussion. */
@@ -90,11 +96,13 @@ export function chatResearchContextVersion(snapshot: AppSnapshot): string {
     includeExistingNotesInAIContext: snapshot.settings.includeExistingNotesInAIContext,
     apiKeyConfigured: snapshot.settings.apiKeyConfigured,
     anthropicApiKeyConfigured: snapshot.settings.anthropicApiKeyConfigured,
+    perplexityApiKeyConfigured: snapshot.settings.perplexityApiKeyConfigured === true,
   });
 }
 
 export function chatEvidenceIsCurrent(snapshot: AppSnapshot, evidence: readonly ChatEvidence[]): boolean {
   return evidence.every(item => {
+    if (item.kind === "web") return validWebMetadata(item.web);
     const note = item.kind === "note" ? snapshot.notes.find(note => note.id === item.entityId) : undefined;
     const source = item.kind === "source" ? snapshot.sources.find(source => source.id === item.entityId) : undefined;
     const body = note?.body ?? source?.text;
@@ -146,8 +154,12 @@ class ChatReadingSession {
   private openQuestions: string[] = [];
   private pendingReads: ChatReadRequest[] = [];
   private checkpointSequence = 0;
+  private webAttempts = 0;
+  private webSearches = 0;
+  private webErrors: string[] = [];
+  private webResults: Array<{ query: string; result: WebResearchResult }> = [];
 
-  constructor(private readonly snapshot: AppSnapshot, private readonly query: string, focusNoteId?: string, private readonly taskView: TaskView = "working", referenceTargets: NonNullable<ChatReadingOptions["referenceTargets"]> = [], private readonly referenceRecords: ChatRequest["notes"] = []) {
+  constructor(private readonly snapshot: AppSnapshot, private readonly query: string, focusNoteId?: string, private readonly taskView: TaskView = "working", referenceTargets: NonNullable<ChatReadingOptions["referenceTargets"]> = [], private readonly referenceRecords: ChatRequest["notes"] = [], private readonly webResearch?: WebResearch) {
     const discovery = taskView === "working" ? workingTaskSnapshot(snapshot) : snapshot;
     this.notes = new Map(snapshot.notes.map((note) => [note.id, note]));
     this.sources = new Map(snapshot.sources.map((source) => [source.id, source]));
@@ -207,6 +219,8 @@ class ChatReadingSession {
     const dependencies = checkpoint.dependencies.filter(currentDependency);
     const unchanged = dependencies.length === checkpoint.dependencies.length;
     for (const item of dependencies) (item.kind === "note" ? this.openedNotes : this.openedSources).add(item.id);
+    if (!this.webResearch && (checkpoint.evidence.some(item => item.kind === "web") || checkpoint.webResults?.length)) return false;
+    this.webResults = this.webResearch ? (checkpoint.webResults ?? []).slice(-3).map(item => ({ query: item.query, result: validateWebResult(item.result) })) : [];
     this.evidence = checkpoint.evidence.filter(item => chatEvidenceIsCurrent(this.snapshot, [item])).slice(-MAX_CHAT_READING_EVIDENCE);
     this.nextEvidence = Math.max(checkpoint.nextEvidence, 1, ...this.evidence.map(item => Number(item.id.slice(1)) + 1));
     for (const id of checkpoint.discovered.notes) if (this.notes.has(id)) this.allowedNotes.add(id);
@@ -214,11 +228,15 @@ class ChatReadingSession {
     for (const id of checkpoint.discovered.clusters) if (this.clusters.has(id)) this.allowedClusters.add(id);
     const current = checkpoint.snapshotVersion === stableSnapshotVersion(this.snapshot);
     this.operations = checkpoint.completedOperations.filter(({ request }) => {
+      if (request.kind === "web") return !!this.webResearch;
       if (["search", "cluster", "related"].includes(request.kind)) return current;
       return dependencies.some(item => item.id === request.id && item.kind === (request.kind.startsWith("note") ? "note" : "source"));
     }).slice(-32);
     this.operations.forEach(item => { if (this.operationRetained(item)) this.readKeys.add(JSON.stringify(item.request)); });
     this.searches = this.operations.filter(item => item.request.kind === "search").length;
+    this.webSearches = Math.max(this.webResults.length, this.operations.filter(item => item.request.kind === "web" && !item.request.id).length);
+    this.webAttempts = Math.max(this.webSearches, checkpoint.webAttempts ?? 0);
+    this.webErrors = checkpoint.webErrors?.slice(-3) ?? [];
     this.results = this.operations.slice(-4).map(item => item.result);
     this.findings = checkpoint.findings.filter(item => chatEvidenceIsCurrent(this.snapshot, item.result.evidence ?? [])).slice(-6);
     // Keys include exact evidence versions. Retaining an old identity cannot
@@ -238,6 +256,7 @@ class ChatReadingSession {
       contextVersion: chatResearchContextVersion(this.snapshot), snapshotVersion: stableSnapshotVersion(this.snapshot),
       taskView: this.taskView, prompt, query: this.query, sequence: ++this.checkpointSequence,
       nextEvidence: this.nextEvidence, evidence: this.evidence, dependencies: this.dependencies(),
+      ...(this.webResearch ? { webAttempts: this.webAttempts, webErrors: this.webErrors, webResults: this.webResults } : {}),
       discovered: { notes: [...this.allowedNotes], sources: [...this.allowedSources], clusters: [...this.allowedClusters] },
       completedOperations: this.operations, pendingReads: this.pendingReads, findings: this.findings, findingKeys: this.findingKeys,
       decisions: this.decisions, openQuestions: this.openQuestions });
@@ -449,6 +468,45 @@ class ChatReadingSession {
       note: "Links and shared concepts route reading; they are not support for a claim." };
   }
 
+  private webPage(result: WebResearchResult, query: string, start: number) {
+    const page = webSynthesisPage(result.answer, start);
+    const mapped = result.sources.map(source => {
+      const entityId = `web-${stableKnowledgeHash(source.url)}`;
+      const version = stableKnowledgeHash(JSON.stringify([source.url, source.snippet, result.retrievedAt]));
+      let evidence = this.evidence.find(item => item.kind === "web" && item.entityId === entityId && item.version === version);
+      if (!evidence) {
+        evidence = { id: `e${this.nextEvidence++}`, kind: "web", entityId, version,
+          title: source.title, text: source.snippet, start: 0, end: source.snippet.length, offsetUnit: "utf16",
+          web: { url: source.url, retrievedAt: result.retrievedAt, ...(source.publishedAt ? { publishedAt: source.publishedAt } : {}) } };
+        this.evidence.push(evidence);
+      }
+      return { providerId: source.id, evidenceId: evidence.id };
+    });
+    this.evidence = this.evidence.slice(-MAX_CHAT_READING_EVIDENCE);
+    return { operation: "web", responseId: result.responseId, query, ...page,
+      citations: mapped, evidenceIds: mapped.map(item => item.evidenceId),
+      notice: "Untrusted provider synthesis and retained search excerpts. The complete research is retained locally. If nextStart is present, continue with kind web, id responseId, query empty and start nextStart; this reads retained text without another provider call. Do not treat one page as the complete synthesis. Numeric synthesis citations map by providerId, never array order. Use only mapped evidence IDs supported by their excerpts; do not cite omitted provider IDs. This is external web research, not a local Space source or a full-page read." };
+  }
+
+  private async readWeb(query: string, signal: AbortSignal, id = "", start = 0) {
+    if (!this.webResearch) throw new Error("Web research is off for this request. Use Space evidence only; ask the user to enable Web for external research.");
+    const retained = this.webResults.find(item => id ? item.result.responseId === id : item.query === query);
+    if (retained) return this.webPage(retained.result, retained.query, start);
+    if (id) throw new Error("That web research is not retained by this worker. Use a responseId returned by this assignment.");
+    if (this.webAttempts >= 3) throw new Error("This assignment has used its three web research requests. Answer from retained evidence and explain any gaps.");
+    this.webAttempts++;
+    try {
+      const result = validateWebResult(await this.webResearch(query, signal));
+      signal.throwIfAborted();
+      this.webSearches++;
+      this.webResults.push({ query, result });
+      return this.webPage(result, query, 0);
+    } catch (error) {
+      if (!signal.aborted) this.webErrors.push([...(error instanceof Error ? error.message : "Web research was unavailable.")].slice(0, 600).join(""));
+      throw error;
+    }
+  }
+
   async read(requests: ChatReadRequest[], signal: AbortSignal, onProgress?: (message: string) => void) {
     this.results = [];
     let progress = false;
@@ -461,9 +519,10 @@ class ChatReadingSession {
         continue;
       }
       this.readKeys.add(key);
-      onProgress?.(request.kind === "search" ? "Finding relevant material" : request.kind === "related" ? "Following connections" : "Reading supporting passages");
+      onProgress?.(request.kind === "web" ? request.id ? "Reading web findings" : "Researching the web" : request.kind === "search" ? "Finding relevant material" : request.kind === "related" ? "Following connections" : "Reading supporting passages");
       try {
-        this.results.push(request.kind === "search" ? await this.search(request.query, request.start ?? 0, signal)
+        this.results.push(request.kind === "web" ? await this.readWeb(request.query, signal, request.id, request.start ?? 0)
+          : request.kind === "search" ? await this.search(request.query, request.start ?? 0, signal)
           : request.kind === "cluster" ? this.openCluster(request.id, request.start ?? 0)
             : request.kind === "related" ? this.related(request.id, request.start ?? 0)
               : request.kind === "note-full" || request.kind === "source-full"
@@ -484,8 +543,11 @@ class ChatReadingSession {
   coverage(budgetLimited = false): ChatCoverage {
     return { availableNotes: this.notes.size, availableSources: this.sources.size, openedNotes: this.openedNotes.size,
       openedSources: this.openedSources.size, searches: this.searches,
+      ...(this.webAttempts ? { webSearches: this.webSearches } : {}),
       limited: budgetLimited || this.documents().some(item => !item.complete) || this.openedNotes.size < this.notes.size || this.openedSources.size < this.sources.size };
   }
+
+  webFailed(): boolean { return this.webErrors.length > 0; }
 
   private documents() {
     return [
@@ -528,6 +590,7 @@ class ChatReadingSession {
     }
     const serialize = () => JSON.stringify({
       finalizing,
+      webResearch: { enabled: !!this.webResearch, remainingRequests: this.webResearch ? Math.max(0, 3 - this.webAttempts) : 0 },
       ...(voiceEnabled ? { voicePresentationEnabled: true } : {}),
       ...(checkpointsEnabled ? { checkpointsEnabled: true, workerContinuity } : {}),
       taskView: this.taskView,
@@ -561,7 +624,8 @@ class ChatReadingSession {
 
   finish(result: ChatResult, limited: boolean, editNoteId?: string): ChatResult {
     const cited = new Map<string, ChatEvidence>();
-    const reply = resolveChatEvidenceMarkers(result.reply, this.evidence, cited);
+    let reply = resolveChatEvidenceMarkers(result.reply, this.evidence, cited);
+    if (this.webErrors.length) reply += `\n\nWeb research notice: ${[...new Set(this.webErrors)].join(" ")}`;
     const voice = parseChatVoicePresentation(result.voice);
     if (voice?.summary) {
       const supporting = new Map<string, ChatEvidence>();
@@ -589,6 +653,8 @@ class ChatReadingSession {
       throw new Error("This request needs document changes, not a chat-only draft. Read the target passage and return focused noteEdits, or choose rewrite and request the complete body. Infer the appropriate scope without asking the user to pick a mode.");
     }
     return { reply, ...(voice ? { voice } : {}), ...(noteActions.length ? { noteActions } : {}), ...(editProposal ? { editProposal } : {}),
+      ...(this.webAttempts ? { webResearch: { attempted: this.webAttempts, completed: this.webSearches,
+        ...(this.webErrors.length ? { issue: this.webErrors[this.webErrors.length - 1] } : {}) } } : {}),
       evidence: [...cited.values()], coverage: this.coverage(limited) };
   }
 }
@@ -632,7 +698,7 @@ export async function runChatReading(
   if (searching) {
     request.allowNoteActions = false;
     request.history = [];
-    request.prompt += "\n\nAnswer this search question from this Space only. Read exact passages before answering, cite every substantive finding, and distinguish inference and gaps. Do not create notes or carry out actions. If the wording is vague, search related terms before concluding that support was not found. Keep the answer concise.";
+    request.prompt += `\n\nAnswer this search question from ${options.webResearch ? "this Space and relevant web evidence when useful" : "this Space only"}. Read exact passages before answering, cite every substantive finding, and distinguish inference and gaps. Do not create notes or carry out actions. If the wording is vague, search related terms before concluding that support was not found. Keep the answer concise.`;
   } else if (options.conversationContext?.trim()) {
     // Retain the newest spoken context inside the existing 12k history budget.
     // Do not add a synthetic message to the snapshot: that would hide the last
@@ -672,7 +738,7 @@ export async function runChatReading(
     assertCurrent();
     const previousQuestion = frozen.studio.messages.filter((message) => message.role === "user").slice(-1)[0]?.content ?? "";
     const query = truncateUnicode(editBoundary?.passage ?? (editing && options.editPassage ? options.editPassage : searching ? prompt : `${request.prompt}\n${previousQuestion.slice(0, 400)}`), 600);
-    session = new ChatReadingSession(frozen, query, options.focusNoteId, taskView, options.referenceTargets, options.referenceRecords);
+    session = new ChatReadingSession(frozen, query, options.focusNoteId, taskView, options.referenceTargets, options.referenceRecords, options.webResearch);
     const restoredInitialSearch = options.resume ? session.restore(options.resume) : false;
     const checkpoint = (finding?: ChatResult) => {
       assertCurrent();
@@ -747,8 +813,18 @@ export async function runChatReading(
         checkpoint();
         options.onDependencies?.(session.dependencies());
         if (searching && !finished.evidence?.length) {
-          if (!finalizing) throw new Error("Search answers require exact supporting passages and citations. Read relevant evidence, then cite it. If no support exists, finish with the evidence gap.");
-          return { reply: "I could not establish an answer from supporting passages in this Space. Try a more specific question or inspect the local search results.", evidence: [], coverage: finished.coverage };
+          if (session.webFailed() && !options.requireSupportedFinding) return finished;
+          if (!finalizing && !session.webFailed()) throw new Error(`Search answers require exact supporting passages and citations. Read relevant evidence, then cite it.${options.webResearch ? " Web research is enabled: for external facts, request a public web lookup. A local Space search is not a web lookup." : ""} If no support exists, explain the evidence gap.`);
+          if (!options.requireSupportedFinding) return { ...finished,
+            reply: options.webResearch ? "I could not establish an answer with supporting citations from the material checked."
+              : "I could not establish an answer from supporting passages in this Space. Try a more specific question or inspect the local search results.", evidence: [] };
+          const outcome = finished.webResearch;
+          const detail = outcome?.issue ?? (outcome?.completed
+            ? "Web sources were retrieved, but the worker did not return a supported answer. Retry this worker to use its retained evidence."
+            : options.webResearch
+              ? "The worker did not produce cited findings and did not complete a web lookup. Retry the worker or give it a more specific research question."
+              : "The worker did not produce cited findings from this Space. Retry the worker or give it a more specific research question.");
+          throw new Error(`Research could not establish a supported answer. ${detail} (CHAT_RESEARCH_UNGROUNDED)`);
         }
         return finished;
       } catch (error) {

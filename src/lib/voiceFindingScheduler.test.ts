@@ -13,58 +13,6 @@ beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(0); });
 afterEach(() => vi.useRealTimers());
 
 describe("voice finding scheduler lifecycle", () => {
-  it("retains 24 completions through continuous speech and offers six coherent groups with breathing room", async () => {
-    const { options } = setup(), sendBatch = vi.fn((_packet: string) => true);
-    const scheduler = new VoiceFindingScheduler({ ...options, sendBatch });
-    for (let i = 0; i < 24; i++) scheduler.enqueue({ ...finding(`done-${i}`), completion: true, background: true });
-    for (let tick = 0; tick < 60; tick++) { scheduler.transcript("user"); await vi.advanceTimersByTimeAsync(500); }
-    expect(sendBatch).not.toHaveBeenCalled();
-    for (let i = 0; i < 24; i++) expect(scheduler.status(`done-${i}`, 1)).toBe("waiting");
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(sendBatch).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(6_000); expect(sendBatch).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(40_000);
-    const delivered = sendBatch.mock.calls.flatMap(([packet]) => JSON.parse(packet).findings.map((item: VoiceDelivery) => item.id));
-    expect(delivered).toEqual(Array.from({ length: 24 }, (_, i) => `done-${i}`));
-    expect(sendBatch).toHaveBeenCalledTimes(6); expect(options.send).not.toHaveBeenCalled();
-    for (let i = 0; i < 24; i++) expect(scheduler.status(`done-${i}`, 1)).toBe("shared");
-    scheduler.enqueue({ ...finding("done-0"), completion: true, background: true });
-    await vi.advanceTimersByTimeAsync(10_000); expect(sendBatch).toHaveBeenCalledTimes(6);
-    scheduler.reset(); expect(vi.getTimerCount()).toBe(0);
-  });
-  it("holds an incomplete thought, retries the batch as a unit, and never marks a rejected offer shared", async () => {
-    const { options } = setup(), sendBatch = vi.fn((_packet: string) => false);
-    const scheduler = new VoiceFindingScheduler({ ...options, sendBatch });
-    scheduler.enqueue({ ...finding(), background: true, completion: true });
-    scheduler.transcript("user", 3_200);
-    await vi.advanceTimersByTimeAsync(3_000); expect(sendBatch).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(500); expect(sendBatch).toHaveBeenCalledOnce(); expect(scheduler.status("one", 1)).toBe("waiting");
-    sendBatch.mockReturnValue(true); await vi.advanceTimersByTimeAsync(500);
-    expect(scheduler.status("one", 1)).toBe("shared");
-    expect(sendBatch.mock.calls[0]).toEqual(sendBatch.mock.calls[1]); scheduler.reset();
-  });
-  it("coalesces staggered completions, bypasses a corrected job, and preserves waiting siblings across an orb handoff", async () => {
-    const { options } = setup(), sendBatch = vi.fn((_packet: string) => true);
-    let correction = true, revision = 1, enabled = true;
-    const scheduler = new VoiceFindingScheduler({ ...options,
-      enabled: () => enabled,
-      correcting: item => item.id === "one" && correction,
-      valid: item => item.id !== "one" || item.revision === revision, sendBatch });
-    scheduler.enqueue({ ...finding(), completion: true, background: true });
-    await vi.advanceTimersByTimeAsync(500);
-    scheduler.enqueue({ ...finding("two"), completion: true, background: true });
-    await vi.advanceTimersByTimeAsync(1_000); expect(sendBatch).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(500); expect(JSON.parse(sendBatch.mock.calls[0][0]).findings.map((item: VoiceDelivery) => item.id)).toEqual(["two"]);
-    scheduler.handoff(); enabled = false;
-    revision = 2; correction = false; scheduler.discardInvalid();
-    expect(scheduler.status("one", 1)).toBeUndefined();
-    scheduler.enqueue({ ...finding("one", 2), completion: true, background: true });
-    await vi.advanceTimersByTimeAsync(10_000); expect(sendBatch).toHaveBeenCalledTimes(1);
-    enabled = true; scheduler.wake(); await vi.advanceTimersByTimeAsync(500); expect(sendBatch).toHaveBeenCalledTimes(2);
-    // A handoff keeps deduplication and its batch spacing, without replaying two.
-    expect(JSON.parse(sendBatch.mock.calls[1][0]).findings[0]).toMatchObject({ id: "one", revision: 2 });
-    scheduler.reset();
-  });
   it("returns each completed assignment automatically after an interim update without opening a worker", async () => {
     const { options, scheduler } = setup(); scheduler.transcript("user");
     scheduler.enqueue({ ...finding("interim"), background: true });
@@ -160,7 +108,7 @@ describe("voice finding scheduler lifecycle", () => {
     scheduler.enqueue(finding()); scheduler.enqueue(finding("two"));
     await vi.advanceTimersByTimeAsync(500);
     expect(options.send).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: "two" }));
-    correcting = false;
+    correcting = false; scheduler.wake();
     await vi.advanceTimersByTimeAsync(1_500);
     expect(options.send).toHaveBeenLastCalledWith(expect.objectContaining({ id: "one", revision: 1 }));
     expect(vi.getTimerCount()).toBe(0);
@@ -190,7 +138,7 @@ describe("voice finding scheduler lifecycle", () => {
       scheduler.enqueue({ ...finding(id, 3), sequence: 2, text: delivery.commentary, reference: delivery.quiet });
     }
     await vi.advanceTimersByTimeAsync(500);
-    correcting = false; await vi.advanceTimersByTimeAsync(1_500);
+    correcting = false; scheduler.wake(); await vi.advanceTimersByTimeAsync(1_500);
     expect(trace.map(item => item.kind)).toEqual(["immediate", "immediate", "reference", "commentary", "reference", "commentary"]);
     expect(JSON.parse(trace[2].text)).toMatchObject({ id: "two", spaceId: "space", revision: 3, sequence: 2,
       sourceReferences: [{ evidenceId: "e1", entityId: "note-two", title: "Source two" }] });

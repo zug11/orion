@@ -8,6 +8,26 @@ const finding: ChatResult = { reply: "The passage suggests a connection [1](#ori
 function input(result = finding) { return { id: "private-job-identity", revision: 7, sequence: 3, subject: "Causation", state: "running" as const, result }; }
 
 describe("natural finding delivery", () => {
+  it("preserves a failed follow-up beside the spoken summary without discarding returned web evidence", () => {
+    const webResearch = { attempted: 2, completed: 1, issue: "Perplexity's shared request limit is busy. Retry in about 20 seconds. (WEB_REQUEST_RATE_LIMIT)" };
+    const delivery = voiceFindingDelivery({ ...input({ ...finding, webResearch, voice: { label: "Connection", summary: finding.reply } }), state: "completed" });
+    expect(JSON.parse(delivery.quiet).webResearch).toEqual(webResearch);
+    expect(delivery.commentary).toContain("does not establish causation");
+    expect(delivery.commentary).toContain("Some web research returned; another lookup could not finish.");
+    expect(delivery.commentary).toContain("shared request limit");
+    expect(delivery.commentary).not.toContain("WEB_REQUEST_RATE_LIMIT");
+    const saved = voiceFindingDelivery({ ...input({ ...finding, webResearch }), acknowledgement: "saved", receipt: { savedNoteIds: ["saved"], savedTitles: ["Connection"] } });
+    expect(saved.commentary).toBe("Saved.");
+  });
+  it("keeps the actual web failure available even when a long finding must stay quiet", () => {
+    const webResearch = { attempted: 1, completed: 0, issue: "Perplexity needs API credit. Check your Perplexity API billing. (WEB_HTTP_402)" };
+    const delivery = voiceFindingDelivery(input({ ...finding, reply: "A long provisional discussion. ".repeat(300), webResearch }));
+    expect(delivery.commentary).toBe("");
+    expect(JSON.parse(delivery.quiet)).toMatchObject({ contentOmitted: true, webResearch });
+    const requested = voiceFindingDelivery({ ...input({ ...finding, reply: "A long provisional discussion. ".repeat(300), webResearch }), requested: true });
+    expect(requested.commentary).toContain("Web research did not return usable evidence.");
+    expect(requested.commentary).toContain("API credit");
+  });
   it("automatically offers the separate qualified summary of a long final answer", () => {
     const reply = "A detailed discussion of the evidence. ".repeat(100) + "The cause remains uncertain.";
     const delivery = voiceFindingDelivery({ ...input({ ...finding, reply, voice: { label: "Connection and causation", summary: finding.reply } }), state: "completed" });
@@ -16,6 +36,17 @@ describe("natural finding delivery", () => {
     expect(delivery.commentary).toContain("material checked so far");
     expect(delivery.commentary).not.toMatch(/ready|open|second|detailed discussion/i);
     expect(JSON.parse(delivery.quiet).finding).toBe(reply);
+  });
+  it("keeps the spoken summary in quiet voice context when a web notice pushes the answer over its limit", () => {
+    const summary = "The source supports a connection, but the cause remains uncertain [1](#orion-evidence-e1).";
+    const result = { ...finding, reply: "A detailed finding. ".repeat(310), voice: { label: "Connection", summary },
+      webResearch: { attempted: 2, completed: 1, issue: "A later lookup timed out." } };
+    const delivery = voiceFindingDelivery({ ...input(result), state: "completed" });
+    const quiet = JSON.parse(delivery.quiet);
+    expect(quiet).toMatchObject({ contentOmitted: true, summary: "The source supports a connection, but the cause remains uncertain.",
+      webResearch: result.webResearch, evidenceIds: ["e1"] });
+    expect(quiet).not.toHaveProperty("finding");
+    expect(delivery.commentary).toContain("cause remains uncertain");
   });
   it("keeps identity and status in quiet context while offering the whole qualified finding", () => {
     const delivery = voiceFindingDelivery(input());

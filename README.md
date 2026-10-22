@@ -42,6 +42,7 @@ The result is a personal wiki that gets more coherent over time:
 - **Projects stay separate.** Spaces are hard boundaries for notes, sources, concepts, Chat, navigation, and AI context.
 - **Chat beside your writing.** A quiet glass circle in the bottom-right opens your Space conversation without leaving the document. It appears when the selected AI provider is configured, without an AI toggle, and stays hidden during Flow. Collapse it or expand into full Chat without losing your draft or pending reply. An attached-note picker makes the reading and editing target explicit; Orion searches, follows connections and reads exact passages before citing them. Stop interrupts the response. Ask naturally: Orion infers whether to answer in Chat, change specific passages, or revise the whole attached note. There is no editing-mode picker. **Review in note** shows highlighted replacements and gray additions in the actual editor. **Accept changes** saves through normal autosave with one Undo; **Discard** keeps the original. Existing chat replies also offer **Use in note**. Newer typing invalidates old suggestions. Creating notes still requires an explicit request.
 - **Chat reads as it goes.** Chat uses the Space hierarchy and compact note directories to find promising material, searches note and source bodies, then opens exact passages and follows connections as needed. Replies can cite the passages actually read; click a citation to inspect it or open the original item. Reading is bounded, can be stopped, and reports partial coverage. Chat can create notes only when explicitly asked. Created notes and **Keep as note** retain exact quoted passages and source links, including when an original later changes or is removed. This uses the selected OpenAI or Anthropic model and may make several requests for a question.
+- **Optional web research.** Add your Perplexity API key in **Settings → Web research**, then use **Test connection** to check it. Voice workers can look up external evidence automatically when useful, while the conversation continues. Text Chat uses web research only when its **Web** pill is selected; it starts off and resets when you change Spaces. Your selected OpenAI or Anthropic model still handles conversation and proposed edits. Web citations show the website, retrieval date and retained search excerpt, and survive **Keep as note**. Long research stays with its worker and is read in sections internally without repeating the web lookup. Research that cannot produce supported findings shows a retryable failure instead of an empty ready result. Research questions are sent to Perplexity and incur API usage. The key stays in macOS Keychain; this connection requires the desktop app.
 - **Search reaches the original text.** Search finds phrases and relevant combinations of words throughout note bodies and preserved sources. Filter Notes, Sources, or Concepts, see highlighted matches, and jump to the passage. Choose **Ask AI** at the right of the search field for a cited answer from the current Space. Switch between Matches and Answer without repeating the request; ordinary search stays local and works without a key.
 - **AI stays optional.** Manual organization and the entire local knowledge layer work without OpenAI or Anthropic.
 
@@ -87,6 +88,17 @@ decoded audio; longer material can be split into separate files.
 
 **Settings → Intelligence** includes **GPT-6 Astra** for complex research and
 synthesis through your OpenAI connection, with Low through Extra high reasoning.
+
+## Orion 0.5.1 — local release
+
+Version 0.5.1 adds optional Perplexity web research and background consolidation
+of voice-worker findings. Voice can research automatically when useful; text
+Chat uses the **Web** pill. Related findings are combined incrementally and wait
+for the current spoken thought to settle before joining the conversation.
+Both Whisper editions contain the same application features. See the
+[0.5.1 release notes](releases/0.5.1.md) for local installers, verification and
+the remaining live-voice acceptance check. Public download links above continue
+to point to the published 0.5.0 release until 0.5.1 is uploaded.
 
 ## Orion 0.5.0
 
@@ -438,6 +450,8 @@ flowchart TD
 
 A genuinely short source can still finish in one direct call. The topology exists where it adds coherence; it is not a tax on small imports.
 
+Larger selections are automatically processed in smaller batches, in source order. Orion checks both total source size and the reading sections needed for complete coverage before synthesis begins, including dense Unicode text. Completed batches are combined in Results, and every original source is preserved. A single document that exceeds one batch's capacity still receives an explicit size or coverage explanation.
+
 Import recovery is automatic; Results never asks you to click Retry or Resume. Temporary connection failures and the readiness check have bounded retries. If a short direct synthesis times out or cannot produce a valid result, Orion makes one recovery pass through smaller, checkpointed reading and writing stages with the selected model. Failed stages can resume twice, retaining accepted work. An active direct synthesis is not interrupted at the soft finalization cutoff; transport and overall safety limits still apply.
 
 If recovery is exhausted, Results clearly says **AI synthesis is incomplete**, shows the failed stage and a redacted error detail, and offers **Keep available notes** to save the available notes and complete sources. Authentication, billing, and rejected-request errors require attention in Settings or the provider account; Orion does not keep spending requests on them. Preserved source previews are never presented as successful AI synthesis. Recovery checkpoints belong to the current session, not a crash-resumable background queue.
@@ -695,7 +709,7 @@ Browser preview is a renderer-development convenience, not Orion's desktop secur
 | `cargo test --manifest-path src-tauri/Cargo.toml` | Run Rust host tests |
 | `cargo test --manifest-path src-tauri/mcp-server/Cargo.toml` | Run MCP server tests |
 
-Native bundles are written below `src-tauri/target/release/bundle/`. Public release packaging additionally requires Developer ID signing and notarization. Use `./script/package_release.sh 0.5.0` for Small and `ORION_WHISPER_MODEL=medium ./script/package_release.sh 0.5.0.m` for Medium rather than treating a local ad-hoc build as a distributable release.
+Native bundles are written below `src-tauri/target/release/bundle/`. Public release packaging additionally requires Developer ID signing and notarization. Use `./script/package_release.sh 0.5.1` for Small and `ORION_WHISPER_MODEL=medium ./script/package_release.sh 0.5.1.m` for Medium rather than treating a local ad-hoc build as a distributable release. Set `ORION_NOTARY_PROFILE=orion-notary` on the maintainer's Mac to submit and verify the finished installers with Apple.
 
 ## Architecture
 
@@ -878,15 +892,23 @@ receive one clarification question. Spoken turns are interpreted in order while
 up to ten workers research in parallel. Additional assignments stay visible and
 cancellable in the queue; there is no six-worker admission cap.
 Unfinished phrases stay attached to their original note and selection across a
-thinking pause. Related completion arrivals are offered together through the
-main voice, with a short gap between groups. Every retained result is reachable
-in the work summary, which distinguishes waiting findings from those shared
+thinking pause. A background synthesis pass combines related interim and final
+findings into a short contribution while the voice continues its response. It
+uses the selected Intelligence model, keeps uncertainty and disagreements, and
+can leave unrelated findings waiting until they fit the conversation. It does
+not wait for all workers. Each pass is read-only and does not restart research.
+Every retained result is reachable in the work summary, which distinguishes
+findings being combined, waiting for a pause, unavailable for voice summary, or shared
 with the voice connection. **Read aloud** requests a result directly. Shared
 means sent to the connection; it does not claim that you heard it.
-Completed findings use transcript activity to find a quiet interval, with a
-12-second cap on input-noise waits so background noise or unrelated routing
-cannot hold it indefinitely. This cap never overrides audible output or an
-arriving user or assistant transcript. Pending corrections resolve before their old
+Prepared contributions wait for playback to settle and the assistant transcript
+to end a sentence. Findings and background context changes stay local through an
+unfinished spoken fragment. This approximates a finished thought because the
+voice provider does not expose a turn-completion event; natural delivery still
+needs a live listening check. Input-noise waits retain a 12-second cap, which
+never overrides speech or an unfinished assistant sentence. Topic changes,
+corrections and newer findings invalidate stale prepared contributions. A failed
+summary leaves the research available with **Retry voice summary**. Pending corrections resolve before their old
 findings can be offered. Explicit spoken assignments start independent work orders even when a provider
 delegation is late or absent. Closely spaced new requests keep separate IDs; late
 delegation events cannot restart them. The voice still chooses when to speak; a transport send

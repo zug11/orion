@@ -352,7 +352,7 @@ fn coverage(v: &Value) -> Result<(), String> {
             "searches",
             "limited",
         ],
-        &[],
+        &["webSearches"],
     )?;
     for key in [
         "availableNotes",
@@ -362,6 +362,9 @@ fn coverage(v: &Value) -> Result<(), String> {
         "searches",
     ] {
         number(v, key)?;
+    }
+    if v.get("webSearches").is_some() && number(v, "webSearches")? > 3 {
+        return Err("Invalid web search count.".into());
     }
     boolean(v, "limited")?;
     Ok(())
@@ -397,7 +400,7 @@ fn finding(v: &Value) -> Result<usize, String> {
                 "complete",
                 "omittedChars",
             ],
-            &[],
+            &["web"],
         )?;
         for key in ["id", "entityId", "version"] {
             id(e, key)?;
@@ -405,7 +408,24 @@ fn finding(v: &Value) -> Result<usize, String> {
         if !ids.insert(e["id"].as_str().unwrap()) {
             return Err("Evidence identities must be unique within one finding.".into());
         }
-        choice(e, "kind", &["note", "source"])?;
+        choice(e, "kind", &["note", "source", "web"])?;
+        if e["kind"] == "web" {
+            let web = &e["web"];
+            fields(web, &["url", "retrievedAt"], &["publishedAt"])?;
+            let url = string(web, "url", 2048)?;
+            if !(url.starts_with("https://") || url.starts_with("http://"))
+                || url.chars().any(|c| c.is_control() || c.is_whitespace())
+                || number(e, "start")? != 0
+            {
+                return Err("Invalid retained web reference.".into());
+            }
+            chars += url.chars().count() + string(web, "retrievedAt", 40)?.chars().count();
+            if web.get("publishedAt").is_some() {
+                chars += string(web, "publishedAt", 100)?.chars().count();
+            }
+        } else if e.get("web").is_some() {
+            return Err("Local evidence cannot carry web provenance.".into());
+        }
         choice(e, "offsetUnit", &["utf16"])?;
         let start = number(e, "start")?;
         let end = number(e, "end")?;
@@ -434,6 +454,7 @@ fn operations(v: &Value, key: &str, max: usize) -> Result<(), String> {
                 "note-full",
                 "source-full",
                 "related",
+                "web",
             ],
         )?;
         if op.get("entityId").is_some() {
@@ -689,6 +710,21 @@ mod tests {
     }
     fn detail() -> Value {
         json!({"spaceId":"s","voiceTargetId":"t","taskView":"working","workOrder":{"id":"w","revision":1,"controlVersion":"v1","state":"completed","taskView":"working","subject":"A","subjectTruncated":false,"stage":"completed","current":true,"checkpointSequence":1,"savedNoteIds":[],"historyWithheld":false,"referenceOnly":true,"findings":[],"decisions":[],"openQuestions":[],"nextSteps":[],"completedOperations":[],"omissions":{"findings":0,"decisions":0,"openQuestions":0,"nextSteps":0,"completedOperations":0},"result":{"text":{"fragments":[{"from":0,"to":3,"text":"🧭a"}],"complete":true,"omittedChars":0},"evidence":[{"id":"e1","kind":"note","entityId":"n","title":"T","version":"v","start":2,"end":4,"text":"🧭","offsetUnit":"utf16","complete":true,"omittedChars":0}],"omittedEvidence":0}}})
+    }
+    #[test]
+    fn voice_web_findings_preserve_provenance_and_count_it_in_the_budget() {
+        let request = VoiceRequest::Get(serde_json::from_value(json!({"space_id":"s","voice_target_id":"t","work_order_id":"w","expected_revision":1,"max_chars":4000})).unwrap());
+        let mut value = detail();
+        let evidence = &mut value["workOrder"]["result"]["evidence"][0];
+        evidence["kind"] = json!("web");
+        evidence["start"] = json!(0);
+        evidence["end"] = json!(2);
+        evidence["web"] =
+            json!({"url":"https://example.org/paper", "retrievedAt":"2026-10-22T02:00:00Z"});
+        value["workOrder"]["completedOperations"] = json!([{"kind":"web"}]);
+        assert!(validate_result(&request, &value).is_ok());
+        value["workOrder"]["result"]["evidence"][0]["web"]["url"] = json!("javascript:alert(1)");
+        assert!(validate_result(&request, &value).is_err());
     }
     #[test]
     fn voice_work_orders_projection_is_finite_exact_and_has_one_unicode_budget() {

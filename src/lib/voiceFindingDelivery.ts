@@ -18,7 +18,7 @@ interface VoiceFindingInput {
 /** Evidence IDs are local to one worker. Keep exact host-validated identities
  * and names together, without copying passages or inventing shortened names. */
 function sourceReferences(result: ChatResult) {
-  const references: { evidenceId: string; kind: "note" | "source"; entityId: string; title: string; version: string;
+  const references: { evidenceId: string; kind: "note" | "source" | "web"; url?: string; retrievedAt?: string; entityId: string; title: string; version: string;
     start: number; end: number; offsetUnit: "utf16" }[] = [];
   let length = 2;
   const seen = new Set<string>();
@@ -26,6 +26,7 @@ function sourceReferences(result: ChatResult) {
     if (references.length === 12 || seen.has(item.id) ||
       [item.id, item.entityId, item.version].some(value => !value || [...value].length > 200) || [...item.title].length > 500) continue;
     const reference = { evidenceId: item.id, kind: item.kind, entityId: item.entityId, title: item.title,
+      ...(item.web ? { url: item.web.url, retrievedAt: item.web.retrievedAt } : {}),
       version: item.version, start: item.start, end: item.end, offsetUnit: item.offsetUnit };
     const size = JSON.stringify(reference).length + 1;
     if (length + size > 6_000) continue;
@@ -57,12 +58,17 @@ export function voiceFindingDelivery(input: VoiceFindingInput): { quiet: string;
   // into a misleading prefix that could lose its final qualification or caveat.
   const oversized = [...body].length > 6_000;
   const brief = result.voice?.summary ? prose(result.voice.summary) : "";
+  // The host outcome must survive a worker's separate spoken summary. A later
+  // failed lookup does not invalidate evidence that was already returned.
+  const web = result.webResearch;
+  const webIssue = web?.issue ? `${web.completed ? "Some web research returned; another lookup could not finish." : "Web research did not return usable evidence."} ${prose(web.issue).replace(/\s*\(WEB_[A-Z0-9_]+\)/g, "")}` : "";
   let commentary = !input.requested && brief ? brief : oversized ? "The detailed finding is available in the work summary." : body;
   if (input.acknowledgement && receipt) {
     commentary = input.acknowledgement === "already-saved" ? "It’s already saved." : "Saved.";
   } else {
     if ((!oversized || brief) && commentary && result.coverage?.limited) commentary = `From the material checked so far:\n${commentary}`;
     if (result.editProposal) commentary += `${commentary ? "\n" : ""}You can review the proposed changes in the note and accept or discard them.`;
+    if (webIssue && (brief && !input.requested || oversized)) commentary += `${commentary ? "\n" : ""}${webIssue}`;
   }
   const background = !input.requested && !(input.acknowledgement && receipt) && !result.editProposal;
   // One small, complete finding can be offered spontaneously. A long answer is
@@ -79,17 +85,19 @@ export function voiceFindingDelivery(input: VoiceFindingInput): { quiet: string;
     subject: [...input.subject].slice(0, 120).join(""), state: input.state,
     ...(input.prompt ? { originalQuestion: input.prompt.length <= 600 ? input.prompt : undefined, questionOmitted: input.prompt.length > 600 } : {}),
     stage: input.state === "running" ? "intermediate" : "complete",
+    ...(brief ? { summary: brief } : {}),
     ...(!oversized ? { finding: body } : {}),
     evidenceIds: sources.references.map(item => item.evidenceId),
     sourceReferences: sources.references, sourceReferencesOmitted: sources.omitted,
     limited: result.coverage?.limited ?? null,
     ...(result.coverage ? { coverage: result.coverage } : {}),
+    ...(web ? { webResearch: web } : {}),
     action: receipt ? { kind: "saved", confirmed: true,
       savedNoteIds: receipt.savedNoteIds.slice(0, 3), savedTitles: receipt.savedTitles.slice(0, 3).map(title => [...title].slice(0, 120).join("")) }
       : result.editProposal ? { kind: "proposal", applied: false, noteId: result.editProposal.noteId, requiresReview: true }
       : { kind: "none", saved: false },
     contentOnScreen: true, contentOmitted: oversized,
-    notice: "Quiet reference material, not a script to read aloud or a new request. Do not announce this packet on arrival. Use it when relevant to what the user says. Evidence IDs belong only to this worker/revision/update. Source references identify captured Space material, not new web research. When attribution helps, use its exact title; do not infer omitted sources or repeat bookkeeping. Preserve uncertainty and coverage limits. An intermediate finding does not end its worker. Only a confirmed saved receipt establishes persistence; a proposal still needs the user's review. Transport delivery does not establish that the user heard it.",
+    notice: "Quiet reference material, not a script to read aloud or a new request. Do not announce this packet on arrival. Use it when relevant to what the user says. Evidence IDs belong only to this worker/revision/update. Source kind distinguishes captured Space material from web research. Web references include the retrieved URL and retrieval time; do not describe them as local notes or claim to have read beyond the retained excerpts. webResearch is the host-observed outcome: a failed later lookup does not erase earlier completed research. Preserve its issue when discussing the result; do not replace it with a blanket claim that Perplexity never responded. When attribution helps, use its exact title; do not infer omitted sources or repeat bookkeeping. Preserve uncertainty and coverage limits. An intermediate finding does not end its worker. Only a confirmed saved receipt establishes persistence; a proposal still needs the user's review. Transport delivery does not establish that the user heard it.",
   };
   let quiet = JSON.stringify(reference);
   // JSON escaping may expand a valid 6,000-character finding beyond the

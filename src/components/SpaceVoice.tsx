@@ -12,7 +12,7 @@ import { VoiceConversation, type VoiceTurn, type VoiceDelivery } from "../lib/vo
 import { VoiceReservations } from "../lib/voiceReservations";
 import { VoiceTurnRouter, type RoutingVoiceTurn } from "../lib/voiceTurnRouter";
 import { VoiceFindingScheduler } from "../lib/voiceFindingScheduler";
-import { VOICE_FINDING_BATCH_INSTRUCTION } from "../lib/voiceFindingBatch";
+import { synthesizeVoiceFindings, VOICE_SYNTHESIS_DELIVERY_INSTRUCTION } from "../lib/voiceFindingSynthesis";
 import { VoiceNoteEdits } from "../lib/voiceNoteEdits";
 import { directVoiceNoteEdit } from "../lib/voiceWorkOrders";
 import { VoiceCallLifecycle } from "../lib/voiceCallLifecycle";
@@ -85,7 +85,11 @@ export function SpaceVoice(props: Props) {
     correcting: item => routes.pending.some(turn => !!item.id && voiceCorrectionMayAffect(turn.prompt, item.id, research.current?.getJobs() ?? [])),
     sendReference: item => voiceCall.append("thinking", item.reference!, voiceCall.delegation(item.delegationId)),
     send: item => voiceCall.append("commentary", item.text, voiceCall.delegation(item.delegationId)),
-    sendBatch: reference => voiceCall.append("thinking", reference) && voiceCall.append("instructions", VOICE_FINDING_BATCH_INSTRUCTION),
+    conversation: () => ({ key: JSON.stringify([activeSpace.current, liveProps.current.snapshot.settings.model,
+      liveProps.current.snapshot.settings.reasoningEffort, conversation.current.recentTurns().slice(-1).map(({ key, prompt }) => [key, prompt])]), text: conversation.current.text() }),
+    synthesize: (items, current, previous, signal) => synthesizeVoiceFindings(liveProps.current.snapshot, items, current, previous, signal, chatWithOrion),
+    sendPrepared: reference => voiceCall.append("thinking", reference) && voiceCall.append("instructions", VOICE_SYNTHESIS_DELIVERY_INSTRUCTION),
+    flushContext: () => syncContext(),
     onChange: () => { if (alive.current) setFindingVersion(value => value + 1); },
   }));
   const contextUpdates = useRef(new VoiceContextUpdates());
@@ -151,10 +155,17 @@ export function SpaceVoice(props: Props) {
   function syncContext(usageRatio?: number, userSpeaking = false) {
     if (voiceCall.status !== "listening") return;
     const current = liveProps.current;
+    let waiting = false;
     contextUpdates.current.update({ snapshot: current.snapshot, focusNoteId: current.focusNoteId,
       jobs: currentContextJobs(), receipts: research.current?.getReceipts() ?? [],
       conversation: conversation.current.text(), usageRatio, userSpeaking, selection: conversation.current.userSelection },
-    text => voiceCall.append("thinking", text));
+    text => {
+      // Selection belongs to the current human utterance. Background work and
+      // navigation updates wait with the findings until the speaker settles.
+      if (!deliveries.canUpdateContext() && !(userSpeaking && text.startsWith('{"type":"selection_update"'))) { waiting = true; return false; }
+      return voiceCall.append("thinking", text);
+    });
+    if (waiting) deliveries.contextChanged();
   }
   function pendingJobs() { return reservations.jobs(); }
   function publishPending() { setRoutingJobs(pendingJobs()); syncContext(); }
@@ -238,7 +249,13 @@ export function SpaceVoice(props: Props) {
         if (!alive.current || research.current !== coordinator) return;
         // Associate current-call responses precisely; reconnect uses general context.
         const delegationId = voiceCall.delegation(providerDelegation);
-        if (kind === "thinking") { deliveries.discardInvalid(validDelivery); voiceCall.append("thinking", text, delegationId); }
+        if (kind === "thinking") {
+          deliveries.discardInvalid(validDelivery);
+          if (text.startsWith('{"type":"worker_finding"')) {
+            const finding = JSON.parse(text);
+            deliveries.enqueue({ text: "", delegationId, ...stamp, reference: text, sequence: finding.sequence, background: true, completion: finding.state === "completed" });
+          } else deliveries.reference({ text: "", reference: text, delegationId, ...stamp });
+        }
         else deliveries.enqueue({ text, delegationId, ...stamp });
       },
     });
@@ -275,7 +292,7 @@ export function SpaceVoice(props: Props) {
   useEffect(() => {
     if (status === "listening" && props.enabled) syncContext();
     // Cheap identity/delta checks. Typing in the same note never resends its body.
-  }, [props.focusNoteId, props.snapshot.notes, props.snapshot.workspace.id, props.enabled, status]);
+  }, [props.focusNoteId, props.snapshot.notes, props.snapshot.workspace.id, props.snapshot.settings.perplexityApiKeyConfigured, props.enabled, status]);
 
   useEffect(() => {
     if (!props.toggleRequest || !props.enabled) return;
@@ -470,7 +487,7 @@ export function SpaceVoice(props: Props) {
       voiceCall.rememberDelegation(event.delegation.id);
     }
     if (event.type.endsWith("transcript.delta")) {
-      deliveries.transcript(event.type === "session.input_transcript.delta" ? "user" : "assistant", conversation.current.settleMs);
+      deliveries.transcript(event.type === "session.input_transcript.delta" ? "user" : "assistant", conversation.current.settleMs, event.delta);
       if (event.type === "session.input_transcript.delta") {
         // Highlighting is local only. The first actual spoken fragment publishes
         // its captured reference; later highlighting cannot retarget that turn.
@@ -572,9 +589,10 @@ export function SpaceVoice(props: Props) {
       </div>}
       {job.state === "completed" && job.result && <>
         <span className="space-voice__delivery" title={offer === "shared" ? "The finding was sent to the voice connection. This does not confirm it was spoken or heard." : undefined}>
-          {offer === "shared" ? "Shared with voice" : offer === "waiting" && status === "listening" ? focusedJobId ? "Ready for the main conversation" : "Waiting for a pause" : "Ready in work summary"}
+          {offer === "shared" ? "Shared with voice" : offer === "failed" ? "Voice summary unavailable" : offer === "preparing" && status === "listening" ? "Combining findings" : offer === "waiting" && status === "listening" ? focusedJobId ? "Ready for the main conversation" : "Waiting for a pause" : "Ready in work summary"}
         </span>
         <div className="space-voice__result-controls">
+          {offer === "failed" && status === "listening" && !focusedJobId && <button type="button" onClick={() => deliveries.retrySummary(job.id)}>Retry voice summary</button>}
           {status === "listening" && !focusedJobId && <button type="button" onClick={() => research.current?.announceResult(job.id)}>Read aloud</button>}
           {props.floating && <button type="button" onClick={() => focusConversation(job.id)}>{dismissedJobIds.includes(job.id) ? "Bring back & talk" : "Talk to worker"}</button>}
           <button type="button" aria-expanded={shownJob === job.id} onClick={() => setShownJob(shownJob === job.id ? undefined : job.id)}>{shownJob === job.id ? "Hide research" : "Research & references"}</button>

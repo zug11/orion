@@ -41,6 +41,7 @@ mod image_planning;
 mod knowledge_schemas;
 #[path = "../shared/note_version.rs"]
 mod note_version;
+mod perplexity;
 #[path = "../shared/voice_work_orders_protocol.rs"]
 mod voice_work_orders_protocol;
 use knowledge_schemas::{
@@ -54,6 +55,7 @@ mod narration_export;
 mod ruler_glass;
 mod speech_timing;
 mod theme_icon;
+mod voice_synthesis;
 mod window_glass;
 mod word_export;
 
@@ -850,6 +852,8 @@ struct ChatRequest {
     #[serde(default)]
     suggestion_context: Option<String>,
     #[serde(default)]
+    synthesis_context: Option<String>,
+    #[serde(default)]
     model: Option<String>,
     #[serde(default)]
     effort: Option<String>,
@@ -869,6 +873,8 @@ struct ChatNoteAction {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ChatResult {
     reply: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    synthesis: Option<voice_synthesis::Summary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     suggestions: Option<Vec<ChatPromptSuggestion>>,
     note_actions: Vec<ChatNoteAction>,
@@ -2543,6 +2549,7 @@ fn parse_chat_result(output_text: &str, reply_only: bool) -> Result<ChatResult, 
     };
     Ok(ChatResult {
         reply,
+        synthesis: None,
         suggestions: None,
         note_actions,
         note_edits: Vec::new(),
@@ -2753,6 +2760,7 @@ fn parse_chat_suggestion_result(output_text: &str, context: &Value) -> Result<Ch
     }
     Ok(ChatResult {
         reply: String::new(),
+        synthesis: None,
         suggestions: Some(suggestions),
         note_actions: Vec::new(),
         note_edits: Vec::new(),
@@ -3752,9 +3760,21 @@ async fn chat(
     }
 
     let inline_writing = match request.mode.as_deref() {
-        None | Some("chat") | Some("chat-reading") | Some("chat-suggestions") => false,
+        None
+        | Some("chat")
+        | Some("chat-reading")
+        | Some("chat-suggestions")
+        | Some("voice-synthesis") => false,
         Some("inline-writing") => true,
         Some(_) => return Err("Orion received an unsupported AI request mode.".to_string()),
+    };
+    let synthesis = request.mode.as_deref() == Some("voice-synthesis");
+    let synthesis_context = if synthesis {
+        Some(voice_synthesis::validate_context(
+            request.synthesis_context.as_deref(),
+        )?)
+    } else {
+        None
     };
     let suggestions = request.mode.as_deref() == Some("chat-suggestions");
     let suggestion_context = if suggestions {
@@ -3764,7 +3784,8 @@ async fn chat(
     } else {
         None
     };
-    let allow_note_actions = !suggestions
+    let allow_note_actions = !synthesis
+        && !suggestions
         && !inline_writing
         && request.allow_note_actions
         && chat_prompt_allows_note_creation(&prompt);
@@ -3782,7 +3803,12 @@ async fn chat(
     } else {
         None
     };
-    let mut provider_instructions = if suggestions {
+    let mut provider_instructions = if synthesis {
+        voice_synthesis::protocol()["instructions"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    } else if suggestions {
         chat_suggestions_protocol()["instructions"]
             .as_str()
             .unwrap()
@@ -3818,7 +3844,7 @@ async fn chat(
             provider_instructions.push_str("No text edit is authorized. Do not return noteEdits or claim to have changed a note.");
         }
     }
-    let max_output_tokens = if suggestions {
+    let max_output_tokens = if synthesis || suggestions {
         6_000
     } else if inline_writing || allow_note_actions || allow_edits {
         12_000
@@ -3895,7 +3921,9 @@ async fn chat(
             })
         })
         .collect::<Vec<_>>();
-    let chat_payload = if let Some(context) = &suggestion_context {
+    let chat_payload = if let Some(context) = &synthesis_context {
+        json!({ "synthesisContext": context })
+    } else if let Some(context) = &suggestion_context {
         json!({ "suggestionContext": context })
     } else if let Some(reading_context) = reading_context {
         json!({
@@ -3916,7 +3944,9 @@ async fn chat(
     };
 
     if use_anthropic {
-        let mut provider_schema = if suggestions {
+        let mut provider_schema = if synthesis {
+            voice_synthesis::protocol()["schema"].clone()
+        } else if suggestions {
             chat_suggestions_protocol()["schema"].clone()
         } else {
             chat_edit_schema(!allow_note_actions, reading, allow_edits)
@@ -3965,6 +3995,9 @@ async fn chat(
             .map_err(|error| format!("Orion could not read Anthropic's response: {error}"))?;
         authorize()?;
         let output_text = extract_anthropic_output_text(&response, operation)?;
+        if let Some(context) = &synthesis_context {
+            return voice_synthesis::parse_result(&output_text, context);
+        }
         return (if let Some(context) = &suggestion_context {
             parse_chat_suggestion_result(&output_text, context)
                 .map_err(|_| chat_reading::ParseError::Suggestions)
@@ -3986,7 +4019,7 @@ async fn chat(
                 "type": "json_schema",
                 "name": "orion_chat",
                 "strict": true,
-                "schema": if suggestions { chat_suggestions_protocol()["schema"].clone() } else { chat_edit_schema(!allow_note_actions, reading, allow_edits) }
+                "schema": if synthesis { voice_synthesis::protocol()["schema"].clone() } else if suggestions { chat_suggestions_protocol()["schema"].clone() } else { chat_edit_schema(!allow_note_actions, reading, allow_edits) }
             }
         }
     });
@@ -4017,6 +4050,9 @@ async fn chat(
         .map_err(|error| format!("Orion could not read OpenAI's response: {error}"))?;
     authorize()?;
     let output_text = extract_output_text(&response, operation)?;
+    if let Some(context) = &synthesis_context {
+        return voice_synthesis::parse_result(&output_text, context);
+    }
     (if let Some(context) = &suggestion_context {
         parse_chat_suggestion_result(&output_text, context)
             .map_err(|_| chat_reading::ParseError::Suggestions)
@@ -4834,6 +4870,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(OpenAiClient(http_client))
         .manage(KnowledgeCancellation::default())
+        .manage(perplexity::RequestGate::default())
         .manage(VaultWriteLock::default())
         .manage(desktop_windows::DesktopWindows::default())
         .manage(local_transcription::VoiceMemoWorkers::default())
@@ -4924,6 +4961,11 @@ pub fn run() {
             organize_content,
             knowledge_assignment,
             cancel_knowledge_assignment,
+            perplexity::save_perplexity_api_key,
+            perplexity::delete_perplexity_api_key,
+            perplexity::test_perplexity_key,
+            perplexity::research_perplexity,
+            perplexity::cancel_perplexity_research,
             knowledge_reading_cache_get,
             knowledge_reading_cache_put,
             chat,

@@ -779,6 +779,15 @@ export function createSourceReadingPlan(
   );
 }
 
+/**
+ * Minimum canonical evidence groups, using the reader's exact range splitter.
+ * Undefined means this source cannot fit in one bounded synthesis on its own.
+ */
+export function minimumSourceReadingCount(text: string): number | undefined {
+  if (text.length === 0) return 0;
+  return minimumPayloadSafeSectionPlan(text)?.length;
+}
+
 function minimumPayloadSafeSectionPlan(
   text: string,
   maximumUtf8Bytes = MAX_SOURCE_RANGE_UTF8_BYTES,

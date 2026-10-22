@@ -19,7 +19,7 @@ function records(title: string, summary: string, text: string): ContextRecord[] 
 }
 
 function researchEvidence(snapshot: AppSnapshot, items: ChatEvidence[]): Evidence[] {
-  return items.map(item => {
+  return items.filter((item): item is ChatEvidence & { kind: "note" | "source" } => item.kind !== "web").map(item => {
     const note = item.kind === "note" ? snapshot.notes.find(note => note.id === item.entityId) : undefined;
     const source = item.kind === "source" ? snapshot.sources.find(source => source.id === item.entityId) : undefined;
     const body = note?.body ?? source?.text ?? "";

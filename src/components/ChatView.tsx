@@ -3,6 +3,7 @@ import {
   AudioLines,
   Bot,
   BookOpenText,
+  Globe,
   MessageCircle,
   Plus,
   RefreshCw,
@@ -49,7 +50,7 @@ export interface ChatViewProps {
   busy: boolean;
   progress?: string;
   onCancel?: () => void;
-  onSend: (prompt: string, focusNoteId?: string, selection?: VoiceSelection) => Promise<ChatResult>;
+  onSend: (prompt: string, focusNoteId?: string, selection?: VoiceSelection, webEnabled?: boolean) => Promise<ChatResult>;
   selection?: VoiceSelection;
   onCommentReply?: (messageId: string, selection?: VoiceSelection) => Promise<void>;
   onReviewEdit?: (proposal: ChatEditProposal) => Promise<boolean>;
@@ -98,6 +99,10 @@ export function ChatView({
   selection,
 }: ChatViewProps) {
   const [draft, setDraft] = useState("");
+  const [webChoice, setWebChoice] = useState({ spaceId: snapshot.workspace.id, enabled: false });
+  const webEnabled = webChoice.spaceId === snapshot.workspace.id && webChoice.enabled && snapshot.settings.perplexityApiKeyConfigured === true;
+  useEffect(() => { setWebChoice({ spaceId: snapshot.workspace.id, enabled: false }); }, [snapshot.workspace.id]);
+  useEffect(() => { if (!snapshot.settings.perplexityApiKeyConfigured) setWebChoice({ spaceId: snapshot.workspace.id, enabled: false }); }, [snapshot.settings.perplexityApiKeyConfigured, snapshot.workspace.id]);
   const [threadBusy, setThreadBusy] = useState(false);
   const [voiceToggle, setVoiceToggle] = useState(0);
   const [localVoiceActive, setVoiceActive] = useState(false);
@@ -164,7 +169,8 @@ export function ChatView({
     setPendingPrompt(normalized);
     setSubmitting(true);
     try {
-      const result = await (capturedSelection ? onSend(normalized, sendNoteId, capturedSelection)
+      const result = await (webEnabled ? onSend(normalized, sendNoteId, capturedSelection, true)
+        : capturedSelection ? onSend(normalized, sendNoteId, capturedSelection)
         : sendNoteId ? onSend(normalized, sendNoteId) : onSend(normalized));
       setEditProposal(result.editProposal);
       setEditRevision(revision => revision + 1);
@@ -462,9 +468,15 @@ export function ChatView({
             </button>}
           </div>
           <div className="chat-composer__footer">
+            <button type="button" className="chat-web-toggle" aria-pressed={webEnabled}
+              disabled={isSending} title={snapshot.settings.perplexityApiKeyConfigured ? "Include web research when useful for this conversation" : "Add a Perplexity key in Settings"}
+              onClick={() => {
+                if (!snapshot.settings.perplexityApiKeyConfigured) { onOpenSettings(); return; }
+                setWebChoice({ spaceId: snapshot.workspace.id, enabled: !webEnabled });
+              }}><Globe size={13} aria-hidden="true" />Web</button>
             <span>
               <BookOpenText size={11} />
-              Grounded in this Space only
+              {webEnabled ? "Space + web" : "Grounded in this Space only"}
             </span>
             <span>Enter to send · Shift Enter for a new line</span>
           </div>

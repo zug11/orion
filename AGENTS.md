@@ -1474,9 +1474,11 @@ Import-scoped instructions and the Space preference have independent
 Current limits are 12 sources per batch, 25 MiB per document or image, and
 5 MiB per fetched webpage. AI batches also cap extracted source text at
 1,800,000 UTF-8 bytes as an intake and context-safety boundary. The intake may
-auto-partition one ordered selection into several bounded synthesis batches;
-the per-batch limits still apply, and a single source above the byte cap remains
-an explicit singleton failure/landing rather than being clipped. Space
+auto-partition one ordered selection into several bounded synthesis batches,
+using the reader's exact minimum payload-safe section count to enforce the
+12-canonical-evidence-group ceiling as well as source count and bytes.
+The per-batch limits still apply, and a single source above the byte or reading
+cap remains an explicit singleton failure/landing rather than being clipped. Space
 orientation is constructed locally and consumes no provider-call budget. The
 adaptive long path is not governed by one shrinking 180-second clock: the
 reading blueprint, each source-reading request, the writing blueprint, and each
@@ -1678,8 +1680,11 @@ all. Do not reintroduce a fixed note-count/body-slice fallback.
   contract; corruption, mismatch, missing coverage, or an unavailable cache is
   an ordinary miss. Correctness must never depend on cached prose or routes.
 - Import selections are partitioned deterministically and in order when source
-  count or UTF-8 size cannot fit one synthesis. Each bounded batch completes
-  through the same orchestration and validation contract, completed batches are
+  count, UTF-8 size, or minimum canonical reading count cannot fit one synthesis.
+  `importBatching.ts` shares the exact page-aware, byte/token-safe minimum
+  section calculation from `knowledgeOrchestration/context.ts`; byte division
+  or file counts alone cannot establish reading coverage. Each bounded batch
+  completes through the same orchestration and validation contract, completed batches are
   retained, and the combined result is applied through one normal import
   payload. An individually oversized source remains a visible singleton failure
   or deterministic landing; it is never silently truncated out of the queue.
@@ -2848,6 +2853,85 @@ vault access, provider calls and write authority.
 Reads never apply accompanying prose or note actions. Preserve host-derived
 creation authority only for the final answer. Never grant writes from context.
 
+### Perplexity web research
+
+`src-tauri/src/perplexity.rs` owns the separate `perplexity-api-key` Keychain
+entry and fixed Perplexity Agent API transport. It inherits `KEYCHAIN_SERVICE`
+from the host, including the Preview identity rewrite. Settings → Web research
+offers Save, Test connection (authenticated model listing, no research), and
+Remove. Only optional `Settings.perplexityApiKeyConfigured` is persisted; older
+vaults hydrate to false. Never read the credential at startup or persist it in
+the vault, browser storage, exports, or logs. Browser previews can inspect the UI
+but real web research and credential storage require the desktop host.
+
+Text Chat's Web pill grants the shared reader a capability captured for that
+submission. It defaults off and resets across Spaces or key removal. A voice
+call does not implicitly enable Web for typed messages. Voice workers receive
+the capability automatically when configured, and use it when external evidence
+is useful; greetings, selection and idle time never initiate web research.
+Capability changes append a quiet delta to voice without resending note bodies.
+The existing OpenAI/Anthropic reader chooses bounded `web` reads, retains the
+existing work identity, checkpoints, cancellation and edit review. Ordinary MCP
+research remains Space-only. MCP inspection of existing voice findings accepts
+the distinct web provenance, within the same public-text budget.
+
+Send only a short public research question (600 code points maximum), never an
+entire Space packet. Instructions require the reader to generalize private or
+identifying material; this is not a deterministic privacy classifier. The native
+request fixes the documented low-style configuration (GPT-6 Luna, web search and
+URL fetch only), five steps and 3,000 output tokens. Each reader permits three
+web calls inside its existing three-minute deadline. Native admission/polling
+is bounded to 110 seconds plus best-effort remote cancellation. Cancellation is
+window/request scoped, including cancel-before-admission; late output cannot
+publish. Provider cancellation acceptance is not confirmation of remote stop.
+Do not retry a paid POST automatically after an ambiguous network failure.
+`perplexity/transport.rs` shares one fair request lane across the app's workers
+and windows. Admission, model checks, status polls and cancellation are paced
+at least 1.1 seconds apart; background provider runs can still proceed in
+parallel. Poll intervals grow from two to six seconds. Explicit HTTP 429
+rejections honor `Retry-After` (seconds or HTTP date) with bounded backoff and
+up to three retries, sharing the cooldown across requests. Poll retries keep
+the admitted run ID. Request, token and model-capacity limits receive separate
+safe diagnostics; raw provider error bodies never enter logs or voice context.
+A cancelled queued request makes no HTTP call. Admission retains its response
+ID if cancellation arrives in flight, so the host can attempt remote cancel.
+All waits remain inside the per-lookup deadline; remote cancellation is bounded
+to eight seconds and can be prevented by a longer shared provider cooldown.
+
+Web evidence uses `kind: web` with validated HTTP(S) URL, retrieval date and
+optional publication date. Its UTF-16 range addresses the retained provider
+search excerpt, never the full remote page. Collect search output batches and
+map citation numbers by provider source ID, not array order. Synthesis alone is
+not a source. Saved replies/notes retain excerpts and ordinary web links through
+the existing portable citation footer; local source arrays remain unchanged.
+Completed reads resume from local checkpoints. Public findings may arrive at
+existing reader checkpoints; individual Perplexity calls currently poll to a
+terminal response, rather than stream provider tokens or reasoning into voice.
+Do not reject a successful research answer because its synthesis is longer than
+one model packet. The bounded native HTTP response retains complete synthesis
+and validated source excerpts. The shared reader keeps up to three full results
+in transient `webResults` checkpoint state, never the vault or live voice context.
+It supplies contiguous Unicode-safe synthesis pages of at most 12,000 UTF-16
+units, with exact range and `nextStart`. A `web` read with the returned response
+ID, empty query and numeric start reads that worker's retained result locally;
+it cannot access another worker or make a provider call. Only new lookups with
+empty ID, public query and null start consume the three-call allowance. Preserve
+source IDs across pages and resume without repeating paid searches. A partial
+page is not a full synthesis read. Source evidence remains usable when the
+provider returns excerpts without synthesis.
+Read-only voice research without a cited finding receives an actionable
+`CHAT_RESEARCH_UNGROUNDED` failure after bounded correction, not a completed
+worker claiming that nothing exists in the Space. A returned web error remains
+specific; partial successful evidence is still usable. Quiet voice findings
+retain the cited spoken summary even when the longer reply is omitted from
+live context, so the main conversation can use it independently of narration.
+Live provider, billing and microphone acceptance remain separate from fixtures.
+The reader also attaches a transient host-observed `ChatResult.webResearch`
+outcome (attempts, completed lookups and an optional bounded issue). Provider
+JSON cannot establish it. Voice summaries, checkpoint updates and a completed
+worker's conversation retain that outcome, so a failed follow-up does not erase
+earlier web evidence or become a misleading blanket claim that web never worked.
+
 Chat questions explicitly request the current Space's knowledge. As before,
 the Settings switch for existing-note context governs imports and enrichment;
 it does not disable explicit Chat reading. Chat never reads other Spaces.
@@ -3869,26 +3953,46 @@ cannot undo an atomic write already in progress. Retain its confirmed receipt
 without announcing a superseded result. Reconnect restores bounded conversation,
 quoted user decisions/corrections, jobs and receipts without rerunning them.
 
-`voiceFindingScheduler.ts` buffers whole commentary updates and rechecks job revisions
-before transport chunking. Quiet context is separate from spoken delivery.
+`voiceFindingScheduler.ts` keeps incoming findings in a local inbox and rechecks
+job revisions before preparation and delivery. Worker arrivals do not immediately
+append reference text to the speaking connection.
 It retains one current pending finding per retained worker, with no smaller
 twelve-result speech cap. Prune queued updates and deduplication records with the
 research engine's current revision/sequence, including already offered entries.
 All retained terminal jobs appear in the scrollable work summary. Completed
-results distinguish Ready in work summary, Waiting for a pause and Shared with
-voice; the last means locally sent, never provider acceptance or audible proof.
+results distinguish Combining findings, Ready in work summary, Waiting for a
+pause, Voice summary unavailable and Shared with voice; the last means locally
+sent, never provider acceptance or audible proof. A failed synthesis preserves
+research and exposes Retry voice summary without a continuous retry loop.
 Read aloud explicitly requests a retained answer without opening its worker.
-`voiceFindingBatch.ts` groups up to four eligible automatic completions after a
-1.2-second collection window, with eight seconds between group offers. Quiet
-batch reference is capped at 18 KB, retains complete summaries, original bounded
-questions and worker-local attribution, and reports omitted source identities.
-One fixed instruction under the transport's 480-byte chunk bound asks the main
-voice to connect, combine or distinguish those findings in a short update. Worker
-text never enters trusted instructions. Explicit results/saves bypass this
-grouping and retain exact provenance pairing. No extra model call is inserted.
-Actual synthesis and natural timing still require live-provider acceptance.
+`voiceFindingSynthesis.ts` prepares up to four current interim/final findings
+after a 1.2-second collection window using one read-only call to the selected
+Intelligence provider/model/effort. It never waits for the entire team. There is
+one preparation slot per conversation, a 45-second deadline, and at least eight
+seconds between prepared offers. `voiceSynthesisProtocol.json` is the shared
+native/browser contract; `src-tauri/src/voice_synthesis.rs` validates it. The
+`voice-synthesis` Chat mode has no research tools, note creation or edit authority.
+Its bounded 32 KB payload includes recent conversation, at most three previous
+offers (not proof of hearing), whole findings and exact worker-local references.
+The model returns one contribution of at most 900 Unicode characters and an
+exact included/deferred finding-key partition. Related evidence can be combined;
+disagreement, coverage and failed-web qualifications must survive. Unrelated or
+redundant findings remain local for another relevant turn. Neither preparation
+nor delivery marks research as finished or resets a worker's checkpoint.
+Completions take priority when filling a preparation batch. Do not prepare an
+interim-only batch without its renewed speaking allowance: it would occupy the
+single prepared slot and strand a later final result behind throttled chatter.
+New user turns, corrections, cancelled/revised workers and newer finding
+sequences invalidate stale preparation and prepared speech. Background
+preparation can run during assistant playback; delivery cannot. Fit fewer whole
+findings when needed rather than clipping caveats or source names, reserving the
+24,000 UTF-16 transport boundary for exact included provenance and the summary.
+One fixed instruction under the transport's 480-byte chunk bound offers the
+prepared contribution; worker text never enters trusted instructions. Explicit
+results/saves bypass synthesis and retain exact provenance pairing. Synthesis
+quality and natural timing still require live-provider acceptance.
 `voiceFindingDelivery.ts` keeps worker identity, stage, evidence/coverage and
-confirmed-save/proposal state and complete bounded answers in quiet reference
+confirmed-save/proposal state and complete bounded answers in local reference
 metadata. Detailed answers are not automatically copied into speech. Commentary carries
 its exact quiet packet so delivery can pair current worker/revision/sequence and
 bounded exact source identities/titles immediately before the finding, even when
@@ -3930,11 +4034,17 @@ local mic/output energy can extend only a short quiet interval. Unrelated intent
 routing never holds a completed result. A finding held for its own correction
 stays queued while the oldest eligible unrelated finding can pass it. Recheck
 its revision after correction and retain pacing between actual accepted sends.
-Quiet findings reach voice immediately. Speech offers wait for actual output
-audio to finish and a 1.5-second quiet interval. Input-noise waits retain a
-12-second cap, but it cannot override audible output or a recent user or
-assistant transcript. Continuous human speech always retains the floor; quiet
-reference context remains immediately available. Interim commentary is limited to one unsolicited short
+Findings, job/status changes, navigation context and continuity checkpoints wait
+locally while voice is speaking. A selection bound to actual user speech retains
+its existing priority-context path. GPT-Live has no turn-done event, so delivery
+uses both playback activity and the accumulating assistant transcript: require
+a completed sentence and 2.8 seconds of settled playback/transcript; an unfinished
+fragment or ellipsis cannot be unlocked by a timer. With no assistant text, the
+existing 1.5-second quiet guard remains. An actual human turn can take over an
+interrupted fragment; noise cannot. This is a conservative turn-boundary
+approximation, not a provider-confirmed semantic end of thought. Input-noise
+waits retain a 12-second cap, but it cannot override audible output or arriving
+transcripts. Continuous human speech always retains the floor. Interim commentary is limited to one unsolicited short
 finding after user speech, at least twelve seconds apart. Each completed worker
 answer bypasses that interim allowance, retaining output pacing and exact
 revision/sequence deduplication. Assistant transcripts, mic noise, time passing and orb handoffs

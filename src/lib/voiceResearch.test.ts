@@ -17,7 +17,10 @@ function options(driver: (request: ChatRequest, signal?: AbortSignal) => Promise
   return { snapshot: () => snapshot, driver, onProgress: vi.fn(), onResult: vi.fn(), deliver: vi.fn(), commit: vi.fn(async (_: VoiceCommit) => ({ savedNoteIds: ["saved"], savedTitles: ["Connection"] })) };
 }
 function findingMetadata(config: ReturnType<typeof options>) {
-  return config.deliver.mock.calls.filter(call => call[0] === "thinking" && call[1].startsWith('{"type":"worker_finding"')).map(call => JSON.parse(call[1]));
+  return config.deliver.mock.calls.flatMap(call => {
+    const packet = call[0] === "commentary" ? call[3]?.reference : call[1];
+    return packet?.startsWith('{"type":"worker_finding"') ? [JSON.parse(packet)] : [];
+  });
 }
 function exactAnswer(request: ChatRequest): ChatResult {
   const packet = JSON.parse(request.readingContext!);

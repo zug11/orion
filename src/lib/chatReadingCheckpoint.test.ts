@@ -47,13 +47,14 @@ describe("incremental reader checkpoints", () => {
     expect(settings.deliver.mock.calls.filter(call => call[0] === "commentary")).toHaveLength(1);
     expect(settings.deliver.mock.calls[settings.deliver.mock.calls.length - 1]?.[1]).toContain("The draft puts Alpha's cost at three");
     expect(settings.deliver.mock.calls[settings.deliver.mock.calls.length - 1]?.[1]).not.toContain("research is still running");
-    const quiet = settings.deliver.mock.calls.find(call => call[0] === "thinking" && call[1].includes('"type":"worker_finding"'));
-    expect(JSON.parse(quiet![1])).toMatchObject({ id: "comparison", revision: 1, sequence: 1, state: "running", referenceOnly: true });
-    expect(settings.deliver.mock.calls.filter(call => call[0] === "commentary")[0][3]).toEqual({ id: "comparison", revision: 1, sequence: 1, reference: quiet![1], background: true });
+    const delivery = settings.deliver.mock.calls.find(call => call[0] === "commentary")!;
+    expect(JSON.parse(delivery[3].reference)).toMatchObject({ id: "comparison", revision: 1, sequence: 1, state: "running", referenceOnly: true });
+    expect(delivery[3]).toEqual({ id: "comparison", revision: 1, sequence: 1, reference: expect.any(String), background: true });
+    expect(settings.deliver.mock.calls.some(call => call[0] === "thinking" && call[1].includes('"type":"worker_finding"'))).toBe(false);
     engine.announceFinding("comparison");
     expect(settings.deliver).toHaveBeenLastCalledWith("commentary", expect.stringContaining("The draft puts Alpha's cost at three"), null, { id: "comparison", revision: 1, sequence: 2, reference: expect.any(String), background: false });
-    const repeated = settings.deliver.mock.calls.filter(call => call[0] === "thinking" && call[1].startsWith('{"type":"worker_finding"')).slice(-1)[0];
-    expect(JSON.parse(repeated![1])).toMatchObject({ id: "comparison", revision: 1, sequence: 2, stage: "intermediate", state: "running" });
+    const repeated = settings.deliver.mock.calls.filter(call => call[0] === "commentary").slice(-1)[0];
+    expect(JSON.parse(repeated![3].reference)).toMatchObject({ id: "comparison", revision: 1, sequence: 2, stage: "intermediate", state: "running" });
     expect(engine.conversationContext("comparison")).toBeUndefined();
     finish(result); await pending;
     expect(engine.getJobs()[0].state).toBe("completed");
@@ -110,8 +111,9 @@ describe("incremental reader checkpoints", () => {
     await vi.waitFor(() => expect(old).toBeDefined());
     await engine.run("worker", "Continue with more detail", "");
     old(result); await first;
-    const updates = settings.deliver.mock.calls.filter(call => call[0] === "thinking" && call[1].startsWith('{"type":"worker_finding"'))
-      .map(call => JSON.parse(call[1])).filter(item => item.stage === "intermediate");
+    const updates = settings.deliver.mock.calls.flatMap(call => call[0] === "commentary" && call[3]?.reference
+      ? [JSON.parse(call[3].reference)] : call[0] === "thinking" && call[1].startsWith('{"type":"worker_finding"') ? [JSON.parse(call[1])] : [])
+      .filter(item => item.stage === "intermediate");
     expect(updates).toHaveLength(1);
   });
 

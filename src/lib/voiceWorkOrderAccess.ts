@@ -12,7 +12,7 @@ export interface VoiceWorkOrderSummary {
 }
 export interface VoicePublicText { fragments: { from: number; to: number; text: string }[]; complete: boolean; omittedChars: number }
 export interface VoicePublicEvidence {
-  id: string; kind: "note" | "source"; entityId: string; title: string; version: string;
+  id: string; kind: "note" | "source" | "web"; web?: ChatEvidence["web"]; entityId: string; title: string; version: string;
   start: number; end: number; text: string; offsetUnit: "utf16"; complete: boolean; omittedChars: number;
 }
 export interface VoicePublicFinding {
@@ -72,12 +72,13 @@ export function voiceWorkOrderDetail(job: VoiceWorkOrder, checkpoint: ChatReadin
       text: text(result.reply, Math.ceil(remaining / 2)), evidence: [], ...(result.coverage ? { coverage: { ...result.coverage } } : {}),
       omittedEvidence: result.evidence?.length ?? 0 };
     for (const entry of (result.evidence ?? []).slice(0, 12)) {
-      const titleSize = characters(entry.title).length;
+      const titleSize = characters(entry.title).length + (entry.web ? characters(entry.web.url + entry.web.retrievedAt + (entry.web.publishedAt ?? "")).length : 0);
       if (titleSize >= remaining || !validEvidence(entry)) continue;
       remaining -= titleSize;
       const passage = characters(entry.text).slice(0, remaining).join("");
       remaining -= characters(passage).length;
       projected.evidence.push({ id: entry.id, kind: entry.kind, entityId: entry.entityId, title: entry.title,
+        ...(entry.web ? { web: entry.web } : {}),
         version: entry.version, start: entry.start, end: entry.start + passage.length, text: passage, offsetUnit: "utf16",
         complete: passage === entry.text, omittedChars: characters(entry.text).length - characters(passage).length });
       projected.omittedEvidence--;
