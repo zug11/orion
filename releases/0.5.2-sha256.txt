@@ -1,0 +1,2 @@
+18a76f69e7eb860ddfd345dea89605f37a9f2e074c3502168cf2f655dd7ed266  Orion-0.5.2-Apple-Silicon.dmg
+218204792adc858fc0181a6ab01614167a9d57dab74e558cfbe36ebe3638f5f2  Orion-0.5.2.m-Apple-Silicon.dmg

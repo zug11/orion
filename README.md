@@ -100,6 +100,8 @@ Voice findings also reach the main conversation more reliably, with substantive
 answers replacing holding phrases while preserving the current spoken turn.
 Both Whisper editions contain the same application features. See the
 [0.5.2 release notes](releases/0.5.2.md) for changes and verification.
+Both installers are Developer ID signed, Apple-notarized, stapled and
+Gatekeeper-accepted.
 
 ## Orion 0.5.1
 
