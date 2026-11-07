@@ -1,0 +1,46 @@
+name: Windows installer
+
+on:
+  push:
+    branches: [codex/orion-windows]
+    tags: ['v*-windows*']
+  pull_request:
+    paths: ['src/**', 'src-tauri/**', 'script/**', '.github/workflows/windows.yml', 'package*.json']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-x64:
+    runs-on: windows-2025
+    timeout-minutes: 35
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/windows
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/windows/release
+          key: orion-windows-x64-v1-${{ hashFiles('src-tauri/Cargo.lock') }}
+      - run: npm ci
+      - run: npm run tauri build -- --bundles nsis --ci
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - run: npm test
+      - uses: actions/upload-artifact@v7
+        with:
+          name: orion-windows-x64
+          path: target/windows/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
