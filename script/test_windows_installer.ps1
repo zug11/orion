@@ -19,20 +19,20 @@ npm install --prefix $tools --no-save --package-lock=false playwright-core@1.65.
 if ($LASTEXITCODE -ne 0) { throw 'Could not install the WebView2 test driver.' }
 # GitHub's Windows runner launches elevated apps. WebView2 ignores its
 # environment and HKCU overrides when elevated; use a scoped HKLM test policy.
-$policy = 'HKLM:/SOFTWARE/Policies/Microsoft/Edge/WebView2/AdditionalBrowserArguments'
-$null = New-Item -Path $policy -Force
-$existing = Get-ItemPropertyValue -LiteralPath $policy -Name 'orion.exe' -ErrorAction SilentlyContinue
+$policy = [Microsoft.Win32.Registry]::LocalMachine.CreateSubKey('SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments')
+$existing = $policy.GetValue('orion.exe')
 try {
-    Set-ItemProperty -LiteralPath $policy -Name 'orion.exe' -Type String -Value '--remote-debugging-port=9222'
+    $policy.SetValue('orion.exe', '--remote-debugging-port=9222', [Microsoft.Win32.RegistryValueKind]::String)
     node script/smoke_windows_installer.mjs
     $smokeExit = $LASTEXITCODE
 }
 finally {
     if ($null -eq $existing) {
-        Remove-ItemProperty -LiteralPath $policy -Name 'orion.exe' -ErrorAction SilentlyContinue
+        $policy.DeleteValue('orion.exe', $false)
     } else {
-        Set-ItemProperty -LiteralPath $policy -Name 'orion.exe' -Type String -Value $existing
+        $policy.SetValue('orion.exe', $existing, [Microsoft.Win32.RegistryValueKind]::String)
     }
+    $policy.Dispose()
 }
 if ($smokeExit -ne 0) {
     Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-5) } -ErrorAction SilentlyContinue |
