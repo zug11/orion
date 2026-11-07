@@ -27,6 +27,7 @@ async function checkHash(path, expected) {
 }
 
 async function download(url, path, length, hash) {
+  console.log(`Fetching ${new URL(url).hostname} build input (${length} bytes)`);
   const response = await fetch(url, { signal: AbortSignal.timeout(180_000) });
   if (!response.ok || !response.body) throw new Error(`Build input download failed: ${response.status} (${new URL(url).hostname})`);
   let received = 0;
@@ -48,7 +49,7 @@ async function stageMsvcRuntime() {
   const installations = execFileSync(vswhere, [
     "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
     "-property", "installationPath",
-  ], { encoding: "utf8", windowsHide: true }).trim().split(/\r?\n/).filter(Boolean);
+  ], { encoding: "utf8", windowsHide: true, timeout: 15_000 }).trim().split(/\r?\n/).filter(Boolean);
   for (const installation of installations) {
     const redist = join(installation, "VC", "Redist", "MSVC");
     const versions = (await readdir(redist).catch(() => [])).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
@@ -103,7 +104,7 @@ try {
   }
   if (process.platform === "win32") {
     await stageMsvcRuntime();
-    const version = execFileSync(join(destination, "whisper-cli.exe"), ["--version"], { encoding: "utf8", windowsHide: true });
+    const version = execFileSync(join(destination, "whisper-cli.exe"), ["--version"], { encoding: "utf8", windowsHide: true, timeout: 30_000 });
     if (!version.includes("1.9.1")) throw new Error("The staged Windows Whisper runtime could not start.");
     console.log(version.trim());
   }

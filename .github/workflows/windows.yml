@@ -27,7 +27,8 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-      - uses: actions/cache@v5
+      - uses: actions/cache/restore@v5
+        id: rust-cache
         with:
           path: |
             ~/.cargo/registry
@@ -38,9 +39,35 @@ jobs:
           key: orion-windows-x64-v2-${{ hashFiles('src-tauri/Cargo.lock') }}
       - run: npm ci
       - run: cargo clean --release -p orion --manifest-path src-tauri/Cargo.toml
-      - run: npm run tauri build -- --bundles nsis --ci
+      - name: Verify and stage the speech runtime
+        run: node script/stage_windows_transcription.mjs
+        timeout-minutes: 5
+      - name: Build the Windows renderer
+        run: npm run build
+      - name: Compile and package Orion
+        shell: pwsh
+        run: |
+          $override = Join-Path $env:RUNNER_TEMP 'orion-staged-build.json'
+          Set-Content -LiteralPath $override -Value '{"build":{"beforeBuildCommand":""}}' -Encoding utf8NoBOM
+          npm run tauri build -- --bundles nsis --ci --config $override
       - run: git diff --exit-code
-      - run: cargo test --locked --release --manifest-path src-tauri/Cargo.toml
+      - uses: actions/cache/save@v5
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/windows/release/build
+            target/windows/release/deps
+            target/windows/release/.fingerprint
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: orion-windows-x64
+          path: target/windows/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+      - run: cargo test --locked --release --manifest-path src-tauri/Cargo.toml --lib
       - run: npm test -- --maxWorkers=2
       - name: Verify installed app
         shell: pwsh
@@ -54,8 +81,3 @@ jobs:
           name: windows-smoke-diagnostics
           path: ${{ runner.temp }}/orion-smoke-failure.png
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@v7
-        with:
-          name: orion-windows-x64
-          path: target/windows/release/bundle/nsis/*-setup.exe
-          if-no-files-found: error
