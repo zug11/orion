@@ -251,6 +251,34 @@ and the Preview Keychain-service rewrite remain in `lib.rs`. Keep temporary-medi
 cleanup, partial batch results, deadlines and on-device-only transcription intact
 when changing this module.
 
+### Windows desktop
+
+Windows 11 x64 uses the same app, vault schema, locking, and close handshake,
+with data in `%APPDATA%\app.orion.knowledge` and provider keys in Windows
+Credential Manager. The Windows overlay config builds a per-user NSIS
+installer with WebView2 and native window decorations. Keep logical
+`orion-image://localhost/<id>` URLs in saved Markdown; translate them only at
+the WebView2 image boundary. macOS glass and the Unix assistant bridge are
+not part of the Windows package.
+
+`script/stage_windows_transcription.ps1` checks the pinned Whisper archive
+and Small model before staging them. `windows_transcription.rs` decodes a
+bounded local file through Media Foundation and runs the bundled CPU CLI with
+a cancellable child and a temporary WAV. Windows supports WAV, MP3, M4A, and
+MP4 up to 30 minutes; dictation still uses Small's separate segments. Windows
+does not use the macOS helper's acoustic alignment or YouTube downloader.
+`windowsOcr.ts` runs English OCR in a packaged Web Worker, with bundled
+Tesseract WebAssembly and trained data. It uses PDF.js to rasterize selected
+PDF pages. Keep the worker and model local, and restrict the added CSP to the
+Windows config.
+
+Use `npm run tauri build -- --bundles nsis` on Windows. The Windows CI job
+builds the real installer, runs host and renderer tests, silently installs it
+in a disposable runner, and tests WebView2 startup, credentials, persistence,
+images, OCR, writing windows, and the installed Whisper runtime. Publish only
+the tested EXE with its SHA-256 and platform notes. The Developer ID,
+notarization and DMG steps below apply to macOS packages.
+
 ## Persistence and schema rules
 
 The canonical desktop vault is `vault.json` in Tauri's application data folder

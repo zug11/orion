@@ -231,3 +231,29 @@ pub(super) fn transcribe(
         .map(|text| text.trim().to_string())
         .map_err(|error| format!("Orion could not read the local transcript: {error}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires the installed Windows package and the pinned public speech fixture"]
+    fn installed_windows_transcription() {
+        let installed = std::path::PathBuf::from(std::env::var_os("ORION_SMOKE_INSTALL").unwrap());
+        let fixture = std::path::PathBuf::from(std::env::var_os("ORION_SMOKE_AUDIO").unwrap());
+        let result = transcribe(
+            &installed.join("windows-transcription/whisper-cli.exe"),
+            &installed.join("models/ggml-model.bin"),
+            &fixture,
+            Some("en"),
+            &Control::default(),
+        )
+        .unwrap();
+        assert!(
+            result
+                .to_ascii_lowercase()
+                .contains("what you can do for your country"),
+            "{result}"
+        );
+    }
+}

@@ -3118,8 +3118,9 @@ export function ImportStudio({
                   <span>
                     <strong>Documents &amp; images</strong>
                     <small>
-                      PDF, DOCX, Markdown, data, PNG/JPEG screenshots, or HEIC
-                      whiteboard photos
+                      {isWindowsDesktop()
+                        ? "PDF, DOCX, Markdown, data, and PNG/JPEG images"
+                        : "PDF, DOCX, Markdown, data, PNG/JPEG screenshots, or HEIC whiteboard photos"}
                     </small>
                   </span>
                   <ArrowRight size={15} aria-hidden="true" />

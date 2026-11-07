@@ -17,6 +17,8 @@
   ·
   <a href="https://github.com/zug11/orion/releases/download/v0.5.2/Orion-0.5.2.m-Apple-Silicon.dmg">Whisper Medium edition</a>
   ·
+  <a href="https://github.com/zug11/orion/releases/tag/v0.5.2-windows.1"><strong>Windows x64 preview</strong></a>
+  ·
   <a href="#the-orchestration-topology">How it works</a>
   ·
   <a href="#build-from-source">Build from source</a>
@@ -24,7 +26,13 @@
   <a href="#local-first-by-construction">Privacy</a>
 </p>
 
-> Orion 0.5.2 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
+> The stable release supports Apple Silicon with macOS 13.3 or later. The Windows 11 x64 preview has its own installer. On both platforms, writing, imports, OCR, transcription, links, search, tasks, Spaces, and export work without an API key.
+
+The Windows build uses WebView2, Windows Credential Manager, and standard Windows
+window controls. It includes local English OCR for PNG, JPEG, and scanned PDFs,
+and multilingual CPU Whisper transcription for WAV, MP3, M4A, and MP4 up to 30
+minutes. Note dictation uses the same local engine. See [the Windows preview
+notes](releases/0.5.2-windows.1.md) for platform differences.
 
 ## Knowledge work should produce knowledge, not another inbox
 
@@ -667,6 +675,15 @@ Requirements:
 Each release bundle is self-contained. It includes the Vision OCR helper, its selected Whisper model and runtime, `yt-dlp`, Deno, Claude connector, and Codex plugin. The two editions share the same app identity, so installing one replaces the other. No Homebrew package, Python environment, ffmpeg installation, local model server, or transcription API key is required.
 
 ## Build from source
+
+**Windows 11 x64:** Install the [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/)
+and Node.js 24. Run `npm ci` and `npm run tauri build -- --bundles nsis`.
+The Windows build stages and checksums the bundled CPU Whisper engine and Small
+model, then writes a per-user setup EXE under
+`src-tauri/target/release/bundle/nsis/`. Run `npm run tauri dev` for development.
+The installed Windows library is in `%APPDATA%\app.orion.knowledge`.
+The rest of this section describes macOS builds.
+
 
 ### Prerequisites
 

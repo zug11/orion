@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 $root = Split-Path -Parent $PSScriptRoot
 $resources = Join-Path $root 'src-tauri/resources'

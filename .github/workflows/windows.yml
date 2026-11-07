@@ -3,7 +3,6 @@ name: Windows installer
 on:
   push:
     branches: [codex/orion-windows]
-    tags: ['v*-windows*']
   pull_request:
     paths: ['src/**', 'src-tauri/**', 'script/**', '.github/workflows/windows.yml', 'package*.json']
   workflow_dispatch:
@@ -12,8 +11,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-${{ github.ref }}
-  cancel-in-progress: true
+  group: windows-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   windows-x64:
@@ -38,9 +37,22 @@ jobs:
             target/windows/release/.fingerprint
           key: orion-windows-x64-v2-${{ hashFiles('src-tauri/Cargo.lock') }}
       - run: npm ci
+      - run: cargo clean --release -p orion --manifest-path src-tauri/Cargo.toml
       - run: npm run tauri build -- --bundles nsis --ci
       - run: cargo test --locked --release --manifest-path src-tauri/Cargo.toml
-      - run: npm test
+      - run: npm test -- --maxWorkers=2
+      - name: Verify installed app
+        shell: pwsh
+        run: |
+          $setup = @(Get-ChildItem target/windows/release/bundle/nsis/*-setup.exe)
+          if ($setup.Length -ne 1) { throw 'Expected exactly one installer.' }
+          ./script/test_windows_installer.ps1 -Installer $setup[0].FullName
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: windows-smoke-diagnostics
+          path: ${{ runner.temp }}/orion-smoke-failure.png
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v7
         with:
           name: orion-windows-x64
