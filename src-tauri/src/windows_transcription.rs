@@ -241,19 +241,26 @@ mod tests {
     fn installed_windows_transcription() {
         let installed = std::path::PathBuf::from(std::env::var_os("ORION_SMOKE_INSTALL").unwrap());
         let fixture = std::path::PathBuf::from(std::env::var_os("ORION_SMOKE_AUDIO").unwrap());
-        let result = transcribe(
-            &installed.join("windows-transcription/whisper-cli.exe"),
-            &installed.join("models/ggml-model.bin"),
-            &fixture,
-            Some("en"),
-            &Control::default(),
-        )
-        .unwrap();
-        assert!(
-            result
-                .to_ascii_lowercase()
-                .contains("what you can do for your country"),
-            "{result}"
-        );
+        // The AAC fixture is a 48 kHz stereo conversion of the pinned public
+        // whisper.cpp sample. It exercises the same decoding as note dictation.
+        let aac = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/windows-transcription-jfk.m4a");
+        for input in [&fixture, &aac] {
+            let result = transcribe(
+                &installed.join("windows-transcription/whisper-cli.exe"),
+                &installed.join("models/ggml-model.bin"),
+                input,
+                Some("en"),
+                &Control::default(),
+            )
+            .unwrap_or_else(|error| panic!("{}: {error}", input.display()));
+            assert!(
+                result
+                    .to_ascii_lowercase()
+                    .contains("what you can do for your country"),
+                "{}: {result}",
+                input.display(),
+            );
+        }
     }
 }

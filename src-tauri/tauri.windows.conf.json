@@ -41,8 +41,8 @@
       }
     },
     "resources": {
-      "resources/windows-transcription/": "windows-transcription/",
-      "resources/models/ggml-small.bin": "models/ggml-model.bin"
+      "resources/windows-transcription/runtime/": "windows-transcription/",
+      "resources/windows-transcription/ggml-model.bin": "models/ggml-model.bin"
     }
   }
 }
