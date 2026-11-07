@@ -103,6 +103,16 @@ try {
   const setup = await invoke("transcription_setup_status");
   assert(setup.whisperAvailable, JSON.stringify(setup));
   assert.match(setup.whisperVersion, /1\.9\.1/);
+  const aac = await readFile("src-tauri/tests/fixtures/windows-transcription-jfk.m4a");
+  const transcript = await invoke("transcribe_voice_memo", {
+    request: {
+      fileName: "voice-memo.m4a",
+      mimeType: "audio/mp4",
+      base64Data: aac.toString("base64"),
+    },
+    config: { language: "en" },
+  });
+  assert.match(transcript.text, /what you can do for your country/i);
 
   const fixtureKey = `orion-ci-test-${randomUUID()}`;
   assert.equal((await invoke("api_key_status")).configured, false);

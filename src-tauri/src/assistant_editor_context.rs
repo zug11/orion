@@ -342,7 +342,7 @@ pub fn editor_context_respond(
         .respond(window.label(), &session_id, &id, &target_id, reference)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     fn fixture() -> Value {

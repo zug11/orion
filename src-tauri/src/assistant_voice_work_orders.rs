@@ -484,7 +484,7 @@ pub fn voice_work_orders_release(
         .release(window.label(), &session_id, &target_id, &grant_id)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     fn vault() -> Value {

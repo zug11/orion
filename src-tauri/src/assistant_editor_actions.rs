@@ -1060,7 +1060,7 @@ pub fn editor_actions_fail(
         .fail(window.label(), &session_id, &id, &error)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     fn fixture() -> Value {

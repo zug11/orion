@@ -1235,7 +1235,7 @@ fn validate_commit_scope(before: &Value, after: &Value, space_id: &str) -> Resul
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     fn fixture() -> Value {

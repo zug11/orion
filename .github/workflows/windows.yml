@@ -68,14 +68,14 @@ jobs:
           compression-level: 0
           path: target/windows/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
-      - run: cargo test --locked --release --manifest-path src-tauri/Cargo.toml --lib
-      - run: npm test -- --maxWorkers=2
       - name: Verify installed app
         shell: pwsh
         run: |
           $setup = @(Get-ChildItem target/windows/release/bundle/nsis/*-setup.exe)
           if ($setup.Length -ne 1) { throw 'Expected exactly one installer.' }
           ./script/test_windows_installer.ps1 -Installer $setup[0].FullName
+      - run: cargo test --locked --release --manifest-path src-tauri/Cargo.toml --lib
+      - run: npm test -- --maxWorkers=2
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

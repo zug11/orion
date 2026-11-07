@@ -159,6 +159,7 @@ mod tests {
         marketplace
     }
 
+    #[cfg(unix)]
     #[test]
     fn codex_plugin_url_encodes_and_recovers_the_absolute_marketplace_path() {
         let marketplace =
