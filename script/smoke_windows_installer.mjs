@@ -190,12 +190,12 @@ try {
   console.log("Verified note autosave, managed image rendering and offline OCR for PNG and scanned PDF.");
 
   await closeAndWait();
-  const context = await launch();
-  await page.getByRole("main").getByText(title, { exact: true }).click();
-  await page.getByText(body, { exact: true }).waitFor();
-  const writing = context.waitForEvent("page");
+  await launch();
+  await page.locator(".recent-grid").getByText(title, { exact: true }).click();
+  await page.waitForFunction((text) => document.querySelector("article .note-prose")?.textContent.includes(text), body);
   await page.getByRole("button", { name: "Open in writing window" }).click();
-  const writingPage = await writing;
+  const writingPage = await eventually(() => browser.contexts().flatMap((context) => context.pages())
+    .find((candidate) => candidate.url().includes("view=writing")), "detached writing window");
   await writingPage.getByRole("textbox", { name: "Note body" }).waitFor();
   assert.match(await writingPage.getByRole("textbox", { name: "Note body" }).innerText(), /phrase saved/);
   assert.equal(await writingPage.getByRole("navigation", { name: "Workspace" }).count(), 0);
