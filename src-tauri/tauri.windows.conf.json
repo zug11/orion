@@ -33,7 +33,8 @@
     ],
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "compression": "zlib"
       },
       "webviewInstallMode": {
         "type": "downloadBootstrapper",

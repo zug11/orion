@@ -26,9 +26,9 @@ async function checkHash(path, expected) {
   if (hash.digest("hex") !== expected) throw new Error(`SHA-256 did not match for ${path}`);
 }
 
-async function download(url, path, length, hash) {
+async function download(url, path, length, hash, timeout = 180_000) {
   console.log(`Fetching ${new URL(url).hostname} build input (${length} bytes)`);
-  const response = await fetch(url, { signal: AbortSignal.timeout(180_000) });
+  const response = await fetch(url, { signal: AbortSignal.timeout(timeout) });
   if (!response.ok || !response.body) throw new Error(`Build input download failed: ${response.status} (${new URL(url).hostname})`);
   let received = 0;
   const bound = new Transform({
@@ -76,7 +76,13 @@ try {
     let input = sourceModel;
     if ((await stat(input).catch(() => null))?.size !== modelSize) {
       input = join(temporary, "ggml-small.bin");
-      await download("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin", input, modelSize, modelHash);
+      try {
+        await download("https://media.githubusercontent.com/media/zug11/orion/v0.5.2/src-tauri/resources/models/ggml-small.bin", input, modelSize, modelHash, 90_000);
+      } catch (error) {
+        console.warn(`The GitHub LFS model was unavailable (${error.message}); trying the upstream model.`);
+        await rm(input, { force: true });
+        await download("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin", input, modelSize, modelHash);
+      }
     }
     await checkHash(input, modelHash);
     await copyFile(input, model);
