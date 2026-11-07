@@ -1,0 +1,26 @@
+name: Diagnose the Windows installer
+on:
+  push:
+    branches: [codex/orion-windows-smoke]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  installed-app:
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v8
+        with:
+          name: orion-windows-x64
+          github-token: ${{ github.token }}
+          run-id: 42350706682
+          path: installer
+      - shell: pwsh
+        run: |
+          $setup = @(Get-ChildItem installer/*-setup.exe)
+          ./script/test_windows_installer.ps1 -Installer $setup[0].FullName
