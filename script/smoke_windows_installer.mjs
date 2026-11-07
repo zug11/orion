@@ -191,7 +191,7 @@ try {
 
   await closeAndWait();
   const context = await launch();
-  await page.getByRole("button", { name: `Open ${title}` }).click();
+  await page.getByRole("main").getByText(title, { exact: true }).click();
   await page.getByText(body, { exact: true }).waitFor();
   const writing = context.waitForEvent("page");
   await page.getByRole("button", { name: "Open in writing window" }).click();
