@@ -37,11 +37,6 @@ let browser;
 let page;
 async function launch() {
   app = spawn(executable, [], {
-    env: {
-      ...process.env,
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=9222",
-      WEBVIEW2_USER_DATA_FOLDER: join(process.env.RUNNER_TEMP, "Orion-WebView2"),
-    },
     stdio: ["ignore", "pipe", "pipe"],
   });
   app.stdout.pipe(process.stdout, { end: false });
@@ -208,6 +203,12 @@ try {
   assert.deepEqual(pageErrors, []);
   console.log("Verified native close, reopen, and detached writing window.");
 } catch (error) {
+  if (app && !page && app.exitCode === null) {
+    const processState = execFileSync("powershell.exe", ["-NoProfile", "-Command",
+      `Get-Process -Id ${app.pid} | Select-Object Id, MainWindowHandle, MainWindowTitle, Responding | Format-List; Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Select-Object Id, SessionId | Format-Table`,
+    ], { encoding: "utf8" });
+    console.error(processState.trim());
+  }
   if (page) {
     console.error((await page.locator("body").innerText().catch(() => "")).slice(0, 4000));
     await page.screenshot({ path: join(process.env.RUNNER_TEMP, "orion-smoke-failure.png") }).catch(() => {});
