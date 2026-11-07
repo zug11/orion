@@ -103,6 +103,7 @@ try {
   const setup = await invoke("transcription_setup_status");
   assert(setup.whisperAvailable, JSON.stringify(setup));
   assert.match(setup.whisperVersion, /1\.9\.1/);
+  console.log("Installed Orion launched and the bundled Whisper runtime is available.");
   const aac = await readFile("src-tauri/tests/fixtures/windows-transcription-jfk.m4a");
   const transcript = await invoke("transcribe_voice_memo", {
     request: {
@@ -113,6 +114,7 @@ try {
     config: { language: "en" },
   });
   assert.match(transcript.text, /what you can do for your country/i);
+  console.log("Transcribed a real AAC recording through the installed app.");
 
   const fixtureKey = `orion-ci-test-${randomUUID()}`;
   assert.equal((await invoke("api_key_status")).configured, false);
@@ -123,7 +125,7 @@ try {
     await invoke("delete_api_key");
   }
   assert.equal((await invoke("api_key_status")).configured, false);
-  console.log("Installed Orion launched; bundled Whisper and Credential Manager are available.");
+  console.log("Windows Credential Manager round trip passed.");
 
   await page.keyboard.press("Control+n");
   await page.getByRole("textbox", { name: "Note title" }).fill(title);
@@ -168,7 +170,12 @@ try {
     { name: "windows-scan.pdf", mimeType: "application/pdf", buffer: pdf },
   ]);
   try {
-    await importDialog.getByRole("button", { name: "Review sources" }).click({ timeout: 90_000 });
+    await page.waitForFunction(() => {
+      const rows = [...document.querySelectorAll(".import-studio__queue-item")];
+      return rows.length === 2 && rows.every((row) => !row.querySelector(".import-studio__spinner"));
+    }, null, { timeout: 90_000 });
+    assert.equal(await importDialog.locator(".import-studio__queue-item--error").count(), 0);
+    await importDialog.getByRole("button", { name: "Review sources" }).click();
     await importDialog.getByRole("button", { name: "Create notes" }).click();
     await importDialog.getByRole("button", { name: "Add to Orion" }).click();
     await eventually(async () => (await vault()).spaces[0].sources.filter((source) =>
