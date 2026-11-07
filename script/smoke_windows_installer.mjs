@@ -42,9 +42,16 @@ async function launch() {
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=9222",
       WEBVIEW2_USER_DATA_FOLDER: join(process.env.RUNNER_TEMP, "Orion-WebView2"),
     },
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
   });
-  await eventually(async () => (await fetch(`${endpoint}/json/version`)).ok, "WebView2 debugging endpoint");
+  app.stdout.pipe(process.stdout, { end: false });
+  app.stderr.pipe(process.stderr, { end: false });
+  app.on("error", (error) => console.error("Could not start Orion:", error));
+  app.on("exit", (code) => console.log(`Orion exited: ${code} (0x${(code >>> 0).toString(16)})`));
+  await eventually(async () => {
+    if (app.exitCode !== null) throw new Error(`Orion exited before WebView2 was ready (0x${(app.exitCode >>> 0).toString(16)}).`);
+    return (await fetch(`${endpoint}/json/version`)).ok;
+  }, "WebView2 debugging endpoint");
   browser = await chromium.connectOverCDP(endpoint);
   const context = browser.contexts()[0];
   assert(context, "WebView2 browsing context");

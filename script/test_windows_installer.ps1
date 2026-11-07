@@ -8,12 +8,22 @@ $installerProcess = Start-Process -FilePath $Installer -ArgumentList "/S /D=$ins
 if ($installerProcess.ExitCode -ne 0) {
     throw "NSIS installer exited with code $($installerProcess.ExitCode)"
 }
+Write-Host "Installed Orion to $install."
+foreach ($name in @('mfplat.dll', 'mfreadwrite.dll')) {
+    $library = Join-Path $env:windir "System32/$name"
+    Write-Host "${name} present: $(Test-Path -LiteralPath $library)"
+}
 $env:ORION_SMOKE_INSTALL = $install
 $env:ORION_SMOKE_TOOLS = $tools
 npm install --prefix $tools --no-save --package-lock=false playwright-core@1.65.0
 if ($LASTEXITCODE -ne 0) { throw 'Could not install the WebView2 test driver.' }
 node script/smoke_windows_installer.mjs
-if ($LASTEXITCODE -ne 0) { throw 'The installed Windows app did not pass its smoke test.' }
+if ($LASTEXITCODE -ne 0) {
+    Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-5) } -ErrorAction SilentlyContinue |
+        Where-Object { $_.Message -match 'orion.exe|WebView2' } |
+        Select-Object -First 4 -Property ProviderName, Id, Message | Format-List
+    throw 'The installed Windows app did not pass its smoke test.'
+}
 
 $sample = Join-Path $env:RUNNER_TEMP 'jfk.wav'
 Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.9.1/samples/jfk.wav' -OutFile $sample
