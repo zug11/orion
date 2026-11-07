@@ -27,5 +27,5 @@ outputs
 *.sln
 *.sw?
 
-# Verified platform build inputs staged by stage_windows_transcription.ps1
+# Verified platform build inputs staged by stage_windows_transcription.mjs
 /src-tauri/resources/windows-transcription/

@@ -32,9 +32,6 @@ async function recognize(
   if (mimeType !== "application/pdf" && mimeType !== "image/png" && mimeType !== "image/jpeg") {
     throw new Error("Text recognition on Windows supports PNG, JPEG, and PDF. Convert HEIC or HEIF images to PNG or JPEG first.");
   }
-  const response = await fetch(englishPath);
-  if (!response.ok) throw new Error("Orion's bundled English text recognition model could not load.");
-  const model = new Uint8Array(await response.arrayBuffer());
   let worker: Worker | undefined;
   let timedOut = false;
   let failWorker: (reason: Error) => void = () => {};
@@ -44,8 +41,9 @@ async function recognize(
     failWorker(new Error("Text recognition reached its time limit. Try fewer pages."));
   }, 10 * 60_000);
   try {
-    const starting = createWorker([{ code: "eng", data: model }], OEM.LSTM_ONLY, {
+    const starting = createWorker("eng", OEM.LSTM_ONLY, {
       corePath,
+      langPath: new URL(".", new URL(englishPath, location.href)).href,
       workerPath,
       workerBlobURL: false,
       cacheMethod: "none",

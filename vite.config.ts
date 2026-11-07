@@ -19,6 +19,16 @@ export default defineConfig(async () => ({
     exclude: [...configDefaults.exclude, "outputs/**"],
   },
 
+  build: {
+    rollupOptions: {
+      output: {
+        assetFileNames: (asset) => asset.names.includes("eng.traineddata.gz")
+          ? "assets/ocr/[name][extname]"
+          : "assets/[name]-[hash][extname]",
+      },
+    },
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

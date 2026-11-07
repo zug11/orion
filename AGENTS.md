@@ -261,7 +261,7 @@ installer with WebView2 and native window decorations. Keep logical
 the WebView2 image boundary. macOS glass and the Unix assistant bridge are
 not part of the Windows package.
 
-`script/stage_windows_transcription.ps1` checks the pinned Whisper archive
+`script/stage_windows_transcription.mjs` checks the pinned Whisper archive
 and Small model before staging them. `windows_transcription.rs` decodes a
 bounded local file through Media Foundation and runs the bundled CPU CLI with
 a cancellable child and a temporary WAV. Windows supports WAV, MP3, M4A, and

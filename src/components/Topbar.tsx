@@ -1,3 +1,4 @@
+import { isWindows } from "../lib/desktopPlatform";
 import {
   ArrowLeft,
   ArrowRight,
@@ -70,7 +71,7 @@ export function Topbar({
         <Search size={15} />
         <span>Search your atlas…</span>
         <kbd>
-          <Command size={11} /> K
+          {isWindows() ? "Ctrl+K" : <><Command size={11} /> K</>}
         </kbd>
       </button>
 
