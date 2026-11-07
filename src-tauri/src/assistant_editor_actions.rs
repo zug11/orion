@@ -1727,6 +1727,7 @@ mod tests {
             .is_err());
         assert_eq!(get(&s, &id)["state"], "stale");
     }
+    #[cfg(unix)]
     #[test]
     fn editor_actions_socket_lane_is_authenticated_immediate_and_does_not_write() {
         use std::io::{BufRead, BufReader, Write};
