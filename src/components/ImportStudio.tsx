@@ -1,3 +1,4 @@
+import { isWindowsDesktop } from "../lib/desktopPlatform";
 import { cleanPlainText, manualSummary } from "../lib/importSummary";
 import {
   useEffect,
@@ -1672,6 +1673,10 @@ export function ImportStudio({
       setUrlError(errorMessage(error));
       return;
     }
+    if (isWindowsDesktop() && classified.kind === "youtube") {
+      setUrlError("YouTube import is not available on Windows. Import a local recording or paste a transcript.");
+      return;
+    }
     if (itemsRef.current.length >= MAX_FILES) {
       setUrlError(`The queue can hold up to ${MAX_FILES} sources.`);
       return;
@@ -2523,10 +2528,11 @@ export function ImportStudio({
                 >
                   <Link2 size={16} aria-hidden="true" />
                   <div className="import-studio__url-copy">
-                    <label htmlFor={`${titleId}-url`}>Webpage or YouTube</label>
+                    <label htmlFor={`${titleId}-url`}>{isWindowsDesktop() ? "Webpage" : "Webpage or YouTube"}</label>
                     <small>
-                      Webpages become readable source text. YouTube audio is
-                      deleted as soon as local transcription finishes.
+                      {isWindowsDesktop()
+                        ? "Public webpages become readable source text."
+                        : "Webpages become readable source text. YouTube audio is deleted as soon as local transcription finishes."}
                     </small>
                   </div>
                   <input
@@ -2534,7 +2540,7 @@ export function ImportStudio({
                     type="url"
                     value={importUrl}
                     placeholder="https://…"
-                    aria-label="Webpage or YouTube URL"
+                    aria-label={isWindowsDesktop() ? "Webpage URL" : "Webpage or YouTube URL"}
                     onChange={(event) => {
                       setImportUrl(event.target.value);
                       setUrlError("");

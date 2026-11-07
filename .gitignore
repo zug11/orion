@@ -26,3 +26,6 @@ outputs
 *.njsproj
 *.sln
 *.sw?
+
+# Verified platform build inputs staged by stage_windows_transcription.ps1
+/src-tauri/resources/windows-transcription/

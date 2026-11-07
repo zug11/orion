@@ -304,10 +304,7 @@ export function delimitedRowsToMarkdown(rows: readonly string[][]): string {
     .join("\n");
 }
 
-async function parsePdf(
-  file: File,
-  recognizeDocumentText?: DocumentTextRecognizer,
-): Promise<ParsedImport> {
+export async function openImportPdf(file: File) {
   const { getDocument, GlobalWorkerOptions } = await import(
     "pdfjs-dist/legacy/build/pdf.mjs"
   );
@@ -318,10 +315,17 @@ async function parsePdf(
     ).toString();
   }
 
-  const loadingTask = getDocument({
+  return getDocument({
     data: new Uint8Array(await file.arrayBuffer()),
     useWorkerFetch: false,
   });
+}
+
+async function parsePdf(
+  file: File,
+  recognizeDocumentText?: DocumentTextRecognizer,
+): Promise<ParsedImport> {
+  const loadingTask = await openImportPdf(file);
   const document = await loadingTask.promise;
   const rawPages: Array<{ pageNumber: number; text: string }> = new Array(
     document.numPages,

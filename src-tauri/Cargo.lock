@@ -2640,6 +2640,7 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+ "windows",
  "zeroize",
  "zip",
 ]

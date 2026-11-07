@@ -1,3 +1,4 @@
+import { desktopCredentialStore, isWindowsDesktop } from "../lib/desktopPlatform";
 import { PerplexitySettings } from "./PerplexitySettings";
 import {
   Bot,
@@ -308,6 +309,7 @@ export function SettingsView({
     | "data"
   >("intelligence");
   const desktopRuntime = isTauriRuntime();
+  const windowsDesktop = isWindowsDesktop();
   const prefersLight =
     typeof window.matchMedia === "function" &&
     window.matchMedia("(prefers-color-scheme: light)").matches;
@@ -928,7 +930,7 @@ export function SettingsView({
                 <span>
                   <ShieldCheck size={13} />
                   {desktopRuntime
-                    ? "Stored separately from your writing keys in macOS Keychain."
+                    ? `Stored separately from your writing keys in ${desktopCredentialStore()}.`
                     : "Browser preview keeps the key in memory only, until reload."}
                 </span>
                 {settings.elevenLabsApiKeyConfigured && (
@@ -1068,7 +1070,7 @@ export function SettingsView({
                 <span>
                   <ShieldCheck size={13} />
                   {desktopRuntime
-                    ? "Stored separately from your OpenAI key in macOS Keychain."
+                    ? `Stored separately from your OpenAI key in ${desktopCredentialStore()}.`
                     : "Browser preview keeps the key in memory only, until reload."}
                 </span>
                 {settings.anthropicApiKeyConfigured && (
@@ -1113,6 +1115,7 @@ export function SettingsView({
               )}
             </div>
 
+            {!windowsDesktop && <>
             <div className="setting-card claude-connector-card">
               <div className="claude-connector-intro">
                 <span>
@@ -1204,6 +1207,7 @@ export function SettingsView({
             </div>
             <AssistantConnections access={settings.assistantAccess} spaces={spaces} jobs={assistantJobs} desktop={desktopRuntime}
               onChange={(assistantAccess) => onChange({ ...settings, assistantAccess })} onCancel={onCancelAssistantJob} />
+            </>}
           </section>
 
           <section className="settings-section" id="transcription">
@@ -1213,7 +1217,7 @@ export function SettingsView({
               </span>
               <span>
                 <h2>Local transcription</h2>
-                <p>Turn recordings and YouTube videos into source notes.</p>
+                <p>{windowsDesktop ? "Turn recordings into source notes." : "Turn recordings and YouTube videos into source notes."}</p>
               </span>
             </div>
 
@@ -1225,10 +1229,8 @@ export function SettingsView({
                 <div>
                   <strong>Private, bundled, and on-device</strong>
                   <small>
-                    Orion includes its own Whisper engine and multilingual
-                    model. Local recordings work without internet and never
-                    leave this Mac. There is no server, API key, Homebrew
-                    package, or Python setup.
+                    Orion includes its own Whisper engine and multilingual model.
+                    Local recordings work without internet and stay on this computer.
                   </small>
                 </div>
               </div>
@@ -1237,8 +1239,9 @@ export function SettingsView({
                   <span>On-device engine</span>
                   <strong>Whisper small · multilingual</strong>
                   <small className="transcription-field-hint">
-                    Metal-accelerated through whisper.cpp and packaged inside
-                    Orion.
+                    {windowsDesktop
+                      ? "Runs locally on your CPU. No internet or API key is required."
+                      : "Metal-accelerated through whisper.cpp and packaged inside Orion."}
                   </small>
                 </div>
                 <label className="transcription-field">
@@ -1254,20 +1257,21 @@ export function SettingsView({
                     }}
                   />
                 </label>
-                <div className="transcription-field">
+                {!windowsDesktop && <div className="transcription-field">
                   <span>YouTube toolkit</span>
                   <strong>yt-dlp + Deno · included</strong>
                   <small className="transcription-field-hint">
                     Orion supplies both executables and uses no shell PATH.
                     YouTube needs internet only to fetch the selected video.
                   </small>
-                </div>
+                </div>}
               </div>
               <div className="transcription-actions">
                 <span>
                   <ShieldCheck size={13} />
-                  Transcription stays local. Temporary YouTube downloads are
-                  deleted after transcription, including on errors.
+                  {windowsDesktop
+                    ? "Transcription stays local. Choose WAV, MP3, M4A, or MP4 up to 30 minutes."
+                    : "Transcription stays local. Temporary YouTube downloads are deleted after transcription, including on errors."}
                 </span>
                 <button
                   className="button soft compact"
@@ -1499,12 +1503,12 @@ export function SettingsView({
                 </div>
               </div>
             </div>
-            <WindowGlassSetting value={settings.windowGlass} status={glassStatus} onChange={(windowGlass) => patch({ windowGlass })} />
+            {!windowsDesktop && <WindowGlassSetting value={settings.windowGlass} status={glassStatus} onChange={(windowGlass) => patch({ windowGlass })} />}
             <div className="setting-card icon-colour-setting">
               <div className="setting-row">
                 <span>
                   <strong>Icon colours</strong>
-                  <small>Match the O and running Dock icon to your theme. Original restores Orion’s colours.</small>
+                  <small>{windowsDesktop ? "Match the O in Orion to your theme. Original restores Orion’s colours." : "Match the O and running Dock icon to your theme. Original restores Orion’s colours."}</small>
                   {themeIconMessage && <small className="icon-colour-status" role="status">{themeIconMessage}</small>}
                 </span>
                 <ThemeChoiceGroup

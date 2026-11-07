@@ -29,9 +29,13 @@ const BUNDLED_WHISPER_MODEL_NAME: &str = "ggml-model.bin";
 const BUNDLED_YT_DLP_NAME: &str = "yt-dlp";
 const BUNDLED_DENO_NAME: &str = "deno";
 const MIN_BUNDLED_MODEL_BYTES: u64 = 400 * 1024 * 1024;
+#[cfg(not(windows))]
 const MEDIA_EXTENSIONS: &[&str] = &[
     "flac", "m4a", "mp3", "mp4", "mpeg", "mpga", "ogg", "wav", "webm",
 ];
+
+#[cfg(windows)]
+const MEDIA_EXTENSIONS: &[&str] = &["m4a", "mp3", "mp4", "wav"];
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -150,6 +154,11 @@ pub(super) async fn align_generated_speech(
     text: &str,
     bytes: &[u8],
 ) -> Option<Vec<speech_timing::SpeechWordTiming>> {
+    // Windows uses the upstream CLI for transcription. It does not expose
+    // the macOS helper's acoustic-alignment protocol.
+    if cfg!(windows) {
+        return None;
+    }
     let runtime = bundled_transcription_runtime(app).ok()?;
     validate_whisper_runtime(&runtime).ok()?;
     let audio = bytes.to_vec();
@@ -233,7 +242,12 @@ pub(super) fn bundled_transcription_runtime(
         .map_err(|error| format!("Orion could not locate its bundled model: {error}"))?;
 
     Ok(TranscriptionRuntime {
+        #[cfg(not(windows))]
         whisper: executable_directory.join(BUNDLED_WHISPER_NAME),
+        #[cfg(windows)]
+        whisper: resource_directory
+            .join("windows-transcription")
+            .join("whisper-cli.exe"),
         model: resource_directory
             .join("models")
             .join(BUNDLED_WHISPER_MODEL_NAME),
@@ -556,8 +570,12 @@ pub(super) async fn transcribe_path_controlled(
     control: &media_jobs::Control,
 ) -> Result<TranscribedMedia, String> {
     control.check()?;
-    let extension = media_extension(path)
-        .ok_or_else(|| "Choose FLAC, M4A, MP3, MP4, MPEG, OGG, WAV, or WebM media.".to_string())?;
+    let extension = media_extension(path).ok_or_else(|| {
+        format!(
+            "Choose one of these media formats: {}.",
+            MEDIA_EXTENSIONS.join(", ")
+        )
+    })?;
     let metadata = fs::metadata(path)
         .map_err(|error| format!("Orion could not inspect this media file: {error}"))?;
     if !metadata.is_file() {
@@ -575,48 +593,63 @@ pub(super) async fn transcribe_path_controlled(
     let model = runtime.model.clone();
     let media = path.to_path_buf();
     let process_control = control.clone();
-    let output = tauri::async_runtime::spawn_blocking(move || {
-        let run = |use_cpu: bool| {
-            let mut command = Command::new(&whisper);
-            command
-                .arg("--model")
-                .arg(&model)
-                .arg("--input")
-                .arg(&media);
-            if use_cpu {
-                command.arg("--cpu");
-            }
-            if let Some(language) = language.as_ref() {
-                command.arg("--language").arg(language);
-            }
-            process_control.run(&mut command, media_jobs::TRANSCRIPTION_TIMEOUT)
-        };
-        let first = run(false)?;
-        let gpu_allocation_failed = !first.status.success()
-            && String::from_utf8_lossy(&first.stderr).contains("ggml_metal_buffer_init: error");
-        if gpu_allocation_failed {
-            run(true)
-        } else {
-            Ok(first)
-        }
+    #[cfg(windows)]
+    let text = tauri::async_runtime::spawn_blocking(move || {
+        crate::windows_transcription::transcribe(
+            &whisper,
+            &model,
+            &media,
+            language.as_deref(),
+            &process_control,
+        )
     })
     .await
     .map_err(|error| format!("The offline transcription task could not finish: {error}"))??;
+    #[cfg(not(windows))]
+    let text = {
+        let output = tauri::async_runtime::spawn_blocking(move || {
+            let run = |use_cpu: bool| {
+                let mut command = Command::new(&whisper);
+                command
+                    .arg("--model")
+                    .arg(&model)
+                    .arg("--input")
+                    .arg(&media);
+                if use_cpu {
+                    command.arg("--cpu");
+                }
+                if let Some(language) = language.as_ref() {
+                    command.arg("--language").arg(language);
+                }
+                process_control.run(&mut command, media_jobs::TRANSCRIPTION_TIMEOUT)
+            };
+            let first = run(false)?;
+            let gpu_allocation_failed = !first.status.success()
+                && String::from_utf8_lossy(&first.stderr).contains("ggml_metal_buffer_init: error");
+            if gpu_allocation_failed {
+                run(true)
+            } else {
+                Ok(first)
+            }
+        })
+        .await
+        .map_err(|error| format!("The offline transcription task could not finish: {error}"))??;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let detail = stderr
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("The bundled Whisper engine stopped unexpectedly.")
+                .trim();
+            return Err(detail.chars().take(900).collect());
+        }
+        String::from_utf8(output.stdout)
+            .map_err(|_| "The bundled Whisper engine returned invalid text.".to_string())?
+            .trim()
+            .to_string()
+    };
     control.check()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let detail = stderr
-            .lines()
-            .rev()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("The bundled Whisper engine stopped unexpectedly.")
-            .trim();
-        return Err(detail.chars().take(900).collect());
-    }
-    let text = String::from_utf8(output.stdout)
-        .map_err(|_| "The bundled Whisper engine returned invalid text.".to_string())?
-        .trim()
-        .to_string();
     if text.is_empty() {
         return Err("Whisper finished without detecting any speech.".to_string());
     }
@@ -843,13 +876,14 @@ pub(super) async fn transcribe_voice_memo(
         .and_then(|_| temporary.flush())
         .map_err(|error| format!("Orion could not prepare the voice memo: {error}"))?;
     let byte_size = bytes.len() as u64;
+    let temporary = temporary.into_temp_path();
     if let Some(session_id) = session_id {
         if !valid_voice_memo_session_id(&session_id) {
             return Err("The dictation session identifier is invalid.".to_string());
         }
         let shared_workers = workers.inner().clone();
         let text = tauri::async_runtime::spawn_blocking(move || {
-            let path = temporary.path().to_path_buf();
+            let path = temporary.to_path_buf();
             transcribe_voice_memo_with_worker(&shared_workers, &session_id, &path)
         })
         .await
@@ -869,7 +903,7 @@ pub(super) async fn transcribe_voice_memo(
     let mut transcript = transcribe_path(
         &runtime,
         &config,
-        temporary.path(),
+        &temporary,
         Some("Voice memo".to_string()),
         None,
     )
@@ -888,6 +922,9 @@ pub(super) async fn transcribe_youtube(
     request_id: String,
     request: YouTubeTranscriptionRequest,
 ) -> Result<TranscribedMedia, String> {
+    if cfg!(windows) {
+        return Err("YouTube import is not available on Windows.".into());
+    }
     let job = jobs.begin(window.label(), &request_id)?;
     let runtime = bundled_transcription_runtime(&app)?;
     transcribe_youtube_controlled(&runtime, request, &job.control).await
@@ -990,20 +1027,25 @@ async fn bundled_tool_version(path: &Path) -> Option<String> {
         return None;
     }
     let executable = path.to_path_buf();
-    tauri::async_runtime::spawn_blocking(move || Command::new(executable).arg("--version").output())
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .filter(|output| output.status.success())
-        .and_then(|output| {
-            String::from_utf8(output.stdout).ok().and_then(|value| {
-                value
-                    .lines()
-                    .find(|line| !line.trim().is_empty())
-                    .map(str::trim)
-                    .map(str::to_string)
-            })
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut command = Command::new(executable);
+        #[cfg(windows)]
+        crate::windows_transcription::no_console(&mut command);
+        command.arg("--version").output()
+    })
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .filter(|output| output.status.success())
+    .and_then(|output| {
+        String::from_utf8(output.stdout).ok().and_then(|value| {
+            value
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .map(str::trim)
+                .map(str::to_string)
         })
+    })
 }
 
 #[tauri::command]
@@ -1028,7 +1070,9 @@ pub(super) async fn transcription_setup_status(
     } else {
         "The bundled Whisper engine or model is missing. Reinstall Orion.".to_string()
     };
-    let youtube_message = if yt_dlp_available {
+    let youtube_message = if cfg!(windows) {
+        String::new()
+    } else if yt_dlp_available {
         format!(
             "Bundled yt-dlp {} and {} are ready.",
             yt_dlp_version.as_deref().unwrap_or(""),

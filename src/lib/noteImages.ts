@@ -1,3 +1,5 @@
+import { isWindowsDesktop } from "./desktopPlatform";
+
 export const NOTE_IMAGE_ACCEPT =
   ".png,.jpg,.jpeg,.gif,.webp,image/png,image/jpeg,image/gif,image/webp";
 
@@ -21,4 +23,10 @@ export function imageFilesFromTransfer(items: Iterable<File>): File[] {
   return Array.from(items).filter((file) =>
     /^(?:image\/(?:png|jpeg|jpg|gif|webp))$/i.test(file.type),
   );
+}
+
+// Wry serves custom schemes through loopback-style origins in WebView2.
+export function noteImageDisplayUrl(value: string): string {
+  const assetId = noteImageAssetId(value);
+  return assetId && isWindowsDesktop() ? `http://orion-image.localhost/${assetId}` : value;
 }

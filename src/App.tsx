@@ -1,3 +1,4 @@
+import { isWindowsDesktop } from "./lib/desktopPlatform";
 import { researchWithPerplexity } from "./lib/perplexity";
 import { workingTaskSnapshot, requestedTaskView } from "./lib/taskWorkingView";
 import { addHumanPassageComment, passageComments, type PassageCommentHandler, passageAnchorFromSelection, passageIsCurrent, validatePassageRewrite, reviewPassageComment, threadEditProposal, isPassageThreads, MAX_PASSAGE_THREADS, MAX_THREAD_MESSAGES, type PassageThreadHandler, type PassageChatTarget, passageConversationSnapshot, passageArticleReference } from "./lib/passageThreads";
@@ -4110,7 +4111,7 @@ function App() {
           imageContextEnabled={snapshot.settings.includeExistingNotesInAIContext}
           aiProviderName={selectedAIProviderName(snapshot.settings)}
           onSpeakNote={speakNoteText}
-          onDownloadNarration={downloadNoteNarration}
+          onDownloadNarration={isWindowsDesktop() && resolveSpeechEngine(snapshot.settings) === "system" ? undefined : downloadNoteNarration}
           onPrepareSpeech={prepareSpeech}
           onPrepareVoiceMemoSession={(sessionId) =>
             prepareVoiceMemoForNote(activeNote.id, sessionId)

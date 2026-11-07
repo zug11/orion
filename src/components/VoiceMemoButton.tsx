@@ -1,3 +1,4 @@
+import { isWindowsDesktop } from "../lib/desktopPlatform";
 import {
   useEffect,
   useRef,
@@ -34,7 +35,9 @@ function supportedMimeType(): string | null {
 
 function recordingErrorMessage(error: unknown): string {
   if (error instanceof DOMException && error.name === "NotAllowedError") {
-    return "Microphone access was denied. Allow Orion in System Settings → Privacy & Security → Microphone.";
+    return isWindowsDesktop()
+      ? "Microphone access was denied. Check Settings → Privacy & security → Microphone."
+      : "Microphone access was denied. Allow Orion in System Settings → Privacy & Security → Microphone.";
   }
   if (error instanceof DOMException && error.name === "NotFoundError") {
     return "No microphone is available.";

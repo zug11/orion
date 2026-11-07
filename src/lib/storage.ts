@@ -1,3 +1,4 @@
+import { isWindowsDesktop } from "./desktopPlatform";
 import { isPassageAnchor, isPassageThreads } from "./passageThreads";
 import { parseVoiceSynthesisContext, parseVoiceSynthesisResult, VOICE_SYNTHESIS_INSTRUCTIONS, VOICE_SYNTHESIS_SCHEMA } from "./voiceSynthesisProtocol";
 import { CHAT_EDIT_INSTRUCTIONS, CHAT_EDIT_SCHEMA, CHAT_EDIT_INTENT_SCHEMA, parseChatEditIntent, CHAT_REWRITE_SCHEMA, chatRequestAllowsEdits, parseChatNoteEdits, parseChatRewrite } from "./chatEdits";
@@ -376,6 +377,10 @@ export async function recognizeDocumentText(
     );
   }
   const mimeType = canonicalRecognitionMimeType(file);
+  if (import.meta.env.VITE_ORION_WINDOWS && isWindowsDesktop()) {
+    const { recognizeWindowsDocument } = await import("./windowsOcr");
+    return recognizeWindowsDocument(file, mimeType, options?.pageNumbers);
+  }
   const value = await invokeTauri<unknown>("recognize_document_text", {
     request: {
       fileName: file.name,
@@ -1492,7 +1497,7 @@ export async function downloadNarration(
 export interface WordExportWorkflow { jobId: string; sessionId: string }
 
 export async function readWordExportImage(assetId: string): Promise<{ base64Data: string; mimeType: string }> {
-  if (!isTauriRuntime()) throw new Error("Managed images can be exported from the Orion Mac app.");
+  if (!isTauriRuntime()) throw new Error("Managed images can be exported from the Orion desktop app.");
   return invokeTauri("read_word_export_image", { assetId });
 }
 

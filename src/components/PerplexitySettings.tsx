@@ -1,3 +1,4 @@
+import { desktopCredentialStore } from "../lib/desktopPlatform";
 import { useRef, useState } from "react";
 import { Eye, EyeOff, Globe, KeyRound, LoaderCircle, LockKeyhole } from "../lib/icons";
 import { deletePerplexityKey, savePerplexityKey, testPerplexityKey } from "../lib/perplexity";
@@ -40,7 +41,7 @@ export function PerplexitySettings({ configured, onConfiguredChange }: { configu
           {reveal ? <EyeOff size={15} /> : <Eye size={15} />}</button></label>
         <button className="button primary compact" type="button" disabled={busy || !key.trim()} onClick={() => void perform("save")}>
           {busy ? <LoaderCircle size={14} className="spin" /> : <LockKeyhole size={14} />}Save key</button></div>
-      <div className="api-key-actions"><span>Stored in macOS Keychain. Research questions go to Perplexity; API usage applies.</span>
+      <div className="api-key-actions"><span>Stored in {desktopCredentialStore()}. Research questions go to Perplexity; API usage applies.</span>
         {configured && <span><button type="button" disabled={busy} onClick={() => void perform("test")}>Test connection</button>
           <button type="button" className="danger-text" disabled={busy} onClick={() => void perform("remove")}>Remove key</button></span>}</div>
       <p className="setting-message">Your selected OpenAI or Anthropic model still handles the conversation. Perplexity supplies cited web research.</p>

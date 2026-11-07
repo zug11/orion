@@ -1,3 +1,5 @@
+import { primaryShortcut } from "../lib/desktopPlatform";
+import { noteImageDisplayUrl } from "../lib/noteImages";
 import { visibleNoteSummary } from "../lib/importSummary";
 import type { Editor } from "@tiptap/core";
 import { PassageThreads } from "./PassageThreads";
@@ -1137,7 +1139,7 @@ export function NoteView({
       if(!src || !isSafeNoteImageUrl(src)) return <span>{alt || "Image unavailable"}</span>;
       const parsed=parseNoteImageTitle(title);
       const content = <>
-        <img src={src} alt={alt??""} title={parsed.title??undefined}/>
+        <img src={noteImageDisplayUrl(src)} alt={alt??""} title={parsed.title??undefined}/>
         {parsed.layout.showCaption && parsed.layout.caption && <span className="note-image-caption-reading">{parsed.layout.caption}</span>}
       </>;
       return <span className="note-image-reading" style={noteImageLayoutStyle(parsed.layout)}>
@@ -1387,7 +1389,7 @@ export function NoteView({
               className={findOpen ? "icon-button active" : "icon-button"}
               aria-label="Find in note"
               aria-pressed={findOpen}
-              title="Find in note (⌘F)"
+              title={`Find in note (${primaryShortcut("F")})`}
               onClick={findOpen ? closeFind : openFind}
             >
               <Search size={16} />

@@ -1,3 +1,4 @@
+import { isWindowsDesktop, primaryShortcut } from "../lib/desktopPlatform";
 import {
   BookOpen,
   ChevronDown,
@@ -184,7 +185,7 @@ export function Sidebar({
 
   return (
     <aside className={collapsed ? "sidebar is-collapsed" : "sidebar"}>
-      <div className="sidebar-titlebar" data-tauri-drag-region aria-hidden="true" />
+      {!isWindowsDesktop() && <div className="sidebar-titlebar" data-tauri-drag-region aria-hidden="true" />}
       <SpaceSwitcher
         brandMarkSrc={brandMarkSrc}
         spaces={spaces}
@@ -204,7 +205,7 @@ export function Sidebar({
         >
           <Plus size={16} strokeWidth={2} />
           <span>New note</span>
-          <kbd>⌘N</kbd>
+          <kbd>{primaryShortcut("N")}</kbd>
         </button>
         {generateEnabled && onGenerate ? (
           <button

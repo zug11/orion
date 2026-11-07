@@ -1,7 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "build": {
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File script/stage_windows_transcription.ps1 && npm run build",
+    "beforeDevCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File script/stage_windows_transcription.ps1 && npm run dev"
   },
   "app": {
     "macOSPrivateApi": false,
@@ -21,7 +22,10 @@
         "fullscreen": false,
         "decorations": true
       }
-    ]
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost orion-image: http://orion-image.localhost data: blob:; media-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'"
+    }
   },
   "bundle": {
     "targets": [
@@ -35,6 +39,10 @@
         "type": "downloadBootstrapper",
         "silent": true
       }
+    },
+    "resources": {
+      "resources/windows-transcription/": "windows-transcription/",
+      "resources/models/ggml-small.bin": "models/ggml-model.bin"
     }
   }
 }

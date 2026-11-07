@@ -57,6 +57,8 @@ mod speech_timing;
 mod theme_icon;
 mod voice_synthesis;
 mod window_glass;
+#[cfg(windows)]
+mod windows_transcription;
 mod word_export;
 
 const KEYCHAIN_SERVICE: &str = "app.orion.knowledge";
@@ -4889,6 +4891,7 @@ pub fn run() {
             desktop_windows::install_menu(app.handle())?;
             desktop_windows::install_citation_routing(app.handle());
             let bridge = assistant_bridge::AssistantBridge::new(vault_path(app.handle())?);
+            #[cfg(unix)]
             if let Err(error) = bridge.start() {
                 eprintln!("Orion desktop workflows are unavailable: {error}");
             }

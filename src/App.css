@@ -608,6 +608,10 @@ kbd {
   background: var(--surface-0);
 }
 
+.sidebar:not(:has(.sidebar-titlebar)) {
+  padding-top: 12px;
+}
+
 .sidebar-titlebar {
   position: absolute;
   inset: 0 0 auto;

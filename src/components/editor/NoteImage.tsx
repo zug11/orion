@@ -1,3 +1,4 @@
+import { noteImageDisplayUrl } from "../../lib/noteImages";
 import Image from "@tiptap/extension-image";
 import type { Editor } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer, useEditorState, type NodeViewProps } from "@tiptap/react";
@@ -568,7 +569,7 @@ function NoteImageView({ node, editor, selected, getPos }: NodeViewProps) {
       <div className="note-image-visual" onPointerDown={beginMove} onMouseDown={(event) => event.preventDefault()}
         onDragStartCapture={(event) => { event.preventDefault(); event.stopPropagation(); }} draggable={false}>
         {safeSource
-          ? <img src={node.attrs.src} alt={node.attrs.alt || ""} title={node.attrs.title || undefined} draggable={false} />
+          ? <img src={noteImageDisplayUrl(node.attrs.src)} alt={node.attrs.alt || ""} title={node.attrs.title || undefined} draggable={false} />
           : <div className="note-image-unavailable" role="img" aria-label={node.attrs.alt || "Image unavailable"}>Image unavailable</div>}
         {selected && editor.isEditable && (["top-left", "top-right", "bottom-left", "bottom-right"] as const).map((corner) => (
           <button type="button" key={corner} className={`note-image-resize ${corner}`} title="Resize image · arrow keys adjust width" aria-label={`Resize image from ${corner.replace("-", " ")}`} onPointerDown={(event) => beginResize(event, corner)} onKeyDown={resizeByKeyboard} draggable={false} />

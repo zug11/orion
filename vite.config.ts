@@ -7,6 +7,11 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [react()],
+  define: {
+    "import.meta.env.VITE_ORION_WINDOWS": JSON.stringify(
+      process.env.TAURI_ENV_PLATFORM === "windows" || process.platform === "win32",
+    ),
+  },
   test: {
     environment: "jsdom",
     globals: true,
