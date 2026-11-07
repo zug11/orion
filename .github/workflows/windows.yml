@@ -39,6 +39,7 @@ jobs:
       - run: npm ci
       - run: cargo clean --release -p orion --manifest-path src-tauri/Cargo.toml
       - run: npm run tauri build -- --bundles nsis --ci
+      - run: git diff --exit-code
       - run: cargo test --locked --release --manifest-path src-tauri/Cargo.toml
       - run: npm test -- --maxWorkers=2
       - name: Verify installed app

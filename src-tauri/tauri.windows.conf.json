@@ -5,7 +5,6 @@
     "beforeDevCommand": "node script/stage_windows_transcription.mjs && npm run dev"
   },
   "app": {
-    "macOSPrivateApi": false,
     "windows": [
       {
         "label": "main",
@@ -20,7 +19,8 @@
         "minimizable": true,
         "closable": true,
         "fullscreen": false,
-        "decorations": true
+        "decorations": true,
+        "dragDropEnabled": false
       }
     ],
     "security": {
