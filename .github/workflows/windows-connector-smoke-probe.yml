@@ -1,0 +1,36 @@
+name: Orion connector installer smoke probe
+on:
+  push:
+    branches: [codex/orion-windows-connector-smoke]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  installed-app:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/download-artifact@v8
+        with:
+          name: orion-windows-x64
+          github-token: ${{ github.token }}
+          run-id: 42571195053
+          path: installer
+      - run: npm ci
+      - shell: pwsh
+        run: |
+          $setup = @(Get-ChildItem installer/*-setup.exe)
+          $original = Get-Content script/test_windows_installer.ps1 -Raw
+          $smokeOnly = $original.Substring(0, $original.IndexOf('$sample = Join-Path'))
+          & ([ScriptBlock]::Create($smokeOnly)) -Installer $setup[0].FullName
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: windows-smoke-diagnostics
+          path: ${{ runner.temp }}/orion-smoke-failure.png
+          if-no-files-found: ignore
