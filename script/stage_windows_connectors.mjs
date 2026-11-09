@@ -79,7 +79,7 @@ if (binaryVersion !== `Orion MCP ${claudeManifest.version}` || pluginManifest.ve
 }
 const claude = new JSZip();
 claude.file("manifest.json", JSON.stringify(claudeManifest, null, 2));
-claude.file(claudeManifest.icon, await readFile(join(root, "public", "orion-mark.png")));
+claude.file(claudeManifest.icon, await readFile(join(root, "src-tauri", "icons", "icon.png")));
 claude.file("README.md", [
   "# Orion for Claude Desktop on Windows",
   "",

@@ -587,9 +587,10 @@ macOS and Windows 11 x64.
 - **Codex:** open **Settings → Connections → Install in Codex**, then confirm installation on Orion's plugin page.
 - **Claude Desktop:** open **Settings → Connections → Install in Claude**, then accept the bundled extension prompt.
 
-On Windows, if the Claude install button shows a file path, use **Claude
-Desktop → Settings → Extensions → Advanced settings → Install Extension**
-and select the displayed `Orion-Claude-Connector.mcpb`.
+On Windows, if the Claude install button shows a file path, open **Claude
+Desktop → Settings → Desktop app** and select **Manage** next to Extensions.
+Under **Advanced settings**, choose **Install Extension** and select the
+displayed `Orion-Claude-Connector.mcpb`. [Claude's extension installation guide](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop)
 
 Both integrations discover Spaces, search and browse bounded content, open exact notes and sources, return `orion://` citations, and create, update, or delete ordinary notes. Reads default only to the active Space. Every write requires an explicit exact Space ID.
 

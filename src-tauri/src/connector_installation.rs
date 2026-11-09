@@ -34,7 +34,7 @@ pub(super) async fn open_claude_connector(app: AppHandle) -> Result<String, Stri
     if let Err(error) = app.opener().open_path(display_path.clone(), None::<String>) {
         #[cfg(windows)]
         return Err(format!(
-            "Open Claude Desktop → Settings → Extensions → Advanced settings → Install Extension, then select {display_path}. Orion could not open the extension directly ({error})."
+            "In Claude Desktop, open Settings → Desktop app and select Manage next to Extensions (or Settings → Extensions). In Advanced settings, choose Install Extension and select {display_path}. Orion could not open the extension directly ({error})."
         ));
         #[cfg(not(windows))]
         return Err(format!(

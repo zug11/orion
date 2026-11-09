@@ -267,13 +267,17 @@ try {
   console.log("Verified note autosave, managed image rendering and offline OCR for PNG and scanned PDF.");
 
   const extensionDirectory = await mkdtemp(join(process.env.RUNNER_TEMP, "Orion Claude Extension "));
+  let noteCitation;
   try {
     const { claude, codex } = await installedConnectors(extensionDirectory);
     const { activeSpaceId: spaceId, spaces } = await vault();
     const noteId = spaces[0].notes.find((note) => note.title === title).id;
     for (const call of [claude, codex]) {
       assert.equal(call("orion_list_spaces").activeSpaceId, spaceId);
-      assert(call("orion_get_note", { space_id: spaceId, note_id: noteId }).note.body.includes(body));
+      const note = call("orion_get_note", { space_id: spaceId, note_id: noteId }).note;
+      assert(note.body.includes(body));
+      assert.match(note.orionUrl, /^orion:\/\//);
+      noteCitation = note.orionUrl;
     }
     const contextRequest = { space_id: spaceId, request_id: "windows-smoke-context", query: "phrase saved", note_ids: [noteId] };
     claude("orion_get_context", contextRequest, { error: true });
@@ -286,7 +290,8 @@ try {
     await page.locator(".assistant-spaces input").first().check();
     await eventually(() => {
       const capabilities = codex("orion_get_capabilities");
-      return capabilities.access?.spaceIds.includes(spaceId) && capabilities.workflowExecutorAvailable;
+      assert(capabilities.workflowExecutorAvailable, capabilities.instruction ?? "The Orion workflow executor is unavailable");
+      return capabilities.access.spaceIds.includes(spaceId);
     }, "approved desktop workflow over the named pipe");
     assert.equal(claude("orion_get_capabilities").access.allowAI, false);
     await assertPipeRequiresToken();
@@ -306,12 +311,17 @@ try {
     const reread = codex("orion_get_note", { space_id: spaceId, note_id: created.note.id });
     assert.equal(reread.note.body, body);
     assert.match(reread.note.orionUrl, /^orion:\/\//);
+    codex("orion_delete_note", { space_id: spaceId, note_id: created.note.id });
     console.log("Verified the installed Claude and Codex packages, zero-configuration discovery, direct note writes, and authenticated Space-scoped workflows.");
   } finally {
     await rm(extensionDirectory, { recursive: true, force: true });
   }
   await launch();
-  await page.locator(".recent-grid").getByText(title, { exact: true }).click();
+  execFileSync("powershell.exe", ["-NoProfile", "-Command", "Start-Process -FilePath $env:ORION_SMOKE_CITATION"], {
+    env: { ...process.env, ORION_SMOKE_CITATION: noteCitation },
+    timeout: 10_000,
+  });
+  await page.getByRole("heading", { name: title, exact: true }).waitFor();
   await page.waitForFunction((text) => document.querySelector("article .note-prose")?.textContent.includes(text), body);
   await page.getByRole("button", { name: "Open in writing window" }).click();
   const writingPage = await eventually(() => browser.contexts().flatMap((context) => context.pages())
@@ -321,7 +331,7 @@ try {
   assert.equal(await writingPage.getByRole("navigation", { name: "Workspace" }).count(), 0);
   assert(!JSON.stringify(await vault()).includes(fixtureKey), "A credential must never be written to the vault");
   assert.deepEqual(pageErrors, []);
-  console.log("Verified native close, reopen, and detached writing window.");
+  console.log("Verified native close, Windows citation activation, and detached writing window.");
 } catch (error) {
   if (app && !page && app.exitCode === null) {
     const processState = execFileSync("powershell.exe", ["-NoProfile", "-Command",

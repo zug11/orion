@@ -863,7 +863,14 @@ impl AssistantBridge {
                 if let Ok(reply) = reply {
                     if let Ok(mut encoded) = serde_json::to_vec(&reply) {
                         encoded.push(b'\n');
-                        let _ = timeout(Duration::from_secs(2), stream.write_all(&encoded)).await;
+                        if matches!(
+                            timeout(Duration::from_secs(2), stream.write_all(&encoded)).await,
+                            Ok(Ok(()))
+                        ) {
+                            // The client closes after reading the response. Keep the
+                            // instance alive briefly without blocking on a stalled peer.
+                            let _ = timeout(Duration::from_secs(2), stream.read_u8()).await;
+                        }
                     }
                 }
             }
