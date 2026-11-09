@@ -1,0 +1,25 @@
+name: Orion Windows client compatibility probe
+on:
+  push:
+    branches: [codex/orion-windows-appdata-probe]
+permissions:
+  contents: read
+jobs:
+  clients:
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: node script/stage_windows_connectors.mjs
+      - name: Verify Claude bundle and launch the Windows Codex plugin
+        shell: pwsh
+        run: |
+          $tools = Join-Path $env:RUNNER_TEMP 'Orion Codex Probe Tools'
+          npm install --prefix $tools --no-save --package-lock=false @openai/codex@0.167.0
+          if ($LASTEXITCODE -ne 0) { throw 'The Codex probe could not install the official client.' }
+          python script/probe_windows_clients.py $tools
