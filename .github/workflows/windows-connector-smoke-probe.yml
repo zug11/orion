@@ -1,0 +1,30 @@
+name: Orion Windows pipe descriptor probe
+on:
+  push:
+    branches: [codex/orion-windows-connector-smoke]
+permissions:
+  contents: read
+jobs:
+  pipe:
+    runs-on: windows-2025
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run the exact private descriptor module on Windows
+        shell: pwsh
+        run: |
+          @'
+          [package]
+          name = "orion-pipe-probe"
+          version = "0.0.0"
+          edition = "2021"
+          [dependencies]
+          serde = { version = "1", features = ["derive"] }
+          serde_json = "1"
+          tempfile = "=3.27.0"
+          tokio = { version = "1", features = ["net", "rt", "time", "io-util", "macros"] }
+          windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
+          [lib]
+          path = "script/windows_pipe_probe.rs"
+          '@ | Set-Content Cargo.toml -Encoding utf8NoBOM
+          cargo test -- --nocapture
