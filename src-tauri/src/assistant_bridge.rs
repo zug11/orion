@@ -814,7 +814,7 @@ impl AssistantBridge {
             },
             &sid,
         )
-        .map_err(|_| "Cannot publish the private workflow descriptor.")?;
+        .map_err(|error| format!("Cannot publish the private workflow descriptor: {error}"))?;
 
         let weak = Arc::downgrade(&self.jobs);
         let path = self.path.clone();
