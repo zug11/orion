@@ -1144,11 +1144,15 @@ fn write_vault_value_unlocked(path: &Path, value: &Value) -> Result<(), ToolFail
             error.error
         ))
     })?;
+    // Windows has already flushed the replacement file and committed the rename.
+    // Opening a directory this way is only supported on Unix.
+    #[cfg(unix)]
     File::open(directory)
         .and_then(|file| file.sync_all())
         .map_err(|error| {
             ToolFailure::new(format!("Orion could not finish the vault update: {error}"))
-        })
+        })?;
+    Ok(())
 }
 
 fn mutate_vault(path: &Path, mutation: impl FnOnce(&mut Value) -> ToolResult) -> ToolResult {

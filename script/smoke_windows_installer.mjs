@@ -305,6 +305,7 @@ try {
     assert.equal(completed.result.providerCalls, 0);
     assert(completed.result.evidence.some((item) => item.entityId === noteId
       && item.passages.some((passage) => passage.text.includes(body))));
+    console.log("Verified authenticated Space-scoped workflows through both packaged connectors.");
 
     await closeAndWait();
     assert.equal(codex("orion_get_capabilities").available, false);
@@ -313,7 +314,7 @@ try {
     assert.equal(reread.note.body, body);
     assert.match(reread.note.orionUrl, /^orion:\/\//);
     codex("orion_delete_note", { space_id: spaceId, note_id: created.note.id });
-    console.log("Verified the installed Claude and Codex packages, zero-configuration discovery, direct note writes, and authenticated Space-scoped workflows.");
+    console.log("Verified zero-configuration discovery and direct note writes with Orion closed.");
   } finally {
     await rm(extensionDirectory, { recursive: true, force: true });
   }
