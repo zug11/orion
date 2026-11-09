@@ -1,0 +1,17 @@
+name: Orion connector MSIX probe
+on:
+  push:
+    branches: [codex/orion-windows-appdata-probe]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build the Windows MCP server
+        run: cargo build --locked --release --manifest-path src-tauri/mcp-server/Cargo.toml
+      - name: Probe a full-trust packaged client's access to the ordinary Orion vault
+        shell: pwsh
+        run: ./script/probe_windows_appdata.ps1
