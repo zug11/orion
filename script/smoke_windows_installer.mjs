@@ -283,7 +283,8 @@ try {
     claude("orion_get_context", contextRequest, { error: true });
 
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.getByRole("button", { name: "Connections", exact: true }).click();
+    await page.getByRole("navigation", { name: "Settings sections" })
+      .getByRole("link", { name: "Connections", exact: true }).click();
     assert(await page.getByRole("button", { name: "Install in Claude" }).isEnabled());
     assert(await page.getByRole("button", { name: "Install in Codex" }).isEnabled());
     await page.getByRole("checkbox", { name: /Enable desktop workflows/ }).check();
