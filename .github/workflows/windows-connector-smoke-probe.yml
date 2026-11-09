@@ -1,0 +1,48 @@
+name: Orion Windows connector handoff probe
+on:
+  push:
+    branches: [codex/orion-windows-connector-smoke]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  installed-app:
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/download-artifact@v8
+        with:
+          name: orion-windows-x64
+          github-token: ${{ github.token }}
+          run-id: 42572578607
+          path: installer
+      - run: npm ci
+      - run: node script/stage_windows_connectors.mjs
+      - name: Install the unchanged host and exercise the rebuilt connectors
+        shell: pwsh
+        run: |
+          $setup = @(Get-ChildItem installer/*-setup.exe)
+          $original = Get-Content script/test_windows_installer.ps1 -Raw
+          $smokeOnly = $original.Substring(0, $original.IndexOf('$sample = Join-Path'))
+          $stage = @'
+          $packages = 'src-tauri/resources/windows-connectors'
+          Copy-Item -LiteralPath (Join-Path $packages 'Orion-Claude-Connector.mcpb') -Destination $install -Force
+          $plugin = Join-Path $install 'Orion-Codex-Plugin'
+          Remove-Item -LiteralPath $plugin -Recurse -Force
+          Copy-Item -LiteralPath (Join-Path $packages 'Orion-Codex-Plugin') -Destination $plugin -Recurse
+          '@
+          $marker = '$env:ORION_SMOKE_INSTALL = $install'
+          if (!$smokeOnly.Contains($marker)) { throw 'Missing installation marker' }
+          $smokeOnly = $smokeOnly.Replace($marker, ($stage + [Environment]::NewLine + $marker))
+          & ([ScriptBlock]::Create($smokeOnly)) -Installer $setup[0].FullName
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: windows-smoke-diagnostics
+          path: ${{ runner.temp }}/orion-smoke-failure.png
+          if-no-files-found: ignore
