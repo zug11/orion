@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "build": {
-    "beforeBuildCommand": "node script/stage_windows_transcription.mjs && npm run build",
-    "beforeDevCommand": "node script/stage_windows_transcription.mjs && npm run dev"
+    "beforeBuildCommand": "node script/stage_windows_transcription.mjs && node script/stage_windows_connectors.mjs && npm run build",
+    "beforeDevCommand": "node script/stage_windows_transcription.mjs && node script/stage_windows_connectors.mjs && npm run dev"
   },
   "app": {
     "windows": [
@@ -43,7 +43,9 @@
     },
     "resources": {
       "resources/windows-transcription/runtime/": "windows-transcription/",
-      "resources/windows-transcription/ggml-model.bin": "models/ggml-model.bin"
+      "resources/windows-transcription/ggml-model.bin": "models/ggml-model.bin",
+      "resources/windows-connectors/Orion-Claude-Connector.mcpb": "Orion-Claude-Connector.mcpb",
+      "resources/windows-connectors/Orion-Codex-Plugin/": "Orion-Codex-Plugin/"
     }
   }
 }

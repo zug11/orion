@@ -36,12 +36,15 @@ jobs:
             target/windows/release/build
             target/windows/release/deps
             target/windows/release/.fingerprint
-          key: orion-windows-x64-v2-${{ hashFiles('src-tauri/Cargo.lock') }}
+          key: orion-windows-x64-v2-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/mcp-server/Cargo.lock') }}
+          restore-keys: orion-windows-x64-v2-
       - run: npm ci
       - run: cargo clean --release -p orion --manifest-path src-tauri/Cargo.toml
       - name: Verify and stage the speech runtime
         run: node script/stage_windows_transcription.mjs
         timeout-minutes: 5
+      - name: Build and stage the Claude and Codex connectors
+        run: node script/stage_windows_connectors.mjs
       - name: Build the Windows renderer
         run: npm run build
       - name: Compile and package Orion
@@ -75,6 +78,7 @@ jobs:
           if ($setup.Length -ne 1) { throw 'Expected exactly one installer.' }
           ./script/test_windows_installer.ps1 -Installer $setup[0].FullName
       - run: cargo test --locked --release --manifest-path src-tauri/Cargo.toml --lib
+      - run: cargo test --locked --manifest-path src-tauri/mcp-server/Cargo.toml
       - run: npm test -- --maxWorkers=2
       - uses: actions/upload-artifact@v7
         if: failure()

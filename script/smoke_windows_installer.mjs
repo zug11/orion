@@ -1,11 +1,13 @@
 // Run against the installed production WebView2 app, on an ephemeral CI user.
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
-import { readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createConnection } from "node:net";
+import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
+import JSZip from "jszip";
 
 const { chromium } = createRequire(join(process.env.ORION_SMOKE_TOOLS, "package.json"))("playwright-core");
 const executable = join(process.env.ORION_SMOKE_INSTALL, "orion.exe");
@@ -70,6 +72,81 @@ async function closeAndWait() {
 
 async function invoke(name, args = {}) {
   return page.evaluate(({ name, args }) => window.__TAURI_INTERNALS__.invoke(name, args), { name, args });
+}
+
+async function installedConnectors(extensionDirectory) {
+  const install = process.env.ORION_SMOKE_INSTALL;
+  const archive = await JSZip.loadAsync(await readFile(join(install, "Orion-Claude-Connector.mcpb")));
+  const manifest = JSON.parse(await archive.file("manifest.json").async("string"));
+  assert.deepEqual(manifest.compatibility.platforms, ["win32"]);
+  assert.equal(manifest.user_config, undefined);
+  assert.equal(manifest.server.entry_point, "server/orion-mcp.exe");
+  const claudeConfig = manifest.server.mcp_config;
+  assert.equal(claudeConfig.command, "${__dirname}/server/orion-mcp.exe");
+  assert.equal(claudeConfig.env, undefined);
+  const claudeExecutable = claudeConfig.command.replace("${__dirname}", extensionDirectory);
+  const binary = await archive.file(manifest.server.entry_point).async("nodebuffer");
+  await mkdir(dirname(claudeExecutable), { recursive: true });
+  await writeFile(claudeExecutable, binary);
+
+  const pluginRoot = join(install, "Orion-Codex-Plugin");
+  const marketplace = JSON.parse(await readFile(join(pluginRoot, ".agents", "plugins", "marketplace.json"), "utf8"));
+  const plugin = marketplace.plugins.find((entry) => entry.name === "orion");
+  assert.equal(plugin.source.path, "./plugins/orion");
+  const pluginDirectory = join(pluginRoot, plugin.source.path);
+  const codexConfig = JSON.parse(await readFile(join(pluginDirectory, ".mcp.json"), "utf8")).mcpServers.orion;
+  assert.deepEqual(codexConfig, { command: "./server/orion-mcp.exe", args: [], cwd: "." });
+  const codexExecutable = join(pluginDirectory, codexConfig.command);
+  assert((await readFile(codexExecutable)).equals(binary), "Both packages must contain the same verified MCP executable");
+
+  const env = { ...process.env };
+  delete env.ORION_VAULT_PATH;
+  function tool(program, args, cwd) {
+    return (name, arguments_ = {}, { error = false } = {}) => {
+      const requests = [
+        { id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "Orion installer smoke", version: "1" } } },
+        { method: "notifications/initialized" },
+        { id: 2, method: "tools/call", params: { name, arguments: arguments_ } },
+      ];
+      const input = requests.map((request) => JSON.stringify({ jsonrpc: "2.0", ...request }) + "\n").join("");
+      const output = execFileSync(program, args, { cwd, env, input, timeout: 12_000, windowsHide: true, encoding: "utf8" });
+      const responses = output.trim().split("\n").map((line) => JSON.parse(line));
+      assert.equal(responses.length, 2);
+      assert.equal(responses[0].result?.serverInfo.name, "orion");
+      const response = responses[1];
+      assert.equal(response.id, 2);
+      assert.ifError(response.error);
+      assert.equal(Boolean(response.result.isError), error, JSON.stringify(response.result));
+      return response.result.structuredContent;
+    };
+  }
+  return {
+    claude: tool(claudeExecutable, claudeConfig.args ?? [], extensionDirectory),
+    codex: tool(codexExecutable, codexConfig.args, join(pluginDirectory, codexConfig.cwd)),
+  };
+}
+
+async function assertPipeRequiresToken() {
+  const descriptor = JSON.parse(await readFile(join(dirname(vaultPath), "assistant-bridge.json"), "utf8"));
+  const reply = await new Promise((resolve, reject) => {
+    const stream = createConnection(descriptor.socket_path);
+    let response = "";
+    stream.setEncoding("utf8");
+    stream.setTimeout(5_000, () => stream.destroy(new Error("Timed out waiting for a pipe response")));
+    stream.once("error", reject);
+    stream.once("close", () => reject(new Error("The pipe closed before sending a response")));
+    stream.once("connect", () => stream.write(JSON.stringify({
+      version: 1, token: "0".repeat(64), method: "capabilities", arguments: {},
+    }) + "\n"));
+    stream.on("data", (chunk) => {
+      response += chunk;
+      if (response.includes("\n")) {
+        resolve(response);
+        stream.destroy();
+      }
+    });
+  });
+  assert.equal(JSON.parse(reply).error.code, "unauthorized");
 }
 
 function scannedPdf(jpeg, width, height) {
@@ -189,7 +266,50 @@ try {
   }
   console.log("Verified note autosave, managed image rendering and offline OCR for PNG and scanned PDF.");
 
-  await closeAndWait();
+  const extensionDirectory = await mkdtemp(join(process.env.RUNNER_TEMP, "Orion Claude Extension "));
+  try {
+    const { claude, codex } = await installedConnectors(extensionDirectory);
+    const { activeSpaceId: spaceId, spaces } = await vault();
+    const noteId = spaces[0].notes.find((note) => note.title === title).id;
+    for (const call of [claude, codex]) {
+      assert.equal(call("orion_list_spaces").activeSpaceId, spaceId);
+      assert(call("orion_get_note", { space_id: spaceId, note_id: noteId }).note.body.includes(body));
+    }
+    const contextRequest = { space_id: spaceId, request_id: "windows-smoke-context", query: "phrase saved", note_ids: [noteId] };
+    claude("orion_get_context", contextRequest, { error: true });
+
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("button", { name: "Connections", exact: true }).click();
+    assert(await page.getByRole("button", { name: "Install in Claude" }).isEnabled());
+    assert(await page.getByRole("button", { name: "Install in Codex" }).isEnabled());
+    await page.getByRole("checkbox", { name: /Enable desktop workflows/ }).check();
+    await page.locator(".assistant-spaces input").first().check();
+    await eventually(() => {
+      const capabilities = codex("orion_get_capabilities");
+      return capabilities.access?.spaceIds.includes(spaceId) && capabilities.workflowExecutorAvailable;
+    }, "approved desktop workflow over the named pipe");
+    assert.equal(claude("orion_get_capabilities").access.allowAI, false);
+    await assertPipeRequiresToken();
+    const started = claude("orion_get_context", contextRequest);
+    const completed = await eventually(() => {
+      const job = codex("orion_get_job", { space_id: spaceId, job_id: started.id });
+      return ["succeeded", "failed", "cancelled"].includes(job.state) ? job : undefined;
+    }, "renderer completion of the connector context request");
+    assert.equal(completed.state, "succeeded", completed.error);
+    assert.equal(completed.result.providerCalls, 0);
+    assert(completed.result.evidence.some((item) => item.entityId === noteId
+      && item.passages.some((passage) => passage.text.includes(body))));
+
+    await closeAndWait();
+    assert.equal(codex("orion_get_capabilities").available, false);
+    const created = claude("orion_create_note", { space_id: spaceId, title: "Windows connector smoke note", body });
+    const reread = codex("orion_get_note", { space_id: spaceId, note_id: created.note.id });
+    assert.equal(reread.note.body, body);
+    assert.match(reread.note.orionUrl, /^orion:\/\//);
+    console.log("Verified the installed Claude and Codex packages, zero-configuration discovery, direct note writes, and authenticated Space-scoped workflows.");
+  } finally {
+    await rm(extensionDirectory, { recursive: true, force: true });
+  }
   await launch();
   await page.locator(".recent-grid").getByText(title, { exact: true }).click();
   await page.waitForFunction((text) => document.querySelector("article .note-prose")?.textContent.includes(text), body);

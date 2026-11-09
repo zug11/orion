@@ -770,21 +770,7 @@ impl AssistantBridge {
                             (&mut stream).take(protocol::MAX_BRIDGE_REQUEST_BYTES + 1),
                         )
                         .read_line(&mut line);
-                        let reply = if read.is_err()
-                            || line.len() as u64 > protocol::MAX_BRIDGE_REQUEST_BYTES
-                        {
-                            failure(
-                                "invalid_request",
-                                "The desktop request is incomplete or too large.",
-                            )
-                        } else {
-                            match serde_json::from_str::<Value>(&line) {
-                                Ok(value) if value["version"]==json!(protocol::BRIDGE_VERSION) && token_matches(value["token"].as_str().unwrap_or(""),&token)=> {
-                                    bridge.handle(value["method"].as_str().unwrap_or(""),value["arguments"].clone())
-                                }
-                                _=>failure("unauthorized","The private desktop connection could not authenticate this request."),
-                            }
-                        };
+                        let reply = bridge.authenticate_request(read, &line, &token);
                         let _ = serde_json::to_writer(&mut stream, &reply);
                         let _ = stream.write_all(b"\n");
                     }
@@ -799,9 +785,123 @@ impl AssistantBridge {
         Ok(())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    pub fn start(&self) -> Result<(), String> {
+        use crate::assistant_pipe;
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+        use tokio::time::timeout;
+
+        let directory = self.path.parent().ok_or("No library directory.")?;
+        fs::create_dir_all(directory)
+            .map_err(|_| "Cannot prepare the local workflow connection.")?;
+        let sid = assistant_pipe::current_account()
+            .map_err(|_| "Cannot identify the account for Orion's private workflow connection.")?;
+        let pipe_name = format!("{}{}", protocol::WINDOWS_PIPE_PREFIX, random_token()?);
+        let token = random_token()?;
+        let runtime = tauri::async_runtime::handle();
+        let mut listener = {
+            let _entered = runtime.inner().enter();
+            assistant_pipe::listen(&pipe_name, &sid, true)
+                .map_err(|_| "Cannot start Orion's private workflow connection.")?
+        };
+        assistant_pipe::publish(
+            directory,
+            &BridgeDescriptor {
+                version: protocol::BRIDGE_VERSION,
+                socket_path: pipe_name.clone(),
+                vault_path: self.path.to_string_lossy().into(),
+                token: token.clone(),
+            },
+            &sid,
+        )
+        .map_err(|_| "Cannot publish the private workflow descriptor.")?;
+
+        let weak = Arc::downgrade(&self.jobs);
+        let path = self.path.clone();
+        let reviews = self.reviews.clone();
+        let editor_context = self.editor_context.clone();
+        let editor_actions = self.editor_actions.clone();
+        let voice_work_orders = self.voice_work_orders.clone();
+        runtime.spawn(async move {
+            while let Some(jobs) = weak.upgrade() {
+                editor_context.expire();
+                editor_actions.expire();
+                voice_work_orders.expire();
+                match timeout(Duration::from_millis(100), listener.connect()).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) => break,
+                    Err(_) => continue,
+                }
+
+                // Keep the name owned while the connected instance serves its
+                // one request. Never disconnect a pipe with unread output.
+                let Ok(next) = assistant_pipe::listen(&pipe_name, &sid, false) else {
+                    break;
+                };
+                let mut stream = std::mem::replace(&mut listener, next);
+                let bridge = AssistantBridge {
+                    path: path.clone(),
+                    jobs,
+                    reviews: reviews.clone(),
+                    editor_context: editor_context.clone(),
+                    editor_actions: editor_actions.clone(),
+                    voice_work_orders: voice_work_orders.clone(),
+                };
+                let mut line = String::new();
+                let read = timeout(
+                    Duration::from_secs(2),
+                    BufReader::new((&mut stream).take(protocol::MAX_BRIDGE_REQUEST_BYTES + 1))
+                        .read_line(&mut line),
+                )
+                .await
+                .unwrap_or_else(|error| Err(std::io::Error::from(error)));
+                let request_token = token.clone();
+                let reply = tauri::async_runtime::spawn_blocking(move || {
+                    bridge.authenticate_request(read, &line, &request_token)
+                })
+                .await;
+                if let Ok(reply) = reply {
+                    if let Ok(mut encoded) = serde_json::to_vec(&reply) {
+                        encoded.push(b'\n');
+                        let _ = timeout(Duration::from_secs(2), stream.write_all(&encoded)).await;
+                    }
+                }
+            }
+        });
+        Ok(())
+    }
+
+    #[cfg(not(any(unix, windows)))]
     pub fn start(&self) -> Result<(), String> {
         Ok(())
+    }
+
+    #[cfg(any(unix, windows))]
+    fn authenticate_request(&self, read: std::io::Result<usize>, line: &str, token: &str) -> Value {
+        if read.is_err()
+            || line.len() as u64 > protocol::MAX_BRIDGE_REQUEST_BYTES
+            || !line.ends_with('\n')
+        {
+            return failure(
+                "invalid_request",
+                "The desktop request is incomplete or too large.",
+            );
+        }
+        match serde_json::from_str::<Value>(line) {
+            Ok(value)
+                if value["version"] == json!(protocol::BRIDGE_VERSION)
+                    && token_matches(value["token"].as_str().unwrap_or(""), token) =>
+            {
+                self.handle(
+                    value["method"].as_str().unwrap_or(""),
+                    value["arguments"].clone(),
+                )
+            }
+            _ => failure(
+                "unauthorized",
+                "The private desktop connection could not authenticate this request.",
+            ),
+        }
     }
 }
 
@@ -863,7 +963,14 @@ pub(crate) fn random_token() -> Result<String, String> {
         .map_err(|_| "Cannot create a private workflow token.".to_string())?;
     Ok(bytes.iter().map(|value| format!("{value:02x}")).collect())
 }
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub(crate) fn random_token() -> Result<String, String> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|_| "Cannot create a private workflow token.")?;
+    Ok(bytes.iter().map(|value| format!("{value:02x}")).collect())
+}
+
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn random_token() -> Result<String, String> {
     Err("Desktop workflows currently require macOS.".into())
 }

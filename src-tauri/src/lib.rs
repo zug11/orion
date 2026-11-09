@@ -25,6 +25,8 @@ use zeroize::{Zeroize, Zeroizing};
 mod assistant_bridge;
 mod assistant_editor_actions;
 mod assistant_editor_context;
+#[cfg(windows)]
+mod assistant_pipe;
 #[path = "../shared/assistant_protocol.rs"]
 mod assistant_protocol;
 mod assistant_review;
@@ -44,6 +46,9 @@ mod note_version;
 mod perplexity;
 #[path = "../shared/voice_work_orders_protocol.rs"]
 mod voice_work_orders_protocol;
+#[cfg(windows)]
+#[path = "../shared/windows_ipc_identity.rs"]
+mod windows_ipc_identity;
 use knowledge_schemas::{
     anthropic_knowledge_response_schema, anthropic_organizer_schema, knowledge_response_schema,
     organizer_schema, strip_anthropic_unsupported_schema_keywords,
@@ -4891,7 +4896,6 @@ pub fn run() {
             desktop_windows::install_menu(app.handle())?;
             desktop_windows::install_citation_routing(app.handle());
             let bridge = assistant_bridge::AssistantBridge::new(vault_path(app.handle())?);
-            #[cfg(unix)]
             if let Err(error) = bridge.start() {
                 eprintln!("Orion desktop workflows are unavailable: {error}");
             }

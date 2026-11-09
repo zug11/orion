@@ -29,3 +29,6 @@ outputs
 
 # Verified platform build inputs staged by stage_windows_transcription.mjs
 /src-tauri/resources/windows-transcription/
+
+# Generated Windows desktop connector packages
+/src-tauri/resources/windows-connectors/

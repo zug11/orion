@@ -1115,7 +1115,6 @@ export function SettingsView({
               )}
             </div>
 
-            {!windowsDesktop && <>
             <div className="setting-card claude-connector-card">
               <div className="claude-connector-intro">
                 <span>
@@ -1207,7 +1206,6 @@ export function SettingsView({
             </div>
             <AssistantConnections access={settings.assistantAccess} spaces={spaces} jobs={assistantJobs} desktop={desktopRuntime}
               onChange={(assistantAccess) => onChange({ ...settings, assistantAccess })} onCancel={onCancelAssistantJob} />
-            </>}
           </section>
 
           <section className="settings-section" id="transcription">

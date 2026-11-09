@@ -4,6 +4,8 @@ use serde_json::Value;
 
 pub const BRIDGE_VERSION: u32 = 1;
 pub const BRIDGE_DESCRIPTOR: &str = "assistant-bridge.json";
+#[cfg(windows)]
+pub const WINDOWS_PIPE_PREFIX: &str = r"\\.\pipe\orion-assistant-";
 pub const MAX_BRIDGE_REQUEST_BYTES: u64 = 8 * 1024 * 1024;
 pub const MAX_BRIDGE_RESULT_BYTES: usize = 2 * 1024 * 1024;
 

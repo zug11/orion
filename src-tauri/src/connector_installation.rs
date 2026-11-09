@@ -12,7 +12,11 @@ use tauri_plugin_opener::OpenerExt;
 const BUNDLED_CLAUDE_CONNECTOR_NAME: &str = "Orion-Claude-Connector.mcpb";
 const BUNDLED_CODEX_PLUGIN_DIRECTORY: &str = "Orion-Codex-Plugin";
 const BUNDLED_CODEX_MARKETPLACE_PATH: &[&str] = &[".agents", "plugins", "marketplace.json"];
+#[cfg(not(windows))]
 const BUNDLED_CODEX_SERVER_PATH: &[&str] = &["plugins", "orion", "server", "orion-mcp"];
+
+#[cfg(windows)]
+const BUNDLED_CODEX_SERVER_PATH: &[&str] = &["plugins", "orion", "server", "orion-mcp.exe"];
 
 #[tauri::command]
 pub(super) async fn open_claude_connector(app: AppHandle) -> Result<String, String> {
@@ -27,9 +31,16 @@ pub(super) async fn open_claude_connector(app: AppHandle) -> Result<String, Stri
         return Err("Orion's Claude connector is incomplete. Reinstall Orion.".to_string());
     }
     let display_path = connector.to_string_lossy().into_owned();
-    app.opener()
-        .open_path(display_path.clone(), None::<String>)
-        .map_err(|error| format!("Orion could not open its Claude connector: {error}"))?;
+    if let Err(error) = app.opener().open_path(display_path.clone(), None::<String>) {
+        #[cfg(windows)]
+        return Err(format!(
+            "Open Claude Desktop → Settings → Extensions → Advanced settings → Install Extension, then select {display_path}. Orion could not open the extension directly ({error})."
+        ));
+        #[cfg(not(windows))]
+        return Err(format!(
+            "Orion could not open its Claude connector: {error}"
+        ));
+    }
     Ok(display_path)
 }
 
@@ -92,6 +103,9 @@ fn validate_bundled_codex_plugin(resource_directory: &Path) -> Result<PathBuf, S
             return Err("Orion's Codex connector cannot run. Reinstall Orion.".to_string());
         }
     }
+
+    #[cfg(windows)]
+    let canonical_marketplace = dunce::simplified(&canonical_marketplace).to_path_buf();
 
     Ok(canonical_marketplace)
 }
@@ -159,11 +173,14 @@ mod tests {
         marketplace
     }
 
-    #[cfg(unix)]
     #[test]
     fn codex_plugin_url_encodes_and_recovers_the_absolute_marketplace_path() {
+        #[cfg(not(windows))]
         let marketplace =
             Path::new("/Applications/Orion Atlas #1/.agents/plugins/marketplace.json");
+        #[cfg(windows)]
+        let marketplace =
+            Path::new(r"C:\Program Files\Orion Atlas #1\.agents\plugins\marketplace.json");
         let url = codex_plugin_url(marketplace).unwrap();
 
         assert_eq!(url.scheme(), "codex");

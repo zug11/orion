@@ -35,6 +35,9 @@ mod note_version;
 #[path = "../../shared/voice_work_orders_protocol.rs"]
 #[allow(dead_code)]
 mod voice_work_orders_protocol;
+#[cfg(windows)]
+#[path = "../../shared/windows_ipc_identity.rs"]
+mod windows_ipc_identity;
 mod workflows;
 mod working_view;
 
@@ -358,7 +361,11 @@ enum Command {
 }
 
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Command, String> {
-    parse_args_with_environment(args, env::var_os("ORION_VAULT_PATH"), env::var_os("HOME"))
+    #[cfg(windows)]
+    let home = dirs::home_dir().map(PathBuf::into_os_string);
+    #[cfg(not(windows))]
+    let home = env::var_os("HOME");
+    parse_args_with_environment(args, env::var_os("ORION_VAULT_PATH"), home)
 }
 
 fn parse_args_with_environment(
@@ -411,11 +418,15 @@ fn resolve_vault_path(
         });
     }
 
-    let home = usable_home_directory(home_directory)?;
+    #[cfg(windows)]
+    let data_directory = dirs::data_dir()
+        .ok_or("Orion could not locate the Windows roaming application data folder.")?;
+    #[cfg(not(windows))]
+    let data_directory = PathBuf::from(usable_home_directory(home_directory)?)
+        .join("Library")
+        .join("Application Support");
     Ok(ResolvedVaultPath {
-        path: PathBuf::from(home)
-            .join("Library")
-            .join("Application Support")
+        path: data_directory
             .join(ORION_APP_DATA_DIRECTORY)
             .join(ORION_VAULT_FILENAME),
         uses_default: true,
@@ -2948,6 +2959,7 @@ mod tests {
         )
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn vault_path_defaults_to_orions_per_user_macos_library() {
         let home = OsString::from("/Users/orion-reader");

@@ -66,33 +66,37 @@ async function runConnector(requests, environment) {
   return stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 
-const automaticHome = join(testDirectory, "automatic-home");
-const automaticVaultDirectory = join(
-  automaticHome,
-  "Library",
-  "Application Support",
-  "app.orion.knowledge",
-);
-await mkdir(automaticVaultDirectory, { recursive: true });
-await copyFile(vaultPath, join(automaticVaultDirectory, "vault.json"));
-const automaticEnvironment = { ...process.env, HOME: automaticHome };
-delete automaticEnvironment.ORION_VAULT_PATH;
-const automaticResponses = await runConnector(
-  [
-    {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: { name: "orion_list_spaces", arguments: {} },
-    },
-  ],
-  automaticEnvironment,
-);
-if (
-  automaticResponses[0]?.result?.structuredContent?.activeSpaceId !==
-  "space-alpha"
-) {
-  throw new Error("MCP did not discover Orion's standard per-user vault automatically.");
+// Windows zero-configuration discovery is tested against the freshly
+// installed app's real roaming folder on a disposable CI user.
+if (process.platform !== "win32") {
+  const automaticHome = join(testDirectory, "automatic-home");
+  const automaticVaultDirectory = join(
+    automaticHome,
+    "Library",
+    "Application Support",
+    "app.orion.knowledge",
+  );
+  await mkdir(automaticVaultDirectory, { recursive: true });
+  await copyFile(vaultPath, join(automaticVaultDirectory, "vault.json"));
+  const automaticEnvironment = { ...process.env, HOME: automaticHome };
+  delete automaticEnvironment.ORION_VAULT_PATH;
+  const automaticResponses = await runConnector(
+    [
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "orion_list_spaces", arguments: {} },
+      },
+    ],
+    automaticEnvironment,
+  );
+  if (
+    automaticResponses[0]?.result?.structuredContent?.activeSpaceId !==
+    "space-alpha"
+  ) {
+    throw new Error("MCP did not discover Orion's standard per-user vault automatically.");
+  }
 }
 
 const requests = [

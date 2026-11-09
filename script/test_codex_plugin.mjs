@@ -186,9 +186,10 @@ assert(
   "Plugin must define exactly one MCP server named `orion`.",
 );
 const server = mcpManifest.mcpServers.orion;
+const expectedServer = process.platform === "win32" ? "./server/orion-mcp.exe" : "./server/orion-mcp";
 assert(
-  server.command === "./server/orion-mcp" && server.cwd === ".",
-  "Orion MCP must launch ./server/orion-mcp with cwd `.`.",
+  server.command === expectedServer && server.cwd === ".",
+  `Orion MCP must launch ${expectedServer} from the plugin root.`,
 );
 assert(
   Array.isArray(server.args) && server.args.length === 0,

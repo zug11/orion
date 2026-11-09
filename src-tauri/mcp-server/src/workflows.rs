@@ -13,7 +13,7 @@ use crate::{ToolFailure, ToolResult};
 use serde_json::{json, Map, Value};
 use std::{
     fs,
-    io::{BufRead, BufReader, Read, Write},
+    io::Read,
     path::Path,
     time::{Duration, Instant},
 };
@@ -392,47 +392,171 @@ fn exchange(vault: &Path, method: &str, arguments: Value) -> ToolResult {
 }
 #[cfg(unix)]
 fn exchange_timeout(vault: &Path, method: &str, arguments: Value, timeout: Duration) -> ToolResult {
-    use std::os::unix::{
-        fs::{MetadataExt, PermissionsExt},
-        net::UnixStream,
+    use std::{
+        io::{BufRead, BufReader, Write},
+        os::unix::net::UnixStream,
     };
+    let descriptor = load_descriptor(vault)?;
+    let mut stream =
+        UnixStream::connect(&descriptor.socket_path).map_err(|_| bridge_unavailable())?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|_| bridge_unavailable())?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .map_err(|_| bridge_unavailable())?;
+    stream
+        .write_all(&encode_bridge_request(descriptor.token, method, arguments)?)
+        .map_err(|_| bridge_unavailable())?;
+    let mut response = String::new();
+    BufReader::new(stream.take(MAX_REPLY_BYTES as u64 + 1))
+        .read_line(&mut response)
+        .map_err(|_| bridge_timeout())?;
+    decode_bridge_response(&response)
+}
+
+#[cfg(windows)]
+fn exchange_timeout(vault: &Path, method: &str, arguments: Value, timeout: Duration) -> ToolResult {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use tokio::{
+        io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+        net::windows::named_pipe::ClientOptions,
+        time,
+    };
+    use windows_sys::Win32::{
+        Foundation::ERROR_PIPE_BUSY,
+        System::{
+            Pipes::GetNamedPipeServerProcessId,
+            Threading::{GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+        },
+    };
+
+    let descriptor = load_descriptor(vault)?;
+    let request = encode_bridge_request(descriptor.token, method, arguments)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| bridge_unavailable())?;
+    runtime.block_on(async {
+        time::timeout(timeout, async {
+            let mut stream = loop {
+                match ClientOptions::new().open(&descriptor.socket_path) {
+                    Ok(stream) => break stream,
+                    Err(error) if error.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) => {
+                        time::sleep(Duration::from_millis(20)).await;
+                    }
+                    Err(_) => return Err(bridge_unavailable()),
+                }
+            };
+            // A private descriptor names only an Orion pipe. Confirm the peer's
+            // account before sending a token or any vault content to it.
+            let same_user = unsafe {
+                let mut pid = 0;
+                if GetNamedPipeServerProcessId(stream.as_raw_handle(), &mut pid) == 0 {
+                    return Err(bridge_unavailable());
+                }
+                let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+                if process.is_null() {
+                    return Err(bridge_unavailable());
+                }
+                let process = OwnedHandle::from_raw_handle(process);
+                let server = crate::windows_ipc_identity::process_user_sid(process.as_raw_handle())
+                    .map_err(|_| bridge_unavailable())?;
+                let client = crate::windows_ipc_identity::process_user_sid(GetCurrentProcess())
+                    .map_err(|_| bridge_unavailable())?;
+                server == client
+            };
+            if !same_user {
+                return Err(ToolFailure::new(
+                    "Orion's desktop connection belongs to a different Windows account.",
+                ));
+            }
+            stream
+                .write_all(&request)
+                .await
+                .map_err(|_| bridge_unavailable())?;
+            let mut response = String::new();
+            BufReader::new(stream.take(MAX_REPLY_BYTES as u64 + 1))
+                .read_line(&mut response)
+                .await
+                .map_err(|_| bridge_timeout())?;
+            decode_bridge_response(&response)
+        })
+        .await
+        .map_err(|_| bridge_timeout())?
+    })
+}
+
+#[cfg(any(unix, windows))]
+const MAX_REPLY_BYTES: usize = protocol::MAX_BRIDGE_RESULT_BYTES + 16_384;
+
+#[cfg(any(unix, windows))]
+fn bridge_unavailable() -> ToolFailure {
+    ToolFailure::new("Open Orion and enable desktop workflows in Settings → Connections. Existing local vault tools remain available while Orion is closed.")
+}
+
+#[cfg(any(unix, windows))]
+fn bridge_timeout() -> ToolFailure {
+    ToolFailure::new(
+        "Orion did not answer in time. Retry with the same request_id to avoid duplicate work.",
+    )
+}
+
+#[cfg(any(unix, windows))]
+fn load_descriptor(vault: &Path) -> Result<BridgeDescriptor, ToolFailure> {
     let directory = vault
         .parent()
         .ok_or_else(|| ToolFailure::new("No library directory."))?;
-    let unavailable = || {
-        ToolFailure::new("Open Orion and enable desktop workflows in Settings → Connections. Existing local vault tools remain available while Orion is closed.")
-    };
     let descriptor_path = directory.join(protocol::BRIDGE_DESCRIPTOR);
-    let metadata = fs::symlink_metadata(&descriptor_path).map_err(|_| unavailable())?;
-    if !metadata.is_file()
-        || metadata.len() > 16_384
-        || metadata.permissions().mode() & 0o077 != 0
-        || metadata.uid() != fs::metadata(vault).map_err(|_| unavailable())?.uid()
+    let metadata = fs::symlink_metadata(&descriptor_path).map_err(|_| bridge_unavailable())?;
+    #[cfg(unix)]
     {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if metadata.permissions().mode() & 0o077 != 0
+            || metadata.uid() != fs::metadata(vault).map_err(|_| bridge_unavailable())?.uid()
+        {
+            return Err(ToolFailure::new(
+                "Orion's private connection descriptor is not protected. Reopen Orion to recreate it.",
+            ));
+        }
+    }
+    if !metadata.is_file() || metadata.len() > 16_384 {
         return Err(ToolFailure::new(
-            "Orion's private connection descriptor is not protected. Reopen Orion to recreate it.",
+            "Orion's connection descriptor is invalid. Reopen Orion.",
         ));
     }
-    let file = fs::File::open(&descriptor_path).map_err(|_| unavailable())?;
+    let file = fs::File::open(&descriptor_path).map_err(|_| bridge_unavailable())?;
     let descriptor: BridgeDescriptor = serde_json::from_reader(file.take(16_385))
         .map_err(|_| ToolFailure::new("Orion's connection descriptor is invalid. Reopen Orion."))?;
     validate_descriptor(vault, &descriptor)?;
-    let mut stream = UnixStream::connect(&descriptor.socket_path).map_err(|_| unavailable())?;
-    stream
-        .set_read_timeout(Some(timeout))
-        .map_err(|_| unavailable())?;
-    stream
-        .set_write_timeout(Some(timeout))
-        .map_err(|_| unavailable())?;
-    let request = json!({"version":protocol::BRIDGE_VERSION,"token":descriptor.token,"method":method,"arguments":arguments});
-    serde_json::to_writer(&mut stream, &request).map_err(|_| unavailable())?;
-    stream.write_all(b"\n").map_err(|_| unavailable())?;
-    let mut response = String::new();
-    // The job envelope adds a small amount beyond the bounded result itself.
-    let limit = protocol::MAX_BRIDGE_RESULT_BYTES + 16_384;
-    BufReader::new(stream.take(limit as u64 + 1)).read_line(&mut response)
-        .map_err(|_| ToolFailure::new("Orion did not answer in time. Retry with the same request_id to avoid duplicate work."))?;
-    if response.len() > limit || !response.ends_with('\n') {
+    Ok(descriptor)
+}
+
+#[cfg(any(unix, windows))]
+fn encode_bridge_request(
+    token: String,
+    method: &str,
+    arguments: Value,
+) -> Result<Vec<u8>, ToolFailure> {
+    let request = json!({
+        "version": protocol::BRIDGE_VERSION,
+        "token": token,
+        "method": method,
+        "arguments": arguments
+    });
+    let mut encoded = serde_json::to_vec(&request).map_err(|_| bridge_unavailable())?;
+    encoded.push(b'\n');
+    if encoded.len() as u64 > protocol::MAX_BRIDGE_REQUEST_BYTES {
+        return Err(ToolFailure::new(
+            "The desktop workflow request is too large.",
+        ));
+    }
+    Ok(encoded)
+}
+
+#[cfg(any(unix, windows))]
+fn decode_bridge_response(response: &str) -> ToolResult {
+    if response.len() > MAX_REPLY_BYTES || !response.ends_with('\n') {
         return Err(ToolFailure::new(
             "Orion returned an incomplete or oversized workflow response.",
         ));
@@ -451,27 +575,37 @@ fn exchange_timeout(vault: &Path, method: &str, arguments: Value, timeout: Durat
     }
 }
 
+#[cfg(any(unix, windows))]
 fn validate_descriptor(vault: &Path, descriptor: &BridgeDescriptor) -> Result<(), ToolFailure> {
     let invalid = || {
         ToolFailure::new("This desktop connection belongs to a different library or protocol. Open the matching Orion library before starting workflows.")
     };
     let canonical_vault = fs::canonicalize(vault).map_err(|_| invalid())?;
-    let expected_socket = canonical_vault
-        .parent()
-        .ok_or_else(invalid)?
-        .join("assistant.sock");
+    #[cfg(unix)]
+    let endpoint_matches = {
+        let expected_socket = canonical_vault
+            .parent()
+            .ok_or_else(invalid)?
+            .join("assistant.sock");
+        fs::canonicalize(&descriptor.socket_path).map_err(|_| invalid())? == expected_socket
+    };
+    #[cfg(windows)]
+    let endpoint_matches = descriptor
+        .socket_path
+        .strip_prefix(protocol::WINDOWS_PIPE_PREFIX)
+        .is_some_and(|id| id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()));
     if descriptor.version != protocol::BRIDGE_VERSION
         || descriptor.token.len() != 64
         || !descriptor.token.bytes().all(|c| c.is_ascii_hexdigit())
         || fs::canonicalize(&descriptor.vault_path).map_err(|_| invalid())? != canonical_vault
-        || fs::canonicalize(&descriptor.socket_path).map_err(|_| invalid())? != expected_socket
+        || !endpoint_matches
     {
         return Err(invalid());
     }
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn exchange_timeout(
     _vault: &Path,
     _method: &str,
@@ -479,7 +613,7 @@ fn exchange_timeout(
     _timeout: Duration,
 ) -> ToolResult {
     Err(ToolFailure::new(
-        "Desktop workflows currently require Orion on macOS.",
+        "Desktop workflows require Orion on macOS or Windows.",
     ))
 }
 
@@ -1121,7 +1255,10 @@ mod tests {
         let mut descriptor = BridgeDescriptor {
             version: protocol::BRIDGE_VERSION,
             vault_path: vault.to_string_lossy().into(),
+            #[cfg(unix)]
             socket_path: dir.path().join("assistant.sock").to_string_lossy().into(),
+            #[cfg(windows)]
+            socket_path: format!("{}{}", protocol::WINDOWS_PIPE_PREFIX, "b".repeat(64)),
             token: "a".repeat(64),
         };
         assert!(validate_descriptor(&vault, &descriptor).is_ok());

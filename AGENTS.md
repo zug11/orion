@@ -257,9 +257,16 @@ Windows 11 x64 uses the same app, vault schema, locking, and close handshake,
 with data in `%APPDATA%\app.orion.knowledge` and provider keys in Windows
 Credential Manager. The Windows overlay config builds a per-user NSIS
 installer with WebView2 and native window decorations. Keep logical
-`orion-image://localhost/<id>` URLs in saved Markdown; translate them only at
-the WebView2 image boundary. macOS glass and the Unix assistant bridge are
-not part of the Windows package.
+`orion-image://localhost/<id>` URLs in saved Markdown. Translate them only at
+the WebView2 image boundary.
+
+`script/stage_windows_connectors.mjs` builds one Windows x64 `orion-mcp.exe`
+and packages it into the Claude extension and Codex plugin. Both discover
+the roaming vault automatically and use the same cross-process lock and
+revision rules as the app. The opt-in workflow bridge uses a local named pipe
+with an account-only DACL, remote connections rejected, and a per-launch token
+in an atomically replaced descriptor protected by the same account ACL. The
+MCP client checks the pipe server's account and exact vault identity.
 
 `script/stage_windows_transcription.mjs` checks the pinned Whisper archive
 and Small model before staging them. `windows_transcription.rs` decodes a
@@ -275,7 +282,8 @@ Windows config.
 Use `npm run tauri build -- --bundles nsis` on Windows. The Windows CI job
 builds the real installer, runs host and renderer tests, silently installs it
 in a disposable runner, and tests WebView2 startup, credentials, persistence,
-images, OCR, writing windows, and the installed Whisper runtime. Publish only
+images, OCR, writing windows, the installed Whisper runtime, and both packaged
+MCP clients against the live app and the closed app's vault. Publish only
 the tested EXE with its SHA-256 and platform notes. The Developer ID,
 notarization and DMG steps below apply to macOS packages.
 
@@ -454,8 +462,8 @@ one native owner per Space to avoid duplicate provider work.
 
 ## Claude MCP contract
 
-Orion bundles `Orion-Claude-Connector.mcpb`, a self-contained Apple Silicon
-Claude Desktop extension. Its `orion-mcp` binary uses newline-delimited JSON-RPC
+Orion bundles `Orion-Claude-Connector.mcpb`, a self-contained Claude Desktop
+extension built for Apple Silicon or Windows x64. Its MCP binary uses newline-delimited JSON-RPC
 over stdio. stdout is protocol-only; diagnostics belong on stderr. It implements
 the MCP initialize lifecycle, ping, these nine local vault tools, and the optional
 desktop workflows described below:
@@ -488,8 +496,9 @@ titles and aliases into the concept vocabulary before entering renderer state,
 so an MCP-created page becomes an automatic-link destination immediately.
 
 The bundled Claude extension is zero-configuration: its manifest must not ask
-for or inject a vault path. `orion-mcp` resolves the standard per-user macOS
-library at `~/Library/Application Support/app.orion.knowledge/vault.json`.
+for or inject a vault path. The server discovers the per-user library at
+`~/Library/Application Support/app.orion.knowledge/vault.json` on macOS
+or `%APPDATA%\app.orion.knowledge\vault.json` on Windows.
 `ORION_VAULT_PATH` and `--vault` remain optional advanced overrides, including
 safe prefix expansion for legacy `~/`, `$HOME/`, and `${HOME}/` values without
 invoking a shell. When the standard vault is absent, return the plain recovery
@@ -824,11 +833,12 @@ Keep a stable renderer session across ordinary navigation and grant changes;
 when idle with no permitted target, it need not poll native storage.
 
 - `src-tauri/shared/assistant_protocol.rs` defines the strict, bounded request
-  contract. `src-tauri/src/assistant_bridge.rs` owns the per-user Unix socket,
-  private descriptor/token, opt-in grants, queue, renderer lease, and commit.
+  contract. `src-tauri/src/assistant_bridge.rs` owns the per-user Unix socket
+  or Windows named pipe, private descriptor/token, opt-in grants, queue,
+  renderer lease, and commit.
   `src-tauri/mcp-server/src/workflows.rs` is a credential-free local transport.
   No separate daemon or TCP endpoint starts. The running app alone accesses
-  Keychain and providers through existing native commands and scheduling.
+  OS credentials and providers through existing native commands and scheduling.
 - Optional `Settings.assistantAccess` hydrates to disabled for older vaults.
   Connections independently enables workflows, API use, workflow writes, and
   exact allowed Space IDs. These grants do not replace the installed connector's
@@ -893,10 +903,12 @@ when idle with no permitted target, it need not poll native storage.
   the running app; explicit overview refresh or the next independent knowledge
   edit resumes normal maintenance. Local import must not trigger a hidden paid
   refresh immediately after completion.
-- Private descriptor mode is 0600. The MCP transport verifies exact canonical
-  vault identity, socket directory, and protocol before connecting, including
-  advanced vault overrides. This is same-user OS authority, not verified identity
-  of a particular assistant client. Never expose the token through MCP results.
+- The private descriptor uses mode 0600 on Unix and a protected same-account
+  DACL on Windows. The MCP transport verifies exact canonical vault identity
+  and protocol, including advanced vault overrides. It checks the Unix socket
+  directory or the Windows pipe name and server account before sending the
+  token. This establishes same-user OS authority. Never expose the token
+  through MCP results.
 - Include `src-tauri/shared` in release fingerprints. Test the exact packaged
   executable, not only source-level tool definitions. See
   `docs/mcp-intelligence.md` for the scope and verification contract.
@@ -929,9 +941,9 @@ select `orion-mcp` as the application executable.
 ## Codex plugin contract
 
 Orion also bundles a zero-configuration Codex plugin. `codex/orion` is the
-canonical authored source; `src-tauri/resources/Orion-Codex-Plugin` is a
-generated, self-contained staging tree for the desktop bundle and must never
-become the place where plugin behavior is edited. The staged layout is:
+canonical authored source. The macOS and Windows build scripts generate
+self-contained staging trees for their desktop bundles. The installed layout
+looks like this.
 
 ```text
 Orion-Codex-Plugin/
@@ -940,7 +952,7 @@ Orion-Codex-Plugin/
     .codex-plugin/plugin.json
     .mcp.json
     assets/
-    server/orion-mcp
+    server/orion-mcp (or orion-mcp.exe on Windows)
     skills/orion/
       SKILL.md
       agents/openai.yaml
@@ -948,9 +960,9 @@ Orion-Codex-Plugin/
 
 The plugin combines a concise Orion usage skill with the same independent MCP
 server used by the Claude connector. Its MCP command must be relative to the
-plugin root and point only to the bundled `server/orion-mcp`; never ask the user
+plugin root and point only to the bundled executable in `server/`. Never ask the user
 for a vault path, rely on Cargo, PATH, a shell expansion, or start a network or
-background service. The server resolves Orion's standard per-user macOS library
+background service. The server resolves Orion's standard per-user library
 and retains the advanced `ORION_VAULT_PATH`/`--vault` overrides outside the
 ordinary installation path.
 

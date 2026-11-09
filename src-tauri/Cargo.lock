@@ -2621,7 +2621,9 @@ name = "orion"
 version = "0.5.2"
 dependencies = [
  "base64 0.22.1",
+ "dunce",
  "fs2",
+ "getrandom 0.4.3",
  "keyring",
  "libc",
  "objc2",
@@ -2641,6 +2643,7 @@ dependencies = [
  "time",
  "tokio",
  "windows",
+ "windows-sys 0.61.2",
  "zeroize",
  "zip",
 ]
