@@ -1,0 +1,72 @@
+{
+  "version": "0.6.0",
+  "source_commit": "28e2ab9f046087c60468fa1c8b1708213d2c5e76",
+  "source_capture": "Maintained application inputs are committed as source_commit. The packaging pipeline verified source-tree and renderer fingerprints from the physical checkout. The publication commit records generated connectors, checksums and verification without changing application source.",
+  "bundle_id": "app.orion.knowledge",
+  "edition": "Whisper Medium",
+  "platform": "darwin-aarch64",
+  "artifacts": [
+    {
+      "artifact": "Orion-0.6.0.m-Apple-Silicon.dmg",
+      "bytes": 1506053266,
+      "sha256": "d4f68302c5c3cd1fa3a90de30ce0c923686430f4aef34043523424e528ced462"
+    },
+    {
+      "artifact": "Orion-0.6.0-Apple-Silicon.app.tar.gz",
+      "bytes": 1503906451,
+      "sha256": "f5641154fe5d45ecdff2e375742cf3207ac4d3f46025d41cd19fe39de8d8a7ed"
+    },
+    {
+      "artifact": "Orion-0.6.0-Apple-Silicon.app.tar.gz.sig",
+      "bytes": 448,
+      "sha256": "f50de92a6174656756dd8019c91ea2144ef7500345dfb0e1fcd97aab9b3b63ed"
+    },
+    {
+      "artifact": "latest.json",
+      "bytes": 3616,
+      "sha256": "51974754abf21ab209e09f64e81f26e5d0821070aa4469bb7d6f4bf7bcb8af12"
+    }
+  ],
+  "notarization": {
+    "app": {
+      "message": "Processing complete",
+      "status": "Accepted",
+      "id": "7dd74c36-9199-4cab-abd1-9f6fe8be4d69"
+    },
+    "dmg": {
+      "message": "Processing complete",
+      "id": "1c32c75a-6045-46ad-9974-c041f3483cca",
+      "status": "Accepted"
+    }
+  },
+  "app_and_dmg_stapled": true,
+  "app_and_dmg_gatekeeper": "accepted",
+  "copied_app_deep_strict_signature": "passed",
+  "main_executable_sha256": "5b019bbee98843a2fb7f75a739ee29234d955e7194daf52ebda3f43af9be89c3",
+  "stamps": {
+    "orion-source.sha256": "6a251abc57c3b5920631934d53ae68d0d0888cb073b39e2ceb9d7ffa781db771",
+    "orion-renderer.sha256": "3c10ca58bca012c31584407c6efef598239dd31e242afb3da522178a606d894d"
+  },
+  "updater": {
+    "signature": "verified",
+    "signed_version": "0.6.0",
+    "isolated_installation": "passed; tampered bytes and mismatched versions rejected without replacing the previous app",
+    "installed_app_signature_ticket_gatekeeper": "passed",
+    "tauri": "2.12.5",
+    "plugin": "2.14.1",
+    "endpoint": "https://github.com/zug11/orion/releases/latest/download/latest.json"
+  },
+  "implementation_verification": {
+    "renderer_passed": 3028,
+    "renderer_skipped": 1,
+    "native_passed": 237,
+    "native_ignored": 1,
+    "mcp_passed": 114,
+    "updater_signing_tests": 8,
+    "production_renderer_build": true,
+    "rust_formatting": true,
+    "browser_qa": "Actual updater components with simulated transport; normal and narrow layouts, keyboard dismissal, progress, save-failure retry, Preview hidden, no console errors. Installation tests use a disposable app and do not launch it or access a vault."
+  },
+  "live_voice_acceptance": "No live microphone or paid-provider run performed during this release validation.",
+  "verified_at": "2026-11-11T13:43:27.563938+00:00"
+}
