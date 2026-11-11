@@ -1,0 +1,47 @@
+{
+  "version": "0.5.3",
+  "source_commit": "19ad725ece4b2991b570a565694bb03727ac48f3",
+  "source_capture": "The tested application inputs are committed as source_commit. All 607 frozen source/configuration files matched before publication; 604 are tracked in this commit and three are non-source .DS_Store metadata files excluded from Git. The publication commit changes README and release records only.",
+  "artifacts": [
+    {
+      "edition": "medium",
+      "version": "0.5.3",
+      "bundle_id": "app.orion.knowledge",
+      "artifact": "Orion-0.5.3-scroll-chat-20261111.m-Apple-Silicon.dmg",
+      "bytes": 1505313840,
+      "sha256": "3c6e47d9dbddcd32e453dec8b572b53c9e6b4d06ca5ecf06342ef59501a0607e",
+      "model_bytes": 1533763059,
+      "model_sha256": "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+      "main_executable_sha256": "39dcbd6246a50b114a02d81e25c72b881a3d8368fe3af60e8167c7cedb271099",
+      "stamps": {
+        "orion-source.sha256": "047229c707f4a86fdbec9a022f32c60d1912de372fcfa534bc383f293fcf370a",
+        "orion-renderer.sha256": "1e37a9f43ebb4bda485425e09c7c677b17934b477e4ade8ef955bc007a6dcb7d"
+      },
+      "notarization": {
+        "status": "Accepted",
+        "createdDate": "2026-11-11T05:28:52.338Z",
+        "name": "Orion-0.5.3-scroll-chat-20261111.m-Apple-Silicon.dmg",
+        "id": "27527091-0387-42d8-87f5-d2ef7729dca0",
+        "message": "Successfully received submission info"
+      },
+      "stapled": true,
+      "dmg_gatekeeper": "accepted",
+      "copied_app_gatekeeper": "accepted",
+      "deep_strict_signature": "passed",
+      "identity": "Developer ID Application: zac klugman (NX592DPNHM)",
+      "hardened_runtime": true,
+      "connectors_version": "0.5.3",
+      "verified_at": "2026-11-11T05:45:57.194235+00:00",
+      "launched_during_packaging": false
+    }
+  ],
+  "implementation_verification": {
+    "renderer_passed": 2972,
+    "renderer_skipped": 1,
+    "native_passed": 222,
+    "native_ignored": 1,
+    "mcp_passed": 114,
+    "browser_qa": "Production components with isolated voice/research transports at normal, narrow and short window sizes, dark/light appearances, scroll and keyboard access. No user-vault edits or paid-provider requests."
+  },
+  "live_voice_acceptance": "Not performed during this release validation; simulated transports do not certify live microphone or paid-provider behavior."
+}

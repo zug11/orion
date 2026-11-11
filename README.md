@@ -13,9 +13,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zug11/orion/releases/download/v0.5.2/Orion-0.5.2-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/zug11/orion/releases/download/v0.5.3/Orion-0.5.3-scroll-chat-20261111.m-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
   ·
-  <a href="https://github.com/zug11/orion/releases/download/v0.5.2/Orion-0.5.2.m-Apple-Silicon.dmg">Whisper Medium edition</a>
+  <a href="https://github.com/zug11/orion/releases/tag/v0.5.3">Release notes · Whisper Medium edition</a>
   ·
   <a href="#the-orchestration-topology">How it works</a>
   ·
@@ -91,16 +91,22 @@ decoded audio; longer material can be split into separate files.
 **Settings → Intelligence** includes **GPT-6 Astra** for complex research and
 synthesis through your OpenAI connection, with Low through Extra high reasoning.
 
-## Orion 0.5.3 — local build
+## Orion 0.5.3
 
-Version 0.5.3 lets a note begin without a name. Optional title and subtitle lines
-sit below the toolbar and show a faint hint only at the active empty line.
-Backspace at the start of the body removes empty heading rows; Enter at that
-same position restores them. The note remembers removed rows when reopened.
-Existing heading text, ordinary body editing, autosave and portable Markdown
-remain intact. This build also includes the recent writing responsiveness and
-Space-summary maintenance fixes. See the [0.5.3 release notes](releases/0.5.3.md).
-The public download links currently point to the published 0.5.2 release.
+Version 0.5.3 keeps writing responsive with autosave, fixes delayed refreshes
+that could trigger false multi-window conflicts, and adds an edit-only word
+count with selected-word counts. Notes can begin without a title or subtitle.
+Image generation uses GPT Image 2.6 at high quality, with acceptance controls
+kept clear of the note's word count.
+
+Voice and text share one compact conversation: begin with the voice scene,
+reveal just enough room for a typed prompt, and scroll to expand the chat.
+Research findings and citations appear in the conversation; worker queues and
+counts stay out of the interface. See the [0.5.3 release notes](releases/0.5.3.md).
+
+The current Apple Silicon download includes Whisper Medium. It is Developer ID
+signed, Apple-notarized, stapled and Gatekeeper-accepted. Small edition builds
+remain available in [earlier releases](https://github.com/zug11/orion/releases).
 
 ## Orion 0.5.2
 
@@ -297,7 +303,7 @@ There is no Markdown mode and no read/write split. Click **Edit**, write with a 
 
 While editing a note, the microphone in the sticky writing toolbar records dictation and inserts the transcript at the preserved text cursor. The control remains available as the note scrolls. Recording and transcription stay on-device; the temporary M4A is deleted when bundled Whisper finishes.
 
-The ordinary `0.5.2` download bundles Whisper Small and processes two-minute segments. The `0.5.2.m` download bundles Whisper Medium, loads it once per dictation, and transcribes overlapping 30-second windows in the background. Both keep all generated text hidden until you press Stop, and neither imposes a fixed recording-duration cap.
+Small edition builds process two-minute segments. The current `0.5.3` Medium download bundles Whisper Medium, loads it once per dictation, and transcribes overlapping 30-second windows in the background. Both keep all generated text hidden until you press Stop, and neither imposes a fixed recording-duration cap.
 
 AI actions are available when their provider keys are configured, without an editor AI toggle. Type `/write` or choose **More → Write with AI** to open a compact frosted composer at your captured cursor. Choose **Sentence**, **Paragraph**, or **Section**, optionally add a direction, then press **Write**. Leave the direction blank to continue from that cursor. Escape or Cancel returns you to writing; merely selecting text or opening the composer makes no AI request.
 
@@ -673,11 +679,13 @@ See [all 21 tools and their contracts](docs/mcp-library-tools.md).
 
 ## Download
 
-[**Download Orion 0.5.2 for Apple Silicon**](https://github.com/zug11/orion/releases/download/v0.5.2/Orion-0.5.2-Apple-Silicon.dmg)
+[**Download Orion 0.5.3 for Apple Silicon — Whisper Medium**](https://github.com/zug11/orion/releases/download/v0.5.3/Orion-0.5.3-scroll-chat-20261111.m-Apple-Silicon.dmg)
 
-[**Download Orion 0.5.2 with Whisper Medium**](https://github.com/zug11/orion/releases/download/v0.5.2/Orion-0.5.2.m-Apple-Silicon.dmg)
-
-The standard installer includes Whisper Small. The larger Medium edition includes Whisper Medium and its persistent dictation worker. Both contain the same app features, two-tone shader picker, Claude connector, and Codex plugin.
+This release includes Whisper Medium and its persistent dictation worker, the
+Claude connector and the Codex plugin. It is Developer ID signed,
+Apple-notarized, stapled and Gatekeeper-accepted. Verify the installer with the
+[SHA-256 checksum](releases/0.5.3-sha256.txt). Small edition builds are available
+in [earlier releases](https://github.com/zug11/orion/releases).
 
 Requirements:
 
@@ -744,7 +752,7 @@ Browser preview is a renderer-development convenience, not Orion's desktop secur
 | `cargo test --manifest-path src-tauri/Cargo.toml` | Run Rust host tests |
 | `cargo test --manifest-path src-tauri/mcp-server/Cargo.toml` | Run MCP server tests |
 
-Native bundles are written below `src-tauri/target/release/bundle/`. Public release packaging additionally requires Developer ID signing and notarization. Use `./script/package_release.sh 0.5.2` for Small and `ORION_WHISPER_MODEL=medium ./script/package_release.sh 0.5.2.m` for Medium rather than treating a local ad-hoc build as a distributable release. Set `ORION_NOTARY_PROFILE=orion-notary` on the maintainer's Mac to submit and verify the finished installers with Apple.
+Native bundles are written below `src-tauri/target/release/bundle/`. Public release packaging additionally requires Developer ID signing and notarization. Use `./script/package_release.sh 0.5.3` for Small and `ORION_WHISPER_MODEL=medium ./script/package_release.sh 0.5.3.m` for Medium rather than treating a local ad-hoc build as a distributable release. Set `ORION_NOTARY_PROFILE=orion-notary` on the maintainer's Mac to submit and verify the finished installers with Apple.
 
 ## Architecture
 
