@@ -102,27 +102,27 @@ describe("live constellation controls", () => {
     expect(screen.getByRole("img")).toHaveAccessibleName("Voice on, microphone muted");
     unmount(); expect(cancelAnimationFrame).toHaveBeenCalled();
   });
-  it("renders ordinary larger groups and opens the named work list when targets become crowded", () => {
-    const input = props(), onShowWorkers = vi.fn();
+  it("renders ordinary larger groups and opens the conversation when targets become crowded", () => {
+    const input = props(), onShowConversation = vi.fn();
     input.jobs = Array.from({ length: 24 }, (_, index) => ({ ...input.jobs[0], id: `worker-${index}`, subject: `Research ${index}` }));
-    const { container } = render(<VoiceConstellation {...input} onShowWorkers={onShowWorkers} />); tick(100);
+    const { container } = render(<VoiceConstellation {...input} onShowConversation={onShowConversation} />); tick(100);
     expect(container.firstElementChild).toHaveAttribute("data-worker-count", "24");
     expect(container.firstElementChild).toHaveAttribute("data-visible-worker-count", "24");
     expect(screen.getByRole("button", { name: /Research 23\./ })).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(screen.getByRole("button", { name: /Research 23\./ }), { detail: 0 });
     expect(input.onFocus).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Show all 24 workers" }));
-    expect(onShowWorkers).toHaveBeenCalledOnce(); expect(input.onDismiss).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Open voice conversation" }));
+    expect(onShowConversation).toHaveBeenCalledOnce(); expect(input.onDismiss).not.toHaveBeenCalled();
   });
   it("bounds crowded targets while bringing any completed identity into view", () => {
-    const input = props(), onShowWorkers = vi.fn();
+    const input = props(), onShowConversation = vi.fn();
     input.jobs = Array.from({ length: 120 }, (_, index) => ({ ...input.jobs[1], id: `worker-${index}`, subject: `Finished ${index}` }));
-    const { container, rerender } = render(<VoiceConstellation {...input} onShowWorkers={onShowWorkers} />); tick(100);
+    const { container, rerender } = render(<VoiceConstellation {...input} onShowConversation={onShowConversation} />); tick(100);
     expect(container.firstElementChild).toHaveAttribute("data-worker-count", "120");
     expect(container.firstElementChild).toHaveAttribute("data-visible-worker-count", "48");
     expect(screen.queryByRole("button", { name: /Finished 119\./ })).toBeNull();
-    expect(screen.getByRole("button", { name: "Show all 120 workers" })).toBeVisible();
-    rerender(<VoiceConstellation {...input} focusedJobId="worker-119" onShowWorkers={onShowWorkers} />); tick(150);
+    expect(screen.getByRole("button", { name: "Open voice conversation" })).toBeVisible();
+    rerender(<VoiceConstellation {...input} focusedJobId="worker-119" onShowConversation={onShowConversation} />); tick(150);
     const late = screen.getByRole("button", { name: /Finished 119\./ });
     expect(late).toHaveAttribute("aria-pressed", "true");
     expect(late).toHaveAttribute("aria-disabled", "false");

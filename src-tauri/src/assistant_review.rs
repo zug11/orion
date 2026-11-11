@@ -526,7 +526,7 @@ fn delivery(entry: &Entry) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub fn assistant_review_poll(
+pub async fn assistant_review_poll(
     window: WebviewWindow,
     bridge: State<'_, AssistantBridge>,
     session_id: String,
@@ -542,7 +542,11 @@ pub fn assistant_review_poll(
             return Err("That note is not owned by this writing window.".into());
         }
     }
-    bridge.reviews.poll(window.label(), &session_id, target)
+    let store = bridge.reviews.clone();
+    let owner = window.label().to_owned();
+    tauri::async_runtime::spawn_blocking(move || store.poll(&owner, &session_id, target))
+        .await
+        .map_err(|_| "The edit review heartbeat could not finish.".to_string())?
 }
 #[tauri::command]
 pub fn assistant_review_stage(

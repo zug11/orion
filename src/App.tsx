@@ -53,6 +53,7 @@ import { SourceViewer } from "./components/SourceViewer";
 import { SourcesView } from "./components/SourcesView";
 import { Topbar } from "./components/Topbar";
 import { WritingWindowHeader } from "./components/WritingWindowHeader";
+import { displayNoteTitle } from "./lib/noteMetadata";
 import { applyWindowLaunch, documentWindowUrl, parseWindowLaunch, windowLaunchNote } from "./lib/windowLaunch";
 import {
   activeSpace,
@@ -215,11 +216,14 @@ import {
   applySpaceBlueprintResult,
   applySpaceRootResult,
   buildSpaceBlueprintRequest,
+  buildSpaceNoteDigests,
   buildSpaceRootRequest,
   pendingSpaceBlueprints,
   prepareSpaceKnowledgeIndex,
   spaceKnowledgeIsCurrent,
+  SpaceNoteDigestCache,
 } from "./lib/spaceKnowledge";
+import { WritingIdleGate } from "./lib/writingIdleGate";
 import {
   createNavigationEntry,
   moveNavigationHistory,
@@ -448,7 +452,10 @@ function App() {
   const linkedArticleRequests = useRef(new LinkedArticleRequestRegistry());
   const wikiEnrichmentRequests = useRef(new Set<string>());
   const overviewRequests = useRef(new Map<string, string>());
+  const overviewWaiting = useRef(new Map<string, object>());
   const overviewTimers = useRef(new Map<string, number>());
+  const overviewWritingIdle = useRef<WritingIdleGate | null>(null);
+  const [overviewDigestCache] = useState(() => new SpaceNoteDigestCache());
   const assistantOverviewVersions = useRef(new Map<string, string>());
   const refreshSpaceOverviewRef = useRef<
     (spaceId: string, manual?: boolean) => Promise<void>
@@ -574,6 +581,7 @@ function App() {
       overviewTimers.current.delete(spaceId);
     }
     overviewRequests.current.delete(spaceId);
+    overviewWaiting.current.delete(spaceId);
     setOverviewBusySpaceIds((current) => {
       if (!current.has(spaceId)) return current;
       const next = new Set(current);
@@ -584,180 +592,162 @@ function App() {
 
   const refreshSpaceOverview = useCallback(
     async (spaceId: string, manual = false) => {
-      const workspace = vaultRef.current.spaces.find(
-        (space) => space.workspace.id === spaceId,
-      );
-      if (!workspace || overviewRequests.current.has(spaceId)) {
-        return;
+      const writingIdle = overviewWritingIdle.current;
+      if (!writingIdle || overviewRequests.current.has(spaceId)) return;
+      if (manual) overviewWaiting.current.delete(spaceId);
+      else {
+        if (overviewWaiting.current.has(spaceId)) return;
+        const waiting = {};
+        overviewWaiting.current.set(spaceId, waiting);
+        const ready = await writingIdle.wait();
+        if (overviewWaiting.current.get(spaceId) !== waiting) return;
+        overviewWaiting.current.delete(spaceId);
+        if (!ready) return;
       }
-      // A workflow must not trigger unreported provider work after it finishes.
-      // Explicit refresh or the next independent knowledge edit resumes maintenance.
-      if (!manual && assistantOverviewVersions.current.get(spaceId) === spaceKnowledgeFingerprint(workspace)) return;
-      assistantOverviewVersions.current.delete(spaceId);
-      if (!workspace.notes.some(hasSubstantiveOverviewNote)) {
-        if (!workspace.spaceOverview && !workspace.spaceKnowledge) return;
-        const now = new Date().toISOString();
-        setVault((current) => ({
-          ...current,
-          spaces: current.spaces.map((space) =>
-            space.workspace.id === spaceId &&
-            !space.notes.some(hasSubstantiveOverviewNote)
-              ? {
-                  ...space,
-                  spaceOverview: undefined,
-                  spaceKnowledge: undefined,
-                  updatedAt: now,
-                }
-              : space,
-          ),
-          updatedAt: now,
-        }));
-        return;
-      }
-      const preparedAt = new Date().toISOString();
-      const preparedKnowledge = prepareSpaceKnowledgeIndex(workspace, preparedAt);
-      if (
-        !workspace.settings.includeExistingNotesInAIContext ||
-        !isSelectedAIConfigured(workspace.settings)
-      ) {
-        const localKnowledge = { ...preparedKnowledge, stale: false };
-        setVault((current) => {
-          const currentSpace = current.spaces.find(
-            (space) => space.workspace.id === spaceId,
-          );
-          if (!currentSpace) return current;
+      // An explicit refresh may have run while this automatic refresh waited.
+      if (overviewRequests.current.has(spaceId)) return;
+      const timer = overviewTimers.current.get(spaceId);
+      if (timer !== undefined) window.clearTimeout(timer);
+      overviewTimers.current.delete(spaceId);
+
+      const requestId = `space-overview-${nanoid(10)}`;
+      // Reserve before awaiting the native lease so timers cannot race a click.
+      overviewRequests.current.set(spaceId, requestId);
+      let ownsNativeLease = false;
+      const readyToContinue = async () => {
+        if (!manual && !await writingIdle.wait()) return false;
+        return overviewRequests.current.get(spaceId) === requestId;
+      };
+      try {
+        let workspace = vaultRef.current.spaces.find(
+          (space) => space.workspace.id === spaceId,
+        );
+        if (!workspace) return;
+        if (workspace.settings.includeExistingNotesInAIContext &&
+          isSelectedAIConfigured(workspace.settings) && isTauriRuntime()) {
+          const { invoke } = await import("@tauri-apps/api/core");
+          ownsNativeLease = await invoke<boolean>("claim_space_overview", { spaceId, requestId });
+          if (!ownsNativeLease || !await readyToContinue()) return;
+          workspace = vaultRef.current.spaces.find((space) => space.workspace.id === spaceId);
+          if (!workspace) return;
+        }
+        // A workflow must not trigger unreported provider work after it finishes.
+        // Only hash its content when a workflow actually suppressed maintenance.
+        const suppressedVersion = assistantOverviewVersions.current.get(spaceId);
+        if (!manual && suppressedVersion !== undefined &&
+          suppressedVersion === spaceKnowledgeFingerprint(workspace)) return;
+        assistantOverviewVersions.current.delete(spaceId);
+
+        const digests = buildSpaceNoteDigests(workspace, overviewDigestCache);
+        if (!digests.length) {
+          if (!workspace.spaceOverview && !workspace.spaceKnowledge) return;
+          const emptyNotes = workspace.notes;
           const now = new Date().toISOString();
-          return {
+          setVault((current) => ({
             ...current,
             spaces: current.spaces.map((space) =>
-              space.workspace.id === spaceId
-                ? { ...space, spaceKnowledge: localKnowledge, updatedAt: now }
+              space.workspace.id === spaceId && space.notes === emptyNotes
+                ? { ...space, spaceOverview: undefined, spaceKnowledge: undefined, updatedAt: now }
                 : space,
             ),
             updatedAt: now,
-          };
-        });
-        if (manual) {
-          showToast(
-            "Local Space overview",
-            workspace.settings.includeExistingNotesInAIContext
-              ? `Add an ${selectedAIProviderName(workspace.settings)} key in Settings when you want Orion to write a richer living overview.`
-              : "Existing-note AI context is off. Orion refreshed the private local Space index without sending note-derived material to a provider.",
-          );
+          }));
+          return;
         }
-        return;
-      }
+        const useProvider = workspace.settings.includeExistingNotesInAIContext &&
+          isSelectedAIConfigured(workspace.settings);
+        // Recheck at execution time, after any writing pause or earlier refresh.
+        // Reuse the same digests for validation and preparation.
+        const localIsCurrent = Boolean(workspace.spaceKnowledge) &&
+          !workspace.spaceKnowledge?.stale && spaceKnowledgeIsCurrent(workspace, digests);
+        if (!manual && localIsCurrent && (!useProvider ||
+          (workspace.spaceOverview && !workspace.spaceOverview.stale &&
+            workspace.spaceKnowledge?.blueprints.every(({ origin }) => origin === "provider")))) return;
 
-      const requestId = `space-overview-${nanoid(10)}`;
-      const fingerprint = spaceKnowledgeFingerprint(workspace);
-      if (isTauriRuntime()) {
-        const { invoke } = await import("@tauri-apps/api/core");
-        if (!await invoke<boolean>("claim_space_overview", { spaceId, requestId })) return;
-      }
-      overviewRequests.current.set(spaceId, requestId);
-      setOverviewBusySpaceIds((current) => {
-        const next = new Set(current);
-        next.add(spaceId);
-        return next;
-      });
-      setOverviewErrors((current) => {
-        const next = new Map(current);
-        next.delete(spaceId);
-        return next;
-      });
+        const preparedKnowledge = prepareSpaceKnowledgeIndex(workspace, new Date().toISOString(), digests);
+        if (!useProvider) {
+          const localKnowledge = { ...preparedKnowledge, stale: false };
+          setVault((current) => {
+            const currentSpace = current.spaces.find((space) => space.workspace.id === spaceId);
+            if (currentSpace !== workspace) return current;
+            const now = new Date().toISOString();
+            return {
+              ...current,
+              spaces: current.spaces.map((space) => space === workspace
+                ? { ...space, spaceKnowledge: localKnowledge, updatedAt: now } : space),
+              updatedAt: now,
+            };
+          });
+          if (manual) {
+            showToast(
+              "Local Space overview",
+              workspace.settings.includeExistingNotesInAIContext
+                ? `Add an ${selectedAIProviderName(workspace.settings)} key in Settings when you want Orion to write a richer living overview.`
+                : "Existing-note AI context is off. Orion refreshed the private local Space index without sending note-derived material to a provider.",
+            );
+          }
+          return;
+        }
 
-      try {
+        const fingerprint = spaceKnowledgeFingerprint(workspace);
+        setOverviewBusySpaceIds((current) => new Set(current).add(spaceId));
+        setOverviewErrors((current) => {
+          const next = new Map(current);
+          next.delete(spaceId);
+          return next;
+        });
         let knowledge = preparedKnowledge;
         for (const blueprint of pendingSpaceBlueprints(knowledge)) {
           const clusterResult = await organizeWithAI(
             buildSpaceBlueprintRequest(workspace, knowledge, blueprint.id),
           );
-          if (overviewRequests.current.get(spaceId) !== requestId) return;
-          const liveSpace = vaultRef.current.spaces.find(
-            (space) => space.workspace.id === spaceId,
-          );
-          if (
-            !liveSpace ||
-            spaceKnowledgeFingerprint(liveSpace) !== fingerprint
-          ) {
+          // Provider responses can arrive during a sentence. Defer their
+          // validation, reconciliation and follow-on requests until writing rests.
+          if (!await readyToContinue()) return;
+          const liveSpace = vaultRef.current.spaces.find((space) => space.workspace.id === spaceId);
+          if (!liveSpace || spaceKnowledgeFingerprint(liveSpace) !== fingerprint) {
             scheduleSpaceOverviewRefresh(spaceId, 900);
             return;
           }
-          knowledge = applySpaceBlueprintResult(
-            knowledge,
-            blueprint.id,
-            clusterResult,
-            new Date().toISOString(),
-          );
+          knowledge = applySpaceBlueprintResult(knowledge, blueprint.id, clusterResult, new Date().toISOString());
         }
-        const result = await organizeWithAI(
-          buildSpaceRootRequest(workspace, knowledge),
-        );
-        if (overviewRequests.current.get(spaceId) !== requestId) {
-          return;
-        }
-        const liveSpace = vaultRef.current.spaces.find(
-          (space) => space.workspace.id === spaceId,
-        );
-        if (
-          !liveSpace ||
-          spaceKnowledgeFingerprint(liveSpace) !== fingerprint
-        ) {
+        const result = await organizeWithAI(buildSpaceRootRequest(workspace, knowledge));
+        if (!await readyToContinue()) return;
+        const liveSpace = vaultRef.current.spaces.find((space) => space.workspace.id === spaceId);
+        if (!liveSpace || spaceKnowledgeFingerprint(liveSpace) !== fingerprint) {
           scheduleSpaceOverviewRefresh(spaceId, 900);
           return;
         }
 
         const now = new Date().toISOString();
         const overview = applySpaceOverviewResult(liveSpace, result, now);
-        const completedKnowledge = applySpaceRootResult(
-          knowledge,
-          result,
-          now,
-        );
+        const completedKnowledge = applySpaceRootResult(knowledge, result, now);
         setVault((current) => {
-          const currentSpace = current.spaces.find(
-            (space) => space.workspace.id === spaceId,
-          );
-          if (
-            !currentSpace ||
-            spaceKnowledgeFingerprint(currentSpace) !== fingerprint
-          ) {
-            return current;
-          }
+          const currentSpace = current.spaces.find((space) => space.workspace.id === spaceId);
+          if (!currentSpace || (currentSpace !== liveSpace &&
+            spaceKnowledgeFingerprint(currentSpace) !== fingerprint)) return current;
           return {
             ...current,
-            spaces: current.spaces.map((space) =>
-              space.workspace.id === spaceId
-                ? {
-                    ...space,
-                    spaceOverview: overview,
-                    spaceKnowledge: completedKnowledge,
-                    updatedAt: now,
-                  }
-                : space,
-            ),
+            spaces: current.spaces.map((space) => space.workspace.id === spaceId
+              ? { ...space, spaceOverview: overview, spaceKnowledge: completedKnowledge, updatedAt: now }
+              : space),
             updatedAt: now,
           };
         });
       } catch (error) {
-        if (overviewRequests.current.get(spaceId) !== requestId) {
-          return;
-        }
+        if (overviewRequests.current.get(spaceId) !== requestId) return;
         const message = error instanceof Error ? error.message : String(error);
-        setOverviewErrors((current) => {
-          const next = new Map(current);
-          next.set(spaceId, message);
-          return next;
-        });
+        setOverviewErrors((current) => new Map(current).set(spaceId, message));
       } finally {
-        if (isTauriRuntime()) {
+        if (ownsNativeLease) {
           void import("@tauri-apps/api/core").then(({ invoke }) =>
             invoke("release_space_overview", { spaceId, requestId }),
-          );
+          ).catch(console.error);
         }
         if (overviewRequests.current.get(spaceId) === requestId) {
           overviewRequests.current.delete(spaceId);
           setOverviewBusySpaceIds((current) => {
+            if (!current.has(spaceId)) return current;
             const next = new Set(current);
             next.delete(spaceId);
             return next;
@@ -765,43 +755,26 @@ function App() {
         }
       }
     },
-    [scheduleSpaceOverviewRefresh, showToast],
+    [overviewDigestCache, scheduleSpaceOverviewRefresh, showToast],
   );
   refreshSpaceOverviewRef.current = refreshSpaceOverview;
 
-  useEffect(
-    () => () => {
-      for (const timer of overviewTimers.current.values()) {
-        window.clearTimeout(timer);
-      }
+  useEffect(() => {
+    const writingIdle = new WritingIdleGate();
+    overviewWritingIdle.current = writingIdle;
+    return () => {
+      writingIdle.dispose();
+      for (const timer of overviewTimers.current.values()) window.clearTimeout(timer);
       overviewTimers.current.clear();
       overviewRequests.current.clear();
-    },
-    [],
-  );
+      overviewWaiting.current.clear();
+    };
+  }, []);
 
   useEffect(() => {
-    const localKnowledgeIsCurrent =
-      Boolean(snapshot.spaceKnowledge) && !snapshot.spaceKnowledge?.stale &&
-      spaceKnowledgeIsCurrent(snapshot);
-    const providerKnowledgeIsCurrent =
-      localKnowledgeIsCurrent &&
-      Boolean(snapshot.spaceKnowledge?.blueprints.length) &&
-      snapshot.spaceKnowledge?.blueprints.every(
-        ({ origin }) => origin === "provider",
-      );
-    const providerOverviewIsCurrent =
-      Boolean(snapshot.spaceOverview) && !snapshot.spaceOverview?.stale;
-    if (
-      !hydrated ||
-      !snapshot.notes.some(hasSubstantiveOverviewNote) ||
-      (localKnowledgeIsCurrent &&
-        (!snapshot.settings.includeExistingNotesInAIContext ||
-          !isSelectedAIConfigured(snapshot.settings) ||
-          (providerKnowledgeIsCurrent && providerOverviewIsCurrent)))
-    ) {
-      return;
-    }
+    if (!hydrated || (!snapshot.notes.length && !snapshot.spaceKnowledge && !snapshot.spaceOverview)) return;
+    // Content validation belongs to the deferred refresh, never a render effect
+    // that autosave publications or navigation can run while the user is typing.
     scheduleSpaceOverviewRefresh(snapshot.workspace.id, 1_800);
   }, [
     hydrated,
@@ -1194,8 +1167,18 @@ function App() {
       }
       refreshing = true;
       try {
+        const baseAtRead = persistedVault.current;
         const latest = await loadSnapshot();
-        if (disposed || !latest) return;
+        if (disposed || closingRef.current || !latest) return;
+        // A save can start or finish while the native read is in flight. Its
+        // result belongs to the earlier base and must never be interpreted as
+        // an external edit against our newer saved text. Retry after the save
+        // settles, including when disk has been written but its reply is pending.
+        if (pendingSaveCount.current > 0 || persistedVault.current !== baseAtRead) {
+          window.clearTimeout(retryTimer);
+          retryTimer = window.setTimeout(() => void refreshExternalVault(), 250);
+          return;
+        }
         const previousVault = vaultRef.current;
         if (latest.updatedAt !== persistedVaultUpdatedAt.current) {
           const base = persistedVault.current;
@@ -1824,9 +1807,9 @@ function App() {
     const id = `note-${nanoid(10)}`;
     const note: Note = {
       id,
-      title: "Untitled note",
+      title: "",
       slug: `untitled-${nanoid(5).toLocaleLowerCase()}`,
-      summary: "A new thread in your atlas.",
+      summary: "",
       body: "",
       aliases: [],
       tags: [],
@@ -1846,10 +1829,6 @@ function App() {
       updatedAt: now,
     }));
     openNote(id);
-    window.setTimeout(() => {
-      const input = document.querySelector<HTMLInputElement>(".note-title-input");
-      input?.select();
-    }, 80);
   }, [openNote]);
 
   const startGenerate = useCallback(
@@ -2108,6 +2087,7 @@ function App() {
   }, []);
 
   const updateNote = useCallback((nextNote: Note) => {
+    overviewWritingIdle.current?.activity();
     const normalized: Note = {
       ...nextNote,
       slug:
@@ -2810,7 +2790,7 @@ function App() {
         screenRef.current === "note" && workspace.activeNoteId === noteId;
       if (
         !window.confirm(
-          `Delete “${note.title}”? Its links, backlinks, and source references will be cleaned up. This cannot be undone.`,
+          `Delete “${displayNoteTitle(note)}”? Its links, backlinks, and source references will be cleaned up. This cannot be undone.`,
         )
       ) {
         return;
@@ -2870,7 +2850,7 @@ function App() {
           0,
         );
       }
-      showToast("Note deleted", `“${note.title}” was removed from this Space.`);
+      showToast("Note deleted", `“${displayNoteTitle(note)}” was removed from this Space.`);
     },
     [
       closeConnections,
@@ -3663,7 +3643,7 @@ function App() {
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
-    const title = `${screen === "note" && activeNote ? `${activeNote.title} — ` : ""}${snapshot.workspace.name} — Orion`;
+    const title = `${screen === "note" && activeNote ? `${displayNoteTitle(activeNote)} — ` : ""}${snapshot.workspace.name} — Orion`;
     void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => getCurrentWindow().setTitle(title));
   }, [activeNote?.title, screen, snapshot.workspace.name]);
 
@@ -4247,7 +4227,7 @@ function App() {
       />}
       <div className="workspace-shell">
         {writingWindow ? <WritingWindowHeader
-          title={activeNote?.title ?? "Writing window"}
+          title={activeNote ? displayNoteTitle(activeNote) : "Writing window"}
           onExport={activeNote ? () => setExportOpen(true) : undefined}
         /> : <Topbar
           workspaceName={snapshot.workspace.name}

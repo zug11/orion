@@ -24,7 +24,7 @@
   <a href="#local-first-by-construction">Privacy</a>
 </p>
 
-> Orion 0.5.2 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
+> Orion 0.5.3 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
 
 ## Knowledge work should produce knowledge, not another inbox
 
@@ -39,6 +39,8 @@ The result is a personal wiki that gets more coherent over time:
 - **Links have destinations.** A durable phrase resolves to one canonical page inside its Space.
 - **Notes stay ordinary.** They are permanent, editable, portable Markdown from the moment they are created.
 - **Saving stays quiet.** Short typing pauses are grouped into one autosave, with a five-second checkpoint during continuous typing. Ordinary saves retain unchanged editor and Space objects. External edits still merge safely or ask you to resolve a conflict, and closing a window still waits for its save.
+- **Writing keeps its input thread free.** Native connection heartbeats check the library on background workers. The formatting toolbar reuses its artwork while you type and repaints when its controls or appearance change.
+- **Word count while editing.** A small translucent pill at the bottom centre of the note shows its word count, including authored title and subtitle text. Highlight a passage while editing to see selected words out of the total. Done hides the count; it also steps aside while AI generation or review controls are open, keeping Accept and Insert visible. Counting stays local to the open note and reuses unchanged paragraphs.
 - **Projects stay separate.** Spaces are hard boundaries for notes, sources, concepts, Chat, navigation, and AI context.
 - **Chat beside your writing.** A quiet glass circle in the bottom-right opens your Space conversation without leaving the document. It appears when the selected AI provider is configured, without an AI toggle, and stays hidden during Flow. Collapse it or expand into full Chat without losing your draft or pending reply. An attached-note picker makes the reading and editing target explicit; Orion searches, follows connections and reads exact passages before citing them. Stop interrupts the response. Ask naturally: Orion infers whether to answer in Chat, change specific passages, or revise the whole attached note. There is no editing-mode picker. **Review in note** shows highlighted replacements and gray additions in the actual editor. **Accept changes** saves through normal autosave with one Undo; **Discard** keeps the original. Existing chat replies also offer **Use in note**. Newer typing invalidates old suggestions. Creating notes still requires an explicit request.
 - **Chat reads as it goes.** Chat uses the Space hierarchy and compact note directories to find promising material, searches note and source bodies, then opens exact passages and follows connections as needed. Replies can cite the passages actually read; click a citation to inspect it or open the original item. Reading is bounded, can be stopped, and reports partial coverage. Chat can create notes only when explicitly asked. Created notes and **Keep as note** retain exact quoted passages and source links, including when an original later changes or is removed. This uses the selected OpenAI or Anthropic model and may make several requests for a question.
@@ -88,6 +90,17 @@ decoded audio; longer material can be split into separate files.
 
 **Settings → Intelligence** includes **GPT-6 Astra** for complex research and
 synthesis through your OpenAI connection, with Low through Extra high reasoning.
+
+## Orion 0.5.3 — local build
+
+Version 0.5.3 lets a note begin without a name. Optional title and subtitle lines
+sit below the toolbar and show a faint hint only at the active empty line.
+Backspace at the start of the body removes empty heading rows; Enter at that
+same position restores them. The note remembers removed rows when reopened.
+Existing heading text, ordinary body editing, autosave and portable Markdown
+remain intact. This build also includes the recent writing responsiveness and
+Space-summary maintenance fixes. See the [0.5.3 release notes](releases/0.5.3.md).
+The public download links currently point to the published 0.5.2 release.
 
 ## Orion 0.5.2
 
@@ -298,9 +311,11 @@ Illustrations can use **Selection only** or **Related Space**, independently of 
 
 Research uses your selected Intelligence model with Low reasoning; the final brief uses your selected reasoning effort. Planning needs that provider's key; rendering needs an OpenAI key. Progress names the current stage, limited coverage is disclosed, and Retry preserves completed research and the brief. If insertion fails, Retry restores the downloaded image without generating it again. Scope or supporting-evidence changes invalidate stale work; unrelated note edits do not restart it. No notes are changed during planning. See [adaptive image context](docs/adaptive-image-context.md) for boundaries and recovery details.
 
-**New note** still opens a blank page. When a key is configured for your selected AI provider, the chevron next to it opens **Generate**: a note, a podcast script, a slide deck, or a slide deck written to be heard. The chevron stays hidden without that key. Each result lands as an ordinary note. Generated articles receive an AI-written title alongside their body; a title you edit during generation is preserved. **Play** in the note header reads the open page with System speech, OpenAI `gpt-4o-mini-tts`, or an optional ElevenLabs key. Slide decks generate complete `gpt-image-2.5-sunburst` slides that letter the title and bullets in distinctive fonts, hide speaker notes on screen, and Play times those slides to the narration.
+**New note** opens a blank page below the formatting toolbar. A faint **Title** hint appears only while the cursor is on the empty first line; move to the second line and only **Subtitle** appears. Move into the body and both hints disappear. Both lines are optional: press Enter through either or click straight into the body to start writing. At the start of the body, Backspace removes the empty subtitle row, then the empty title row, bringing the body to the top. The note remembers removed rows when reopened. At that same starting position, Enter restores the title row; Enter in that row restores the subtitle. Backspace on an empty heading also removes its row. Existing heading text is preserved until you clear it yourself, and Enter elsewhere in the body keeps its usual paragraph behavior. The hints are never saved as text. Unnamed pages appear as **New note** in navigation until you name them.
 
-Image generation keeps medium-quality JPEG output. OpenAI's [Image API](https://developers.openai.com/api/reference/resources/images/methods/generate) does not document a Fast mode option; [Fast mode](https://developers.openai.com/api/docs/guides/fast-mode) is documented for Responses and Chat Completions.
+When a key is configured for your selected AI provider, the chevron next to **New note** opens **Generate**: a note, a podcast script, a slide deck, or a slide deck written to be heard. The chevron stays hidden without that key. Each result lands as an ordinary note. Generated articles receive an AI-written title alongside their body; a title you edit during generation is preserved. **Play** in the note header reads the open page with System speech, OpenAI `gpt-4o-mini-tts`, or an optional ElevenLabs key. Slide decks generate complete `gpt-image-2.6-sunburst` slides that letter the title and bullets in distinctive fonts, hide speaker notes on screen, and Play times those slides to the narration.
+
+Image generation uses GPT Image 2.6 at maximum quality (`quality: "max"`, `complexity: "high"`) with lossless PNG output at 1536 × 1024. **Detailed** uses Sunburst by default; **Fast** selects Flare while retaining maximum render quality. These are separate image models, not the Responses API's Fast mode. Maximum quality can take longer and use more image tokens. See [OpenAI's image parameters](https://developers.openai.com/api/docs/guides/image-prompting#model-parameters). Images remain previews until you accept them.
 
 Generate shows **Use notes from this Space**, initially matching your context setting. Turn it on for a single generation without changing that setting. Authored notes provide context even without imported Sources: Orion uses the Space overview, a compact note directory, and relevant note excerpts. Decks and podcasts share one outline before up to six writers work on separate sections; slide images follow in their own parallel waves. Planning caps high reasoning at medium while writers keep your selected effort. With context off, Orion uses only your instructions and cannot describe the saved project.
 
@@ -319,7 +334,7 @@ Teach Orion a phrase once and it becomes durable vocabulary for that Space. Crea
 
 When Orion names a page from a highlighted passage, it checks the active Space's titles and aliases. A matching article is reused, and an empty article can continue generating under its canonical name. If AI suggests the current note or an ambiguous name, Orion tries a more specific title automatically. The link composer identifies existing articles before linking, and their text stays intact.
 
-Use **Cmd+Shift+N** or **File → New Window** to open another Orion window in the current Space. Each window can browse a different note or Space, with its own Back and Forward history. Edits sync across windows; competing edits to the same text offer a choice before saving. Closing one window leaves the others open, and quitting Orion saves every window first. **Cmd+N** continues to create a note.
+Use **Cmd+Shift+N** or **File → New Window** to open another Orion window in the current Space. Each window can browse a different note or Space, with its own Back and Forward history. Edits sync across windows; competing edits to the same text offer a choice before saving. A refresh that overlaps this window's own save is retried against the current library, so a delayed read cannot roll back the editor or create a false conflict. Closing one window leaves the others open, and quitting Orion saves every window first. **Cmd+N** continues to create a note.
 
 For a focused document view, click **Open in writing window** immediately left of
 Download in a note's top bar. The same note opens ready to edit in its own
@@ -382,6 +397,12 @@ Home carries a living **Across this Space** orientation beside the task list. It
 Even one short note can produce a summary. The overview grows with the material;
 brief Spaces can stay at a sentence or a few short paragraphs. Blank starter
 notes do not count as knowledge, and a local summary stays visible during AI refreshes.
+
+Automatic summaries wait until you have paused writing for three seconds.
+Incoming summary results also wait for that pause before updating the Space.
+Unchanged notes reuse their local digests, and a completed refresh clears
+redundant scheduled work. Autosave continues on its usual schedule; the
+explicit summary refresh remains available immediately.
 
 **Settings → Appearance** lets you save up to 24 named personal palettes.
 Saved palettes appear in the same room-preview grid as Orion, Tide, Grove, and
@@ -826,13 +847,13 @@ the request; editing never applies or saves itself.
 
 Voice answers briefly and then listens. Each finished worker returns a short,
 cited finding through the central voice; opening its orb is optional deeper
-discussion. Its detailed answer stays in the work summary. Interim commentary
+discussion. Its detailed answer appears in the conversation. Interim commentary
 remains limited so progress does not turn silence into a monologue. Final answers
 have their own delivery path and wait for both playback and arriving assistant
 speech to settle. The reading model names its assignment during the same research
 call. A circular indicator distinguishes thinking/research from speaking.
 Switching orbs immediately pauses the departing audio and retains its conversation.
-**Clear voice chat…** in the work summary asks before ending the call and removing
+**Clear voice chat…** in Voice options asks before ending the call and removing
 voice conversations, workers and unsaved research. Saved notes and typed Chat stay
 intact; another call starts only through an explicit action. These safeguards do
 not substitute for live listening QA.
@@ -842,7 +863,7 @@ worker commands or a separate topic for each worker. An explicit request such as
 “spawn 4 workers to read across all the notes” divides the notes into reading
 assignments directly when the groups fit the reader's reference budget. All four
 jobs appear and execute concurrently. Up to ten voice workers can execute at
-once; additional admitted work queues visibly. Broader
+once; additional admitted work queues in the background. Broader
 or uneven requests use contextual scope planning. Each worker reports what it
 actually read and any missing coverage. An incomplete plan is retried internally
 rather than asking you to invent the workers' roles.
@@ -862,8 +883,21 @@ The sidebar uses one combined chat-and-waveform mark to open Chat. Start voice
 from Chat’s composer. Collapsed navigation keeps a 44 px selection background
 around Home, Notes, Sources and Chat. A glass pill follows
 you through notes and views in the same Space and window, with microphone mute,
-end call, Chat and an expandable work summary. Collapsing Chat keeps the call;
+end call, Chat and a small Voice options menu. Findings and saved-note links
+appear in the conversation, with controls to read aloud, discuss, keep or retry
+a result. Worker queues and counts stay out of the interface. Voice options
+contains Stop research and Clear voice chat; opening it keeps the pill compact. Retained results keep one shared Chat launcher after a
+call ends; clearing voice work restores the ordinary Chat bubble. Collapsing Chat keeps the call;
 changing Space ends it. Dictation into a note remains a separate control.
+
+During a call, compact Chat starts with the voice scene and composer, without an
+empty message section. Sending a prompt reveals just enough space for that
+prompt; a reply adds a **New reply** cue without growing the panel. Scroll down
+to expand the panel upward into the conversation. Once expanded, messages scroll
+normally. Scroll back to the first message, then continue upward to return to
+voice, or use the **Voice** button. The composer stays anchored at the bottom.
+Long prompts and the expanded panel stay within the window; reduced-motion and
+keyboard controls are supported.
 
 The central orb follows the main voice, while worker orbs represent actual
 assignments. Small update beads and a receiving reaction mark useful findings;
@@ -873,7 +907,7 @@ Switching opens a fresh voice connection and may incur connection latency and
 additional session usage. New research from that worker returns the conversation
 to the centre until it finishes. Dragging a running worker into the small swarm
 cancels only that research; dismissing a finished one keeps its findings in the
-work list. Listening and speaking gestures follow measured input and playback.
+conversation. Listening and speaking gestures follow measured input and playback.
 
 Workers can report a cited intermediate finding and continue investigating.
 Their local checkpoint retains evidence, source versions, completed reads,
@@ -903,18 +937,17 @@ Voice research now uses identifiable work orders. Ordinary conversation leaves
 them running; a new assignment can run alongside earlier work. Name a request
 to cancel or correct it, or use its compact Cancel control. Ambiguous references
 receive one clarification question. Spoken turns are interpreted in order while
-up to ten workers research in parallel. Additional assignments stay visible and
-cancellable in the queue; there is no six-worker admission cap.
+up to ten workers research in parallel. Additional assignments queue internally
+and remain cancellable by voice or Stop research; there is no six-worker admission cap.
 Unfinished phrases stay attached to their original note and selection across a
 thinking pause. A background synthesis pass combines related interim and final
 findings into a short contribution while the voice continues its response. It
 uses the selected Intelligence model, keeps uncertainty and disagreements, and
 can leave unrelated findings waiting until they fit the conversation. It does
 not wait for all workers. Each pass is read-only and does not restart research.
-Every retained result is reachable in the work summary, which distinguishes
-findings being combined, waiting for a pause, unavailable for voice summary, or shared
-with the voice connection. **Read aloud** requests a result directly. Shared
-means sent to the connection; it does not claim that you heard it.
+Every retained finding is readable in the conversation. **Read aloud** requests
+a result directly; **Retry voice summary** appears if its spoken summary failed.
+Internal delivery status is not shown as a queue or as proof that you heard it.
 Prepared contributions wait for settled playback and a completed sentence, with
 an eight-second continuous-silence fallback if the final transcript punctuation
 never arrives. Active speech always keeps the floor. The actual consolidated

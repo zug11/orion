@@ -1,4 +1,5 @@
 import { visibleNoteSummary } from "../lib/importSummary";
+import { NoteWordCount } from "./NoteWordCount";
 import type { Editor } from "@tiptap/core";
 import { PassageThreads } from "./PassageThreads";
 import { usePassageComment } from "./PassageCommentComposer";
@@ -66,7 +67,7 @@ import {
 } from "../lib/markdown";
 import { collectTasksFromNote, setTaskChecked } from "../lib/tasks";
 import { findTextMatches, wrapMatchIndex } from "../lib/noteFind";
-import { visibleNoteTags } from "../lib/noteMetadata";
+import { editableNoteTitle, editableNoteSubtitle, noteHeadingVisibility, noteHeadingLayout, visibleNoteTags, type NoteHeadingVisibility } from "../lib/noteMetadata";
 import {
   extractNoteOutline,
   resolveActiveOutlineHeading,
@@ -95,6 +96,7 @@ import {
 } from "../lib/slideDeck";
 import { FavoriteMark } from "./icons/FavoriteMark";
 import { NoteOutline } from "./NoteOutline";
+import { NoteDocumentHeading } from "./NoteDocumentHeading";
 import { SlideDeckView } from "./SlideDeckView";
 import { SourceReferences } from "./SourceReferences";
 
@@ -239,7 +241,7 @@ export function NoteView({
 }: NoteViewProps) {
   const localEditingModes = useRef(new Map<string, boolean>());
   const modes = editingModes ?? localEditingModes.current;
-  const [editing, setEditingState] = useState(() => modes.get(note.id) ?? (initialEditing || note.title === "Untitled note"));
+  const [editing, setEditingState] = useState(() => modes.get(note.id) ?? (initialEditing || !editableNoteTitle(note).trim()));
   const setEditing = useCallback((value: boolean) => {
     modes.set(note.id, value);
     setEditingState(value);
@@ -276,6 +278,9 @@ export function NoteView({
   const editButtonRef = useRef<HTMLButtonElement>(null);
   const findButtonRef = useRef<HTMLButtonElement>(null);
   const findInputRef = useRef<HTMLInputElement>(null);
+  const titleRef = useRef<HTMLTextAreaElement>(null);
+  const subtitleRef = useRef<HTMLTextAreaElement>(null);
+  const pendingHeadingFocus = useRef<{ noteId: string; line: "title" | "subtitle" | "body" } | null>(null);
   const [threadEditor, setThreadEditor] = useState<Editor | null>(null);
   const findScopeRef = useRef<HTMLElement>(null);
   const currentNoteRef = useRef(note);
@@ -332,7 +337,24 @@ export function NoteView({
     return () => onEditorContextChange?.(note.id, null);
   }, [note.id, onEditorContextChange]);
   useVoiceSelection(findScopeRef, note, voiceSelection, voiceSelection?.spaceId, displayedNote, { state: captureState });
-  const shownSummary = useMemo(() => visibleNoteSummary(note, sources), [note.summary, note.sourceIds, sources]);
+  const shownTitle = editableNoteTitle(note);
+  const shownSummary = useMemo(() => editableNoteSubtitle({ summary: visibleNoteSummary(note, sources) }), [note.summary, note.sourceIds, sources]);
+  const headingVisibility = noteHeadingVisibility({ ...note, title: shownTitle, summary: shownSummary });
+  useLayoutEffect(() => {
+    const pending = pendingHeadingFocus.current;
+    if (!pending) return;
+    if (pending.noteId !== note.id || !editing) { pendingHeadingFocus.current = null; return; }
+    if (pending.line === "body") {
+      if (!threadEditor) return;
+      threadEditor.commands.focus("start");
+    } else {
+      const field = pending.line === "title" ? titleRef.current : subtitleRef.current;
+      if (!field) return;
+      field.focus();
+      field.setSelectionRange(field.value.length, field.value.length);
+    }
+    pendingHeadingFocus.current = null;
+  }, [note.id, editing, headingVisibility.title, headingVisibility.subtitle, threadEditor]);
   const comment = usePassageComment({ note, getNote: displayedNote, root: findScopeRef, store: voiceSelection,
     editing, available: () => captureState().available, onCreate: onCreateComment });
   const dirtyEditingRef = useRef(false);
@@ -474,7 +496,7 @@ export function NoteView({
 
   useEffect(() => {
     dirtyEditingRef.current = false;
-    setEditing(modes.get(note.id) ?? (initialEditing || note.title === "Untitled note"));
+    setEditing(modes.get(note.id) ?? (initialEditing || !editableNoteTitle(note).trim()));
     setFindOpen(false);
     setFindQuery("");
     setFindResultCount(0);
@@ -883,6 +905,58 @@ export function NoteView({
       setSavedPulse(false);
       savedPulseTimerRef.current = null;
     }, 950);
+  }
+
+  function currentHeadings() {
+    const current = currentNoteRef.current;
+    const title = editableNoteTitle(current);
+    const subtitle = editableNoteSubtitle({ summary: visibleNoteSummary(current, sources) });
+    return { title, subtitle, visibility: noteHeadingVisibility({ ...current, title, summary: subtitle }) };
+  }
+
+  function focusHeading(line: "title" | "subtitle") {
+    const field = line === "title" ? titleRef.current : subtitleRef.current;
+    field?.focus();
+    field?.setSelectionRange(field.value.length, field.value.length);
+  }
+
+  function changeHeadingRows(visibility: NoteHeadingVisibility, focus: "title" | "subtitle" | "body") {
+    pendingHeadingFocus.current = { noteId: note.id, line: focus };
+    update({ headingLayout: noteHeadingLayout(visibility) });
+  }
+
+  function revealHeading(line: "title" | "subtitle") {
+    const { visibility } = currentHeadings();
+    if (visibility[line]) focusHeading(line);
+    else changeHeadingRows({ ...visibility, [line]: true }, line);
+  }
+
+  function removeHeading(line: "title" | "subtitle", fromBody = false): boolean {
+    const headings = currentHeadings();
+    // Never remove authored words through a boundary key, including a newer
+    // title received from another window since the last render.
+    if (headings[line]) { focusHeading(line); return true; }
+    if (!headings.visibility[line]) return false;
+    const visibility = { ...headings.visibility, [line]: false };
+    const focus = fromBody ? "body" : line === "title"
+      ? visibility.subtitle ? "subtitle" : "body"
+      : visibility.title ? "title" : "body";
+    changeHeadingRows(visibility, focus);
+    return true;
+  }
+
+  function handleBodyStartKey(key: "ArrowUp" | "Backspace" | "Enter"): boolean {
+    const { visibility } = currentHeadings();
+    if (key === "Enter") {
+      if (!visibility.title) { revealHeading("title"); return true; }
+      if (!visibility.subtitle) { revealHeading("subtitle"); return true; }
+      return false;
+    }
+    const line = visibility.subtitle ? "subtitle" : visibility.title ? "title" : null;
+    if (!line) return false;
+    if (key === "Backspace") return removeHeading(line, true);
+    focusHeading(line);
+    return true;
   }
 
   const syncFindMatches = useCallback(() => {
@@ -1434,27 +1508,10 @@ export function NoteView({
               <Trash2 size={16} />
             </button>
           </div>
-        <div className="note-title-line">
-          {editing ? (
-            <input
-              className="note-title-input"
-              value={note.title}
-              onChange={(event) => update({ title: event.target.value })}
-              aria-label="Note title"
-            />
-          ) : (
-            <h1 data-narration-text="title">{highlightFindText(note.title, "note-title")}</h1>
-          )}
-        </div>
-        {editing ? (
-          <textarea
-            className="note-summary-input"
-            value={shownSummary}
-            onChange={(event) => update({ summary: event.target.value })}
-            rows={2}
-            aria-label="Note summary"
-          />
-        ) : shownSummary ? (
+        {!editing && shownTitle ? <div className="note-title-line">
+          <h1 data-narration-text="title">{highlightFindText(shownTitle, "note-title")}</h1>
+        </div> : null}
+        {!editing && shownSummary ? (
           <p className="note-summary" data-narration-text="summary">
             {highlightFindText(shownSummary, "note-summary")}
           </p>
@@ -1541,6 +1598,22 @@ export function NoteView({
             }
           >
             <RichNoteEditor
+              documentHeading={<NoteDocumentHeading
+                key={note.id}
+                title={shownTitle}
+                subtitle={shownSummary}
+                visibility={headingVisibility}
+                titleRef={titleRef}
+                autoFocus={!shownTitle && !shownSummary && !note.body.trim()}
+                subtitleRef={subtitleRef}
+                onTitleChange={(title) => update({ title, headingLayout: noteHeadingLayout({ ...currentHeadings().visibility, title: true }) })}
+                onSubtitleChange={(summary) => update({ summary, headingLayout: noteHeadingLayout({ ...currentHeadings().visibility, subtitle: true }) })}
+                onFocusBody={() => threadEditor?.commands.focus("start")}
+                onFocusSubtitle={() => revealHeading("subtitle")}
+                onRemoveLine={removeHeading}
+              />}
+              onBodyStartKey={handleBodyStartKey}
+              autofocusBody={!headingVisibility.title && !headingVisibility.subtitle}
               onAddComment={comment.openComment}
               commentComposerActive={comment.active}
               onThreadEditor={setThreadEditor}
@@ -1626,6 +1699,9 @@ export function NoteView({
           </span>
         </footer>
       </div>
+      {editing && !showSlideshow && <NoteWordCount key={`word-count-${note.id}`} root={findScopeRef}
+        editor={editing ? threadEditor : null} editing={editing}
+        title={shownTitle} subtitle={shownSummary} body={markdown} />}
       {showPlayhead ? (
         <div
           className="note-listen-playhead"

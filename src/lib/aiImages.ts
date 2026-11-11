@@ -12,7 +12,8 @@ import {
   type ImageResearchFinding, type ImageSearchPlan, type ImageVisualPlan,
 } from "./aiImagePlanning";
 
-export const AI_IMAGE_MODEL = "gpt-image-2.5-sunburst";
+export const AI_IMAGE_MODEL = "gpt-image-2.6-sunburst";
+export const AI_IMAGE_FAST_MODEL = "gpt-image-2.6-flare";
 export const MAX_AI_IMAGE_INSTRUCTION_CHARS = 1_250;
 export const MAX_AI_IMAGE_SELECTION_CHARS = 32_000;
 export type AIImageQuality = "fast" | "detailed";

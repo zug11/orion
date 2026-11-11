@@ -8,6 +8,7 @@ import {
 } from "../lib/icons";
 import { markdownToPlainText } from "../lib/wiki";
 import type { AppSnapshot, Note, Relationship } from "../types";
+import { displayNoteTitle, editableNoteSubtitle } from "../lib/noteMetadata";
 import { useEffect, useRef } from "react";
 
 interface ContextPanelProps {
@@ -96,7 +97,7 @@ export function ContextPanel({
   const concepts = snapshot.concepts.filter((concept) =>
     note.conceptIds.includes(concept.id),
   );
-  const terms = [note.title, ...note.aliases, ...concepts.flatMap((item) => [item.label, ...item.aliases])];
+  const terms = [note.title, ...note.aliases, ...concepts.flatMap((item) => [item.label, ...item.aliases])].filter((term) => term.trim());
   const argumentConnections = new Map<string, Set<string>>();
   for (const relationship of snapshot.relationships) {
     const otherId = relationship.fromNoteId === note.id ? relationship.toNoteId
@@ -142,7 +143,7 @@ export function ContextPanel({
       ref={panelRef}
       className="context-panel"
       role="region"
-      aria-label={`Connections and sources for ${note.title}`}
+      aria-label={`Connections and sources for ${displayNoteTitle(note)}`}
       tabIndex={-1}
     >
       <header className="context-header">
@@ -179,7 +180,7 @@ export function ContextPanel({
                   onClick={() => onOpenNote(backlink.id)}
                 >
                   <span>
-                    <strong>{backlink.title}</strong>
+                    <strong>{displayNoteTitle(backlink)}</strong>
                     <ArrowUpRight size={12} />
                   </span>
                   <small>
@@ -215,8 +216,8 @@ export function ContextPanel({
               >
                 <i style={{ background: item.color ?? "#8798ff" }} />
                 <span>
-                  <strong>{item.title}</strong>
-                  <small>{item.summary}</small>
+                  <strong>{displayNoteTitle(item)}</strong>
+                  <small>{editableNoteSubtitle(item)}</small>
                   {[...(argumentConnections.get(item.id) ?? [])].map((connection) => (
                     <small className="context-argument-reason" key={connection}>{connection}</small>
                   ))}

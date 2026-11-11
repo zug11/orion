@@ -25,10 +25,45 @@ These product decisions are intentional:
   seeded Chat messages to a real vault.
 - Notes have one direct reading/writing surface. Editing reveals a lightweight
   word-processing toolbar; users never need to understand Markdown.
+  Editing places the optional Title and Subtitle lines below that toolbar,
+  aligned with the body. Only the focused empty line shows its faint Title or
+  Subtitle hint; both disappear in the body, which has no third hint. These
+  placeholders are presentation only; new
+  manual notes persist empty title/summary strings. Enter moves through those
+  lines into the body without requiring either field. At the absolute start of
+  an ordinary body paragraph/heading, Backspace removes the nearest empty
+  heading row without changing prose; repeated Backspace can remove both so
+  the body starts directly below the toolbar. Backspace in an empty heading
+  removes its own row. From that body boundary Enter restores a missing title,
+  then subtitle; Enter from the title can also restore the subtitle. Preserve
+  normal Enter/Backspace elsewhere, structured blocks, selection and IME input.
+  Optional `Note.headingLayout` accepts only `both`, `title`, `subtitle`, or
+  `none`; older notes default to both. Persist this per-note choice through
+  ordinary autosave and window merging. Nonempty authored headings always
+  remain visible, including incoming MCP/window changes. Keep title/summary in
+  their existing metadata fields rather than copying them into Markdown or
+  changing body offsets for Chat, dictation, citations or exports. Old starter
+  copy is hidden locally, without a vault migration. Unnamed notes retain a
+  New note navigation label, and existing authored headings stay intact.
   Each window remembers each note's last edit/preview mode independently by
   Space during the session, including navigation through Home or another view.
   Returning to a note resumes that mode; Done explicitly returns it to preview.
   This is transient window navigation state, never a persisted note field.
+- Edit mode shows a small translucent word-count pill at the bottom
+  centre of the note's text column. Count the displayed title, subtitle and body,
+  excluding placeholders, Markdown metadata, citation controls and separate
+  image captions/metadata. Reading mode never mounts the count, including when
+  text is highlighted; Done removes it along with its listeners and spacing.
+  Highlighting prose or a heading shows selected words out of the total; a
+  collapsed or unrelated selection restores the total. Counts are transient
+  per-window presentation and never trigger autosave or alter note text. Cache
+  immutable editor subtrees so typing recounts only changed textblocks, and
+  coalesce updates into a frame inside the badge component. Keep it visible while scrolling,
+  clear of selection actions and narration controls, with opaque accessibility
+  fallbacks and no per-keystroke screen-reader announcements.
+  Hide the badge while an AI composer, generation/progress/error dock or review
+  controls are visible, so Accept/Insert/Discard remain unobscured. Restore it
+  when those controls close without moving the document.
 - The sticky rich-text toolbar can record dictation at the current body cursor.
   The renderer preserves and tracks that insertion point while rotating the
   live microphone into bounded M4A segments. The Small edition uses independent
@@ -411,7 +446,12 @@ revision. Pending typing during a save is rebased as subsequent local edits.
 Every write still uses `vault.lock`, the expected revision, and atomic file
 replacement. Retries are bounded; failed writes leave local edits available.
 Native save/workflow events refresh other windows without changing their
-navigation; browser preview uses storage events and Web Locks. JSON object key
+navigation; browser preview uses storage events and Web Locks. An external
+refresh must recheck the save queue and persisted base after its asynchronous
+read. If a save started or the base advanced during that read, discard the
+result and retry against fresh disk data after saving settles. A delayed read
+must never roll back the editor or mistake this window's own save for a
+competing edit. JSON object key
 order is not a content change. New save revisions must advance monotonically.
 Autosave coalesces 800 ms typing pauses with a five-second ceiling during
 continuous input; explicit navigation/window/quit flushes retain their save
@@ -794,6 +834,11 @@ after one hour. There is one pending review per target. Unknown fields and
 caller-supplied acceptance, model, title and base-body arguments are rejected.
 Keep a stable renderer session across ordinary navigation and grant changes;
 when idle with no permitted target, it need not poll native storage.
+The workflow, editor context/action/review, and voice work-order heartbeat
+commands are asynchronous and run their blocking mailbox work on Tauri's
+blocking worker pool. Shared vault locks and fresh permission/version checks
+remain inside those workers. Never put periodic vault parsing or lock waits on
+the AppKit input thread; a small active note still shares a larger library.
 
 - `src-tauri/shared/assistant_protocol.rs` defines the strict, bounded request
   contract. `src-tauri/src/assistant_bridge.rs` owns the per-user Unix socket,
@@ -1086,6 +1131,19 @@ update followed by one root merge, not five readers and not a whole-Space
 fan-out. Several unrelated additions may touch several clusters, but provider
 width is derived from the number of affected clusters, never raw note count.
 Prefer the sequential path for coherence and low background contention.
+
+Automatic overview maintenance waits for three seconds without a note edit in
+its window before validating or preparing the hierarchy. Provider responses
+also wait for this quiet period before validation, publication, or a follow-on
+request. Explicit refresh remains immediate. This gate is independent of the
+800 ms / five-second autosave policy. Recheck freshness when the delayed work
+actually runs so a completed refresh cannot be repeated by an older timer.
+Reserve a renderer request before awaiting the native per-Space lease, and
+acquire that lease before preparing provider work. Each window keeps a weak
+cache of digests for immutable note objects; changes to derived concept labels
+or relationship hints invalidate the affected entries. Reuse the same digests
+for freshness checks and preparation. Keep full content checks at the quiet
+boundary and preserve the stale-result guard and the last valid overview.
 
 Cluster synthesis and ancestor merges currently run sequentially, including a
 first large-Space build. If a future explicit rebuild parallelizes independent
@@ -2487,7 +2545,7 @@ copy writers with a shared thesis and ordered section titles. Outline planning
 caps high/xhigh effort at medium; writers retain the selected effort. Validate
 exact Space-local note IDs and unique headings, and reject partial copy on
 failure. Assemble accepted copy locally with no final model rewrite. Each
-slide is then a complete `gpt-image-2.5-sunburst` 16:9 image
+slide is then a complete `gpt-image-2.6-sunburst` 16:9 image
 that letters the title and bullets in distinctive fonts, in same-kind waves
 of at most six, never mixed with copy. The slideshow shows that image only:
 no HTML type overlay even as a fallback, and speaker notes stay off-screen
@@ -2635,7 +2693,7 @@ independent **Fast / Detailed** rendering and **Selection only / Related Space**
 context choices. Detailed is the default; context initially follows
 `includeExistingNotesInAIContext`. Choosing Related Space is explicit consent for
 that image only, without changing the shared preference. Fast uses
-`gpt-image-2.5-flare`; Detailed uses `gpt-image-2.5-sunburst`. Both use the one-shot
+`gpt-image-2.6-flare`; Detailed uses `gpt-image-2.6-sunburst`. Both use the one-shot
 OpenAI Image API, even when Anthropic plans the illustration. Do not offer image
 generation without an OpenAI key or silently substitute a model. These choices
 are transient captured-request state, not new persisted settings.
@@ -2709,12 +2767,14 @@ versions and cancellation between stages and after rendering. Invalid planning
 must never start an image request. Stage progress and safe timing/failure-kind
 metrics are transient; do not log note text or keys or persist diagnostics.
 
-Request one `1536x1024`, medium-quality JPEG with output compression 88 from the
-explicitly chosen image model. Fast means Flare, not a `service_tier` parameter;
+Request one `1536x1024`, lossless PNG at `quality: "max"` and
+`complexity: "high"` from the explicitly chosen GPT Image 2.6 model. Fast means Flare, not a `service_tier` parameter;
 never send Responses-only Fast mode settings to the Image API. See
 [OpenAI's image guide](https://developers.openai.com/api/docs/guides/image-prompting).
 Returned base64 bytes are transient proposal state, bounded to the existing
-12-MiB note-image limit, and must pass renderer and Rust JPEG validation. They
+12-MiB note-image limit, and must pass renderer and Rust PNG signature validation.
+Retain validation and acceptance of existing transient JPEG proposals; filename,
+MIME type and signature must agree. No lossy conversion or silent quality downgrade. They
 do not enter the vault or private image directory until acceptance. The preview
 appears after the unchanged selected top-level passage; acceptance persists and
 inserts its ordinary portable Markdown reference as one Undo step. Native image
@@ -3459,8 +3519,12 @@ this integration's scope.
   `src-tauri/src/ruler_glass.rs` hosts the scale/handles in Clear's `contentView`.
   `nativeToolbarPaint` paints only the existing local toolbar glyphs, labels and
   control states into a bounded transparent foreground inside Regular's
-  `contentView`. Group toolbar controls with whitespace, never vertical rules;
-  preserve active-button outlines and keyboard focus rings. The native painter
+  `contentView`. Group toolbar controls with whitespace, never vertical rules.
+  Repaint that foreground only for changes to the dock's controls or inherited
+  appearance. Prose edits do not invalidate its PNG; unrelated DOM layout and
+  overlay changes remeasure geometry using the existing artwork. Scroll must
+  preserve any pending control repaint while dispatching updated geometry.
+  Preserve active-button outlines and keyboard focus rings. The native painter
   draws controls only, not group containers or spacers. Accept only bounded PNG bytes (maximum 4096x160 pixels and
   350,000 encoded characters), never arbitrary SVG, a path or a URL. No document
   content is read by this paint path. More formatting uses a third native
@@ -3938,8 +4002,8 @@ publication. Ending audio preserves admitted work; leaving the Space disposes
 its coordinator. None of these transient owners adds vault state.
 
 There is no six-worker or cumulative admission limit. Up to ten workers execute at
-once; additional jobs remain visible and cancellable as queued, with execution
-deadlines beginning only on dispatch. Retention bounds 24 terminal records,
+once; additional jobs queue internally and remain cancellable through voice,
+orb dismissal or Stop research. Execution deadlines begin only on dispatch. Retention bounds 24 terminal records,
 never running/queued jobs. Router responses plan at most 24 distinct scopes per
 page and automatically page larger requests, validating the whole batch before
 admission. One utterance has a 1,000-worker allocation guard with an explicit
@@ -3986,11 +4050,11 @@ append reference text to the speaking connection.
 It retains one current pending finding per retained worker, with no smaller
 twelve-result speech cap. Prune queued updates and deduplication records with the
 research engine's current revision/sequence, including already offered entries.
-All retained terminal jobs appear in the scrollable work summary. Completed
-results distinguish Combining findings, Ready in work summary, Waiting for a
-pause, Voice summary unavailable and Shared with voice; the last means locally
-sent, never provider acceptance or audible proof. A failed synthesis preserves
-research and exposes Retry voice summary without a continuous retry loop.
+Retained findings, cancellation outcomes and actionable failures appear in the
+conversation. Do not expose worker queues, counts or delivery-state badges.
+Internal delivery states distinguish prepared, waiting, failed and locally sent;
+sent never proves provider acceptance or audible playback. A failed synthesis
+preserves research and exposes Retry voice summary without a continuous retry loop.
 Read aloud explicitly requests a retained answer without opening its worker.
 `voiceFindingSynthesis.ts` prepares up to four current interim/final findings
 after a 1.2-second collection window using one read-only call to the selected
@@ -4089,8 +4153,8 @@ under the bounded routing timeout, and every offered result rechecks its revisio
 Transport chunks prefer sentences, then words/graphemes; the conservative 480-byte
 fallback remains until a verified GPT-Live tokenizer mapping is available for the
 API's 500-token cap. No provider speech-start/stop or audio-done event is assumed. Sent
-commentary cannot be retracted or treated as heard. Keep result controls inside
-the expandable work summary. End voice immediately releases capture and closes
+commentary cannot be retracted or treated as heard. Keep result controls alongside their findings in
+the conversation. End voice immediately releases capture and closes
 the connection while already requested work can finish. ChatDock owns the
 mounted call outside its hidden Chat panel. Collapsing/clearing Chat and note or
 view navigation preserve it. Flow, Space changes and window teardown close
@@ -4150,14 +4214,42 @@ The empty Chat composer shows an audio-wave voice button in the send position.
 Typing replaces it with Send when idle. During a call, the same position shows
 a square Stop voice button even if a draft is being typed. Starting voice from
 the sidebar leaves the current note open; ordinary Chat navigation still opens
-Chat. A bottom-right glass pill exposes mute/end, Chat and a work summary.
+Chat. A bottom-right glass pill exposes mute/end, Chat and Voice options.
+Retained research, errors and clarification keep ownership of that dock after audio
+ends: hide the ordinary Chat circle and native circle glass whenever voice controls
+remain visible. Report only visibility transitions to ChatDock, never audio frames.
+Voice options contains View conversation, Stop research and Clear voice chat, plus
+Return to Space conversation for a focused finding. Its popover keeps the pill's
+width and does not change the Chat layout; closing it or Escape returns focus to
+the options button. Research findings, citations, saved-note links and actionable
+errors appear in Chat's conversation through a stable results portal. There is no
+worker list, queue count or delivery-state badge. Interim findings use a closed
+Latest finding disclosure, completed findings show their answer directly, and
+Retry research, Retry voice summary, Read aloud, Discuss by voice and Keep as note
+retain their existing authority and revision checks. Clearing voice work restores
+the ordinary Chat launcher. No result opens Chat or captures the writer's cursor.
+
 When either full or compact Chat is open, the same call renders its orb scene
 inside Chat and docks controls above the composer; no fixed pill overlays Chat.
 The idle welcome also uses the orb identity. Stable presentation portals keep
 the call owner outside the hidden/remounted Chat view and retain its motion model.
 Keep transcripts transiently for delegation, without elapsed-time or provider
-copy in the composer. Research results, citations, saves and actionable errors
-remain in the expanded summary.
+copy in the composer.
+
+Compact Chat with an active call opens on voice alone, with no empty text section.
+Submitting a typed prompt reveals only that prompt's measured height and normal
+padding, bounded by the window for long prompts. Replies do not enlarge the panel
+automatically; a New reply cue gives explicit access. Scrolling down grows the
+whole panel upward, keeping its bottom, controls and composer anchored, as the
+voice scene yields to messages. Once expanded, ordinary message scrolling takes
+over. Upward scrolling must reach the first message before a further upward
+gesture shrinks the panel back to voice. Conversation/New reply and Voice buttons,
+plus focused Home/End/Page/arrow keys, offer alternatives to scrolling. Respect
+reduced motion, nested scrollable content and composer input. This mode is local
+presentation, never persisted: `useVoiceChatScroll.ts` owns bounded geometry,
+observers and event cleanup, updating CSS per frame without rerendering the whole
+conversation. Preserve the mounted call and draft through collapse, navigation
+and full Chat. Passage Chat keeps its own reading layout.
 
 `VoiceConstellation` and `voiceOrbMotion.ts` use actual normalized input/output
 PCM levels from `LiveVoiceConnection`, gated on track availability and local
@@ -4179,7 +4271,7 @@ writing cursor automatically.
 
 ### Voice follow-up lifecycle and recovery
 
-The work summary's Clear voice chat action requires an inline confirmation and
+The Voice options menu's Clear voice chat action requires an inline confirmation and
 ends audio before replacing its transient coordinator. Clear routing, retained
 voice conversations, results, motion and queued commentary; cancel research and
 edit preparation. Do not delete saved notes, typed Chat or already prepared note

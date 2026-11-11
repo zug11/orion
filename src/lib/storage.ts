@@ -26,7 +26,7 @@ import type {
 } from "../types";
 import { truncateUnicode } from "./text";
 import type { EditorActionGrant } from "./assistant/editorActionHost";
-import { AI_IMAGE_MODEL } from "./aiImages";
+import { AI_IMAGE_FAST_MODEL, AI_IMAGE_MODEL } from "./aiImages";
 import {
   IMAGE_PLANNING_INSTRUCTIONS, imagePlanningSchema, parseImagePlanningContext,
   parseImagePlanningResult, imagePlanningTimeoutMs, imagePlanningTimeoutMessage, imagePlanningStageLabel,
@@ -569,13 +569,13 @@ export async function generateNoteImage(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: quality === "fast" ? "gpt-image-2.5-flare" : AI_IMAGE_MODEL,
+        model: quality === "fast" ? AI_IMAGE_FAST_MODEL : AI_IMAGE_MODEL,
         prompt: normalized,
         n: 1,
         size: "1536x1024",
-        quality: "medium",
-        output_format: "jpeg",
-        output_compression: 88,
+        quality: "max",
+        complexity: "high",
+        output_format: "png",
       }),
       signal,
     });
@@ -591,8 +591,8 @@ export async function generateNoteImage(
       throw new Error("OpenAI returned an image Orion could not read.");
     }
     return parseGeneratedNoteImage({
-      fileName: "orion-generated-image.jpg",
-      mimeType: "image/jpeg",
+      fileName: "orion-generated-image.png",
+      mimeType: "image/png",
       byteSize: decodedBase64Length(first.b64_json),
       base64Data: first.b64_json,
     });
@@ -629,8 +629,8 @@ export async function persistGeneratedNoteImage(
 export function parseGeneratedNoteImage(value: unknown): GeneratedNoteImage {
   if (
     !isRecord(value) ||
-    value.fileName !== "orion-generated-image.jpg" ||
-    value.mimeType !== "image/jpeg" ||
+    !((value.fileName === "orion-generated-image.png" && value.mimeType === "image/png") ||
+      (value.fileName === "orion-generated-image.jpg" && value.mimeType === "image/jpeg")) ||
     typeof value.byteSize !== "number" ||
     !Number.isSafeInteger(value.byteSize) ||
     value.byteSize <= 0 ||
@@ -639,7 +639,7 @@ export function parseGeneratedNoteImage(value: unknown): GeneratedNoteImage {
     !/^[A-Za-z0-9+/]+={0,2}$/.test(value.base64Data) ||
     value.base64Data.length > Math.ceil(MAX_NOTE_IMAGE_BYTES / 3) * 4 ||
     decodedBase64Length(value.base64Data) !== value.byteSize ||
-    !base64HasJpegSignature(value.base64Data)
+    !base64HasGeneratedImageSignature(value.base64Data, value.mimeType)
   ) {
     throw new Error("OpenAI returned an invalid or oversized image.");
   }
@@ -656,9 +656,10 @@ function decodedBase64Length(value: string): number {
   return Math.floor((value.length * 3) / 4) - padding;
 }
 
-function base64HasJpegSignature(value: string): boolean {
+function base64HasGeneratedImageSignature(value: string, mimeType: string): boolean {
   try {
-    const prefix = atob(value.slice(0, 8));
+    const prefix = atob(value.slice(0, 12));
+    if (mimeType === "image/png") return prefix.startsWith("\x89PNG\r\n\x1a\n");
     return (
       prefix.charCodeAt(0) === 0xff &&
       prefix.charCodeAt(1) === 0xd8 &&
@@ -2354,6 +2355,7 @@ function isNote(value: unknown): boolean {
     typeof value.title === "string" &&
     typeof value.slug === "string" &&
     typeof value.summary === "string" &&
+    (value.headingLayout === undefined || isOneOf(value.headingLayout, ["both", "title", "subtitle", "none"])) &&
     typeof value.body === "string" &&
     isStringArray(value.aliases) &&
     isStringArray(value.tags) &&

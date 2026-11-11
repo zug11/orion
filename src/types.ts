@@ -11,6 +11,7 @@ export type NoteKind =
   | "idea";
 
 export type NoteStatus = "draft" | "ready" | "archived";
+export type NoteHeadingLayout = "both" | "title" | "subtitle" | "none";
 
 export interface Note {
   /** Passage discussions are separate from authored Markdown and exports. */
@@ -19,6 +20,8 @@ export interface Note {
   title: string;
   slug: string;
   summary: string;
+  /** Optional heading rows in the writing surface; older notes show both. */
+  headingLayout?: NoteHeadingLayout;
   body: string;
   aliases: string[];
   tags: string[];
@@ -819,7 +822,7 @@ export interface NoteImageAttachment {
 
 export interface GeneratedNoteImage {
   fileName: string;
-  mimeType: "image/jpeg";
+  mimeType: "image/png" | "image/jpeg";
   byteSize: number;
   /** Transient provider output. Persist it only after the user accepts the preview. */
   base64Data: string;

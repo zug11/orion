@@ -1,0 +1,29 @@
+{
+  "artifact": "/Users/zzz/Developer/orion/outputs/Orion-0.5.2-summary-latency-20261030.m-Apple-Silicon.dmg",
+  "edition": "medium",
+  "verifiedAt": "2026-10-30T09:24:39.333313+00:00",
+  "bytes": 1505142226,
+  "sha256": "9aa24c5a5927475455a935cd794ebb26ca21bf2903289d1603c1ac2b5d6865c0",
+  "result": "passed",
+  "bundle": {
+    "identifier": "app.orion.knowledge",
+    "version": "0.5.2",
+    "architecture": "arm64"
+  },
+  "model": {
+    "bytes": 1533763059,
+    "sha256": "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208"
+  },
+  "provenance": {
+    "orion-source.sha256": "41379598c5fb10b10585a5dbbdcb2fa5ff1df333a7497b76e5f92be733cb979f",
+    "orion-renderer.sha256": "e89d9c6d9937495fd106f606b2ac730d99c6ede76de5652baa23758afadb735b"
+  },
+  "notarization": {
+    "id": "65a94b21-bc0e-461a-95e5-48aa4e290500",
+    "status": "Accepted",
+    "createdDate": "2026-10-30T09:08:56.880Z",
+    "name": "Orion-0.5.2-summary-latency-20261030.m-Apple-Silicon.dmg",
+    "message": "Successfully received submission info"
+  },
+  "implementationMatchesTestedInputs": true
+}

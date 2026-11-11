@@ -409,7 +409,7 @@ fn identifiers(session: &str, id: &str, target: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn voice_work_orders_poll(
+pub async fn voice_work_orders_poll(
     window: WebviewWindow,
     bridge: State<'_, AssistantBridge>,
     session_id: String,
@@ -424,9 +424,11 @@ pub fn voice_work_orders_poll(
             return Err("This Space is not owned by this voice window.".into());
         }
     }
-    bridge
-        .voice_work_orders
-        .poll(window.label(), &session_id, target)
+    let store = bridge.voice_work_orders.clone();
+    let owner = window.label().to_owned();
+    tauri::async_runtime::spawn_blocking(move || store.poll(&owner, &session_id, target))
+        .await
+        .map_err(|_| "The voice work-order heartbeat could not finish.".to_string())?
 }
 #[tauri::command]
 pub fn voice_work_orders_claim(

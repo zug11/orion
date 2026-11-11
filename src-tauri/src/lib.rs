@@ -1011,8 +1011,8 @@ enum NoteImageQuality {
 impl NoteImageQuality {
     fn model(&self) -> &'static str {
         match self {
-            Self::Fast => "gpt-image-2.5-flare",
-            Self::Detailed => "gpt-image-2.5-sunburst",
+            Self::Fast => "gpt-image-2.6-flare",
+            Self::Detailed => "gpt-image-2.6-sunburst",
         }
     }
 }
@@ -1607,17 +1607,31 @@ fn parse_generated_note_image_response(response: &Value) -> Result<GeneratedNote
             .decode(encoded.as_bytes())
             .map_err(|_| "OpenAI returned invalid image data.".to_string())?,
     );
-    if bytes.is_empty()
-        || bytes.len() > MAX_NOTE_IMAGE_BYTES
-        || !NoteImageKind::Jpeg.has_expected_signature(&bytes)
-    {
+    if bytes.is_empty() || bytes.len() > MAX_NOTE_IMAGE_BYTES {
         return Err("OpenAI returned an invalid or oversized image.".to_string());
     }
+    let (file_name, mime_type) = match note_image_kind_from_bytes(&bytes) {
+        Some((NoteImageKind::Png, mime)) => ("orion-generated-image.png", mime),
+        Some((NoteImageKind::Jpeg, mime)) => ("orion-generated-image.jpg", mime),
+        _ => return Err("OpenAI returned an invalid or oversized image.".to_string()),
+    };
     Ok(GeneratedNoteImage {
-        file_name: "orion-generated-image.jpg".to_string(),
-        mime_type: "image/jpeg".to_string(),
+        file_name: file_name.to_string(),
+        mime_type: mime_type.to_string(),
         byte_size: bytes.len(),
         base64_data: encoded.to_string(),
+    })
+}
+
+fn note_image_generation_body(request: &GenerateNoteImageRequest) -> Value {
+    json!({
+        "model": request.quality.model(),
+        "prompt": request.prompt.trim(),
+        "n": 1,
+        "size": "1536x1024",
+        "quality": "max",
+        "complexity": "high",
+        "output_format": "png"
     })
 }
 
@@ -1632,15 +1646,7 @@ async fn run_generate_note_image(
     let Some(api_key) = stored_api_key().await? else {
         return Err("Add an OpenAI API key in Settings before generating an image.".to_string());
     };
-    let body = json!({
-        "model": request.quality.model(),
-        "prompt": request.prompt.trim(),
-        "n": 1,
-        "size": "1536x1024",
-        "quality": "medium",
-        "output_format": "jpeg",
-        "output_compression": 88
-    });
+    let body = note_image_generation_body(&request);
     authorize()?;
     let send = client
         .post(OPENAI_IMAGE_GENERATIONS_URL)
@@ -5171,7 +5177,14 @@ mod tests {
     fn image_quality_defaults_to_detailed_and_rejects_unknown_options() {
         let base = json!({"requestId":"image:test", "prompt":"A scene"});
         let detailed: GenerateNoteImageRequest = serde_json::from_value(base.clone()).unwrap();
-        assert_eq!(detailed.quality.model(), "gpt-image-2.5-sunburst");
+        assert_eq!(detailed.quality.model(), "gpt-image-2.6-sunburst");
+        assert_eq!(
+            note_image_generation_body(&detailed),
+            json!({
+                "model": "gpt-image-2.6-sunburst", "prompt": "A scene", "n": 1,
+                "size": "1536x1024", "quality": "max", "complexity": "high", "output_format": "png"
+            })
+        );
         let mut fast = base.clone();
         fast["quality"] = json!("fast");
         assert_eq!(
@@ -5179,7 +5192,7 @@ mod tests {
                 .unwrap()
                 .quality
                 .model(),
-            "gpt-image-2.5-flare"
+            "gpt-image-2.6-flare"
         );
         let mut invalid = base;
         invalid["quality"] = json!("turbo");
@@ -5187,7 +5200,7 @@ mod tests {
     }
 
     #[test]
-    fn validates_generated_note_image_request_and_jpeg_response() {
+    fn validates_generated_note_image_request_and_png_or_legacy_jpeg_response() {
         let valid = GenerateNoteImageRequest {
             request_id: "image:request-123".to_string(),
             prompt: "A quiet editorial illustration".to_string(),
@@ -5219,6 +5232,20 @@ mod tests {
         assert_eq!(parsed.file_name, "orion-generated-image.jpg");
         assert_eq!(parsed.mime_type, "image/jpeg");
         assert_eq!(parsed.byte_size, 4);
+
+        let png = parse_generated_note_image_response(&json!({
+            "data": [{ "b64_json": BASE64_STANDARD.encode(b"\x89PNG\r\n\x1a\n") }]
+        }))
+        .unwrap();
+        assert_eq!(png.file_name, "orion-generated-image.png");
+        assert_eq!(png.mime_type, "image/png");
+        assert_eq!(png.byte_size, 8);
+        for invalid in [b"GIF89a".as_slice(), b"<svg/>", b"\x89PNG"] {
+            assert!(parse_generated_note_image_response(&json!({
+                "data": [{ "b64_json": BASE64_STANDARD.encode(invalid) }]
+            }))
+            .is_err());
+        }
 
         assert!(parse_generated_note_image_response(&json!({
             "data": [{ "b64_json": BASE64_STANDARD.encode(b"not a jpeg") }]

@@ -164,6 +164,16 @@ describe("Space overviews", () => {
     expect(request.taskInstructions).toContain("one sentence");
   });
 
+  it("gives a body-only note a readable navigation label in the local overview", () => {
+    const snapshot = createEmptySnapshot("Writing", NOW);
+    snapshot.notes = [{ ...note("body-only", "", "An idea can grow before it has a name."), summary: "", headingLayout: "none" }];
+    const overview = buildLocalSpaceOverview(snapshot);
+    expect(overview.body).toContain("Recent work moves through New note.");
+    expect(overview.body).toContain("New note. An idea can grow before it has a name.");
+    expect(overview.relatedNoteIds).toEqual(["body-only"]);
+    expect(snapshot.notes[0].title).toBe("");
+  });
+
   it("includes finished reference articles but ignores unfinished and empty pages", () => {
     const reference = {
       ...note("note-sql", "SQL", "SQL organizes relational data into tables."),

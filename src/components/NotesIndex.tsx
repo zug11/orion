@@ -1,7 +1,7 @@
 import { BookOpen, Grid2X2, List, Search, Trash2 } from "../lib/icons";
 import { useMemo, useState, type CSSProperties } from "react";
 import type { Note } from "../types";
-import { visibleNoteTags } from "../lib/noteMetadata";
+import { displayNoteTitle, editableNoteSubtitle, visibleNoteTags } from "../lib/noteMetadata";
 import { searchLocalNotes } from "../lib/localSearch";
 import BorderGlow from "./BorderGlow";
 
@@ -76,8 +76,8 @@ export function NotesIndex({
                 } as CSSProperties
               }
             >
-              <strong>{note.title}</strong>
-              <p>{query.trim() ? snippet : note.summary}</p>
+              <strong>{displayNoteTitle(note)}</strong>
+              <p>{query.trim() ? snippet : editableNoteSubtitle(note)}</p>
               <div className="tag-row">
                 {visibleNoteTags(note).slice(0, 3).map((tag) => (
                   <span key={tag}>#{tag}</span>
@@ -96,8 +96,8 @@ export function NotesIndex({
             <button
               type="button"
               className="note-index-delete"
-              aria-label={`Delete ${note.title}`}
-              title={`Delete ${note.title}`}
+              aria-label={`Delete ${displayNoteTitle(note)}`}
+              title={`Delete ${displayNoteTitle(note)}`}
               onClick={() => onDeleteNote(note.id)}
             >
               <Trash2 size={14} />

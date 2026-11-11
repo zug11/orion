@@ -53,7 +53,8 @@ not stop remote playback. Remove capture listeners before deliberate disposal.
   circles; further workers promote ambient positions, then add their own stable
   bodies. Larger groups use denser, smaller separated orbits while preserving the
   approved first six. Small copies simplify the visible field for legibility;
-  the work summary retains access to every admitted or queued worker.
+  the conversation retains all findings, with cancellation available by voice
+  or Stop research in Voice options.
 - Stable worker identities survive routing, clarification and dispatch. Real increases in
   `updates[].sequence` emit a filled bead toward the centre. Its arrival gives a
   finite dip, squash and rebound after the same 1.2-second flight used by the
@@ -66,10 +67,10 @@ not stop remote playback. Remove capture listeners before deliberate disposal.
   is active again. A stale or evicted focused result returns an ongoing call to
   the centre; after Stop or disconnection it only clears focus, without opening
   another microphone connection. Dismissing a focused orb follows the same rule.
-- A running work-summary row offers a collapsed Latest finding disclosure using
+- An interim result in the conversation offers a closed Latest finding disclosure using
   the normal cited reply renderer and exact coverage. Opening it only displays
-  that evidence; arriving findings cannot open the work panel or move the writing
-  cursor. Cancelled rows remain available and resume only through explicit Retry,
+  that evidence; arriving findings cannot open Chat or move the writing
+  cursor. Cancellation outcomes remain actionable through explicit Retry research,
   using the retained validated checkpoint. A saved receipt that won a cancellation
   race remains navigable and does not offer a duplicate-save retry.
 - The small companions share a slow orbital current with radial damping, gradual
@@ -111,9 +112,9 @@ substituting another note.
 Cancelling a waiting orb invalidates in-flight answers that referenced its former
 group. Late responses cannot revive it or duplicate a sibling's identity.
 
-The old six-worker admission limit is removed. Three workers research at once,
-with additional named assignments queued and individually cancellable. The UI
-separates researching, queued and waiting-for-details counts. Planning pages of
+The old six-worker admission limit is removed. Up to ten workers research at once,
+with additional named assignments queued internally and individually cancellable.
+Queue counts and worker lists are not shown in the interface. Planning pages of
 24 scopes are automatic; all pages must validate before the batch begins.
 A 1,000-worker per-request allocation guard rejects excessive counts explicitly,
 without imposing a cumulative six-orb cap. Queued time does not consume the

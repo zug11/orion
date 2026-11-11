@@ -13,6 +13,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { notesForExportScope, type ExportScope } from "../lib/webExport";
 import type { AppSnapshot, Note } from "../types";
+import { displayNoteTitle } from "../lib/noteMetadata";
 
 export type ExportFormat = "web" | "word" | "markdown";
 
@@ -217,7 +218,7 @@ export function ExportDialog({
                 <BookOpen size={15} />
                 <span>
                   <strong>This note</strong>
-                  <small>{activeNote?.title ?? "Open a note to use this scope"}</small>
+                  <small>{activeNote ? displayNoteTitle(activeNote) : "Open a note to use this scope"}</small>
                 </span>
               </button>
               <button

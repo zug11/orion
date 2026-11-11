@@ -946,7 +946,7 @@ Ok(json!({
     }
 }
 #[tauri::command]
-pub fn editor_actions_poll(
+pub async fn editor_actions_poll(
     window: WebviewWindow,
     bridge: State<'_, AssistantBridge>,
     session_id: String,
@@ -962,9 +962,11 @@ pub fn editor_actions_poll(
             return Err("This writing window does not own the exact note.".into());
         }
     }
-    bridge
-        .editor_actions
-        .poll(window.label(), &session_id, target)
+    let store = bridge.editor_actions.clone();
+    let owner = window.label().to_owned();
+    tauri::async_runtime::spawn_blocking(move || store.poll(&owner, &session_id, target))
+        .await
+        .map_err(|_| "The editor action heartbeat could not finish.".to_string())?
 }
 #[tauri::command]
 pub fn editor_actions_capture(

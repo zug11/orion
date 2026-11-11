@@ -19,16 +19,19 @@ import { VoiceCallLifecycle } from "../lib/voiceCallLifecycle";
 import { VoiceContextUpdates } from "../lib/voiceContextUpdates";
 import { ChatReply } from "./ChatReply";
 import { VoiceConstellation } from "./VoiceConstellation";
-import { AudioLines, MessageCircle, Mic2, Square } from "../lib/icons";
+import { AudioLines, Ellipsis, MessageCircle, Mic2, Square, X } from "../lib/icons";
 import { silentVoiceActivity, type VoicePresenceStore } from "../lib/voicePresence";
 import { voiceSelectionReference, type VoiceSelectionStore } from "../lib/voiceSelection";
 import type { IconPalette } from "../lib/themeIcon";
 import { VoiceOrbMotion } from "../lib/voiceOrbMotion";
 import "./SpaceVoice.css";
 
+export interface VoiceConversationContent { hasContent: boolean; revision: string }
+
 interface Props {
   snapshot: AppSnapshot; focusNoteId?: string; enabled: boolean;
   toggleRequest?: number; onActiveChange?: (active: boolean) => void;
+  onVisibleChange?: (visible: boolean) => void;
   commit: (request: VoiceCommit) => Promise<VoiceReceipt>;
   onProposal: (result: ChatResult) => void | Promise<unknown>;
   onOpenNote: (id: string) => void; onOpenSource?: (id: string) => void;
@@ -39,7 +42,9 @@ interface Props {
   voiceSelection?: VoiceSelectionStore;
   onOpenChat?: () => void;
   chatVisible?: boolean;
-  onShowWork?: () => void;
+  onShowConversation?: () => void;
+  resultsHost?: HTMLDivElement | null;
+  onConversationContentChange?: (content: VoiceConversationContent) => void;
   sceneHost?: HTMLDivElement | null;
   controlsHost?: HTMLDivElement | null;
   onCloseChat?: () => void;
@@ -59,11 +64,17 @@ export function SpaceVoice(props: Props) {
   const [activity, setActivity] = useState(silentVoiceActivity);
   const [muted, setMuted] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const summaryButton = useRef<HTMLButtonElement>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [voiceGeneration, setVoiceGeneration] = useState(0);
   const [sceneMotion, setSceneMotion] = useState(() => new VoiceOrbMotion());
-  const [, setFindingVersion] = useState(0);
+  const [findingVersion, setFindingVersion] = useState(0);
   useEffect(() => { if (props.chatVisible) setExpanded(false); }, [props.chatVisible]);
+  useEffect(() => {
+    if (!expanded) return;
+    const selector = confirmClear ? ".space-voice__clear button" : ".space-voice__options > button";
+    summaryButton.current?.closest("section")?.querySelector<HTMLButtonElement>(selector)?.focus({ preventScroll: true });
+  }, [expanded, confirmClear]);
   const [reservations] = useState(() => new VoiceReservations());
   const [routes] = useState(() => new VoiceTurnRouter({
     enabled: () => alive.current && voiceCall.acceptsInput,
@@ -103,7 +114,6 @@ export function SpaceVoice(props: Props) {
   const [error, setError] = useState("");
   const [clarification, setClarification] = useState("");
   const [keeping, setKeeping] = useState<string>();
-  const [shownJob, setShownJob] = useState<string>();
   const alive = useRef(true);
   const [editProgress, setEditProgress] = useState("");
   const [noteEdits] = useState(() => new VoiceNoteEdits({
@@ -202,7 +212,7 @@ export function SpaceVoice(props: Props) {
     stopCall(); voiceCall.dispose(); deliveries.reset(); noteEdits.cancel();
     conversations.current.clear(); conversation.current = new VoiceConversation();
     focusedConversation.current = undefined; setFocusedJobId(undefined);
-    setJobs([]); setRoutingJobs([]); setShownJob(undefined); setKeeping(undefined);
+    setJobs([]); setRoutingJobs([]); setKeeping(undefined);
     setError(""); setClarification(""); setConfirmClear(false); setExpanded(false);
     setSceneMotion(new VoiceOrbMotion()); setVoiceGeneration(value => value + 1);
   }
@@ -226,7 +236,7 @@ export function SpaceVoice(props: Props) {
     if (!job) return;
     setDismissedJobIds(current => current.includes(id) ? current : [...current, id]);
     // Returning a finished orb is visual. Its evidence, receipts and optional
-    // conversation remain available in the work list for an explicit return.
+    // conversation remain available in the transcript for an explicit return.
     if (job.state === "running") cancelJob(id);
     if (focusedConversation.current?.id === id) focusConversation(undefined, voiceCall.acceptsInput);
   }
@@ -234,7 +244,7 @@ export function SpaceVoice(props: Props) {
   useEffect(() => {
     alive.current = true;
     activeSpace.current = props.snapshot.workspace.id;
-    setJobs([]); setShownJob(undefined); setError(""); setClarification(""); setStatus("idle");
+    setJobs([]); setError(""); setClarification(""); setStatus("idle");
     conversations.current.clear(); focusedConversation.current = undefined; setFocusedJobId(undefined);
     setDismissedJobIds([]);
     setConfirmClear(false);
@@ -553,105 +563,123 @@ export function SpaceVoice(props: Props) {
   }
 
 
-  const visible = [...candidates.filter(job => job.state === "running" || job.state === "failed"), ...candidates.filter(job => job.state === "cancelled" || job.state === "completed" && job.result)];
   const active = ["connecting", "listening", "closing"].includes(status);
-  const running = candidates.filter(job => job.state === "running" && job.phase !== "clarifying" && job.phase !== "queued").length;
-  const waiting = candidates.filter(job => job.phase === "clarifying").length;
-  const queued = candidates.filter(job => job.phase === "queued").length;
-  const ready = candidates.filter(job => job.state === "completed" && job.result).length;
-  if (!visible.length && !error && !clarification && !editProgress && !(props.floating && active)) return null;
-  const content = <div className="space-voice">
-    {confirmClear ? <div className="space-voice__clear" role="group" aria-label="Clear voice chat confirmation">
-      <p>End the call and clear voice conversations, workers and unsaved research? Saved notes stay in your Space.</p>
-      <button type="button" onClick={clearVoiceChat}>Clear voice chat</button>
-      <button type="button" onClick={() => setConfirmClear(false)}>Keep voice chat</button>
-    </div> : <div className="space-voice__clear-action"><button type="button" onClick={() => setConfirmClear(true)}>Clear voice chat…</button></div>}
+  const running = candidates.some(job => job.state === "running");
+  const results = useMemo(() => candidates.filter(job => job.state === "failed" || job.state === "cancelled" || job.state === "completed" && job.result || job.receipt || job.state === "running" && job.updates?.length), [candidates]);
+  const hasConversation = Boolean(results.length || error || clarification || editProgress);
+  const conversationRevision = useMemo(() => JSON.stringify([
+    results.map(job => [job.id, job.revision, job.state, job.result?.reply.length, job.updates?.[job.updates.length - 1]?.sequence, job.receipt?.savedNoteIds, job.state === "failed" ? job.progress : ""]), error, clarification, editProgress,
+  ]), [results, error, clarification, editProgress]);
+  const hasContent = Boolean(candidates.length || hasConversation || active);
+  // Publish meaningful presentation changes, never the incoming audio frames.
+  useEffect(() => {
+    props.onVisibleChange?.(hasContent);
+    return () => props.onVisibleChange?.(false);
+  }, [hasContent, props.onVisibleChange]);
+  useEffect(() => {
+    props.onConversationContentChange?.({ hasContent: hasConversation, revision: conversationRevision });
+  }, [hasConversation, conversationRevision, props.onConversationContentChange]);
+  useEffect(() => () => { liveProps.current.onConversationContentChange?.({ hasContent: false, revision: "" }); }, []);
+  // Audio levels update the orb frequently. Keep retained Markdown and citation
+  // views stable, including while Chat is collapsed. Actions read the current
+  // ref-owned controllers; evidence refreshes with the snapshot and job objects.
+  const content = useMemo(() => <div className="voice-conversation-results">
+    {hasConversation && <div className="voice-conversation-results__label">From voice</div>}
     {editProgress && <div className="space-voice__progress"><span role="status">{editProgress}</span><button type="button" onClick={() => noteEdits.cancel()}>Cancel note changes</button></div>}
-    {visible.map(job => {
+    {results.map(job => {
       const latestFinding = job.updates?.[job.updates.length - 1];
       const offer = deliveries.status(job.id, job.revision);
-      return <div className="space-voice__job" key={job.id}>
-      <div className="space-voice__progress">
-        <span className="space-voice__subject" title={job.prompt}>{job.subject}</span>
-        {job.state === "running" && <><span role="status">{job.progress}</span><button type="button" aria-label={"Cancel research: " + job.subject} onClick={() => cancelJob(job.id)}>Cancel</button></>}
-        {job.state === "failed" && <span role="status">{job.progress}</span>}
-        {job.state === "cancelled" && <span role="status">Cancelled</span>}
-        {(job.state === "failed" || job.state === "cancelled") && !job.receipt && <button type="button" onClick={() => {
-          setDismissedJobIds(current => current.filter(id => id !== job.id));
-          void research.current?.retry(job.id, conversation.current.text());
-        }}>Retry</button>}
-      </div>
-      {job.state === "running" && latestFinding && <details className="space-voice__finding">
-        <summary>Latest finding <span>Still researching</span></summary>
-        <div className="space-voice__result"><ChatReply snapshot={props.snapshot} message={{ id: `${job.id}-finding-${latestFinding.sequence}`, role: "assistant", content: latestFinding.reply,
-          evidence: latestFinding.evidence, coverage: latestFinding.coverage, cardIds: [], contextCardIds: [], createdAt: "" }} onOpenNote={props.onOpenNote} onOpenSource={props.onOpenSource} /></div>
-      </details>}
-      {job.state === "cancelled" && job.receipt && <div className="space-voice__result-controls">
-        <span>Saved before cancellation</span>
-        {job.receipt.savedNoteIds.map((id, index) => <button type="button" key={id} onClick={() => props.onOpenNote(id)}>Saved · {job.receipt!.savedTitles[index]}</button>)}
-      </div>}
-      {job.state === "completed" && job.result && <>
-        <span className="space-voice__delivery" title={offer === "shared" ? "The finding was sent to the voice connection. This does not confirm it was spoken or heard." : undefined}>
-          {offer === "shared" ? "Shared with voice" : offer === "failed" ? "Voice summary unavailable" : offer === "preparing" && status === "listening" ? "Combining findings" : offer === "waiting" && status === "listening" ? focusedJobId ? "Ready for the main conversation" : "Waiting for a pause" : "Ready in work summary"}
-        </span>
-        <div className="space-voice__result-controls">
-          {offer === "failed" && status === "listening" && !focusedJobId && <button type="button" onClick={() => deliveries.retrySummary(job.id)}>Retry voice summary</button>}
-          {status === "listening" && !focusedJobId && <button type="button" onClick={() => research.current?.announceResult(job.id)}>Read aloud</button>}
-          {props.floating && <button type="button" onClick={() => focusConversation(job.id)}>{dismissedJobIds.includes(job.id) ? "Bring back & talk" : "Talk to worker"}</button>}
-          <button type="button" aria-expanded={shownJob === job.id} onClick={() => setShownJob(shownJob === job.id ? undefined : job.id)}>{shownJob === job.id ? "Hide research" : "Research & references"}</button>
-          {job.receipt ? job.receipt.savedNoteIds.map((id, index) => <button type="button" key={id} onClick={() => props.onOpenNote(id)}>Saved · {job.receipt!.savedTitles[index]}</button>) :
-            !job.result.editProposal && <button type="button" disabled={keeping === job.id} onClick={() => {
+      return <article className="voice-conversation-result" key={job.id} aria-label={job.subject}>
+        <h3>{job.subject}</h3>
+        {(job.state === "failed" || job.state === "cancelled" && !job.receipt) && <div className="chat-composer__error" role={job.state === "failed" ? "alert" : "status"}>{job.state === "cancelled" ? "Research stopped." : job.progress}
+          {!job.receipt && <button type="button" onClick={() => {
+            setDismissedJobIds(current => current.filter(id => id !== job.id));
+            void research.current?.retry(job.id, conversation.current.text());
+          }}>Retry research</button>}
+        </div>}
+        {job.state === "running" && latestFinding && <details className="space-voice__finding">
+          <summary>Latest finding <span>Still researching</span></summary>
+          <ChatReply snapshot={props.snapshot} message={{ id: `${job.id}-finding-${latestFinding.sequence}`, role: "assistant", content: latestFinding.reply,
+            evidence: latestFinding.evidence, coverage: latestFinding.coverage, cardIds: [], contextCardIds: [], createdAt: "" }} onOpenNote={props.onOpenNote} onOpenSource={props.onOpenSource} />
+          <button type="button" aria-label={"Cancel research: " + job.subject} onClick={() => cancelJob(job.id)}>Stop this research</button>
+        </details>}
+        {job.state === "completed" && job.result && <>
+          <ChatReply snapshot={props.snapshot} message={{ id: job.id, role: "assistant", content: job.result.reply,
+            evidence: job.result.evidence, coverage: job.result.coverage, cardIds: [], contextCardIds: [], createdAt: "" }} onOpenNote={props.onOpenNote} onOpenSource={props.onOpenSource} />
+          <div className="space-voice__result-controls">
+            {offer === "failed" && status === "listening" && !focusedJobId && <button type="button" onClick={() => deliveries.retrySummary(job.id)}>Retry voice summary</button>}
+            {status === "listening" && !focusedJobId && <button type="button" onClick={() => research.current?.announceResult(job.id)}>Read aloud</button>}
+            <button type="button" onClick={() => focusConversation(job.id)}>Discuss by voice</button>
+            {!job.receipt && !job.result.editProposal && <button type="button" disabled={keeping === job.id} onClick={() => {
               setKeeping(job.id); void research.current?.keep(job.id).catch(reason => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setKeeping(undefined));
             }}>{keeping === job.id ? "Saving…" : "Keep as note"}</button>}
-        </div>
-        {shownJob === job.id && <div className="space-voice__result"><ChatReply snapshot={props.snapshot} message={{ id: job.id, role: "assistant", content: job.result.reply, evidence: job.result.evidence, coverage: job.result.coverage, cardIds: [], contextCardIds: [], createdAt: "" }} onOpenNote={props.onOpenNote} onOpenSource={props.onOpenSource} /></div>}
-      </>}
-    </div>; })}
+          </div>
+        </>}
+        {job.receipt && <div className="space-voice__result-controls">
+          {job.state === "cancelled" && <span>Saved before cancellation</span>}
+          {job.receipt.savedNoteIds.map((id, index) => <button type="button" key={id} onClick={() => props.onOpenNote(id)}>Saved · {job.receipt!.savedTitles[index]}</button>)}
+        </div>}
+      </article>;
+    })}
     {clarification && <div className="space-voice__clarification" role="status">{clarification}</div>}
-    {error && <div className="chat-composer__error" role="alert">
-      {error}
-      {status === "disconnected" && props.enabled && props.snapshot.settings.apiKeyConfigured &&
-        <button type="button" onClick={start}>Reconnect voice</button>}
+    {error && <div className="chat-composer__error" role="alert">{error}
+      {status === "disconnected" && props.enabled && props.snapshot.settings.apiKeyConfigured && <button type="button" onClick={start}>Reconnect voice</button>}
     </div>}
+  </div>, [results, hasConversation, props.snapshot, props.onOpenNote, props.onOpenSource, props.enabled,
+    status, focusedJobId, keeping, error, clarification, editProgress, findingVersion, deliveries, noteEdits]);
+  if (!hasContent) return null;
+  const options = <div className="space-voice__options" role="group" aria-label="Voice options">
+    <div className="space-voice__options-header"><strong>Voice</strong><button type="button" aria-label="Close voice options" onClick={() => { setExpanded(false); summaryButton.current?.focus(); }}><X size={15} /></button></div>
+    {confirmClear ? <div className="space-voice__clear" role="group" aria-label="Clear voice chat confirmation">
+      <p>End the call and clear voice conversations and unsaved research? Saved notes stay in your Space.</p>
+      <button type="button" onClick={clearVoiceChat}>Clear voice chat</button>
+      <button type="button" onClick={() => setConfirmClear(false)}>Keep voice chat</button>
+    </div> : <>
+      {focusedJobId && <button type="button" onClick={() => { focusConversation(undefined); setExpanded(false); }}>Return to Space conversation</button>}
+      {hasConversation && props.onShowConversation && <button type="button" onClick={() => { setExpanded(false); props.onShowConversation?.(); }}>View conversation</button>}
+      {running && <button type="button" onClick={() => { for (const job of candidates) if (job.state === "running") cancelJob(job.id); setExpanded(false); }}>Stop research</button>}
+      <button type="button" onClick={() => setConfirmClear(true)}>Clear voice chat…</button>
+    </>}
   </div>;
-  if (!props.floating) return content;
+  if (!props.floating) return hasConversation ? <>{content}{options}</> : null;
   const embedded = Boolean(props.chatVisible && props.sceneHost && props.controlsHost);
   const scene = <VoiceConstellation status={status} activity={activity} muted={muted} thinking={thinking} jobs={candidates} focusedJobId={focusedJobId}
-    dismissedJobIds={dismissedJobIds} palette={props.voicePalette} onFocus={focusConversation} onDismiss={dismissJob} size="expanded" motion={sceneMotion} onShowWorkers={() => setExpanded(true)} />;
-  const showWork = () => { if (!embedded && !expanded) props.onShowWork?.(); setExpanded(value => !value); };
+    dismissedJobIds={dismissedJobIds} palette={props.voicePalette} onFocus={focusConversation} onDismiss={dismissJob} size="expanded" motion={sceneMotion} onShowConversation={props.onShowConversation} />;
   const escape = (event: KeyboardEvent) => {
     if (event.key !== "Escape" || event.defaultPrevented) return;
     if ((event.target as Element).closest('[role="dialog"],[role="menu"]')) return;
     event.stopPropagation();
-    if (expanded) setExpanded(false);
+    if (expanded) { setExpanded(false); summaryButton.current?.focus(); }
     else if (embedded) props.onCloseChat?.();
   };
+  const voiceStatus = status === "connecting" ? "Connecting…" : status === "disconnected" ? "Disconnected" : muted && active ? "Mic muted" : active ? activity.outputActive && (activity.outputMeasured || activity.measured) ? "Speaking" : "Listening" : running ? "Researching…" : hasConversation ? "Conversation available" : "Ready";
   const controls = <section className={`space-voice-call${embedded ? " space-voice-call--embedded" : ""}`} aria-label="Space voice conversation" onKeyDown={escape}>
-    {expanded && <div className="space-voice-call__expanded">
-      {!embedded && scene}
-      {content}
-    </div>}
+    {expanded && <div className="space-voice-call__expanded">{options}</div>}
     <div className="space-voice-call__pill">
       {!embedded && <VoiceConstellation status={status} activity={activity} muted={muted} thinking={thinking} jobs={candidates} focusedJobId={focusedJobId}
         dismissedJobIds={dismissedJobIds} palette={props.voicePalette} onFocus={focusConversation} onDismiss={dismissJob} size="pill" motion={sceneMotion} />}
-      <button type="button" className="space-voice-call__summary" aria-expanded={expanded} onClick={showWork}>
-        <strong>{focusedJobId ? candidates.find(job => job.id === focusedJobId)?.subject ?? "Worker conversation" : "Talk to Space"}</strong>
+      <div className="space-voice-call__summary">
+        <strong>{focusedJobId ? candidates.find(job => job.id === focusedJobId)?.subject ?? "Research conversation" : "Talk to Space"}</strong>
         {selectedText && <span key={selectedText.id} className="space-voice-call__selection" title={selectedText.noteTitle}>Selected text</span>}
-        <span>{editProgress || (status === "connecting" ? "Connecting…" : status === "disconnected" ? "Disconnected" : `${running} working · ${ready} ready${waiting ? ` · ${waiting} waiting` : ""}${queued ? ` · ${queued} queued` : ""}`)}</span>
-      </button>
+        <span>{voiceStatus}</span>
+      </div>
       {active ? <>
         <button type="button" aria-label={muted ? "Unmute microphone" : "Mute microphone"} title={muted ? "Unmute microphone" : "Mute microphone"}
           aria-pressed={muted} className={muted ? "is-muted" : undefined} onClick={toggleMute}><Mic2 size={17} /></button>
         <button type="button" aria-label="End voice call" title="End voice call" onClick={stopCall}><Square size={14} fill="currentColor" /></button>
       </> : <button type="button" aria-label="Reconnect voice" title="Reconnect voice" onClick={start}><AudioLines size={18} /></button>}
+      <button ref={summaryButton} type="button" aria-label="Voice options" title="Voice options" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}><Ellipsis size={17} /></button>
       {!embedded && <button type="button" aria-label="Open chat" title="Open chat" onClick={() => { setExpanded(false); props.onOpenChat?.(); }}><MessageCircle size={17} /></button>}
     </div>
-    {!expanded && (error || clarification) && <button type="button" className="space-voice-call__notice" onClick={() => { if (!embedded) props.onShowWork?.(); setExpanded(true); }}>{error || clarification}</button>}
+    {(error || clarification) && <button type="button" className="space-voice-call__notice" onClick={props.onShowConversation}>{error || clarification}</button>}
   </section>;
-  // Only presentation moves. The connection, work orders and per-conversation
-  // history stay owned by this mounted component through Chat navigation.
-  return embedded ? <>
-    {createPortal(active ? <div className="space-voice-call__scene" onKeyDown={escape}>{scene}</div> : null, props.sceneHost!)}
-    {createPortal(controls, props.controlsHost!)}
-  </> : controls;
+  // Only presentation moves. The call and research remain owned here. Outcomes
+  // join Chat as transient content rather than a second worker-management panel.
+  return <>
+    {embedded ? <>
+      {createPortal(active ? <div className="space-voice-call__scene" onKeyDown={escape}>{scene}</div> : null, props.sceneHost!)}
+      {createPortal(controls, props.controlsHost!)}
+    </> : controls}
+    {props.resultsHost ? createPortal(content, props.resultsHost) : null}
+  </>;
 }

@@ -67,6 +67,37 @@ afterEach(async () => {
 });
 
 describe("native ruler glass bridge", () => {
+  it("keeps toolbar artwork during prose edits and save-status changes, but repaints changed controls", async () => {
+    const dock = document.createElement("div"); document.body.append(dock); dock.append(track);
+    track.className = "editor-toolbar-shell";
+    const bold = document.createElement("button"); bold.setAttribute("aria-pressed", "false"); track.append(bold);
+    const prose = document.createElement("div"); prose.className = "editor-prose";
+    const text = document.createTextNode("Writing"); prose.append(text); document.body.append(prose);
+    const saved = document.createElement("span"); document.body.append(saved);
+    const dockRef = { current: dock };
+    const { result } = renderHook(() => useNativeRulerGlass(dockRef)); await flush();
+    const paints = paint.paintNativeToolbar.mock.calls.length;
+    const calls = native.invoke.mock.calls.length;
+    for (const character of " without lag") {
+      text.appendData(character); await flush();
+    }
+    saved.textContent = "Saved"; await flush();
+    expect(paint.paintNativeToolbar).toHaveBeenCalledTimes(paints);
+    expect(native.invoke).toHaveBeenCalledTimes(calls);
+    bold.setAttribute("aria-pressed", "true"); await flush();
+    expect(paint.paintNativeToolbar).toHaveBeenCalledTimes(paints + 1);
+    document.documentElement.dataset.theme = "dark"; await flush();
+    expect(paint.paintNativeToolbar).toHaveBeenCalledTimes(paints + 2);
+    // Image options live inside the prose and can overlap the sticky dock.
+    const dialog = document.createElement("div"); dialog.role = "dialog";
+    vi.spyOn(dialog, "getBoundingClientRect").mockReturnValue(box());
+    prose.append(dialog); await flush();
+    expect(result.current).toBe(false);
+    dialog.remove(); await flush();
+    expect(result.current).toBe(true);
+    expect(paint.paintNativeToolbar).toHaveBeenCalledTimes(paints + 2);
+  });
+
   it("keeps the toolbar and ruler glass active beneath More, repaints menu scrolling, and removes only the menu on close", async () => {
     const dock = document.createElement("div"); document.body.append(dock); dock.append(track);
     track.className = "editor-toolbar-shell";

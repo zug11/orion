@@ -308,7 +308,7 @@ impl EditorContextStore {
     }
 }
 #[tauri::command]
-pub fn editor_context_poll(
+pub async fn editor_context_poll(
     window: WebviewWindow,
     bridge: State<'_, AssistantBridge>,
     session_id: String,
@@ -324,9 +324,13 @@ pub fn editor_context_poll(
             return Err("That note is not owned by this editor window.".into());
         }
     }
-    bridge
-        .editor_context
-        .poll(window.label(), &session_id, target)
+    let store = bridge.editor_context.clone();
+    let owner = window.label().to_owned();
+    // A heartbeat reads the vault under its shared lock. Neither parsing nor
+    // waiting for another writer may occupy AppKit's input thread.
+    tauri::async_runtime::spawn_blocking(move || store.poll(&owner, &session_id, target))
+        .await
+        .map_err(|_| "The editor context heartbeat could not finish.".to_string())?
 }
 #[tauri::command]
 pub fn editor_context_respond(

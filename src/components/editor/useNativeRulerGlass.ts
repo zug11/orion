@@ -176,6 +176,7 @@ export function useNativeRulerGlass(trackRef: RefObject<HTMLDivElement | null>, 
     if (!isTauri() || !/Macintosh|Mac OS X/.test(navigator.userAgent)) return;
     let mounted = true;
     let frame = 0;
+    let paintPending = false;
     let lastRequest = "";
     let failed = false;
     let unavailable = false;
@@ -205,6 +206,8 @@ export function useNativeRulerGlass(trackRef: RefObject<HTMLDivElement | null>, 
     };
     const update = (paint = true) => {
       frame = 0;
+      paint ||= paintPending;
+      paintPending = false;
       if (!mounted || owner !== identity) return;
       const track = trackRef.current;
       const opaque = queries.some(query => query.matches);
@@ -245,7 +248,12 @@ export function useNativeRulerGlass(trackRef: RefObject<HTMLDivElement | null>, 
       }
       send({ ...request, rulerVisible: Boolean(ruler), toolbar: { frame: toolbarRequest.frame, paint: toolbarPaint }, menu: menuVisual });
     };
-    const schedule = () => { if (mounted && !frame) frame = requestAnimationFrame(() => update()); };
+    const scheduleUpdate = (paint: boolean) => {
+      if (!mounted) return;
+      paintPending ||= paint;
+      if (!frame) frame = requestAnimationFrame(() => update(false));
+    };
+    const schedule = () => scheduleUpdate(true);
     const scroll = (event?: Event) => {
       // WebKit has already moved the sticky HTML dock when scroll is delivered.
       // Waiting for another animation frame makes the native ruler trail it,
@@ -257,13 +265,39 @@ export function useNativeRulerGlass(trackRef: RefObject<HTMLDivElement | null>, 
     scheduleRef.current = schedule;
     const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
     if (trackRef.current) resize?.observe(trackRef.current);
-    const mutation = new MutationObserver(schedule);
+    const mutation = new MutationObserver(records => {
+      const track = trackRef.current;
+      if (!track) return;
+      for (const record of records) {
+        // Only chrome or inherited appearance changes invalidate the PNG.
+        // Prose typing and save indicators used to repaint every control,
+        // synchronously encode a PNG, then compare it with the previous PNG.
+        const inheritedAppearance = record.type === "attributes" && record.target.contains(track);
+        const reparented = record.type === "childList" && [...record.addedNodes, ...record.removedNodes].some(node => node.contains(track));
+        if (track.contains(record.target) || inheritedAppearance || reparented) {
+          schedule();
+          return;
+        }
+      }
+      // Other DOM changes can move/occlude the dock (title wrapping, dialogs).
+      // Prose text is below it; structural changes still need an occlusion
+      // check because image options can open inside the prose itself.
+      if (records.some(record => {
+        const element = record.target instanceof Element ? record.target : record.target.parentElement;
+        return record.type === "childList" || !element?.closest(".editor-prose") || element.closest(overlaySelector);
+      })) scheduleUpdate(false);
+    });
     mutation.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["class", "style", "hidden", "open", "disabled", "inert", "aria-pressed", "aria-expanded", "aria-disabled", "data-theme", "data-native-glass", "data-window-material", "data-ready", "data-left", "data-right", "data-left-position", "data-right-position", "data-active-side", "data-focused-side", "data-disabled"] });
     document.addEventListener("scroll", scroll, { capture: true, passive: true });
     document.addEventListener("scrollend", scroll, true);
     document.addEventListener("visibilitychange", schedule);
-    document.addEventListener("transitionend", schedule, true);
-    document.addEventListener("animationend", schedule, true);
+    const layoutChanged = (event: Event) => {
+      const track = trackRef.current;
+      const target = event.target;
+      scheduleUpdate(Boolean(track && target instanceof Node && (track.contains(target) || target.contains(track))));
+    };
+    document.addEventListener("transitionend", layoutChanged, true);
+    document.addEventListener("animationend", layoutChanged, true);
     const chromeChanged = (event: Event) => { if (event.target instanceof Node && trackRef.current?.contains(event.target)) schedule(); };
     const chromeEvents = ["pointerover", "pointerout", "pointerdown", "pointerup", "focusin", "focusout", "change"];
     chromeEvents.forEach(name => document.addEventListener(name, chromeChanged, true));
@@ -281,8 +315,8 @@ export function useNativeRulerGlass(trackRef: RefObject<HTMLDivElement | null>, 
       document.removeEventListener("scroll", scroll, true);
       document.removeEventListener("scrollend", scroll, true);
       document.removeEventListener("visibilitychange", schedule);
-      document.removeEventListener("transitionend", schedule, true);
-      document.removeEventListener("animationend", schedule, true);
+      document.removeEventListener("transitionend", layoutChanged, true);
+      document.removeEventListener("animationend", layoutChanged, true);
       chromeEvents.forEach(name => document.removeEventListener(name, chromeChanged, true));
       window.removeEventListener("resize", schedule);
       window.visualViewport?.removeEventListener("resize", schedule);

@@ -869,12 +869,17 @@ pub(crate) fn random_token() -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn assistant_poll(
+pub async fn assistant_poll(
     bridge: State<'_, AssistantBridge>,
     session_id: String,
     ready: Option<bool>,
 ) -> Result<Value, String> {
-    bridge.poll_ready(&session_id, ready.unwrap_or(true))
+    let bridge = bridge.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        bridge.poll_ready(&session_id, ready.unwrap_or(true))
+    })
+    .await
+    .map_err(|_| "The workflow heartbeat could not finish.".to_string())?
 }
 
 #[tauri::command]

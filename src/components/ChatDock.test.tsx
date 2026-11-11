@@ -233,7 +233,7 @@ it("a sidebar voice request keeps the note and call alive through Chat collapse 
   fireEvent.click(screen.getByRole("button", { name: "Open chat" }));
   expect(screen.getByRole("region", { name: /Chat in/ })).toBeVisible();
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "A thought while talking" } });
-  fireEvent.click(screen.getByRole("button", { name: /Talk to Space\s*0 working/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
   expect(screen.getByRole("region", { name: /Chat in/ })).toBeVisible();
   expect(screen.getByTestId("voice-expanded")).toBeVisible();
   expect(screen.getByRole("region", { name: /Chat in/ })).toContainElement(screen.getByRole("region", { name: "Space voice conversation" }));

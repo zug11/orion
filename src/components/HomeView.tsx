@@ -27,6 +27,7 @@ import {
   type ThemePalette,
 } from "../lib/theme";
 import type { AppSnapshot, Note } from "../types";
+import { displayNoteTitle, editableNoteSubtitle } from "../lib/noteMetadata";
 import BorderGlow from "./BorderGlow";
 import HomeAtmosphere from "./HomeAtmosphere";
 import { resolveAtmosphereTheme } from "../lib/homeAtmosphere";
@@ -72,8 +73,8 @@ function NoteCard({
       glowColor={note.color ?? "#a8b3ff"}
       onClick={() => onOpen(note.id)}
     >
-      <strong>{note.title}</strong>
-      <p>{note.summary}</p>
+      <strong>{displayNoteTitle(note)}</strong>
+      <p>{editableNoteSubtitle(note)}</p>
       <div className="card-footer">
         <span>
           <Clock3 size={12} />

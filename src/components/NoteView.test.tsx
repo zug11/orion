@@ -44,7 +44,7 @@ describe("NoteView", () => {
     restored.rerender(<NoteView {...props} note={first} editingModes={modes}/>);
     expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
   });
-  it("opens an existing note ready to write when requested and retains normal Done behavior", () => {
+  it("opens an existing note ready to write when requested and retains normal Done behavior", async () => {
     const note: Note = {
       id: "note-writing-window",
       title: "Existing document",
@@ -60,7 +60,7 @@ describe("NoteView", () => {
       onDisableConceptAutoLink: vi.fn(), initialEditing: true,
     };
     const { rerender } = render(<NoteView {...props} note={note} />);
-    expect(screen.getByRole("textbox", { name: "Note title" })).toHaveValue(note.title);
+    expect(await screen.findByRole("textbox", { name: "Note title" })).toHaveValue(note.title);
     expect(screen.getByRole("button", { name: "Done" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
@@ -503,7 +503,7 @@ describe("NoteView", () => {
     expect(onDeleteNote).toHaveBeenCalledWith(note.id);
   });
 
-  it("finishes dirty editing when navigation replaces the note", () => {
+  it("finishes dirty editing when navigation replaces the note", async () => {
     const onFinishEditing = vi.fn();
     const first: Note = {
       id: "note-first",
@@ -536,7 +536,7 @@ describe("NoteView", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Note title" }), {
+    fireEvent.change(await screen.findByRole("textbox", { name: "Note title" }), {
       target: { value: "Revised first note" },
     });
     rerender(<NoteView note={second} notes={[first, second]} {...shared} />);

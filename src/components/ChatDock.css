@@ -39,7 +39,7 @@
 .chat-composer__context span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat-composer__context svg { flex: none; }
 .chat-dock--page { position: relative; inset: auto; height: 100%; z-index: auto; }
-.chat-dock:not(.chat-dock--page)[data-voice-active="true"] .chat-dock__panel { margin-bottom: 0; }
+.chat-dock:not(.chat-dock--page)[data-voice-visible="true"] .chat-dock__panel { margin-bottom: 0; }
 .chat-dock--page .chat-dock__panel { display: block; width: 100%; height: 100%; margin: 0; border: 0; border-radius: 0; background: none; box-shadow: none; backdrop-filter: none; overflow: visible; }
 @media (max-width: 560px) { .chat-dock:not(.chat-dock--page) { right: 12px; bottom: 12px; } .chat-dock__panel { width: min(390px, calc(100vw - 24px)); } }
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) { .chat-dock__circle, .chat-dock__panel { background: var(--surface-raised); backdrop-filter: none; } }

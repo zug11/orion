@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptySnapshot } from "../data/defaults";
 import type { VoiceWorkOrder } from "../lib/voiceResearch";
 import { SpaceVoice } from "./SpaceVoice";
+import { ChatDock } from "./ChatDock";
 import type { VoiceConstellationProps } from "./VoiceConstellation";
 import { createVoiceSelectionStore } from "../lib/voiceSelection";
 import { spaceNoteVersion } from "../lib/spaceKnowledge";
@@ -17,8 +18,18 @@ const mock = vi.hoisted(() => ({
   options: undefined as any, engine: undefined as any, connections: [] as any[], jobs: [] as any[],
   run: vi.fn(), retry: vi.fn(), cancel: vi.fn(), dispose: vi.fn(), keep: vi.fn(), announce: vi.fn(), finding: vi.fn(), route: vi.fn(),
   close: vi.fn(), append: vi.fn(), context: vi.fn(), current: vi.fn(),
-  editDriver: vi.fn(),
+  editDriver: vi.fn(), replyRender: vi.fn(), glass: vi.fn((..._args: unknown[]) => false),
   native: false, mailboxes: [] as { host: VoiceWorkOrderHost; dispose: ReturnType<typeof vi.fn> }[],
+}));
+vi.mock("./useNativeChatGlass", () => ({ useNativeChatGlass: mock.glass }));
+vi.mock("./ChatReply", async importOriginal => {
+  const original = await importOriginal<typeof import("./ChatReply")>();
+  return { ChatReply: (props: Parameters<typeof original.ChatReply>[0]) => {
+    mock.replyRender(); return <original.ChatReply {...props} />;
+  } };
+});
+vi.mock("../lib/chatSuggestions", async importOriginal => ({
+  ...await importOriginal<typeof import("../lib/chatSuggestions")>(), generateChatSuggestions: vi.fn().mockResolvedValue([]),
 }));
 vi.mock("../lib/storage", async importOriginal => ({
   ...await importOriginal<typeof import("../lib/storage")>(), isTauriRuntime: () => mock.native, chatWithOrion: mock.editDriver,
@@ -76,10 +87,11 @@ beforeEach(() => {
   mock.retry.mockReset().mockResolvedValue(undefined);
   mock.close.mockClear(); mock.dispose.mockClear(); mock.announce.mockClear(); mock.finding.mockClear();
 });
-afterEach(() => { cleanup(); vi.clearAllMocks(); vi.useRealTimers(); });
+afterEach(() => { cleanup(); document.querySelectorAll("[data-test-results]").forEach(node => node.remove()); vi.clearAllMocks(); vi.useRealTimers(); });
 function setup() {
   const snapshot = createEmptySnapshot("Research", "2026-10-09", "a"); snapshot.settings.apiKeyConfigured = true;
-  const props = { snapshot, enabled: true, toggleRequest: 1, commit: vi.fn(), onProposal: vi.fn(), onOpenNote: vi.fn(), onOpenSettings: vi.fn() };
+  const resultsHost = document.createElement("div"); resultsHost.dataset.testResults = "true"; document.body.append(resultsHost);
+  const props = { snapshot, resultsHost, enabled: true, toggleRequest: 1, commit: vi.fn(), onProposal: vi.fn(), onOpenNote: vi.fn(), onOpenSettings: vi.fn() };
   return { props, ...render(<SpaceVoice {...props} />) };
 }
 function event(value: unknown, connection = mock.options) { act(() => connection.onEvent(value)); }
@@ -100,6 +112,73 @@ function backgroundFinding(job: VoiceWorkOrder, spaceId: string, sequence = 1, d
 const synthesized = () => mock.append.mock.calls.filter(call => call[0] === "thinking" && String(call[1]).includes('"type":"consolidated_worker_finding"'));
 
 describe("Space voice work-order integration", () => {
+  it("does not rerender retained Markdown on microphone or playback animation frames", () => {
+    setup(); publish([finished()]);
+    mock.replyRender.mockClear();
+    for (let frame = 0; frame < 20; frame++) act(() => mock.options.onActivity({
+      inputActive: false, outputActive: false, measured: true, inputLevel: frame / 100, outputLevel: 0,
+    }));
+    expect(mock.replyRender).not.toHaveBeenCalled();
+    publish([{ ...finished(), result: { reply: "Updated finding." } }]);
+    expect(mock.replyRender).toHaveBeenCalledOnce();
+    expect(screen.getByText("Updated finding.")).toBeVisible();
+  });
+
+  it("opens a finding from the voice pill even before Chat has ever been mounted", async () => {
+    const snapshot = createEmptySnapshot("First finding", "2026-11-11", "first-finding");
+    snapshot.settings.apiKeyConfigured = true;
+    const props = { snapshot, fullPage: false, flowActive: false, busy: false,
+      onExpand: vi.fn(), onSend: vi.fn(), onClear: vi.fn(), onOpenNote: vi.fn(), onSaveReply: vi.fn(), onOpenSettings: vi.fn(), onVoiceCommit: vi.fn() };
+    const { rerender } = render(<ChatDock {...props} voiceToggleRequest={0} />);
+    rerender(<ChatDock {...props} voiceToggleRequest={1} />);
+    publish([finished()]);
+    expect(screen.queryByRole("region", { name: /Chat in/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    fireEvent.click(screen.getByRole("button", { name: "View conversation" }));
+    await settle(300);
+    expect(document.querySelector(".chat-view__stage")).toHaveAttribute("data-scroll-phase", "messages");
+    expect(document.querySelector(".chat-view__thread")).not.toHaveAttribute("inert");
+    expect(screen.getByText("Climate finding.")).toBeVisible();
+    expect(screen.queryByRole("list", { name: "Voice workers" })).toBeNull();
+    expect(mock.connections).toHaveLength(1);
+    expect(props.onSend).not.toHaveBeenCalled();
+  });
+
+  it("keeps one Chat launcher after ending a call with retained workers, then restores it after clearing", () => {
+    const snapshot = createEmptySnapshot("Dock regression", "2026-11-11", "dock-regression");
+    snapshot.settings.apiKeyConfigured = true;
+    const props = { snapshot, fullPage: false, flowActive: false, busy: false,
+      onExpand: vi.fn(), onSend: vi.fn(), onClear: vi.fn(), onOpenNote: vi.fn(), onSaveReply: vi.fn(), onOpenSettings: vi.fn(), onVoiceCommit: vi.fn() };
+    const { rerender } = render(<ChatDock {...props} voiceToggleRequest={0} />);
+    rerender(<ChatDock {...props} voiceToggleRequest={1} />);
+    publish([finished()]);
+    fireEvent.click(screen.getByRole("button", { name: "End voice call" }));
+    expect(screen.getAllByRole("button", { name: "Open chat" })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Open chat" }).closest(".space-voice-call__pill")).not.toBeNull();
+    expect(document.querySelector(".chat-dock__circle")).toHaveAttribute("hidden");
+    expect(mock.glass.mock.calls[mock.glass.mock.calls.length - 1]?.[1]).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Open chat" }));
+    expect(document.querySelector(".space-voice-call:not(.space-voice-call--embedded)")).toBeNull();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "A draft alongside the research" } });
+    fireEvent.click(screen.getByRole("button", { name: "Collapse chat" }));
+    expect(screen.getByRole("button", { name: "Open chat" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    expect(screen.queryByRole("list", { name: "Voice workers" })).toBeNull();
+    expect(screen.getByRole("button", { name: "View conversation" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Close voice options" }));
+    expect(screen.getByRole("button", { name: "Voice options" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear voice chat…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear voice chat" }));
+    expect(screen.queryByRole("region", { name: "Space voice conversation" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open chat" }).closest(".chat-dock__circle")).not.toBeNull();
+    expect(mock.glass.mock.calls[mock.glass.mock.calls.length - 1]?.[1]).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Open chat" }));
+    expect(screen.getByRole("textbox")).toHaveValue("A draft alongside the research");
+    expect(props.onSend).not.toHaveBeenCalled();
+    expect(props.onVoiceCommit).not.toHaveBeenCalled();
+  });
+
   it("prepares related findings during speech without injecting job context or worker packets into the unfinished response", async () => {
     const { props } = setup();
     event({ type: "session.output_transcript.delta", delta: "The important distinction is", start_ms: 0, end_ms: 600 });
@@ -127,14 +206,13 @@ describe("Space voice work-order integration", () => {
     mock.editDriver.mockRejectedValueOnce(new Error("Provider unavailable"));
     act(() => backgroundFinding(job, props.snapshot.workspace.id));
     await settle(2_000);
-    expect(screen.getByText("Voice summary unavailable")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Research & references" }));
+    expect(screen.getByRole("button", { name: "Retry voice summary" })).toBeInTheDocument();
     expect(screen.getByText("Climate finding.")).toBeInTheDocument();
     await settle(60_000); expect(mock.editDriver).toHaveBeenCalledOnce(); expect(synthesized()).toHaveLength(0);
     fireEvent.click(screen.getByRole("button", { name: "Retry voice summary" }));
     await settle(1_000);
     expect(mock.editDriver).toHaveBeenCalledTimes(2);
-    expect(screen.getByText("Shared with voice")).toBeInTheDocument();
+    expect(commentary().length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "Retry voice summary" })).toBeNull();
   });
   it("delivers the actual summary after a missing final transcript delta, keeping the current task's delegation and retrying the pair", async () => {
@@ -153,7 +231,7 @@ describe("Space voice work-order integration", () => {
       return true;
     });
     // Pending job context, exact reference, and then a rejected commentary.
-    await settle(1_500); expect(screen.getByText("Waiting for a pause")).toBeInTheDocument();
+    await settle(1_500); expect(mock.editDriver).toHaveBeenCalledOnce();
     const rejectedOffers = commentary().length; expect(rejectedOffers).toBeGreaterThan(0);
     rejectCommentary = false;
     await settle(500);
@@ -162,22 +240,21 @@ describe("Space voice work-order integration", () => {
     expect(synthesized().every(call => call[2] === "current-task")).toBe(true);
     expect(mock.append.mock.calls.filter(([kind]) => kind === "instructions")).toHaveLength(0);
     expect(mock.editDriver).toHaveBeenCalledOnce();
-    expect(screen.getByText("Shared with voice")).toBeInTheDocument();
+    expect(commentary().length).toBeGreaterThan(0);
     await settle(20_000); expect(commentary()).toHaveLength(rejectedOffers + 1);
   });
-  it("keeps all 24 ready results reachable and distinguishes queued findings from offers to voice", async () => {
+  it("keeps all 24 findings readable while voice delivery stays in the background", async () => {
     const { props } = setup();
     const jobs = Array.from({ length: 24 }, (_, i) => finished(`job-${i}`, `Investigation ${i}`)); publish(jobs);
-    expect(screen.getAllByRole("button", { name: "Research & references" })).toHaveLength(24);
-    expect(screen.getAllByText("Ready in work summary")).toHaveLength(24);
+    expect(screen.getAllByRole("article")).toHaveLength(24);
+    expect(screen.queryByText(/ready in work summary|working ·|waiting for a pause/i)).toBeNull();
     event({ type: "session.input_transcript.delta", delta: "I was thinking", start_ms: 0, end_ms: 400 });
     act(() => { for (const job of jobs) backgroundFinding(job, props.snapshot.workspace.id); });
     await settle(2_000);
-    expect(screen.getAllByText("Combining findings")).toHaveLength(24);
+    expect(synthesized()).toHaveLength(0);
     expect(mock.run).not.toHaveBeenCalled(); expect(mock.route).not.toHaveBeenCalled();
     await settle(2_000);
-    expect(screen.getAllByText("Shared with voice")).toHaveLength(4);
-    expect(screen.getAllByText(/Waiting for a pause|Combining findings/)).toHaveLength(20);
+    expect(screen.getAllByRole("article")).toHaveLength(24);
     const batches = synthesized();
     expect(batches).toHaveLength(1); expect(JSON.parse(batches[0][1]).findings).toHaveLength(4);
     expect(commentary()).toEqual([["commentary", "A combined finding with its caveats.", null]]);
@@ -207,10 +284,10 @@ describe("Space voice work-order integration", () => {
     rerender(<SpaceVoice {...props} toggleRequest={3} />);
     await settle(3_000); expect(openings()).toHaveLength(1);
     publish([finished()]);
-    fireEvent.click(screen.getByRole("button", { name: /Talk to Space.*1 ready/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Talk to worker" }));
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discuss by voice" }));
     await settle(3_000); expect(openings()).toHaveLength(1);
-    fireEvent.click(within(screen.getByTestId("orbs-pill")).getByRole("button", { name: "Focus main conversation" }));
+    fireEvent.click(screen.getByRole("button", { name: "Return to Space conversation" }));
     await settle(3_000); expect(openings()).toHaveLength(1);
   });
   it("confirms clearing the voice chat, ends audio, removes transient work, and starts fresh only on request", async () => {
@@ -219,7 +296,7 @@ describe("Space voice work-order integration", () => {
     speak("My earlier private idea"); await settle();
     publish([finished(), { ...finished("running"), state: "running", result: undefined }]);
     const oldConnection = mock.options, oldEngine = mock.engine;
-    fireEvent.click(screen.getByRole("button", { name: /Talk to Space.*1 working.*1 ready/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
     fireEvent.click(screen.getByRole("button", { name: "Clear voice chat…" }));
     expect(presence.getSnapshot().jobs).toHaveLength(2); expect(mock.close).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Keep voice chat" }));
@@ -281,7 +358,8 @@ describe("Space voice work-order integration", () => {
   it("registers one native worker owner through note navigation without starting audio and withdraws on Space change", () => {
     mock.native = true;
     const snapshot = createEmptySnapshot("Research", "2026-10-11", "a"); snapshot.settings.apiKeyConfigured = true;
-    const props = { snapshot, enabled: true, commit: vi.fn(), onProposal: vi.fn(), onOpenNote: vi.fn(), onOpenSettings: vi.fn() };
+    const resultsHost = document.createElement("div"); resultsHost.dataset.testResults = "true"; document.body.append(resultsHost);
+  const props = { snapshot, resultsHost, enabled: true, commit: vi.fn(), onProposal: vi.fn(), onOpenNote: vi.fn(), onOpenSettings: vi.fn() };
     const { rerender, unmount } = render(<SpaceVoice {...props} focusNoteId="first" />);
     expect(mock.mailboxes).toHaveLength(1); expect(mock.mailboxes[0].host.spaceId).toBe("a");
     rerender(<SpaceVoice {...props} focusNoteId="second" chatVisible />);
@@ -317,8 +395,8 @@ describe("Space voice work-order integration", () => {
     publish([finished(), finished("astronomy", "Astronomy"), finished("history", "History")]);
     event({ type: "session.delegation.created", delegation: { id: "old-call" }, offset_ms: 200 });
     act(() => mock.engine.deliver("commentary", "Astronomy finding", "old-call", { id: "astronomy", revision: 1, reference: "Astronomy exact sources" }));
-    fireEvent.click(screen.getByRole("button", { name: /Talk to Space.*3 ready/ }));
-    fireEvent.click(screen.getAllByRole("button", { name: "Talk to worker" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Discuss by voice" })[0]);
     act(() => mock.engine.deliver("commentary", "History finding", "old-call", { id: "history", revision: 1, reference: "History exact sources" }));
     await settle(15_000);
     expect(commentary()).toEqual([]);
@@ -339,8 +417,8 @@ describe("Space voice work-order integration", () => {
     rerender(<SpaceVoice {...props} floating presence={presence} />);
     speak("Keep the original question in mind."); await settle();
     publish([finished()]);
-    fireEvent.click(screen.getByRole("button", { name: /Talk to Space.*1 ready/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Talk to worker" }));
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discuss by voice" }));
     expect(presence.getSnapshot().focusedJobId).toBe("climate");
     const toggleRequest = state === "stopped" ? 2 : 1;
     if (state === "stopped") rerender(<SpaceVoice {...props} floating presence={presence} toggleRequest={toggleRequest} />);
@@ -357,8 +435,8 @@ describe("Space voice work-order integration", () => {
     const { props, rerender } = setup(); const presence = createVoicePresence();
     rerender(<SpaceVoice {...props} floating presence={presence} />);
     publish([finished(), finished("astronomy", "Astronomy")]);
-    fireEvent.click(screen.getByRole("button", { name: /Talk to Space.*2 ready/ }));
-    fireEvent.click(screen.getAllByRole("button", { name: "Talk to worker" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Discuss by voice" })[0]);
     act(() => mock.engine.deliver("commentary", "Astronomy finding", null, { id: "astronomy", revision: 1, reference: "Astronomy sources" }));
     publish([finished("astronomy", "Astronomy")]); await settle(2_000);
     expect(presence.getSnapshot().focusedJobId).toBeUndefined();
@@ -369,8 +447,8 @@ describe("Space voice work-order integration", () => {
     const { props, rerender } = setup(); const presence = createVoicePresence();
     rerender(<SpaceVoice {...props} floating presence={presence} />);
     publish([finished()]);
-    fireEvent.click(screen.getByRole("button", { name: /Talk to Space.*1 ready/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Talk to worker" }));
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discuss by voice" }));
     const oldConnection = mock.options;
     // The engine's local note-access answer can complete before its batched
     // publication exposes the intermediate running state.
@@ -386,8 +464,8 @@ describe("Space voice work-order integration", () => {
     const { props, rerender } = setup(); const presence = createVoicePresence();
     rerender(<SpaceVoice {...props} floating presence={presence} />);
     publish([finished()]);
-    fireEvent.click(screen.getByRole("button", { name: /Talk to Space.*1 ready/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Talk to worker" }));
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discuss by voice" }));
     rerender(<SpaceVoice {...props} floating presence={presence} toggleRequest={2} />);
     fireEvent.click(within(screen.getByTestId("orbs-pill")).getByRole("button", { name: "Dismiss orb: Climate" }));
     expect(presence.getSnapshot().focusedJobId).toBeUndefined();
@@ -401,8 +479,8 @@ describe("Space voice work-order integration", () => {
       assignment: { subject: "Climate", focus: "Investigate the historical climate evidence." },
       selection: { id: "original-passage", spaceId: "a", noteId: "original-note", noteTitle: "Climate draft", version: "v1", range: { from: 0, to: 16, unit: "dom-text-utf16" }, text: "A climate claim.", hiddenTaskRanges: [] } };
     publish([child, finished("astronomy", "Astronomy")]);
-    fireEvent.click(screen.getByRole("button", { name: /Talk to Space.*2 ready/ }));
-    fireEvent.click(screen.getAllByRole("button", { name: "Talk to worker" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Discuss by voice" })[0]);
     expect(presence.getSnapshot().focusedJobId).toBe("climate");
     speak("Follow that distinction"); await settle();
     expect(mock.run).toHaveBeenCalledExactlyOnceWith("climate", "Follow that distinction", expect.any(String), "original-note", null, false, child.selection, child.assignment);
@@ -416,7 +494,7 @@ describe("Space voice work-order integration", () => {
     setup(); publish([finished(), finished("astronomy", "Astronomy")]);
     speak("Follow that distinction"); await settle();
     expect(mock.run).not.toHaveBeenCalled(); expect(mock.route).not.toHaveBeenCalled();
-    expect(screen.getByText("Which research request should I change?")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Which research request should I change?");
   });
   it("admits a second distinct spoken follow-that after completion but not its delayed delegation", async () => {
     setup(); const assignment = { subject: "Climate", focus: "Explain the climate distinction." };
@@ -438,12 +516,12 @@ describe("Space voice work-order integration", () => {
     const { props, rerender } = setup(); rerender(<SpaceVoice {...props} floating />);
     const assignment = { subject: "Climate", focus: "Explain the climate distinction." };
     publish([{ ...finished(), assignment }, finished("astronomy", "Astronomy")]);
-    fireEvent.click(screen.getByRole("button", { name: /Talk to Space.*2 ready/ }));
-    fireEvent.click(screen.getAllByRole("button", { name: "Talk to worker" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Discuss by voice" })[0]);
     speak("Follow that distinction"); await settle();
     expect(mock.run).toHaveBeenCalledTimes(1);
     publish([{ ...finished("climate", "Climate", 2), prompt: "Follow that distinction", assignment }, finished("astronomy", "Astronomy")]);
-    fireEvent.click(screen.getAllByRole("button", { name: "Talk to worker" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Discuss by voice" })[0]);
     speak("Follow that distinction", 0); await settle();
     expect(mock.run).toHaveBeenCalledTimes(2);
     expect(mock.run.mock.calls[1][8]).toEqual({ expectedRevision: 2 });
@@ -489,8 +567,8 @@ describe("Space voice work-order integration", () => {
   it("cancels the focused completed worker on stop-that without touching its sole running sibling", async () => {
     const { props, rerender } = setup(); rerender(<SpaceVoice {...props} floating />);
     publish([finished(), { ...finished("astronomy", "Astronomy"), state: "running", result: undefined }]);
-    fireEvent.click(screen.getByRole("button", { name: /Talk to Space.*1 ready/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Talk to worker" }));
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discuss by voice" }));
     speak("Stop that"); await settle();
     expect(mock.cancel).toHaveBeenCalledExactlyOnceWith("climate");
     expect(mock.jobs.find(job => job.id === "astronomy")).toMatchObject({ state: "running", revision: 1 });
@@ -498,13 +576,13 @@ describe("Space voice work-order integration", () => {
   it("does not continue a focused finished worker whose evidence becomes stale before routing", async () => {
     const { props, rerender } = setup(); rerender(<SpaceVoice {...props} floating />);
     publish([finished(), finished("astronomy", "Astronomy")]);
-    fireEvent.click(screen.getByRole("button", { name: /Talk to Space.*2 ready/ }));
-    fireEvent.click(screen.getAllByRole("button", { name: "Talk to worker" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Discuss by voice" })[0]);
     speak("Follow that distinction");
     mock.current.mockImplementation((id, revision) => id !== "climate" && mock.jobs.some(job => job.id === id && job.revision === revision));
     await settle();
     expect(mock.run).not.toHaveBeenCalled(); expect(mock.cancel).not.toHaveBeenCalled();
-    expect(screen.getByText("Which research request should I change?")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Which research request should I change?");
   });
   it("retains child read-only authority but replaces its scope only for an explicit scoped correction", async () => {
     setup(); const child = { ...finished("climate", "Historical climate"), assignment: { subject: "Climate", focus: "Compare climate and astronomy." } };
@@ -528,7 +606,7 @@ describe("Space voice work-order integration", () => {
     await act(async () => resolve({ action: "clarify", question: "What should each worker investigate?", workerCount: 3 })); await settle();
     expect(presence.getSnapshot().jobs.map(job => job.id)).toEqual(reserved.map(job => job.id));
     expect(presence.getSnapshot().jobs.every(job => job.phase === "clarifying")).toBe(true);
-    expect(screen.getByRole("button", { name: /0 working · 0 ready · 3 waiting/ })).toBeInTheDocument();
+    expect(screen.queryByText(/working ·|ready ·|3 waiting/)).toBeNull();
     mock.route.mockResolvedValueOnce({ action: "conversation" });
     speak("This is such an interesting idea", 2_500); await settle();
     expect(presence.getSnapshot().jobs.map(job => job.id)).toEqual(reserved.map(job => job.id));
@@ -560,12 +638,12 @@ describe("Space voice work-order integration", () => {
   });
   it("cancels one waiting orb without removing its siblings or reviving it on clarification", async () => {
     const { props, rerender } = setup(); const presence = createVoicePresence();
-    rerender(<SpaceVoice {...props} presence={presence} />);
+    rerender(<SpaceVoice {...props} presence={presence} floating />);
     mock.route.mockResolvedValueOnce({ action: "clarify", question: "What should each worker investigate?", workerCount: 3 });
     speak("Spawn three orbs", 0); await settle();
     const ids = presence.getSnapshot().jobs.map(job => job.id);
     expect(ids).toHaveLength(3);
-    fireEvent.click(screen.getByRole("button", { name: "Cancel research: Worker 2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss orb: Worker 2" }));
     expect(presence.getSnapshot().jobs.map(job => job.id)).toEqual([ids[0], ids[2]]);
     mock.route.mockResolvedValueOnce({ action: "batch", prompt: "Plot and history", assignments: [
       { subject: "Plot", focus: "Research plot" }, { subject: "History", focus: "Research history" },
@@ -576,7 +654,7 @@ describe("Space voice work-order integration", () => {
   });
   it("invalidates a clarification answer already routing when one reserved worker is cancelled", async () => {
     const { props, rerender } = setup(); const presence = createVoicePresence();
-    rerender(<SpaceVoice {...props} presence={presence} />);
+    rerender(<SpaceVoice {...props} presence={presence} floating />);
     mock.route.mockResolvedValueOnce({ action: "clarify", question: "Which topics?", workerCount: 3 });
     speak("Spawn three orbs", 0); await settle();
     const ids = presence.getSnapshot().jobs.map(job => job.id);
@@ -584,7 +662,7 @@ describe("Space voice work-order integration", () => {
     mock.route.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
     speak("Plot, characters and history", 2_500); await settle();
     const signal = mock.route.mock.calls.slice(-1)[0][0].signal;
-    fireEvent.click(screen.getByRole("button", { name: "Cancel research: Worker 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss orb: Worker 1" }));
     expect(signal.aborted).toBe(true);
     await act(async () => resolve({ action: "batch", prompt: "Plot, characters and history", assignments: [
       { subject: "Plot", focus: "Plot" }, { subject: "Characters", focus: "Characters" }, { subject: "History", focus: "History" },
@@ -734,7 +812,7 @@ describe("Space voice work-order integration", () => {
     act(() => mock.engine.deliver("commentary", "Climate finding", null, { id: "climate", revision: 1 }));
     await settle(2_000);
     expect(commentary()).toEqual([["commentary", "Climate finding", null]]);
-    expect(screen.getByRole("button", { name: "Cancel research: Research astronomy" })).toBeInTheDocument();
+    expect(mock.route.mock.calls[0][0].signal.aborted).toBe(false);
   });
   it("does not hold an astronomy finding while an explicitly named climate correction is routed", async () => {
     setup(); publish([finished("climate", "Climate"), finished("astronomy", "Astronomy")]);
@@ -831,11 +909,11 @@ describe("Space voice work-order integration", () => {
     expect(mock.jobs.find(job => job.id === "astronomy").state).toBe("running");
   });
   it("does not revive a job cancelled while its correction was being interpreted", async () => {
-    setup(); publish([{ ...finished(), state: "running" }]);
+    const { props, rerender } = setup(); rerender(<SpaceVoice {...props} floating />); publish([{ ...finished(), state: "running" }]);
     let resolve!: (value: unknown) => void;
     mock.route.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
     speak("Actually, check climate in 2024 instead", 0); await settle();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel research: Climate" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss orb: Climate" }));
     expect(mock.cancel).toHaveBeenCalledExactlyOnceWith("climate");
     await act(async () => resolve({ action: "update", jobId: "climate", revision: 1, prompt: "Actually, check climate in 2024 instead" }));
     expect(mock.run).not.toHaveBeenCalled();
@@ -851,17 +929,17 @@ describe("Space voice work-order integration", () => {
     await act(async () => resolve({ action: "new", prompt: "What about climate?" }));
     await settle(2_000);
     expect(mock.run).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "Cancel research: What about climate?" })).toBeNull();
+    expect(signal.aborted).toBe(true);
   });
   it("starts an unrelated queued interpretation after cancellation even if the old router never settles", async () => {
-    setup();
+    const { props, rerender } = setup(); rerender(<SpaceVoice {...props} floating />);
     mock.route.mockImplementationOnce(() => new Promise(() => {}));
     speak("What about climate?", 0, "climate"); await settle();
     const oldSignal = mock.route.mock.calls[0][0].signal;
     mock.route.mockResolvedValueOnce({ action: "new", prompt: "What about astronomy?" });
     speak("What about astronomy?", 2_500, "astronomy"); await settle();
     expect(mock.route).toHaveBeenCalledOnce(); expect(mock.run).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel research: What about climate?" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss orb: What about climate?" }));
     await settle();
     expect(oldSignal.aborted).toBe(true); expect(mock.route).toHaveBeenCalledTimes(2);
     expect(mock.run).toHaveBeenCalledExactlyOnceWith(expect.any(String), "What about astronomy?", expect.any(String), undefined, "astronomy");
@@ -908,20 +986,20 @@ describe("Space voice work-order integration", () => {
     setup(); let resolve!: (value: unknown) => void;
     mock.route.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
     speak("What about climate?", 0, "climate"); await settle();
-    expect(screen.getByRole("button", { name: "Cancel research: What about climate?" })).toBeInTheDocument();
+    expect(mock.route.mock.calls[0][0].signal.aborted).toBe(false);
     const signal = mock.route.mock.calls[0][0].signal as AbortSignal;
     await settle(45_000);
     expect(signal.aborted).toBe(true);
-    expect(screen.queryByRole("button", { name: "Cancel research: What about climate?" })).toBeNull();
+    expect(signal.aborted).toBe(true);
     expect(screen.getByRole("alert")).toHaveTextContent(/understanding this request took too long/i);
     await act(async () => resolve({ action: "new", prompt: "What about climate?" }));
     await settle();
     expect(mock.run).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "Cancel research: What about climate?" })).toBeNull();
+    expect(signal.aborted).toBe(true);
   });
   it("targets Keep and saved-note navigation to their own completed research result", async () => {
     const { props } = setup(); publish([finished("climate", "Climate"), finished("astronomy", "Astronomy")]);
-    const astronomy = screen.getByText("Astronomy").closest(".space-voice__job") as HTMLElement;
+    const astronomy = screen.getByText("Astronomy").closest("article") as HTMLElement;
     await act(async () => fireEvent.click(within(astronomy).getByRole("button", { name: "Keep as note" })));
     expect(mock.keep).toHaveBeenCalledExactlyOnceWith("astronomy");
     publish([finished("climate", "Climate"), { ...finished("astronomy", "Astronomy"), receipt: { savedNoteIds: ["saved-astronomy"], savedTitles: ["Astronomy notes"] } }]);
@@ -941,7 +1019,7 @@ describe("Space voice work-order integration", () => {
     expect(mock.options.context).toContain("We agreed to keep the climate comparison brief");
     expect(mock.append).toHaveBeenCalledWith("thinking", expect.stringContaining("saved-climate"));
     expect(screen.getByRole("button", { name: "Saved · Climate notes" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Cancel research: Astronomy" })).toBeInTheDocument();
+    expect(mock.jobs.find(job => job.id === "astronomy")).toMatchObject({ state: "running" });
     expect(screen.queryByRole("button", { name: "Reconnect voice" })).toBeNull();
     expect(mock.run).not.toHaveBeenCalled(); expect(mock.cancel).not.toHaveBeenCalled();
     expect(commentary()).toEqual([]);
@@ -988,12 +1066,11 @@ describe("Space voice work-order integration", () => {
     expect(mock.jobs[0]).toMatchObject({ id: "climate", state: "completed", result: { reply: "Climate finding." } });
     expect(screen.getByTestId("orbs-pill")).toHaveAttribute("data-dismissed", "climate");
     expect(presence.getSnapshot().dismissedJobIds).toEqual(["climate"]);
-    fireEvent.click(screen.getByRole("button", { name: /Talk to Space.*0 working.*1 ready/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Research & references" }));
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
     expect(screen.getByText("Climate finding.")).toBeVisible();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Keep as note" })));
     expect(mock.keep).toHaveBeenCalledExactlyOnceWith("climate");
-    fireEvent.click(screen.getByRole("button", { name: "Bring back & talk" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discuss by voice" }));
     expect(mock.connections).toHaveLength(2);
     expect(screen.getByTestId("orbs-pill")).toHaveAttribute("data-dismissed", "");
     expect(presence.getSnapshot().focusedJobId).toBe("climate");
@@ -1008,7 +1085,7 @@ describe("Space voice work-order integration", () => {
   });
   it("uses the explicit retry path so replay deduplication cannot swallow a failed job retry", async () => {
     setup(); publish([{ ...finished(), state: "failed", progress: "Provider timed out" }]);
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Retry" })));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Retry research" })));
     expect(mock.retry).toHaveBeenCalledExactlyOnceWith("climate", expect.any(String));
     expect(mock.run).not.toHaveBeenCalled();
   });
@@ -1019,8 +1096,8 @@ describe("Space voice work-order integration", () => {
       coverage: { availableNotes: 2, availableSources: 0, openedNotes: 1, openedSources: 0, searches: 1, limited: true } };
     const working = { ...finished(), state: "running" as const, result: undefined, progress: "Checking another passage", updates: [update] };
     publish([working]);
-    expect(draft).toHaveFocus(); expect(screen.queryByText("Latest finding")).toBeNull(); expect(commentary()).toEqual([]);
-    fireEvent.click(screen.getByRole("button", { name: /Talk to Space.*1 working.*0 ready/ }));
+    expect(draft).toHaveFocus(); expect(commentary()).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
     const summary = screen.getByText("Latest finding"), disclosure = summary.closest("details")!;
     expect(disclosure).not.toHaveAttribute("open");
     expect(screen.getByText(/A supported first finding/)).not.toBeVisible();
@@ -1032,20 +1109,19 @@ describe("Space voice work-order integration", () => {
     publish([{ ...working, updates: [update, { ...update, sequence: 2, reply: "A newer supported finding [1](#orion-evidence-e1)." }] }]);
     expect(screen.getByText(/A newer supported finding/)).toBeVisible(); expect(screen.queryByText(/A supported first finding/)).toBeNull();
     publish([finished()]);
-    expect(screen.queryByText("Latest finding")).toBeNull(); expect(screen.getByRole("button", { name: "Research & references" })).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Research & references" })); expect(screen.getByText("Climate finding.")).toBeVisible();
+    expect(screen.queryByText("Latest finding")).toBeNull(); expect(screen.getByText("Climate finding.")).toBeVisible();
   });
-  it("retains a cancelled work row and retries only through an explicit action", async () => {
-    setup(); publish([{ ...finished(), state: "running", result: undefined }]);
-    fireEvent.click(screen.getByRole("button", { name: "Cancel research: Climate" }));
-    expect(screen.getByText("Climate")).toBeVisible(); expect(screen.getByRole("status")).toHaveTextContent("Cancelled");
+  it("keeps cancellation actionable in the conversation without a worker list", async () => {
+    const { props, rerender } = setup(); rerender(<SpaceVoice {...props} floating />); publish([{ ...finished(), state: "running", result: undefined }]);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss orb: Climate" }));
+    expect(screen.getByRole("article", { name: "Climate" })).toBeVisible(); expect(screen.getByText("Research stopped.")).toBeVisible();
     expect(mock.retry).not.toHaveBeenCalled();
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Retry" })));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Retry research" })));
     expect(mock.retry).toHaveBeenCalledExactlyOnceWith("climate", expect.any(String)); expect(mock.run).not.toHaveBeenCalled();
   });
   it("retains an atomic save receipt after cancellation without offering a duplicate-save retry", () => {
     const { props } = setup(); publish([{ ...finished(), state: "cancelled", receipt: { savedNoteIds: ["saved-before-stop"], savedTitles: ["Prior finding"] } }]);
-    expect(screen.getByText("Saved before cancellation")).toBeVisible(); expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.getByText("Saved before cancellation")).toBeVisible(); expect(screen.queryByRole("button", { name: "Retry research" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Saved · Prior finding" }));
     expect(props.onOpenNote).toHaveBeenCalledExactlyOnceWith("saved-before-stop"); expect(mock.keep).not.toHaveBeenCalled(); expect(mock.retry).not.toHaveBeenCalled();
   });
@@ -1113,19 +1189,19 @@ describe("selected passage during a live Space call", () => {
   });
   it("keeps the original passage through navigation, a cancelled clarification answer and the surviving workers' next answer", async () => {
     const { props, rerender, store, selected } = selectionSetup(), presence = createVoicePresence();
-    rerender(<SpaceVoice {...props} focusNoteId="story" voiceSelection={store} presence={presence} />);
+    rerender(<SpaceVoice {...props} focusNoteId="story" voiceSelection={store} presence={presence} floating />);
     act(() => store.capture(selected)); const original = store.getSnapshot();
     mock.route.mockResolvedValueOnce({ action: "clarify", question: "Which angles?", workerCount: 3 });
     speak("Spawn three orbs to study this passage", 0); await settle();
     const ids = presence.getSnapshot().jobs.map(job => job.id);
     act(() => store.capture({ ...selected, text: "Second passage.", range: { ...selected.range, from: 15, to: 30 } }));
-    rerender(<SpaceVoice {...props} focusNoteId="other" voiceSelection={store} presence={presence} />);
+    rerender(<SpaceVoice {...props} focusNoteId="other" voiceSelection={store} presence={presence} floating />);
     let resolveOld!: (value: unknown) => void;
     mock.route.mockImplementationOnce(() => new Promise(done => { resolveOld = done; }));
     speak("Meaning, cadence and history", 2_500); await settle();
     expect(mock.route.mock.calls.slice(-1)[0][0].conversation).toContain("First passage.");
     expect(mock.route.mock.calls.slice(-1)[0][0].conversation).not.toContain("Second passage.");
-    fireEvent.click(screen.getByRole("button", { name: "Cancel research: Worker 2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss orb: Worker 2" }));
     await act(async () => resolveOld({ action: "batch", prompt: "Meaning, cadence and history", assignments: [
       { subject: "Meaning", focus: "Meaning" }, { subject: "Cadence", focus: "Cadence" }, { subject: "History", focus: "History" },
     ] })); await settle();

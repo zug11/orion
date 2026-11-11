@@ -8,8 +8,9 @@ optional session recording storage. This is online voice, separate from local
 Whisper dictation. Research uses the selected Intelligence provider/model and its
 normal scheduler. Starting from the sidebar leaves the current note open. The
 current Space and window own the call, independently of the visible Chat panel.
-A bottom-right glass pill provides mute, end, Open Chat and an expandable work
-summary. The composer's audio-wave button becomes a square Stop button while
+A bottom-right glass pill provides mute, end, Open Chat and Voice options.
+Findings, citations, saved-note links and actionable errors appear in the
+conversation; worker queues and counts are not displayed. The composer's audio-wave button becomes a square Stop button while
 connected or connecting; transcripts, elapsed time and provider/usage text stay
 out of the composer. Local Whisper dictation retains its existing insertion and
 transcription behavior.
@@ -38,15 +39,15 @@ identity, relocks its conversation and hands audio back to the centre. Switching
 recipients never cancels admitted unrelated work. These explicit switches may
 involve connection latency and a new billable voice session.
 
-The work summary offers **Clear voice chat…** with an inline confirmation. It
+Voice options offers **Clear voice chat…** with an inline confirmation. It
 ends the transport, cancels pending routing/research/preparation, replaces the
 Space's transient coordinator and clears retained voice conversations/results.
 Late events from the old recipient or coordinator cannot repopulate the cleared
 view. Saved notes and typed Chat are not deleted; a save already admitted to the
 atomic writer may finish. The user explicitly starts the next call.
 
-Undecided ordinary conversation routing remains cancellable in the work summary
-but does not flash a provisional research orb. Explicit worker reservations stay
+Undecided ordinary conversation routing remains cancellable by voice or Stop
+research but does not flash a provisional research orb. Explicit worker reservations stay
 visible. Actual routing/research and direct edit preparation drive circular
 indicators, independently of measured audio. Reduced motion uses static rings.
 The router receives a bounded reference to the captured finished finding so a
@@ -54,7 +55,7 @@ question about existing evidence can stay conversational.
 
 Throwing a running worker back into the small swarm cancels only that job.
 Throwing a completed worker shrinks its visible orb while retaining the result,
-references and conversation in the work list. An explicit return restores it.
+references and conversation in Chat. An explicit return restores it.
 Only measured microphone and locally playing output energy animate listening
 and speaking. Update receipts and text do not impersonate audio. See
 [the constellation contract](voice-constellation.md) for motion and accessibility.
@@ -129,7 +130,7 @@ packet and sends it immediately before its prose, so interleaved workers cannot 
 each other's source mapping. A rejected reference send holds commentary; a
 rejected commentary retries both together. Current-call delegation IDs are
 resolved at delivery rather than carried blindly across audio connections.
-Complete bounded findings remain available in the local work summary, including
+Complete bounded findings remain available in the local conversation, including
 final answers. The same reading calls can return a validated `voice` object with a
 short assignment label (80 Unicode characters) and a final spoken summary
 (360 Unicode characters). The label changes presentation only; the original
@@ -319,9 +320,9 @@ not renew it. A completed assignment's concise answer bypasses this interim
 allowance and remains paced behind existing speech. Revision/sequence guards
 prevent duplicate final announcements. Explicit requests and confirmed actions
 also remain eligible independently. Detailed results remain in local context
-and the work summary; opening a worker is never required to receive its finding.
+and the conversation; opening a worker is never required to receive its finding.
 The speech queue now follows research retention rather than dropping updates
-after twelve, and the work list exposes every retained result rather than six.
+after twelve, and the conversation exposes every retained result rather than six.
 After a 1.2-second collection window, up to four automatic interim/final findings
 enter one background synthesis call using the selected Intelligence provider,
 model and effort. It can prepare during assistant speech and never waits for

@@ -103,7 +103,70 @@ function appendInEditor(editor: Editor, text: string) {
   act(() => { editor.commands.insertContentAt(editor.state.doc.content.size - 1, text); });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
 describe("external MCP changes with a note already open", () => {
+  it.each([false, true])("ignores an overtaken refresh and retries for current remote metadata (newer typing: %s)", async newerTyping => {
+    const editor = await launch();
+    const stale = structuredClone(runtime.disk!);
+    const refresh = deferred<OrionVault>();
+    runtime.load.mockImplementationOnce(() => refresh.promise);
+    fireEvent.focus(window);
+
+    appendInEditor(editor, localAddition);
+    await waitFor(() => expect(diskNote().body).toBe(originalBody + localAddition));
+    // This update has no second notification. Discarding the stale result must
+    // still trigger a fresh read, even if this window has finished typing.
+    externalUpdate({ summary: "A subtitle from another window." });
+    const body = originalBody + localAddition + (newerTyping ? " Still writing." : "");
+    if (newerTyping) appendInEditor(editor, " Still writing.");
+    await act(async () => { refresh.resolve(stale); });
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(editor.getMarkdown()).toBe(body);
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Note summary" })).toHaveValue("A subtitle from another window."));
+    await waitFor(() => expect(diskNote().body).toBe(body));
+    expect(openEditor()).toBe(editor);
+  });
+
+  it("does not treat this window's in-flight save as another writer when a refresh finishes first", async () => {
+    const editor = await launch();
+    const refresh = deferred<OrionVault>();
+    const saved = deferred<void>();
+    runtime.load.mockImplementationOnce(() => refresh.promise);
+    fireEvent.focus(window);
+    runtime.save.mockImplementationOnce(async (next: OrionVault, expectedRevision: string | null) => {
+      expect(expectedRevision).toBe(runtime.disk!.updatedAt);
+      runtime.disk = structuredClone(next);
+      await saved.promise;
+    });
+
+    appendInEditor(editor, localAddition);
+    await waitFor(() => expect(diskNote().body).toBe(originalBody + localAddition));
+    appendInEditor(editor, " Still writing.");
+    await act(async () => { refresh.resolve(structuredClone(runtime.disk!)); });
+    const showedConflict = screen.queryByRole("dialog") !== null;
+    // Always release the pending write, including when checking the old bug.
+    await act(async () => { saved.resolve(); });
+
+    expect(showedConflict).toBe(false);
+    expect(editor.getMarkdown()).toBe(originalBody + localAddition + " Still writing.");
+    await waitFor(() => expect(diskNote().body).toBe(originalBody + localAddition + " Still writing."));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("creates a genuinely empty note with optional heading placeholders", async () => {
+    await launch();
+    fireEvent.keyDown(window, { key: "n", metaKey: true });
+    await waitFor(() => expect(screen.getByPlaceholderText("Title")).toHaveValue(""));
+    expect(screen.getByPlaceholderText("Subtitle")).toHaveValue("");
+    await waitFor(() => expect(runtime.disk!.spaces[0].notes).toHaveLength(2));
+    expect(runtime.disk!.spaces[0].notes[0]).toMatchObject({ title: "", summary: "", body: "" });
+  });
   it("coalesces short typing pauses while checkpointing continuous typing within five seconds", async () => {
     const editor = await launch();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });

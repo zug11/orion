@@ -34,6 +34,7 @@ export { default as Edit3 } from "lucide-react/dist/esm/icons/edit-3.mjs";
 export { default as ExternalLink } from "lucide-react/dist/esm/icons/external-link.mjs";
 export { default as Eye } from "lucide-react/dist/esm/icons/eye.mjs";
 export { default as EyeOff } from "lucide-react/dist/esm/icons/eye-off.mjs";
+export { default as Ellipsis } from "lucide-react/dist/esm/icons/ellipsis.mjs";
 export { default as File } from "lucide-react/dist/esm/icons/file.mjs";
 export { default as FileCode2 } from "lucide-react/dist/esm/icons/file-code-2.mjs";
 export { default as FilePlus2 } from "lucide-react/dist/esm/icons/file-plus-2.mjs";

@@ -6,6 +6,7 @@ import type {
   SpaceOverview,
 } from "../types";
 import { decorateAutoLinks, resolveConceptDestination } from "./wiki";
+import { displayNoteTitle } from "./noteMetadata";
 import { isKnowledgeNote, spaceNoteSummary, SPACE_OVERVIEW_WRITING_GUIDANCE, stableKnowledgeHash } from "./spaceKnowledge";
 
 const MAX_NOTES = 64;
@@ -194,7 +195,7 @@ export function buildLocalSpaceOverview(snapshot: AppSnapshot): SpaceOverview {
       : concepts.length === 1
         ? `Around ${concepts[0].label}`
         : recent[0]?.title || snapshot.workspace.name;
-  const noteNames = recent.map((note) => note.title);
+  const noteNames = recent.map(displayNoteTitle);
   const noteOrientations = recent
     .map((note) => {
       const summary = spaceNoteSummary(note);
@@ -206,7 +207,7 @@ export function buildLocalSpaceOverview(snapshot: AppSnapshot): SpaceOverview {
         .join(" ")
         .slice(0, 520)
         .trim();
-      return detail ? `${note.title}. ${detail}` : "";
+      return detail ? `${displayNoteTitle(note)}. ${detail}` : "";
     })
     .filter(Boolean);
   const body = recent.length

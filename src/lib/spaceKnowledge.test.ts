@@ -11,6 +11,7 @@ import {
   pendingSpaceBlueprints,
   prepareSpaceKnowledgeIndex,
   spaceKnowledgeIsCurrent,
+  SpaceNoteDigestCache,
   stableKnowledgeHash,
 } from "./spaceKnowledge";
 
@@ -53,6 +54,47 @@ function result(title: string, body: string): OrganizeContentResult {
 }
 
 describe("persistent Space knowledge topology", () => {
+  it("reuses unchanged note digests while rebuilding edited notes without changing their meaning", () => {
+    const snapshot = createEmptySnapshot("Writing", NOW);
+    snapshot.notes = [note("a", "First thought."), note("b", "Second thought.")];
+    const cache = new SpaceNoteDigestCache();
+    const initial = buildSpaceNoteDigests(snapshot, cache);
+    expect(initial).toEqual(buildSpaceNoteDigests(snapshot));
+    snapshot.notes = [{ ...snapshot.notes[0], body: "An expanded first thought." }, snapshot.notes[1]];
+    const changed = buildSpaceNoteDigests(snapshot, cache);
+    expect(changed[0]).not.toBe(initial[0]);
+    expect(changed[1]).toBe(initial[1]);
+    expect(changed).toEqual(buildSpaceNoteDigests(snapshot));
+    snapshot.spaceKnowledge = prepareSpaceKnowledgeIndex(snapshot, NOW, changed);
+    expect(spaceKnowledgeIsCurrent(snapshot, changed)).toBe(true);
+
+    snapshot.notes = [snapshot.notes[0]];
+    expect(buildSpaceNoteDigests(snapshot, cache)).toEqual([changed[0]]);
+    expect(spaceKnowledgeIsCurrent(snapshot, buildSpaceNoteDigests(snapshot, cache))).toBe(false);
+  });
+
+  it("invalidates derived links when a connected note or concept changes, and never shares cached digests across Spaces", () => {
+    const snapshot = createEmptySnapshot("Links", NOW);
+    snapshot.notes = [note("a", "First thought."), note("b", "Second thought.")];
+    snapshot.concepts = [{ id: "concept", label: "First concept", description: "", color: "teal", autoLink: true,
+      aliases: [], noteIds: ["a"], canonicalNoteId: "a" }];
+    snapshot.relationships = [{ id: "relationship", fromNoteId: "a", toNoteId: "b", kind: "related", label: "Connection", strength: 0.7 }];
+    const cache = new SpaceNoteDigestCache();
+    const initial = buildSpaceNoteDigests(snapshot, cache);
+    snapshot.concepts = [{ ...snapshot.concepts[0], label: "Renamed concept" }];
+    snapshot.notes = [snapshot.notes[0], { ...snapshot.notes[1], title: "New neighbour title" }];
+    const updated = buildSpaceNoteDigests(snapshot, cache);
+    expect(updated[0]).not.toBe(initial[0]);
+    expect(updated[0].conceptLabels).toContain("Renamed concept");
+    expect(updated[0].relationshipHints.join(" ")).toContain("New neighbour title");
+    expect(updated).toEqual(buildSpaceNoteDigests(snapshot));
+
+    const otherSpace = { ...snapshot, workspace: { ...snapshot.workspace, id: "other-space" } };
+    const otherDigests = buildSpaceNoteDigests(otherSpace, cache);
+    expect(otherDigests).toEqual(updated);
+    expect(otherDigests[0]).not.toBe(updated[0]);
+  });
+
   it("reads current body sketches on a one-cluster refresh instead of recycling its old overview", () => {
     const snapshot = createEmptySnapshot("Discussion", NOW);
     snapshot.notes = [{

@@ -1,5 +1,6 @@
 import {
   ArrowUp,
+  ChevronDown,
   AudioLines,
   Bot,
   BookOpenText,
@@ -18,13 +19,16 @@ import {
   type FormEvent,
   type KeyboardEvent,
   type RefCallback,
+  type RefObject,
 } from "react";
+import { useVoiceChatScroll } from "./useVoiceChatScroll";
+import "./VoiceChatScroll.css";
 import type { VoiceSelection } from "../lib/voiceSelection";
 import { PassageThreadConversation, type PassageChatContext } from "./PassageThreads";
 import { passageIsCurrent } from "../lib/passageThreads";
 import { ChatReply } from "./ChatReply";
 import type { AppSnapshot, ChatResult, ChatEditProposal } from "../types";
-import { SpaceVoice } from "./SpaceVoice";
+import { SpaceVoice, type VoiceConversationContent } from "./SpaceVoice";
 import { VoiceConstellation } from "./VoiceConstellation";
 import type { IconPalette } from "../lib/themeIcon";
 import type { VoiceCommit, VoiceReceipt } from "../lib/voiceResearch";
@@ -45,7 +49,12 @@ export interface ChatViewProps {
   /** Stable portal destinations for the window-owned call. Neither starts audio. */
   voiceSceneRef?: RefCallback<HTMLDivElement>;
   voiceControlsRef?: RefCallback<HTMLDivElement>;
+  voiceResultsRef?: RefCallback<HTMLDivElement>;
+  voiceContent?: VoiceConversationContent;
+  voiceRevealRequest?: number;
   voicePalette?: IconPalette;
+  /** Only the compact dock can grow; full Chat retains its page layout. */
+  dockPanelRef?: RefObject<HTMLDivElement | null>;
   snapshot: AppSnapshot;
   busy: boolean;
   progress?: string;
@@ -79,7 +88,11 @@ export function ChatView({
   voiceControl,
   voiceSceneRef,
   voiceControlsRef,
+  voiceResultsRef,
+  voiceContent,
+  voiceRevealRequest,
   voicePalette,
+  dockPanelRef,
   busy,
   progress,
   onCancel,
@@ -130,7 +143,24 @@ export function ChatView({
   const providerName = selectedAIProviderName(snapshot.settings);
   const isSending = busy || submitting;
   const externalVoiceActive = voiceControl?.active === true;
-  const hasThreadContent = !!passageChat || messages.length > 0 || Boolean(pendingPrompt || error || editProposal) || isSending;
+  const hasThreadContent = !!passageChat || messages.length > 0 || Boolean(pendingPrompt || error || editProposal || voiceContent?.hasContent) || isSending;
+  const scrollVoice = compact && externalVoiceActive && !passageChat && !!dockPanelRef;
+  let latestReply = "";
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index].role === "assistant") { latestReply = `${messages[index].id}:${messages[index].content.length}`; break; }
+  }
+  const voiceScroll = useVoiceChatScroll({ enabled: scrollVoice, active: externalVoiceActive, visible,
+    hasContent: hasThreadContent, panelRef: dockPanelRef, replyKey: `${latestReply}:${voiceContent?.revision ?? ""}`,
+    contentKey: `${messages.length}:${messages[messages.length - 1]?.content.length ?? 0}:${isSending}:${!!pendingPrompt}:${editRevision}:${voiceContent?.revision ?? ""}` });
+  const lastVoiceRevealRequest = useRef<number | undefined>(0);
+  useEffect(() => {
+    if (lastVoiceRevealRequest.current === voiceRevealRequest) return;
+    lastVoiceRevealRequest.current = voiceRevealRequest;
+    if (voiceRevealRequest) {
+      if (scrollVoice) voiceScroll.showMessages(true);
+      else messagesEndRef.current?.scrollIntoView?.({ block: "nearest" });
+    }
+  }, [voiceRevealRequest, voiceScroll.showMessages]);
   const focusNote = focusNoteId ? noteById.get(focusNoteId) : undefined;
   const suggestionCount = compact ? 2 : 4;
   const suggestions = useChatSuggestions(snapshot, {
@@ -140,11 +170,11 @@ export function ChatView({
   });
 
   useEffect(() => {
-    if (visible) messagesEndRef.current?.scrollIntoView?.({
+    if (visible && !scrollVoice) messagesEndRef.current?.scrollIntoView?.({
       behavior: "smooth",
       block: "nearest",
     });
-  }, [isSending, messages.length, pendingPrompt, visible, editProposal]);
+  }, [isSending, messages.length, pendingPrompt, visible, editProposal, scrollVoice]);
 
   async function submitPrompt(prompt = draft) {
     const normalized = prompt.trim();
@@ -164,6 +194,7 @@ export function ChatView({
     const capturedSelection = selection?.spaceId === snapshot.workspace.id && selection.noteId === sendNoteId
       ? structuredClone(selection) : undefined;
 
+    voiceScroll.previewPrompt();
     setDraft("");
     setError(null);
     setPendingPrompt(normalized);
@@ -211,7 +242,7 @@ export function ChatView({
 
   return (
     <section className={`chat-view view${passageChat ? " passage-chat" : ""}${compact ? " chat-view--compact" : ""}`}
-      data-voice-active={externalVoiceActive} data-voice-empty={!hasThreadContent}>
+      data-voice-active={externalVoiceActive} data-voice-empty={!hasThreadContent} data-voice-scroll={scrollVoice}>
       <header className="chat-view__header">
         <div className="chat-view__title">
           <span className="eyebrow">
@@ -254,16 +285,30 @@ export function ChatView({
         </div>
       </header>
 
-      <div className="chat-view__stage">
-        <div className="chat-view__voice-scene" ref={voiceSceneRef} />
+      <div className="chat-view__stage" ref={voiceScroll.stageRef} tabIndex={scrollVoice ? 0 : undefined}
+        aria-label={scrollVoice ? "Voice and text conversation" : undefined}>
+        <div className="chat-view__voice-intro" inert={scrollVoice && voiceScroll.phase === "messages"}>
+          <div className="chat-view__voice-scene" ref={voiceSceneRef} />
+          {scrollVoice && hasThreadContent && <button type="button" className="chat-view__conversation-cue"
+            onClick={() => voiceScroll.showMessages(voiceScroll.newReply)}>
+            {voiceScroll.newReply ? "New reply" : "Conversation"}<ChevronDown size={14} />
+          </button>}
+        </div>
         {passageChat ? <PassageThreadConversation key={passageChat.key} thread={passageChat.thread}
           current={passageIsCurrent(passageChat.note, passageChat.thread.anchor)} onAction={passageChat.onAction}
           references={{ notes: snapshot.notes, sources: snapshot.sources, onOpenNote, onOpenSource }}
           initialDraft={passageChat.draft} active={visible} onBusyChange={setThreadBusy}
           intro={<blockquote className="passage-chat__anchor">{passageChat.thread.anchor.scope === "note" ? "About this note" : passageChat.thread.anchor.text.slice(0, 600)}</blockquote>}
           between={<div className="chat-view__voice-controls" ref={voiceControlsRef} />} /> : <>
-        <div className="chat-view__thread" aria-live="polite" hidden={externalVoiceActive && !hasThreadContent}>
-          {!externalVoiceActive && messages.length === 0 && !pendingPrompt ? (
+        <div className="chat-view__thread" ref={voiceScroll.threadRef} aria-live="polite" hidden={externalVoiceActive && !hasThreadContent}
+          tabIndex={scrollVoice ? 0 : undefined} aria-label={scrollVoice ? "Conversation messages" : undefined}
+          inert={scrollVoice && voiceScroll.phase === "voice" && !voiceScroll.peeking}>
+          {scrollVoice && <nav className="chat-view__reading-nav" aria-label="Conversation view">
+            <button type="button" onClick={voiceScroll.showVoice}><AudioLines size={14} />Voice</button>
+            {voiceScroll.newReply && <button type="button" onClick={() => voiceScroll.showMessages(true)}>New reply<ChevronDown size={13} /></button>}
+          </nav>}
+          <div className="chat-view__thread-content" ref={voiceScroll.contentRef}>
+          {!externalVoiceActive && messages.length === 0 && !pendingPrompt && !voiceContent?.hasContent ? (
             <div className="chat-welcome">
               <div className="chat-welcome__voice" aria-hidden="true">
                 <VoiceConstellation status="idle" activity={idleVoiceActivity} muted={false} jobs={[]}
@@ -395,7 +440,10 @@ export function ChatView({
               </span>
             </article>
           )}
+          <div className="chat-view__voice-results" ref={voiceResultsRef} />
           <div ref={messagesEndRef} />
+          </div>
+          {scrollVoice && <div className="chat-view__prompt-tail" aria-hidden="true" />}
         </div>
 
         <div className="chat-view__voice-controls" ref={voiceControlsRef} />

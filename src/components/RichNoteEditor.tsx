@@ -38,6 +38,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import type {
   AIWritingAction,
@@ -120,6 +121,9 @@ export interface AIImageGenerationCallbacks {
 export interface RichEditorContextState extends EditorCaptureState { markdown: string; authored: boolean }
 
 interface RichNoteEditorProps {
+  documentHeading?: ReactNode;
+  onBodyStartKey?: (key: "ArrowUp" | "Backspace" | "Enter") => boolean;
+  autofocusBody?: boolean;
   onAddComment?: (scope?: "note", cursor?: CommentCursor) => void;
   commentComposerActive?: boolean;
   onThreadEditor?: (editor: Editor | null) => void;
@@ -248,6 +252,9 @@ function sameCitationReferences(
 }
 
 export function RichNoteEditor({
+  documentHeading,
+  onBodyStartKey,
+  autofocusBody = false,
   onAddComment,
   commentComposerActive = false,
   onThreadEditor,
@@ -302,6 +309,8 @@ export function RichNoteEditor({
   const notesRef = useRef(notes);
   const sourcesRef = useRef(sources);
   const onChangeRef = useRef(onChange);
+  const onBodyStartKeyRef = useRef(onBodyStartKey);
+  const [initialBodyFocus] = useState(autofocusBody);
   const onOpenNoteRef = useRef(onOpenNote);
   const frontmatterRef = useRef(initialDocument.prefix);
   const savedPassagesRef = useRef(initialDocument.passages.footer);
@@ -372,6 +381,7 @@ export function RichNoteEditor({
   notesRef.current = notes;
   sourcesRef.current = sources;
   onChangeRef.current = onChange;
+  onBodyStartKeyRef.current = onBodyStartKey;
   onOpenNoteRef.current = onOpenNote;
   findQueryRef.current = findQuery;
   onFindDecorationsChangedRef.current = onFindDecorationsChanged;
@@ -402,7 +412,7 @@ export function RichNoteEditor({
       NoteTextAlignment,
       NoteMargins,
       Placeholder.configure({
-        placeholder: "Start writing…",
+        placeholder: documentHeading ? "" : "Start writing…",
         emptyEditorClass: "is-editor-empty",
       }),
       NoteImage.configure({
@@ -434,6 +444,14 @@ export function RichNoteEditor({
       content: initialDocument.content,
       contentType: "markdown",
       editorProps: {
+        handleKeyDown: (view, event) => {
+          if (!onBodyStartKeyRef.current || !view.editable || view.composing || event.isComposing || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return false;
+          const { selection } = view.state;
+          const { $from } = selection;
+          if (!selection.empty || $from.depth !== 1 || $from.before(1) !== 0 || $from.parentOffset !== 0 || !["paragraph", "heading"].includes($from.parent.type.name)) return false;
+          if (event.key !== "ArrowUp" && event.key !== "Backspace" && event.key !== "Enter") return false;
+          return onBodyStartKeyRef.current(event.key);
+        },
         attributes: {
           role: "textbox",
           "aria-label": "Note body",
@@ -521,6 +539,9 @@ export function RichNoteEditor({
     [noteId],
   );
   editorRef.current = editor;
+  useEffect(() => {
+    if (initialBodyFocus && editor && !editor.isDestroyed) editor.commands.focus("start");
+  }, [editor, initialBodyFocus]);
   useEffect(() => { onThreadEditor?.(editor); return () => onThreadEditor?.(null); }, [editor, onThreadEditor]);
   const flowActive = useEditorState({ editor, selector: ({ editor: current }) => Boolean(current && getInlineFlow(current)) }) ?? false;
   useEffect(() => { onFlowActiveChange?.(flowActive); }, [flowActive, onFlowActiveChange]);
@@ -866,7 +887,11 @@ export function RichNoteEditor({
           .querySelector<HTMLElement>(".editor-formatting-dock, .editor-toolbar-shell")
           ?.getBoundingClientRect().bottom ?? workspaceRect.top + 44;
       const nextSelection = resolveAIWritingSelectionPosition({
-        workspace: workspaceRect,
+        // Keep selection actions clear of the note's bottom-centred word count.
+        workspace: {
+          left: workspaceRect.left, right: workspaceRect.right, top: workspaceRect.top,
+          bottom: workspaceRect.bottom - (shell.closest(".note-view")?.querySelector(".note-word-count") ? 54 : 0),
+        },
         toolbarBottom,
         start,
         end,
@@ -2063,6 +2088,7 @@ export function RichNoteEditor({
       </div>
       {marginsVisible && <MarginsControl editor={editor} disabled={Boolean(aiOperation) || imageBusy || linkTitleBusy} onClose={closeMargins}/>}
       </NativeFormattingDock>}
+      {documentHeading}
       <SlashMenu editor={editor} canComment={Boolean(onAddComment)} suspended={Boolean(chatReview || pendingInsert || linkDraft || citationDraft || writeComposerOpen || aiOperation || imageBusy || flowActive || commentComposerActive)} onCommand={runSlashCommand}/>
       <input ref={slashImageInputRef} type="file" className="sr-only" accept={NOTE_IMAGE_ACCEPT} multiple tabIndex={-1} aria-hidden="true"
         onChange={(event) => {

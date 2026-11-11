@@ -3,7 +3,7 @@ import { Maximize2, MessageCircle, Minus, Plus, X } from "../lib/icons";
 import { isSelectedAIConfigured } from "../lib/ai";
 import { ChatView, type ChatViewProps } from "./ChatView";
 import { useNativeChatGlass } from "./useNativeChatGlass";
-import { SpaceVoice } from "./SpaceVoice";
+import { SpaceVoice, type VoiceConversationContent } from "./SpaceVoice";
 import type { VoicePresenceStore } from "../lib/voicePresence";
 import type { VoiceSelectionStore } from "../lib/voiceSelection";
 import type { IconPalette } from "../lib/themeIcon";
@@ -32,8 +32,12 @@ export function ChatDock({ fullPage, flowActive, onExpand, allowExpand = true, v
   const [expandedSelection, setExpandedSelection] = useState(selection);
   const [voiceToggle, setVoiceToggle] = useState(0);
   const [voiceActive, setVoiceActive] = useState(false);
+  const [voiceVisible, setVoiceVisible] = useState(false);
   const [voiceSceneHost, setVoiceSceneHost] = useState<HTMLDivElement | null>(null);
   const [voiceControlsHost, setVoiceControlsHost] = useState<HTMLDivElement | null>(null);
+  const [voiceResultsHost, setVoiceResultsHost] = useState<HTMLDivElement | null>(null);
+  const [voiceContent, setVoiceContent] = useState<VoiceConversationContent>({ hasContent: false, revision: "" });
+  const [voiceRevealRequest, setVoiceRevealRequest] = useState(0);
   const lastVoiceToggleRequest = useRef(voiceToggleRequest);
   useEffect(() => {
     if (lastVoiceToggleRequest.current === voiceToggleRequest) return;
@@ -49,7 +53,8 @@ export function ChatDock({ fullPage, flowActive, onExpand, allowExpand = true, v
   const restoreFocus = useRef(false);
   const available = isSelectedAIConfigured(chat.snapshot.settings) && !flowActive;
   const visible = fullPage || (available && open);
-  const nativeGlass = useNativeChatGlass(circleRef, available && !fullPage && !voiceActive, open, chat.busy);
+  const hasVoiceControls = Boolean(chat.onVoiceCommit && (voiceActive || voiceVisible));
+  const nativeGlass = useNativeChatGlass(circleRef, available && !fullPage && !hasVoiceControls, open, chat.busy);
 
   useEffect(() => { if (visible) setHasOpened(true); }, [visible]);
   useEffect(() => { if (!available) setOpen(false); }, [available]);
@@ -65,15 +70,15 @@ export function ChatDock({ fullPage, flowActive, onExpand, allowExpand = true, v
     restoreFocus.current = false;
     const target = returnFocus.current;
     if (target?.isConnected && !target.closest("[hidden]")) target.focus({ preventScroll: true });
-    else (voiceActive ? dockRef.current?.querySelector<HTMLButtonElement>('.space-voice-call__pill button[aria-label="Open chat"]') : buttonRef.current)?.focus({ preventScroll: true });
-  }, [visible, voiceActive]);
+    else (hasVoiceControls ? dockRef.current?.querySelector<HTMLButtonElement>('.space-voice-call__pill button[aria-label="Open chat"]') : buttonRef.current)?.focus({ preventScroll: true });
+  }, [visible, hasVoiceControls]);
 
   function close() {
     restoreFocus.current = true;
     setOpen(false);
   }
 
-  return <div ref={dockRef} className={fullPage ? "chat-dock chat-dock--page" : "chat-dock"} data-voice-active={voiceActive}>
+  return <div ref={dockRef} className={fullPage ? "chat-dock chat-dock--page" : "chat-dock"} data-voice-visible={hasVoiceControls}>
     <div ref={panelRef} id="space-chat-panel" role="region" aria-label={`Chat in ${chat.snapshot.workspace.name}`}
       className="chat-dock__panel" hidden={!visible}
       onKeyDown={event => {
@@ -93,11 +98,13 @@ export function ChatDock({ fullPage, flowActive, onExpand, allowExpand = true, v
       {(hasOpened || visible) && <ChatView key={conversationKey} {...chat} suggestionSeed={conversationKey * 2} focusNoteId={fullPage ? expandedContext : chat.focusNoteId} compact={!fullPage} visible={visible} voiceEnabled={!flowActive}
         selection={fullPage ? expandedSelection : selection}
         voiceControl={{ active: voiceActive, toggle: () => setVoiceToggle(value => value + 1) }}
+        dockPanelRef={panelRef}
         voiceSceneRef={setVoiceSceneHost} voiceControlsRef={setVoiceControlsHost} voicePalette={voicePalette}
+        voiceResultsRef={setVoiceResultsHost} voiceContent={voiceContent} voiceRevealRequest={voiceRevealRequest}
         onCommentReply={chat.onCommentReply ? async (id, selected) => { await chat.onCommentReply!(id, selected); setOpen(false); } : undefined}
         onReviewEdit={chat.onReviewEdit ? proposal => { setOpen(false); return chat.onReviewEdit!(proposal); } : undefined} />}
     </div>
-    <div ref={circleRef} className="chat-dock__circle" data-native-chat-glass={nativeGlass || undefined} hidden={!available || fullPage || voiceActive}>
+    <div ref={circleRef} className="chat-dock__circle" data-native-chat-glass={nativeGlass || undefined} hidden={!available || fullPage || hasVoiceControls}>
       <button ref={buttonRef} type="button" className="chat-dock__toggle"
         aria-label={open ? "Close chat" : "Open chat"} title={open ? "Close chat" : "Chat with your Space"}
         aria-expanded={open} aria-controls="space-chat-panel"
@@ -109,7 +116,7 @@ export function ChatDock({ fullPage, flowActive, onExpand, allowExpand = true, v
     </div>
     {chat.onVoiceCommit && <SpaceVoice snapshot={chat.snapshot} focusNoteId={chat.focusNoteId}
       enabled={!flowActive} floating presence={voicePresence} voicePalette={voicePalette} voiceSelection={voiceSelection}
-      toggleRequest={voiceToggle} onActiveChange={setVoiceActive} commit={chat.onVoiceCommit}
+      toggleRequest={voiceToggle} onActiveChange={setVoiceActive} onVisibleChange={setVoiceVisible} commit={chat.onVoiceCommit}
       onProposal={result => {
         if (!result.editProposal) return;
         if (!chat.onReviewEdit) throw new Error("The note review is unavailable in this view.");
@@ -117,6 +124,8 @@ export function ChatDock({ fullPage, flowActive, onExpand, allowExpand = true, v
       }}
       onOpenNote={chat.onOpenNote} onOpenSource={chat.onOpenSource} onOpenSettings={chat.onOpenSettings}
       chatVisible={visible} sceneHost={voiceSceneHost} controlsHost={voiceControlsHost}
+      resultsHost={voiceResultsHost} onConversationContentChange={setVoiceContent}
+      onShowConversation={() => { chat.passageChat?.onLeave(); setOpen(true); setVoiceRevealRequest(value => value + 1); }}
       onCloseChat={!fullPage ? close : undefined}
       onOpenChat={() => { if (!fullPage) setOpen(true); }} />}
   </div>;

@@ -20,8 +20,8 @@ export interface VoiceConstellationProps {
   interactive?: boolean;
   /** Keep the visible scene's motion when its UI moves between Chat and the pill. */
   motion?: VoiceOrbMotion;
-  /** Opens the existing named work list when the scene cannot offer clear targets. */
-  onShowWorkers?: () => void;
+  /** Opens the conversation when the scene cannot offer clear targets. */
+  onShowConversation?: () => void;
 }
 type RGB = readonly [number, number, number];
 const blend = (a: RGB, b: RGB, amount: number): RGB => a.map((value, index) => Math.round(value + (b[index] - value) * amount)) as unknown as RGB;
@@ -215,7 +215,7 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
         onLostPointerCapture={event => endDrag(event, true)}
         onClick={event => { if (event.detail === 0 && job.state === "completed" && job.result) props.onFocus(job.id); }}
         onKeyDown={event => { if (event.key === "Escape") { motion.releaseDrag(true); gesture.current = undefined; } if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); motion.dismiss(job.id); if (props.focusedJobId === job.id) props.onFocus(undefined); props.onDismiss(job.id); } }} />)}
-      {crowded && props.onShowWorkers && <button type="button" className="voice-constellation__overflow" aria-label={`Show all ${props.jobs.length} workers`} onClick={props.onShowWorkers}>{props.jobs.length} workers</button>}
+      {crowded && props.onShowConversation && <button type="button" className="voice-constellation__overflow" aria-label="Open voice conversation" onClick={props.onShowConversation}>Conversation</button>}
     </>}
   </div>;
 }

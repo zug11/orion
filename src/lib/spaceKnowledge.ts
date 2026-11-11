@@ -72,9 +72,35 @@ export function spaceNoteVersion(note: Note): string {
   );
 }
 
-export function buildSpaceNoteDigests(snapshot: AppSnapshot): SpaceNoteDigest[] {
+/** Window-local cache for immutable renderer notes. Weak keys release old
+ * drafts; derived links are checked separately because another note can change
+ * a concept label or relationship without changing this note's identity. */
+export class SpaceNoteDigestCache {
+  private readonly eligibility = new WeakMap<Note, boolean>();
+  private readonly entries = new WeakMap<Note, { spaceId: string; digest: SpaceNoteDigest }>();
+
+  eligible(note: Note): boolean {
+    const cached = this.eligibility.get(note);
+    if (cached !== undefined) return cached;
+    const eligible = isKnowledgeNote(note);
+    this.eligibility.set(note, eligible);
+    return eligible;
+  }
+
+  get(spaceId: string, note: Note, concepts: readonly string[], relationships: readonly string[]): SpaceNoteDigest | undefined {
+    const entry = this.entries.get(note);
+    return entry?.spaceId === spaceId && sameOrderedValues(entry.digest.conceptLabels, concepts)
+      && sameOrderedValues(entry.digest.relationshipHints, relationships) ? entry.digest : undefined;
+  }
+
+  set(spaceId: string, note: Note, digest: SpaceNoteDigest): void {
+    this.entries.set(note, { spaceId, digest });
+  }
+}
+
+export function buildSpaceNoteDigests(snapshot: AppSnapshot, cache?: SpaceNoteDigestCache): SpaceNoteDigest[] {
   const eligibleNotes = snapshot.notes
-    .filter(isKnowledgeNote)
+    .filter(note => cache ? cache.eligible(note) : isKnowledgeNote(note))
     .sort((left, right) => left.id.localeCompare(right.id));
   const noteById = new Map(eligibleNotes.map((note) => [note.id, note] as const));
   const conceptsByNoteId = new Map<string, string[]>();
@@ -141,6 +167,10 @@ export function buildSpaceNoteDigests(snapshot: AppSnapshot): SpaceNoteDigest[] 
   }
 
   return eligibleNotes.map((note) => {
+    const conceptLabels = conceptsByNoteId.get(note.id) ?? [];
+    const relationshipHints = relationshipsByNoteId.get(note.id) ?? [];
+    const cached = cache?.get(snapshot.workspace.id, note, conceptLabels, relationshipHints);
+    if (cached) return cached;
     const noteVersion = spaceNoteVersion(note);
     const headings = extractNoteHeadings(note.body);
     const wholeBodySketch = buildNoteWholeBodySketch(note.body, headings);
@@ -160,7 +190,7 @@ export function buildSpaceNoteDigests(snapshot: AppSnapshot): SpaceNoteDigest[] 
         : quality === "weak"
           ? "The note is short or has too little prose for a strong semantic sketch."
           : "The note has no readable body; routing can use metadata only.";
-    return {
+    const digest: SpaceNoteDigest = {
       noteId: note.id,
       noteVersion,
       title: note.title,
@@ -169,8 +199,8 @@ export function buildSpaceNoteDigests(snapshot: AppSnapshot): SpaceNoteDigest[] 
       summary,
       headings,
       wholeBodySketch,
-      conceptLabels: [...(conceptsByNoteId.get(note.id) ?? [])],
-      relationshipHints: [...(relationshipsByNoteId.get(note.id) ?? [])],
+      conceptLabels: [...conceptLabels],
+      relationshipHints: [...relationshipHints],
       sourceIds: [...note.sourceIds],
       reference: note.kind === "wiki",
       bodyCharacters: note.body.length,
@@ -187,15 +217,17 @@ export function buildSpaceNoteDigests(snapshot: AppSnapshot): SpaceNoteDigest[] 
       ),
       quality,
       qualityReason,
-    } satisfies SpaceNoteDigest;
+    };
+    cache?.set(snapshot.workspace.id, note, digest);
+    return digest;
   });
 }
 
 export function prepareSpaceKnowledgeIndex(
   snapshot: AppSnapshot,
   generatedAt = new Date().toISOString(),
+  digests = buildSpaceNoteDigests(snapshot),
 ): SpaceKnowledgeIndex {
-  const digests = buildSpaceNoteDigests(snapshot);
   const previousIndex = spaceKnowledgeIndexHasValidStructure(
     snapshot.spaceKnowledge,
   )
@@ -406,10 +438,10 @@ export function getSpaceKnowledgeRoot(
   return index.blueprints.find(({ id }) => id === index.rootBlueprintId);
 }
 
-export function spaceKnowledgeIsCurrent(snapshot: AppSnapshot): boolean {
+export function spaceKnowledgeIsCurrent(snapshot: AppSnapshot, digests?: SpaceNoteDigest[]): boolean {
   const index = snapshot.spaceKnowledge;
   if (!index || !spaceKnowledgeIndexHasValidStructure(index)) return false;
-  const expectedDigests = buildSpaceNoteDigests(snapshot);
+  const expectedDigests = digests ?? buildSpaceNoteDigests(snapshot);
   const expectedFingerprint = stableKnowledgeHash(
     JSON.stringify({
       workspace: [snapshot.workspace.name, snapshot.workspace.description],

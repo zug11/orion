@@ -15,6 +15,16 @@ function fixture() {
 const copy = (vault: OrionVault) => structuredClone(vault);
 
 describe("shared vault, independent windows", () => {
+  it("merges a removed heading layout with another writer's body edit", () => {
+    const base = fixture();
+    base.spaces[0].notes[0].title = "";
+    const local = copy(base), remote = copy(base);
+    local.spaces[0].notes[0].headingLayout = "none";
+    remote.spaces[0].notes[0].body = "Writing from the other window.";
+    expect(mergeWindowVault(base, local, remote).spaces[0].notes[0]).toMatchObject({
+      title: "", summary: "", headingLayout: "none", body: "Writing from the other window.",
+    });
+  });
   it("treats native JSON key ordering as the same content and avoids redundant writes", async () => {
     const base = fixture();
     const reordered = JSON.parse(JSON.stringify(base), (_key, value) => {

@@ -21,6 +21,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import type { AppSnapshot, ChatResult } from "../types";
+import { displayNoteTitle } from "../lib/noteMetadata";
 import { localSearchPassage, localSearchTerms, searchLocalSpace } from "../lib/localSearch";
 import { requestNoteExcerptNavigation } from "../lib/noteExcerptNavigation";
 import { requestSourcePassageNavigation } from "../lib/sourcePassageNavigation";
@@ -159,7 +160,7 @@ export function CommandPalette({
 
     const knowledge: PaletteResult[] = searchLocalSpace(snapshot, query, 40, kind).map((match) => ({
       id: match.item.id,
-      title: match.type === "concept" ? match.item.label : match.item.title,
+      title: match.type === "concept" ? match.item.label : match.type === "note" ? displayNoteTitle(match.item) : match.item.title,
       subtitle: match.type === "source"
         ? `${match.item.kind.toUpperCase()} · ${match.snippet}`
         : match.type === "concept"

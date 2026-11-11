@@ -327,10 +327,10 @@ describe("note image storage boundary", () => {
 });
 
 describe("generated note image boundary", () => {
-  it("requests Sunburst through the Image API and validates the returned JPEG", async () => {
+  it("requests 2.6 Sunburst at maximum quality and validates the lossless PNG", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
-        JSON.stringify({ data: [{ b64_json: "/9j/2Q==" }] }),
+        JSON.stringify({ data: [{ b64_json: "iVBORw0KGgo=" }] }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
     );
@@ -339,10 +339,10 @@ describe("generated note image boundary", () => {
 
     try {
       await expect(generateNoteImage("An editorial systems map")).resolves.toEqual({
-        fileName: "orion-generated-image.jpg",
-        mimeType: "image/jpeg",
-        byteSize: 4,
-        base64Data: "/9j/2Q==",
+        fileName: "orion-generated-image.png",
+        mimeType: "image/png",
+        byteSize: 8,
+        base64Data: "iVBORw0KGgo=",
       });
       expect(fetchMock).toHaveBeenCalledWith(
         "https://api.openai.com/v1/images/generations",
@@ -352,13 +352,13 @@ describe("generated note image boundary", () => {
             Authorization: "Bearer sk-browser-image-test",
           }),
           body: JSON.stringify({
-            model: "gpt-image-2.5-sunburst",
+            model: "gpt-image-2.6-sunburst",
             prompt: "An editorial systems map",
             n: 1,
             size: "1536x1024",
-            quality: "medium",
-            output_format: "jpeg",
-            output_compression: 88,
+            quality: "max",
+            complexity: "high",
+            output_format: "png",
           }),
         }),
       );
@@ -369,12 +369,12 @@ describe("generated note image boundary", () => {
   });
 
   it("uses Flare only when Fast is explicitly chosen", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [{ b64_json: "/9j/2Q==" }] }), { status: 200 }));
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [{ b64_json: "iVBORw0KGgo=" }] }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     await saveApiKey("sk-image-fast-fixture");
     try {
       await generateNoteImage("An editorial diagram", undefined, "fast");
-      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ model: "gpt-image-2.5-flare", quality: "medium", output_format: "jpeg" });
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ model: "gpt-image-2.6-flare", quality: "max", complexity: "high", output_format: "png" });
       await expect(generateNoteImage("An image", undefined, "unexpected" as "fast")).rejects.toThrow(/Fast or Detailed/);
       expect(fetchMock).toHaveBeenCalledTimes(1);
     } finally { await deleteApiKey(); vi.unstubAllGlobals(); }
@@ -409,6 +409,19 @@ describe("generated note image boundary", () => {
         base64Data: "iVBORw==",
       }),
     ).toThrow(/invalid or oversized image/i);
+  });
+
+  it("accepts PNG after review while rejecting mismatched formats and active content", async () => {
+    const png = { fileName: "orion-generated-image.png", mimeType: "image/png" as const, byteSize: 8, base64Data: "iVBORw0KGgo=" };
+    await expect(persistGeneratedNoteImage(png, "image_123456789012345678")).resolves.toMatchObject({
+      fileName: png.fileName, mimeType: png.mimeType, byteSize: 8, src: `data:image/png;base64,${png.base64Data}`,
+    });
+    for (const invalid of [
+      { ...png, mimeType: "image/jpeg" },
+      { ...png, fileName: "orion-generated-image.jpg" },
+      { ...png, byteSize: 4, base64Data: "/9j/2Q==" },
+      { ...png, byteSize: 6, base64Data: btoa("<svg/>") },
+    ]) expect(() => parseGeneratedNoteImage(invalid)).toThrow(/invalid or oversized image/i);
   });
 
   it("asks native to cancel the exact active image request", async () => {
@@ -1166,6 +1179,31 @@ describe("browser persistence fallback", () => {
       spaces: [{ workspace: { name: "Test constellation" } }],
     });
   });
+
+  it.each([undefined, "both", "title", "subtitle", "none"] as const)(
+    "round-trips optional note heading layout %s without changing prose", async (headingLayout) => {
+      const vault = createEmptyVault("Optional headings", TEST_NOW);
+      vault.spaces[0] = createPopulatedSnapshot();
+      vault.activeSpaceId = vault.spaces[0].workspace.id;
+      const note = vault.spaces[0].notes[0];
+      if (headingLayout !== undefined) note.headingLayout = headingLayout;
+      await saveSnapshot(vault);
+      expect((await loadSnapshot())?.spaces[0].notes[0]).toEqual(note);
+    },
+  );
+
+  it.each([null, false, "", "body", 3, {}, ["none"]])(
+    "rejects invalid heading layout %j without replacing the vault", async (headingLayout) => {
+      const vault = createEmptyVault("Invalid heading layout", TEST_NOW);
+      vault.spaces[0] = createPopulatedSnapshot();
+      vault.activeSpaceId = vault.spaces[0].workspace.id;
+      Object.assign(vault.spaces[0].notes[0], { headingLayout });
+      const original = JSON.stringify(vault);
+      window.localStorage.setItem("orion:vault:v2", original);
+      await expect(loadSnapshot()).rejects.toThrow();
+      expect(window.localStorage.getItem("orion:vault:v2")).toBe(original);
+    },
+  );
 
   it("round-trips named voices and the active selection", async () => {
     const vault = createEmptyVault("Voice preferences", TEST_NOW);

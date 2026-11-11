@@ -11,6 +11,7 @@ import {
 } from "../lib/icons";
 import { useEffect, useRef, useState, type ComponentType } from "react";
 import type { AppSnapshot, Note } from "../types";
+import { displayNoteTitle } from "../lib/noteMetadata";
 import {
   GENERATE_KINDS,
   generateKindLabel,
@@ -90,15 +91,16 @@ function SidebarNoteRow({
   onOpenNote,
   onDeleteNote,
 }: SidebarNoteRowProps) {
+  const title = displayNoteTitle(note);
   return (
     <div className={active ? "sidebar-note-row active" : "sidebar-note-row"}>
       <button
         type="button"
         className="note-nav-item"
-        aria-label={`Open ${note.title}`}
+        aria-label={`Open ${title}`}
         onClick={() => onOpenNote(note.id)}
       >
-        <span className="note-nav-title">{note.title}</span>
+        <span className="note-nav-title">{title}</span>
         {note.pinned ? (
           <FavoriteMark className="note-nav-favorite" size={11} />
         ) : null}
@@ -106,8 +108,8 @@ function SidebarNoteRow({
       <button
         type="button"
         className="sidebar-note-delete"
-        aria-label={`Delete ${note.title}`}
-        title={`Delete ${note.title}`}
+        aria-label={`Delete ${title}`}
+        title={`Delete ${title}`}
         onClick={() => onDeleteNote(note.id)}
       >
         <Trash2 size={12} />
