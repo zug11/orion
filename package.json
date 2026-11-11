@@ -1,7 +1,7 @@
 {
   "name": "orion",
   "private": true,
-  "version": "0.5.3",
+  "version": "0.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -46,7 +46,7 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2",
+    "@tauri-apps/cli": "^2.12.4",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^19.1.8",

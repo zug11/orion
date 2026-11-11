@@ -22,6 +22,7 @@ use tauri_plugin_opener::OpenerExt;
 use tempfile::NamedTempFile;
 use zeroize::{Zeroize, Zeroizing};
 
+mod app_updates;
 mod assistant_bridge;
 mod assistant_editor_actions;
 mod assistant_editor_context;
@@ -33,6 +34,7 @@ mod assistant_review_protocol;
 mod assistant_voice_work_orders;
 mod connector_installation;
 mod desktop_windows;
+mod dictation_cleanup;
 #[path = "../shared/editor_actions_protocol.rs"]
 mod editor_actions_protocol;
 #[path = "../shared/editor_context_protocol.rs"]
@@ -4879,6 +4881,7 @@ pub fn run() {
         .manage(perplexity::RequestGate::default())
         .manage(VaultWriteLock::default())
         .manage(desktop_windows::DesktopWindows::default())
+        .manage(app_updates::AppUpdates::default())
         .manage(local_transcription::VoiceMemoWorkers::default())
         .manage(media_jobs::MediaJobs::default())
         .manage(theme_icon::ThemeIconState::default())
@@ -4891,6 +4894,7 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             desktop_windows::install_menu(app.handle())?;
             desktop_windows::install_citation_routing(app.handle());
@@ -4905,6 +4909,10 @@ pub fn run() {
             note_image_protocol_response(context.app_handle(), &request)
         })
         .invoke_handler(tauri::generate_handler![
+            app_updates::get_app_update_status,
+            app_updates::check_app_update,
+            app_updates::download_app_update,
+            app_updates::install_app_update,
             live_voice::create_live_voice_session,
             load_vault,
             window_glass::set_window_glass,
@@ -4946,6 +4954,7 @@ pub fn run() {
             save_note_image,
             generate_note_image,
             image_planning::plan_note_image,
+            dictation_cleanup::cleanup_dictation,
             cancel_note_image_generation,
             open_data_directory,
             connector_installation::open_claude_connector,

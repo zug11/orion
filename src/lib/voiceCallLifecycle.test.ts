@@ -18,23 +18,24 @@ function setup(start?: () => Promise<void>) {
 }
 
 describe("single-recipient voice call lifecycle", () => {
-  it("offers one neutral opening after connection and a short pause, never on repeated status events", async () => {
+  it("starts listening without an opening, including after silence and repeated connection events", async () => {
     vi.useFakeTimers();
-    const { call, transports, options } = setup(); call.open(options, true);
+    const { call, transports, options } = setup(); call.open(options);
     const transport = transports[0];
-    await vi.advanceTimersByTimeAsync(5_000); expect(transport.append).not.toHaveBeenCalled();
     transport.options.onStatus("listening");
-    await vi.advanceTimersByTimeAsync(1_999); expect(transport.append).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(30_000);
     transport.options.onStatus("listening");
-    await vi.advanceTimersByTimeAsync(1);
-    expect(transport.append).toHaveBeenCalledExactlyOnceWith("instructions", expect.stringContaining("where would you like to start?"), null);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(transport.append).not.toHaveBeenCalled();
     expect(transport.mute).toHaveBeenCalledExactlyOnceWith(false);
-    transport.options.onStatus("listening"); await vi.advanceTimersByTimeAsync(30_000);
-    expect(transport.append).toHaveBeenCalledOnce(); call.dispose(); expect(vi.getTimerCount()).toBe(0);
+    expect(call.acceptsInput).toBe(true);
+    transport.options.onEvent({ type: "session.input_transcript.delta", delta: "Can we discuss this?" });
+    expect(options.onEvent).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ delta: "Can we discuss this?" }));
+    call.dispose(); expect(vi.getTimerCount()).toBe(0);
   });
-  it.each(["user", "assistant", "inputAudio", "outputAudio", "delegation", "finding", "mute", "stop", "disconnect", "handoff"])("abandons the pending welcome on %s without replaying it later", async cause => {
+  it.each(["user", "assistant", "inputAudio", "outputAudio", "delegation", "finding", "mute", "stop", "disconnect", "handoff"])("never introduces unsolicited speech after %s", async cause => {
     vi.useFakeTimers();
-    const { call, transports, options } = setup(); call.open(options, true);
+    const { call, transports, options } = setup(); call.open(options);
     const transport = transports[0]; transport.options.onStatus("listening");
     await vi.advanceTimersByTimeAsync(1_000);
     if (cause === "user" || cause === "assistant") transport.options.onEvent({ type: `session.${cause === "user" ? "input" : "output"}_transcript.delta`, delta: "Hello" });
@@ -54,7 +55,7 @@ describe("single-recipient voice call lifecycle", () => {
     const { call, transports, options } = setup(); call.open(options);
     transports[0].options.onStatus("listening"); await vi.advanceTimersByTimeAsync(5_000);
     expect(transports[0].append).not.toHaveBeenCalled();
-    call.pause(); call.mute(true); call.open(options, true);
+    call.pause(); call.mute(true); call.open(options);
     transports[1].options.onStatus("listening"); call.mute(false);
     await vi.advanceTimersByTimeAsync(5_000); expect(transports[1].append).not.toHaveBeenCalled(); call.dispose();
   });

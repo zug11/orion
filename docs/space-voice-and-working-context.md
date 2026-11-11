@@ -1,6 +1,7 @@
 # Space voice and agent working context
 
-Talk to Space is an optional control beside Chat in the sidebar and inside the Chat composer. Starting
+Talk to Space is an optional control inside the Chat composer. The sidebar has
+one combined Chat entry. Starting
 it requests microphone access and connects GPT-Live (`gpt-live-1`) over WebRTC.
 The native host authenticates the SDP handshake using the OpenAI Keychain entry;
 the renderer never receives the provider credential. `store: false` disables
@@ -10,22 +11,24 @@ normal scheduler. Starting from the sidebar leaves the current note open. The
 current Space and window own the call, independently of the visible Chat panel.
 A bottom-right glass pill provides mute, end, Open Chat and Voice options.
 Findings, citations, saved-note links and actionable errors appear in the
-conversation; worker queues and counts are not displayed. The composer's audio-wave button becomes a square Stop button while
-connected or connecting; transcripts, elapsed time and provider/usage text stay
-out of the composer. Local Whisper dictation retains its existing insertion and
-transcription behavior.
+conversation; worker queues and counts are not displayed. When Chat is open,
+microphone mute and Voice options sit inside one thin composer pill, which grows
+with longer text. Its primary button shows Send for a draft, a square Stop
+response during cancellable text generation, a square Stop voice for an empty
+active call, or an audio-wave start button while idle. Voice options also offers
+End voice call, so typing never hides access to disconnect. Sending or cancelling
+text leaves voice running. Standard Mic and MicOff icons reflect microphone
+state. Transcripts, elapsed time and provider/usage text stay out of the composer.
+Local Whisper dictation retains its existing insertion and transcription behavior.
 
-A fresh main conversation waits two connected seconds before offering one
-neutral welcome: “Hey, where would you like to start?” Input stays live, and
-any arriving user/assistant transcript, input/output activity, delegation,
-spoken finding, mute or teardown cancels the pending greeting. Reconnect,
-navigation and worker switches do not greet again. Existing work suppresses it;
-Clear voice chat restores eligibility for the next explicit fresh call. The
-offer is one trusted `instructions` append after session startup, following
-[OpenAI's greeting sequence](https://developers.openai.com/api/docs/guides/live-conversations#greet-before-the-caller-speaks),
-with no automatic retry. The native prompt never treats the open note or restored
-context as a request to start a subject. This timing and cancellation are local
-guarantees; natural wording and yielding mid-greeting still need live listening.
+Every call starts silently and listens for the user. There is no scheduled
+opening, greeting instruction or synthetic user turn. A small Listening cue
+beneath the voice scene reports actual connection readiness, with Connecting
+and Mic muted states when appropriate. The native policy forbids startup
+introductions or questions as well as unsolicited topics based on context.
+Reconnect, navigation, worker switches and clearing conversation also stay quiet.
+Automated tests verify the absence of a startup speech request; live provider
+speech behavior remains a separate listening check.
 
 The central orb represents the main conversation; visible worker orbs are tied
 to actual work-order IDs. Useful checkpoint sequences send a small filled bead

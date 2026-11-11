@@ -154,9 +154,8 @@ export function useVoiceChatScroll(options: Options) {
     if (reveal.current < VOICE_CHAT_REVEAL_DISTANCE && !previewAnchor.current) thread.scrollTop = 0;
     function measure() {
       const header = panel!.querySelector<HTMLElement>(".chat-dock__header");
-      const controls = stage!.querySelector<HTMLElement>(".chat-view__voice-controls");
       const composer = stage!.querySelector<HTMLElement>(".chat-composer");
-      const chrome = 2 + (header?.getBoundingClientRect().height ?? 0) + (controls?.getBoundingClientRect().height ?? 0) + (composer?.getBoundingClientRect().height ?? 0);
+      const chrome = 2 + (header?.getBoundingClientRect().height ?? 0) + (composer?.getBoundingClientRect().height ?? 0);
       const bottom = Number.parseFloat(getComputedStyle(panel!.parentElement!).bottom) || 20;
       const article = previewAnchor.current ? previewArticle() : undefined;
       const padding = getComputedStyle(thread!);
@@ -170,7 +169,7 @@ export function useVoiceChatScroll(options: Options) {
     // These heights can change for errors, selections and zoom.
     // Observing the panel itself would create feedback during its scroll resize.
     const resize = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : undefined;
-    for (const child of [panel.querySelector(".chat-dock__header"), stage.querySelector(".chat-view__voice-controls"), stage.querySelector(".chat-composer")]) {
+    for (const child of [panel.querySelector(".chat-dock__header"), stage.querySelector(".chat-composer")]) {
       if (child) resize?.observe(child);
     }
     const contentResize = typeof ResizeObserver === "function" ? new ResizeObserver(() => {

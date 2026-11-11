@@ -75,7 +75,7 @@ describe("ChatView", () => {
     expect(callbacks.onSend).not.toHaveBeenCalled();
   });
 
-  it("keeps stable scene and controls slots outside the composer and retains the thread during a call", () => {
+  it("keeps the scene stable and integrates call controls into the composer without losing the thread", () => {
     const snapshot = fixture(), callbacks = handlers(), toggle = vi.fn();
     const voiceSceneRef = vi.fn(), voiceControlsRef = vi.fn();
     const props = { ...callbacks, snapshot, busy: false, voiceSceneRef, voiceControlsRef };
@@ -84,8 +84,9 @@ describe("ChatView", () => {
     const controls = container.querySelector('.chat-view__voice-controls');
     expect(voiceSceneRef).toHaveBeenCalledWith(scene);
     expect(voiceControlsRef).toHaveBeenCalledWith(controls);
-    expect(scene?.closest("form")).toBeNull(); expect(controls?.closest("form")).toBeNull();
-    expect(controls?.nextElementSibling).toHaveClass("chat-composer");
+    expect(scene?.closest("form")).toBeNull();
+    expect(controls?.closest("form")).toHaveClass("chat-composer");
+    expect(controls?.parentElement).toHaveClass("chat-composer__actions");
     rerender(<ChatView {...props} voiceControl={{ active: true, toggle }} />);
     expect(container.querySelector('.chat-view__voice-scene')).toBe(scene);
     expect(container.querySelector('.chat-view__voice-controls')).toBe(controls);

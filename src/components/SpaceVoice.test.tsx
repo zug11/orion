@@ -272,23 +272,23 @@ describe("Space voice work-order integration", () => {
     expect(mock.run.mock.calls[0][1]).toBe("Research the relationship between the narrator and the setting");
     expect(mock.run.mock.calls[0][3]).toBe("original-note");
   });
-  it("welcomes only a fresh main conversation, never on navigation, reconnect, or worker handoff", async () => {
+  it("starts silently and stays quiet through navigation, reconnect, and worker handoff", async () => {
     const initial = setup(), props = { ...initial.props, floating: true }, { rerender } = initial;
     rerender(<SpaceVoice {...props} />);
     const openings = () => mock.append.mock.calls.filter(call => call[0] === "instructions" && String(call[1]).includes("One-time opening"));
     await settle(1_500); expect(openings()).toEqual([]);
     rerender(<SpaceVoice {...props} focusNoteId="another-note" />);
-    await settle(500); expect(openings()).toHaveLength(1);
+    await settle(500); expect(openings()).toEqual([]);
     expect(mock.run).not.toHaveBeenCalled(); expect(mock.route).not.toHaveBeenCalled();
     rerender(<SpaceVoice {...props} toggleRequest={2} />);
     rerender(<SpaceVoice {...props} toggleRequest={3} />);
-    await settle(3_000); expect(openings()).toHaveLength(1);
+    await settle(3_000); expect(openings()).toEqual([]);
     publish([finished()]);
     fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
     fireEvent.click(screen.getByRole("button", { name: "Discuss by voice" }));
-    await settle(3_000); expect(openings()).toHaveLength(1);
+    await settle(3_000); expect(openings()).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: "Return to Space conversation" }));
-    await settle(3_000); expect(openings()).toHaveLength(1);
+    await settle(3_000); expect(openings()).toEqual([]);
   });
   it("confirms clearing the voice chat, ends audio, removes transient work, and starts fresh only on request", async () => {
     const { props, rerender } = setup(), presence = createVoicePresence();

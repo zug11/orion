@@ -1,4 +1,5 @@
 import { PerplexitySettings } from "./PerplexitySettings";
+import { AppUpdateSettings, AppUpdateSettingsLink } from "./AppUpdate";
 import {
   Bot,
   Cable,
@@ -306,6 +307,7 @@ export function SettingsView({
     | "linking"
     | "appearance"
     | "data"
+    | "updates"
   >("intelligence");
   const desktopRuntime = isTauriRuntime();
   const prefersLight =
@@ -555,6 +557,7 @@ export function SettingsView({
           >
             <Database size={15} /> Data & privacy
           </a>
+          <AppUpdateSettingsLink active={activeSection === "updates"} onSelect={() => setActiveSection("updates")} />
         </nav>
 
         <div className="settings-content">
@@ -1787,6 +1790,7 @@ export function SettingsView({
               </button>
             </div>
           </section>
+          <AppUpdateSettings />
         </div>
       </div>
     </div>

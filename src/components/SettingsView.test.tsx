@@ -15,7 +15,7 @@ import { SettingsView } from "./SettingsView";
 
 const invokeTauriMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeTauriMock }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeTauriMock, isTauri: () => false }));
 
 afterEach(() => {
   invokeTauriMock.mockReset();

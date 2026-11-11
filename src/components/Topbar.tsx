@@ -7,6 +7,7 @@ import {
   PanelRight,
   Search,
 } from "../lib/icons";
+import { AppUpdateButton } from "./AppUpdate";
 
 interface TopbarProps {
   workspaceName: string;
@@ -75,6 +76,7 @@ export function Topbar({
       </button>
 
       <div className="topbar-actions">
+        <AppUpdateButton />
         {onOpenWritingWindow && (
           <button
             type="button"

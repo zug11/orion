@@ -1,4 +1,5 @@
 import { isPassageAnchor, isPassageThreads } from "./passageThreads";
+import { parseDictationCleanup, type DictationBlock } from "./dictationCleanup";
 import { parseVoiceSynthesisContext, parseVoiceSynthesisResult, VOICE_SYNTHESIS_INSTRUCTIONS, VOICE_SYNTHESIS_SCHEMA } from "./voiceSynthesisProtocol";
 import { CHAT_EDIT_INSTRUCTIONS, CHAT_EDIT_SCHEMA, CHAT_EDIT_INTENT_SCHEMA, parseChatEditIntent, CHAT_REWRITE_SCHEMA, chatRequestAllowsEdits, parseChatNoteEdits, parseChatRewrite } from "./chatEdits";
 import type {
@@ -316,6 +317,24 @@ export async function startVoiceMemoSession(
 export async function finishVoiceMemoSession(sessionId: string): Promise<void> {
   if (!USE_PERSISTENT_VOICE_MEMO_WORKER || !isTauriRuntime()) return;
   await invokeTauri("finish_voice_memo_session", { sessionId });
+}
+
+export async function cleanUpDictation(
+  transcript: string,
+  settings: Pick<Settings, "model" | "reasoningEffort">,
+  signal: AbortSignal,
+): Promise<DictationBlock[]> {
+  signal.throwIfAborted();
+  if (!isTauriRuntime()) throw new Error("Dictation cleanup is available in the installed Orion app.");
+  const requestId = `dictation:${crypto.randomUUID()}`;
+  const result = await invokeTauri<unknown>("cleanup_dictation", {
+    request: { requestId, transcript, model: settings.model, effort: settings.reasoningEffort },
+  }, {
+    queueKey: "dictation-cleanup", signal,
+    cancelActive: () => { void invokeTauri("cancel_knowledge_assignment", { requestId }).catch(() => undefined); },
+  });
+  signal.throwIfAborted();
+  return parseDictationCleanup(result, transcript);
 }
 
 export async function transcribeYouTube(
@@ -1640,6 +1659,7 @@ const PROVIDER_COMMANDS = new Set([
   "knowledge_assignment",
   "organize_content",
   "chat",
+  "cleanup_dictation",
   "generate_note_image",
   "plan_note_image",
   "generate_speech",

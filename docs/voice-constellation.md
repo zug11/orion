@@ -35,7 +35,8 @@ not stop remote playback. Remove capture listeners before deliberate disposal.
 
 - Both full Chat and its compact panel show the orb identity in their welcome
   state. An active call replaces that welcome with the interactive live scene
-  and docks mute/end and work controls above the composer in normal layout flow.
+  with a quiet readiness cue below it. Mute and Voice options share the composer
+  pill; its primary action becomes Send for a draft and a square Stop when empty.
   There is no fixed call overlay while Chat is visible. Existing messages retain
   their scrollable thread without shrinking the constellation when the first reply arrives. Collapsing Chat restores the
   bottom-right pill and expandable scene without restarting audio or work.

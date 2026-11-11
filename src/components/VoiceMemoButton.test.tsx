@@ -46,6 +46,54 @@ afterEach(() => {
 });
 
 describe("VoiceMemoButton", () => {
+  it("offers Use original only during cleanup, cancels that wait and keeps recording released", async () => {
+    const stopTrack = vi.fn();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
+      getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: stopTrack }] }),
+    } });
+    vi.stubGlobal("MediaRecorder", FakeMediaRecorder);
+    const onComplete = vi.fn(async (_id, _text, options) => {
+      options.onPhase("cleaning");
+      await new Promise<void>(resolve => options.signal.addEventListener("abort", () => resolve(), { once: true }));
+      return "Original dictation inserted.";
+    });
+    const onSessionEnd = vi.fn();
+    render(<VoiceMemoButton noteId="note-one" onTranscribe={vi.fn().mockResolvedValue("Maybe Friday, or Thursday.")} onComplete={onComplete} onSessionEnd={onSessionEnd}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Start dictation" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Stop dictation/ }));
+    const skip = await screen.findByRole("button", { name: "Use original dictation" });
+    expect(stopTrack).toHaveBeenCalledTimes(1);
+    expect(skip).toBeEnabled();
+    expect(skip).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    fireEvent.click(skip);
+    expect(await screen.findByRole("button", { name: "Start dictation" })).toBeEnabled();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[0][2].signal.aborted).toBe(true);
+  });
+
+  it("aborts pending cleanup and releases its session when the note unmounts", async () => {
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
+      getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] }),
+    } });
+    vi.stubGlobal("MediaRecorder", FakeMediaRecorder);
+    let cleanupSignal: AbortSignal | undefined;
+    const onComplete = vi.fn(async (_id, _text, options) => {
+      cleanupSignal = options.signal;
+      options.onPhase("cleaning");
+      await new Promise<void>(resolve => options.signal.addEventListener("abort", () => resolve(), { once: true }));
+    });
+    const end = vi.fn();
+    const view = render(<VoiceMemoButton noteId="note-one" onTranscribe={vi.fn().mockResolvedValue("Raw text.")} onComplete={onComplete} onSessionEnd={end}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Start dictation" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Stop dictation/ }));
+    await screen.findByRole("button", { name: "Use original dictation" });
+    view.unmount();
+    expect(cleanupSignal?.aborted).toBe(true);
+    await waitFor(() => expect(end).toHaveBeenCalledTimes(1));
+  });
+
   it("records, stops, and submits one temporary audio blob", async () => {
     const stopTrack = vi.fn();
     const stream = {
@@ -88,8 +136,59 @@ describe("VoiceMemoButton", () => {
     });
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
     expect(onComplete.mock.calls[0]?.[1]).toBe("Spoken note.");
-    await screen.findByText("Inserted");
+    expect(await screen.findByRole("button", { name: "Start dictation" })).toBeEnabled();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(stopTrack).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps finishing, recovery saving and cleanup quiet, then allows another recording immediately", async () => {
+    const stopTrack = vi.fn();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
+      getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: stopTrack }] }),
+    } });
+    vi.stubGlobal("MediaRecorder", FakeMediaRecorder);
+    let finishTranscription!: (text: string) => void;
+    let finishSaving!: () => void;
+    let finishCleanup!: () => void;
+    const onTranscribe = vi.fn(() => new Promise<string>(resolve => { finishTranscription = resolve; }));
+    const onComplete = vi.fn(async (_id, _text, options) => {
+      options.onPhase("saving");
+      await new Promise<void>(resolve => { finishSaving = resolve; });
+      options.onPhase("cleaning");
+      await new Promise<void>(resolve => { finishCleanup = resolve; });
+      return "Dictation cleaned up and inserted. Original saved.";
+    });
+    render(<VoiceMemoButton noteId="note-one" onTranscribe={onTranscribe} onComplete={onComplete} />);
+    fireEvent.click(screen.getByRole("button", { name: "Start dictation" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Stop dictation/ }));
+    await waitFor(() => expect(onTranscribe).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: "Finishing dictation transcription" })).toBeDisabled();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(stopTrack).toHaveBeenCalledTimes(1);
+    await act(async () => { finishTranscription("Friday, actually Thursday."); });
+    expect(screen.getByRole("button", { name: "Saving original dictation" })).toBeDisabled();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    await act(async () => { finishSaving(); });
+    expect(screen.getByRole("button", { name: "Use original dictation" })).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    await act(async () => { finishCleanup(); });
+    const start = screen.getByRole("button", { name: "Start dictation" });
+    expect(start).toBeEnabled();
+    expect(start).toHaveAttribute("aria-busy", "false");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    fireEvent.click(start);
+    expect(await screen.findByRole("button", { name: /Stop dictation/ })).toBeEnabled();
+  });
+
+  it("keeps actionable recording failures visible", async () => {
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
+      getUserMedia: vi.fn().mockRejectedValue(new DOMException("Denied", "NotAllowedError")),
+    } });
+    vi.stubGlobal("MediaRecorder", FakeMediaRecorder);
+    render(<VoiceMemoButton noteId="note-one" onTranscribe={vi.fn()} onComplete={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Start dictation" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Microphone access was denied.");
+    expect(screen.getByRole("button", { name: "Start dictation" })).toBeEnabled();
   });
 
   it("rotates bounded segments and keeps recording without a duration cap", async () => {

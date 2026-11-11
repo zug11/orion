@@ -19,7 +19,7 @@ import { VoiceCallLifecycle } from "../lib/voiceCallLifecycle";
 import { VoiceContextUpdates } from "../lib/voiceContextUpdates";
 import { ChatReply } from "./ChatReply";
 import { VoiceConstellation } from "./VoiceConstellation";
-import { AudioLines, Ellipsis, MessageCircle, Mic2, Square, X } from "../lib/icons";
+import { AudioLines, Ellipsis, MessageCircle, Mic, MicOff, Square, X } from "../lib/icons";
 import { silentVoiceActivity, type VoicePresenceStore } from "../lib/voicePresence";
 import { voiceSelectionReference, type VoiceSelectionStore } from "../lib/voiceSelection";
 import type { IconPalette } from "../lib/themeIcon";
@@ -525,8 +525,7 @@ export function SpaceVoice(props: Props) {
       deliveries.handoff();
     } else deliveries.reset();
     reservations.reset();
-    const freshConversation = conversation.current.reconnect();
-    const welcome = freshConversation && !preserveFindings && !focusedConversation.current && !currentContextJobs().length;
+    conversation.current.reconnect();
     setError(""); setClarification("");
     const current = liveProps.current;
     let contextSent = false;
@@ -559,7 +558,7 @@ export function SpaceVoice(props: Props) {
           setActivity(silentVoiceActivity()); cancelRouting(); deliveries.clear();
         }
       },
-    }, welcome);
+    });
   }
 
 
@@ -628,6 +627,7 @@ export function SpaceVoice(props: Props) {
   </div>, [results, hasConversation, props.snapshot, props.onOpenNote, props.onOpenSource, props.enabled,
     status, focusedJobId, keeping, error, clarification, editProgress, findingVersion, deliveries, noteEdits]);
   if (!hasContent) return null;
+  const embedded = Boolean(props.floating && props.chatVisible && props.sceneHost && props.controlsHost);
   const options = <div className="space-voice__options" role="group" aria-label="Voice options">
     <div className="space-voice__options-header"><strong>Voice</strong><button type="button" aria-label="Close voice options" onClick={() => { setExpanded(false); summaryButton.current?.focus(); }}><X size={15} /></button></div>
     {confirmClear ? <div className="space-voice__clear" role="group" aria-label="Clear voice chat confirmation">
@@ -637,12 +637,12 @@ export function SpaceVoice(props: Props) {
     </div> : <>
       {focusedJobId && <button type="button" onClick={() => { focusConversation(undefined); setExpanded(false); }}>Return to Space conversation</button>}
       {hasConversation && props.onShowConversation && <button type="button" onClick={() => { setExpanded(false); props.onShowConversation?.(); }}>View conversation</button>}
+      {embedded && active && <button type="button" onClick={() => { stopCall(); setExpanded(false); }}>End voice call</button>}
       {running && <button type="button" onClick={() => { for (const job of candidates) if (job.state === "running") cancelJob(job.id); setExpanded(false); }}>Stop research</button>}
       <button type="button" onClick={() => setConfirmClear(true)}>Clear voice chat…</button>
     </>}
   </div>;
   if (!props.floating) return hasConversation ? <>{content}{options}</> : null;
-  const embedded = Boolean(props.chatVisible && props.sceneHost && props.controlsHost);
   const scene = <VoiceConstellation status={status} activity={activity} muted={muted} thinking={thinking} jobs={candidates} focusedJobId={focusedJobId}
     dismissedJobIds={dismissedJobIds} palette={props.voicePalette} onFocus={focusConversation} onDismiss={dismissJob} size="expanded" motion={sceneMotion} onShowConversation={props.onShowConversation} />;
   const escape = (event: KeyboardEvent) => {
@@ -658,26 +658,26 @@ export function SpaceVoice(props: Props) {
     <div className="space-voice-call__pill">
       {!embedded && <VoiceConstellation status={status} activity={activity} muted={muted} thinking={thinking} jobs={candidates} focusedJobId={focusedJobId}
         dismissedJobIds={dismissedJobIds} palette={props.voicePalette} onFocus={focusConversation} onDismiss={dismissJob} size="pill" motion={sceneMotion} />}
-      <div className="space-voice-call__summary">
+      {!embedded && <div className="space-voice-call__summary">
         <strong>{focusedJobId ? candidates.find(job => job.id === focusedJobId)?.subject ?? "Research conversation" : "Talk to Space"}</strong>
         {selectedText && <span key={selectedText.id} className="space-voice-call__selection" title={selectedText.noteTitle}>Selected text</span>}
         <span>{voiceStatus}</span>
-      </div>
+      </div>}
       {active ? <>
         <button type="button" aria-label={muted ? "Unmute microphone" : "Mute microphone"} title={muted ? "Unmute microphone" : "Mute microphone"}
-          aria-pressed={muted} className={muted ? "is-muted" : undefined} onClick={toggleMute}><Mic2 size={17} /></button>
-        <button type="button" aria-label="End voice call" title="End voice call" onClick={stopCall}><Square size={14} fill="currentColor" /></button>
-      </> : <button type="button" aria-label="Reconnect voice" title="Reconnect voice" onClick={start}><AudioLines size={18} /></button>}
+          aria-pressed={muted} className={muted ? "is-muted" : undefined} onClick={toggleMute}>{muted ? <MicOff size={17} aria-hidden="true" /> : <Mic size={17} aria-hidden="true" />}</button>
+        {!embedded && <button type="button" aria-label="End voice call" title="End voice call" onClick={stopCall}><Square size={14} fill="currentColor" strokeWidth={0} aria-hidden="true" /></button>}
+      </> : !embedded && <button type="button" aria-label="Reconnect voice" title="Reconnect voice" onClick={start}><AudioLines size={18} /></button>}
       <button ref={summaryButton} type="button" aria-label="Voice options" title="Voice options" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}><Ellipsis size={17} /></button>
       {!embedded && <button type="button" aria-label="Open chat" title="Open chat" onClick={() => { setExpanded(false); props.onOpenChat?.(); }}><MessageCircle size={17} /></button>}
     </div>
-    {(error || clarification) && <button type="button" className="space-voice-call__notice" onClick={props.onShowConversation}>{error || clarification}</button>}
+    {!embedded && (error || clarification) && <button type="button" className="space-voice-call__notice" onClick={props.onShowConversation}>{error || clarification}</button>}
   </section>;
   // Only presentation moves. The call and research remain owned here. Outcomes
   // join Chat as transient content rather than a second worker-management panel.
   return <>
     {embedded ? <>
-      {createPortal(active ? <div className="space-voice-call__scene" onKeyDown={escape}>{scene}</div> : null, props.sceneHost!)}
+      {createPortal(active ? <div className="space-voice-call__scene" onKeyDown={escape}>{scene}<span className="space-voice-call__readiness" role="status">{voiceStatus}</span></div> : null, props.sceneHost!)}
       {createPortal(controls, props.controlsHost!)}
     </> : controls}
     {props.resultsHost ? createPortal(content, props.resultsHost) : null}

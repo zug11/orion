@@ -74,9 +74,30 @@ These product decisions are intentional:
   session has no fixed duration cap, but their generated text stays buffered
   and is not shown in the note until the user stops the whole session. The
   native host bounds and temporarily stages each part, bundled Whisper
-  transcribes it entirely on-device, and only the combined ordered transcript
-  is inserted into the note; each recording is discarded after its command
-  finishes.
+  transcribes it entirely on-device. After Stop, save the combined original as
+  an attached ordinary audio Source (`source-dictation-<session>`), flush it
+  through the shared vault save queue, then optionally clean up that transcript
+  with the selected configured AI provider before insertion. Cleanup receives
+  only the transcript, never note/Space context, and preserves meaning, voice,
+  uncertainty and intentional emphasis. It can remove nonsemantic hesitation,
+  accidental repetition and clear self-corrections, add punctuation, and return
+  literal paragraphs, bullets or explicit unchecked tasks. Insert at the mapped
+  original cursor in one Undo group. Original dictations at the note's footer
+  opens preserved text in Sources, including after reopening. Missing keys,
+  offline/failed/invalid responses, a 45-second deadline, oversize input, failed
+  recovery save, or Use original keep the complete local transcript instead.
+  Navigating/unmounting or an external document replacement cancels cleanup and
+  prevents a late insertion into another/replaced note. The completed original
+  remains in its originating Space. Each audio recording is discarded after its
+  transcription command finishes; cleanup never sends audio to a provider.
+  After Stop, show processing only in the existing microphone button; do not
+  display transcription, recovery-saving, cleanup or success status bubbles.
+  Keep the recording timer and actionable errors visible. During AI cleanup the
+  busy microphone button remains operable as Use original (accessible name and
+  tooltip), aborting cleanup and inserting the local transcript. Completion
+  immediately restores the ordinary microphone button without a notice timer.
+  With no key for the selected provider, skip AI cleanup entirely and insert
+  only the local Whisper transcript; keep the original recovery copy local.
 - To-do items use portable Markdown task lists inside ordinary notes. Home
   derives a scrollable open-task list for the active Space, including source
   note and best matching canonical concept; do not add a parallel task schema.
@@ -285,6 +306,38 @@ the same controlled transcription helpers. Provider speech generation, credentia
 and the Preview Keychain-service rewrite remain in `lib.rs`. Keep temporary-media
 cleanup, partial batch results, deadlines and on-device-only transcription intact
 when changing this module.
+
+## Application updates
+
+Public Apple Silicon releases from 0.6.0 use the Tauri updater plugin with
+`https://github.com/zug11/orion/releases/latest/download/latest.json` and a
+dedicated public verification key in `tauri.conf.json`. Updates are optional:
+background checks may advertise a release, but downloading and restarting are
+explicit user actions. Keep update progress in its own subscribed component so
+it never rerenders the note editor. Provide a manual check in Settings.
+Browser development, debug builds, and the separate Orion Preview identity
+must not download or install public release updates.
+
+Native code owns release metadata, the verified download, and installation;
+the renderer cannot supply an endpoint, archive URL, signature, or executable.
+Keep signature verification and signed-version matching enabled. Installation
+must use the existing all-window save handshake and cancel on any save failure;
+never use a raw renderer process-restart permission to bypass it. The updater
+must not read, migrate, reset, or copy the vault as part of replacing the app.
+After installation, drain native media work and request a fresh save from every
+window before restarting, preserving results that arrived during installation.
+Fresh save attempts must run even in already-locked renderers; duplicate and
+stale acknowledgements cannot satisfy a later attempt. A failed final save
+keeps the running process and local edits available. Retrying saves and restarts
+the already-installed update without installing it again.
+
+The public update archive is produced only from the final Developer ID signed,
+Apple-notarized and stapled application. `bundle.createUpdaterArtifacts` stays
+false because the custom packaging pipeline performs final signing after
+Tauri's interim app bundle. See `docs/updating-orion.md` for packaging and
+publication. The private signing key is stored outside the checkout and must
+never enter Git, release assets, logs, or the app. Retain and securely back it
+up: future releases need the same key to update existing installations.
 
 ## Persistence and schema rules
 
@@ -2232,9 +2285,24 @@ windows with the prior two seconds of decoded audio prepended for boundary
 continuity. The host validates the name, MIME type, MP4 signature,
 encoded/decoded sizes, and temporary-file lifetime before invoking the sidecar.
 Segment transcripts stay buffered until recording stops; the renderer removes
-overlap duplicates and only then inserts and persists the combined ordered
-transcript. Silent intermediate windows are valid. The overall dictation
-session has no fixed duration limit.
+overlap duplicates and then preserves the combined ordered original before the
+optional cleanup/insertion step. Silent intermediate windows are valid. The
+overall dictation session has no fixed duration limit.
+
+`dictationCleanup.ts` archives the exact combined transcript using the existing
+Source schema and defines cleanup fallback/deadline behavior. Sessions capture
+their exact Space, note, language, selected model and reasoning settings at
+recording start. `src-tauri/src/dictation_cleanup.rs` owns the narrow
+`cleanup_dictation` command, using the existing provider scheduler and knowledge
+request cancellation registry. It accepts at most 24,000 Unicode characters,
+never truncates, and returns at most 256 typed blocks / 32,000 characters.
+Strict validation, bounded response reads and obvious size-loss/inflation guards
+fall back to original text; they do not prove semantic correctness. Model output
+has no markup, note-write or tool authority. `voiceDictation.ts` creates literal
+ProseMirror text/list/task nodes, not interpreted provider HTML or Markdown.
+Oversized dictation retains ordinary complete local insertion. A saved original
+is available via Sources and the note footer even if cleanup or insertion is
+cancelled; no raw audio is retained and no provider credentials enter recovery.
 
 Imported media uses a separate bounded path: decode five-minute windows with
 two seconds of overlap and reuse one loaded Whisper context. Check allocation
@@ -3864,15 +3932,12 @@ the microphone or reconnect automatically. Authenticate the fixed-endpoint nativ
 SDP handshake with the OpenAI Keychain entry, never a renderer key. Keep audio
 storage off, input/output lifecycle bounded, and the selected Intelligence model
 for research. Voice receives compact context and cited assignment results, not an
-entire Space. A fresh main conversation offers one neutral welcome after two
-connected seconds, with microphone input continuing. The call lifecycle cancels
-it on user/assistant transcripts, measured input/output activity, delegation,
-commentary, mute, Stop or disconnection. Repeated connection status, reconnect,
-worker switches and navigation cannot replay it; Clear resets the conversation's
-opening eligibility. Existing work also suppresses a new welcome. Send the
-trusted opening once through `instructions`, never as a synthetic user request.
-The native policy stays quiet until user speech or that explicit opening; context
-cannot initiate a topic. Natural pauses and unfinished thoughts remain listening
+entire Space. Calls start silently and wait for the user to speak. Do not schedule
+an opening instruction, synthetic user turn, greeting or introduction. A quiet
+Listening label beneath the voice scene indicates readiness; Connecting and Mic
+muted reflect the actual call state. Reconnect, navigation, worker switches and
+Clear cannot trigger an unsolicited opening. The native policy also forbids
+startup speech; context cannot initiate a topic. Natural pauses and unfinished thoughts remain listening
 opportunities. Available worker capacity alone is not a research reason; retain
 organic investigation of useful evidence gaps and exact requested counts.
 Startup context includes bounded exact working passages of the open
@@ -4210,11 +4275,18 @@ context when expanded. Do not expose an Attached note dropdown or editing-mode
 selector. To change the edit target, navigate to the note; the model still cannot
 choose a different destination, and each proposal names its captured target.
 
-The empty Chat composer shows an audio-wave voice button in the send position.
-Typing replaces it with Send when idle. During a call, the same position shows
-a square Stop voice button even if a draft is being typed. Starting voice from
-the sidebar leaves the current note open; ordinary Chat navigation still opens
-Chat. A bottom-right glass pill exposes mute/end, Chat and Voice options.
+The Chat composer begins as a thin, single-line pill and grows with wrapped or
+multiline text, bounded to keep long drafts scrollable. Re-measure only draft or
+width changes, never audio frames. Its primary action is Send for a nonempty
+draft, a square Stop response while text generation can be cancelled, a square
+Stop voice for an empty active call, and the audio-wave start button while idle.
+Sending/cancelling text does not end or restart voice. During a call, standard
+Mic/MicOff and Voice options controls sit inside the same pill. End voice call
+also remains in Voice options when Send or Stop response occupies the primary
+position. No duplicate Talk to Space strip or second stop button appears above
+the composer. Starting voice from the sidebar leaves the current note open;
+ordinary Chat navigation still opens Chat. The collapsed bottom-right glass pill
+retains mute/end, Chat and Voice options.
 Retained research, errors and clarification keep ownership of that dock after audio
 ends: hide the ordinary Chat circle and native circle glass whenever voice controls
 remain visible. Report only visibility transitions to ChatDock, never audio frames.
@@ -4230,7 +4302,7 @@ retain their existing authority and revision checks. Clearing voice work restore
 the ordinary Chat launcher. No result opens Chat or captures the writer's cursor.
 
 When either full or compact Chat is open, the same call renders its orb scene
-inside Chat and docks controls above the composer; no fixed pill overlays Chat.
+inside Chat and integrates controls into the composer; no fixed pill overlays Chat.
 The idle welcome also uses the orb identity. Stable presentation portals keep
 the call owner outside the hidden/remounted Chat view and retain its motion model.
 Keep transcripts transiently for delegation, without elapsed-time or provider
@@ -4416,7 +4488,8 @@ Collapsed and responsive icon-only navigation gives `.sidebar-nav-row` an explic
 44 px width. Preserve this wrapper width: the voice stylesheet sets its child to
 100%, and an intrinsic wrapper shrinks the selected background to the icon.
 `ChatVoiceMark.tsx` uses the user-supplied Group 3-4 SVG with currentColor for the idle
-Chat icon, including SidebarVoiceIndicator. The combined mark is the single Chat entry; do not add a separate sidebar voice
+Chat icon, including SidebarVoiceIndicator. Its square 19-unit viewBox centres
+the artwork within the existing 22px-wide slot, without altering the paths. The combined mark is the single Chat entry; do not add a separate sidebar voice
 button. Start voice through the existing Chat composer. Chat uses the same row
 width as the other navigation entries; active calls still show the constellation.
 

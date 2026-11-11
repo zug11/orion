@@ -16,6 +16,8 @@ struct QuitState {
     attempt: u64,
     quitting: bool,
     allowed: bool,
+    updating: bool,
+    restarting: bool,
 }
 
 impl QuitState {
@@ -28,8 +30,25 @@ impl QuitState {
         self.quitting = true;
         Some(self.attempt)
     }
+    fn begin_followup_save(&mut self) -> u64 {
+        self.attempt += 1;
+        self.allowed = false;
+        self.restarting = true;
+        self.pending = self.ready.clone();
+        self.attempt
+    }
+    fn register(&mut self, label: &str) -> Option<u64> {
+        let newly_ready = self.ready.insert(label.into());
+        if self.quitting && newly_ready {
+            self.pending.insert(label.into());
+            self.allowed = false;
+            Some(self.attempt)
+        } else {
+            None
+        }
+    }
     fn complete(&mut self, label: &str, attempt: u64) -> bool {
-        if !self.quitting || self.attempt != attempt {
+        if !self.quitting || self.attempt != attempt || !self.ready.contains(label) {
             return false;
         }
         self.pending.remove(label);
@@ -43,6 +62,8 @@ impl QuitState {
             return false;
         }
         self.quitting = false;
+        self.updating = false;
+        self.restarting = false;
         self.pending.clear();
         self.allowed = false;
         true
@@ -638,10 +659,8 @@ pub fn is_citation_window(app: AppHandle, window: WebviewWindow) -> bool {
 pub fn set_exit_guard_ready(window: WebviewWindow, state: State<'_, DesktopWindows>, ready: bool) {
     let mut quit = state.quit.lock().unwrap_or_else(|e| e.into_inner());
     if ready {
-        quit.ready.insert(window.label().into());
-        if quit.quitting {
-            quit.pending.insert(window.label().into());
-            let _ = window.emit("orion-quit-requested", quit.attempt);
+        if let Some(attempt) = quit.register(window.label()) {
+            let _ = window.emit("orion-quit-requested", attempt);
         }
     } else {
         quit.ready.remove(window.label());
@@ -652,6 +671,16 @@ pub fn set_exit_guard_ready(window: WebviewWindow, state: State<'_, DesktopWindo
 pub fn may_exit(app: &AppHandle) -> bool {
     let state = app.state::<DesktopWindows>();
     let mut quit = state.quit.lock().unwrap_or_else(|e| e.into_inner());
+    // An update holds every renderer locked after saving until installation
+    // either succeeds or explicitly cancels. An OS Quit must not bypass it.
+    if quit.updating {
+        let saved = quit.allowed;
+        drop(quit);
+        if saved {
+            finish_saved_exit(app);
+        }
+        return false;
+    }
     if quit.allowed || quit.ready.is_empty() {
         drop(quit);
         return media_ready_to_exit(app);
@@ -677,7 +706,17 @@ fn media_ready_to_exit(app: &AppHandle) -> bool {
         let app = app.clone();
         tauri::async_runtime::spawn_blocking(move || {
             jobs.wait_until_drained();
-            app.exit(0);
+            let restarting = app
+                .state::<DesktopWindows>()
+                .quit
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .restarting;
+            if restarting {
+                app.request_restart();
+            } else {
+                app.exit(0);
+            }
         });
     }
     false
@@ -696,20 +735,149 @@ pub fn complete_app_exit(
         .unwrap_or_else(|e| e.into_inner())
         .complete(window.label(), attempt);
     if finished {
-        app.exit(0);
+        finish_saved_exit(&app);
     }
 }
 
 #[tauri::command]
 pub fn cancel_app_exit(app: AppHandle, state: State<'_, DesktopWindows>, attempt: u64) {
-    let cancelled = state
-        .quit
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .cancel(attempt);
+    let (cancelled, updating) = {
+        let mut quit = state.quit.lock().unwrap_or_else(|e| e.into_inner());
+        let updating = quit.updating;
+        // Once every save was acknowledged, only the native installation
+        // result may unlock these windows. Ignore late renderer cancellation.
+        let cancelled =
+            if updating && (quit.allowed || crate::app_updates::installation_in_progress(&app)) {
+                false
+            } else {
+                quit.cancel(attempt)
+            };
+        (cancelled, updating)
+    };
     if cancelled {
+        if updating {
+            crate::app_updates::save_cancelled(&app, "Update paused because a window could not save. Resolve the save problem, then try again.");
+        }
         let _ = app.emit("orion-quit-cancelled", ());
     }
+}
+
+/// Begin the same guarded save used by Quit, but hold the process open for the
+/// updater. A renderer cannot mark an arbitrary update as installed or restart.
+pub fn request_update_save(app: &AppHandle, installed: bool) -> Result<(), String> {
+    let state = app.state::<DesktopWindows>();
+    // Serialize the transition with native window creation. No window can pass
+    // its quit check and appear after we capture the complete save set.
+    let _creation = state.creation.try_lock().map_err(|_| {
+        "Wait for the new Orion window to finish opening, then try the update again."
+    })?;
+    let mut quit = state.quit.lock().unwrap_or_else(|e| e.into_inner());
+    if quit.quitting || quit.allowed {
+        return Err(
+            "Orion is already saving its windows. Try updating when it has finished.".into(),
+        );
+    }
+    let windows = app.webview_windows();
+    if windows.keys().any(|label| !quit.ready.contains(label)) {
+        return Err(
+            "Wait for all Orion windows to finish opening, then try the update again.".into(),
+        );
+    }
+    let attempt = quit
+        .begin()
+        .ok_or("Wait for Orion to finish opening, then try the update again.")?;
+    quit.updating = true;
+    quit.restarting = installed;
+    drop(quit);
+    if let Err(error) = app.emit("orion-quit-requested", attempt) {
+        cancel_update_save(app);
+        return Err(format!("Could not ask every window to save: {error}"));
+    }
+    Ok(())
+}
+
+fn finish_saved_exit(app: &AppHandle) {
+    let (updating, restarting) = {
+        let state = app.state::<DesktopWindows>();
+        let quit = state.quit.lock().unwrap_or_else(|e| e.into_inner());
+        (quit.updating, quit.restarting)
+    };
+    if updating && restarting {
+        restart_after_update(app);
+    } else if updating {
+        crate::app_updates::install_after_save(app);
+    } else if restarting {
+        app.request_restart();
+    } else {
+        app.exit(0);
+    }
+}
+
+pub fn cancel_update_save(app: &AppHandle) {
+    let state = app.state::<DesktopWindows>();
+    let mut quit = state.quit.lock().unwrap_or_else(|e| e.into_inner());
+    let attempt = quit.attempt;
+    if quit.updating && quit.cancel(attempt) {
+        drop(quit);
+        let _ = app.emit("orion-quit-cancelled", ());
+    }
+}
+
+/// Installation can take time while earlier async work completes. Stop native
+/// media first, then require a *new* save from every renderer before restarting.
+pub fn save_after_update(app: &AppHandle) {
+    let attempt = {
+        let state = app.state::<DesktopWindows>();
+        let mut quit = state.quit.lock().unwrap_or_else(|e| e.into_inner());
+        if !quit.updating {
+            return;
+        }
+        quit.begin_followup_save()
+    };
+    let jobs = app.state::<crate::media_jobs::MediaJobs>().inner().clone();
+    jobs.start_shutdown();
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        jobs.wait_until_drained();
+        let empty = {
+            let state = app.state::<DesktopWindows>();
+            let mut quit = state.quit.lock().unwrap_or_else(|e| e.into_inner());
+            if !quit.updating || !quit.restarting || quit.attempt != attempt {
+                return;
+            }
+            let empty = quit.pending.is_empty();
+            if empty {
+                quit.allowed = true;
+            }
+            empty
+        };
+        if empty {
+            finish_saved_exit(&app);
+        } else if let Err(error) = app.emit("orion-quit-requested", attempt) {
+            crate::app_updates::save_cancelled(
+                &app,
+                &format!("Could not request the final save: {error}"),
+            );
+            cancel_update_save(&app);
+        }
+    });
+}
+
+/// All windows have saved, and Tauri has installed the verified update. The
+/// ordinary ExitRequested path still drains native media workers before exit.
+pub fn restart_after_update(app: &AppHandle) {
+    let state = app.state::<DesktopWindows>();
+    let mut quit = state.quit.lock().unwrap_or_else(|e| e.into_inner());
+    if !quit.updating {
+        return;
+    }
+    quit.restarting = true;
+    if !quit.allowed {
+        return;
+    }
+    quit.updating = false;
+    drop(quit);
+    app.request_restart();
 }
 
 #[tauri::command]
@@ -738,7 +906,7 @@ pub fn destroyed(app: &AppHandle, label: &str) {
         .unwrap_or_else(|e| e.into_inner())
         .retain(|_, (owner, _)| owner != label);
     if finished {
-        app.exit(0);
+        finish_saved_exit(app);
     }
 }
 
@@ -802,6 +970,69 @@ mod tests {
         assert!(!state.complete("main", current));
         assert!(state.complete("orion-window-1", current));
     }
+    #[test]
+    fn an_update_cannot_proceed_until_every_window_saved() {
+        let mut state = two_windows();
+        let attempt = state.begin().unwrap();
+        state.updating = true;
+        assert!(!state.complete("unknown-window", attempt));
+        assert!(!state.complete("main", attempt));
+        assert!(!state.allowed);
+        assert!(state.updating);
+        assert!(state.complete("orion-window-1", attempt));
+        assert!(state.allowed);
+        assert!(state.updating);
+    }
+
+    #[test]
+    fn a_failed_update_save_unlocks_and_requires_a_fresh_attempt() {
+        let mut state = two_windows();
+        let old = state.begin().unwrap();
+        state.updating = true;
+        assert!(!state.complete("main", old));
+        assert!(state.cancel(old));
+        assert!(!state.updating);
+        assert!(!state.allowed);
+        let retry = state.begin().unwrap();
+        state.updating = true;
+        assert!(!state.complete("orion-window-1", old));
+        assert!(!state.complete("orion-window-1", retry));
+        assert!(state.complete("main", retry));
+    }
+
+    #[test]
+    fn installed_update_requires_fresh_acknowledgements_after_media_shutdown() {
+        let mut state = two_windows();
+        let initial = state.begin().unwrap();
+        state.updating = true;
+        assert!(!state.complete("main", initial));
+        assert!(state.complete("orion-window-1", initial));
+        let final_save = state.begin_followup_save();
+        assert_ne!(initial, final_save);
+        assert!(!state.allowed);
+        assert!(state.restarting);
+        assert!(!state.complete("main", initial));
+        assert!(!state.complete("orion-window-1", initial));
+        assert!(!state.complete("main", final_save));
+        assert!(state.complete("orion-window-1", final_save));
+    }
+
+    #[test]
+    fn a_late_window_must_save_even_after_initial_windows_acknowledged() {
+        let mut state = two_windows();
+        let attempt = state.begin().unwrap();
+        state.updating = true;
+        assert!(!state.complete("main", attempt));
+        assert!(state.complete("orion-window-1", attempt));
+        assert_eq!(state.register("orion-window-2"), Some(attempt));
+        assert!(!state.allowed);
+        state.restarting = true;
+        assert!(state.complete("orion-window-2", attempt));
+        assert!(state.restarting);
+        assert_eq!(state.register("main"), None);
+        assert!(state.allowed);
+    }
+
     fn target(space_id: &str, note_id: &str) -> NoteTarget {
         NoteTarget {
             space_id: space_id.into(),

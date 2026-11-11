@@ -4,6 +4,7 @@ import {
   useState,
 } from "react";
 import { LoaderCircle, Mic2, Square } from "../lib/icons";
+import type { DictationCompletionOptions } from "../lib/dictationCleanup";
 import {
   MAX_VOICE_MEMO_BYTES,
   mergeVoiceTranscriptParts,
@@ -17,14 +18,14 @@ const MIME_TYPES = [
 
 export { VOICE_MEMO_SEGMENT_MS } from "../lib/transcription";
 
-type VoiceMemoPhase = "idle" | "recording" | "transcribing" | "inserted";
+type VoiceMemoPhase = "idle" | "recording" | "transcribing" | "saving" | "cleaning";
 
 interface VoiceMemoButtonProps {
   noteId: string;
   onSessionStart?: (sessionId: string) => Promise<void> | void;
   onSessionEnd?: (sessionId: string) => Promise<void> | void;
   onTranscribe: (audio: Blob, sessionId: string) => Promise<string>;
-  onComplete: (sessionId: string, transcript: string) => Promise<void>;
+  onComplete: (sessionId: string, transcript: string, options: DictationCompletionOptions) => Promise<string | void>;
 }
 
 function supportedMimeType(): string | null {
@@ -58,6 +59,7 @@ export function VoiceMemoButton({
   const [elapsedMs, setElapsedMs] = useState(0);
   const [pendingSegments, setPendingSegments] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const completionControllerRef = useRef<AbortController | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const sessionIdRef = useRef<string | null>(null);
@@ -73,7 +75,6 @@ export function VoiceMemoButton({
   const pendingSegmentsRef = useRef(0);
   const elapsedTimerRef = useRef<number | null>(null);
   const segmentTimerRef = useRef<number | null>(null);
-  const resetTimerRef = useRef<number | null>(null);
   const onSessionStartRef = useRef(onSessionStart);
   const onSessionEndRef = useRef(onSessionEnd);
   const onTranscribeRef = useRef(onTranscribe);
@@ -97,17 +98,9 @@ export function VoiceMemoButton({
     }
   }
 
-  function clearResetTimer() {
-    if (resetTimerRef.current !== null) {
-      window.clearTimeout(resetTimerRef.current);
-      resetTimerRef.current = null;
-    }
-  }
-
   function clearTimers() {
     clearElapsedTimer();
     clearSegmentTimer();
-    clearResetTimer();
   }
 
   function releaseStream() {
@@ -194,18 +187,20 @@ export function VoiceMemoButton({
       if (!transcript) {
         throw new Error("Whisper finished without detecting any speech.");
       }
-      await onCompleteRef.current(sessionId, transcript);
+      const controller = new AbortController();
+      completionControllerRef.current = controller;
+      await onCompleteRef.current(sessionId, transcript, {
+        signal: controller.signal,
+        onPhase: next => { if (generationRef.current === generation) setPhase(next); },
+      });
       if (generationRef.current !== generation) return;
-      setPhase("inserted");
-      resetTimerRef.current = window.setTimeout(() => {
-        if (generationRef.current === generation) setPhase("idle");
-        resetTimerRef.current = null;
-      }, 2_000);
+      setPhase("idle");
     } catch (caught) {
       if (generationRef.current !== generation) return;
       setPhase("idle");
       setError(recordingErrorMessage(caught));
     } finally {
+      completionControllerRef.current = null;
       endSession();
     }
   }
@@ -276,6 +271,7 @@ export function VoiceMemoButton({
 
   useEffect(() => {
     return () => {
+      completionControllerRef.current?.abort();
       endSession();
       generationRef.current += 1;
       clearTimers();
@@ -347,20 +343,29 @@ export function VoiceMemoButton({
   }
 
   function toggleRecording() {
+    if (phase === "cleaning") {
+      completionControllerRef.current?.abort();
+      return;
+    }
     if (phase === "recording") {
       requestStop();
       return;
     }
-    if (phase === "idle" || phase === "inserted") void startRecording();
+    if (phase === "idle") void startRecording();
   }
 
   const recordingStatus = `${formatElapsed(elapsedMs)}${
     pendingSegments > 0 ? " · transcribing" : ""
   }`;
+  const finishing = phase === "transcribing" || phase === "saving" || phase === "cleaning";
   const label =
     phase === "recording"
       ? `Stop dictation, recording ${formatElapsed(elapsedMs)}`
-      : phase === "transcribing"
+      : phase === "cleaning"
+        ? "Use original dictation"
+        : phase === "saving"
+          ? "Saving original dictation"
+          : phase === "transcribing"
         ? "Finishing dictation transcription"
         : "Start dictation";
 
@@ -370,33 +375,28 @@ export function VoiceMemoButton({
         type="button"
         className={phase === "recording" ? "icon-button voice-memo active" : "icon-button voice-memo"}
         aria-label={label}
-        title={phase === "recording" ? "Stop dictation" : "Dictate at cursor"}
+        title={phase === "recording" ? "Stop dictation" : phase === "cleaning" ? "Use original dictation without AI cleanup" : "Dictate at cursor"}
         aria-pressed={phase === "recording"}
-        disabled={phase === "transcribing"}
+        aria-busy={finishing}
+        disabled={finishing && phase !== "cleaning"}
         onMouseDown={(event) => event.preventDefault()}
         onClick={toggleRecording}
       >
         {phase === "recording" ? (
           <Square size={13} fill="currentColor" />
-        ) : phase === "transcribing" ? (
+        ) : finishing ? (
           <LoaderCircle size={16} className="spin" />
         ) : (
           <Mic2 size={16} />
         )}
       </button>
-      {phase !== "idle" || error ? (
+      {phase === "recording" || error ? (
         <span
           className={`voice-memo-status${error ? " is-error" : ""}`}
           role="status"
           aria-live="polite"
         >
-          {error
-            ? error
-            : phase === "recording"
-              ? recordingStatus
-              : phase === "transcribing"
-                ? "Finishing transcription…"
-                : "Inserted"}
+          {error ?? recordingStatus}
         </span>
       ) : null}
     </span>

@@ -4,6 +4,8 @@ import { addHumanPassageComment, passageComments, type PassageCommentHandler, pa
 import { portableChatEvidence } from "./lib/chatCitations";
 import type { PassageThread } from "./types";
 import type { VoiceCommit, VoiceReceipt } from "./lib/voiceResearch";
+import { attachDictationOriginal, dictationOriginalSource, prepareDictation, type DictationCompletionOptions } from "./lib/dictationCleanup";
+import { cleanUpDictation } from "./lib/storage";
 import { createVoicePresence } from "./lib/voicePresence";
 import { createVoiceSelectionStore, type VoiceSelection } from "./lib/voiceSelection";
 import { validateChatEditTarget, type ChatEditApplication } from "./lib/chatEdits";
@@ -52,6 +54,7 @@ import { Sidebar, type WorkspaceView } from "./components/Sidebar";
 import { SourceViewer } from "./components/SourceViewer";
 import { SourcesView } from "./components/SourcesView";
 import { Topbar } from "./components/Topbar";
+import { createWindowExitGuard } from "./lib/windowExitGuard";
 import { WritingWindowHeader } from "./components/WritingWindowHeader";
 import { displayNoteTitle } from "./lib/noteMetadata";
 import { applyWindowLaunch, documentWindowUrl, parseWindowLaunch, windowLaunchNote } from "./lib/windowLaunch";
@@ -451,6 +454,7 @@ function App() {
   const chatNoteEdits = useRef(new Map<string, { spaceId: string; controller: AbortController; promise: Promise<ChatEditProposal> }>());
   const linkedArticleRequests = useRef(new LinkedArticleRequestRegistry());
   const wikiEnrichmentRequests = useRef(new Set<string>());
+  const dictationSessions = useRef(new Map<string, { spaceId: string; noteId: string; settings: Settings }>());
   const overviewRequests = useRef(new Map<string, string>());
   const overviewWaiting = useRef(new Map<string, object>());
   const overviewTimers = useRef(new Map<string, number>());
@@ -804,6 +808,7 @@ function App() {
       const reconciled = publishWindowVault(live, merged);
       if (live === before) skipAutosaveVault.current = reconciled;
       flushSync(() => { vaultRef.current = reconciled; setVault(reconciled); });
+      return { published: reconciled, settled: live === before };
     } catch (error) {
       if (error instanceof WindowVaultConflict) setSaveConflict(error);
       throw error;
@@ -816,12 +821,12 @@ function App() {
       .catch(() => undefined)
       .then(async () => {
         // Coalesce at execution time so a queued autosave cannot undo a workflow commit.
-        await persistLatestVault();
+        return persistLatestVault();
       })
       .finally(() => {
         pendingSaveCount.current = Math.max(0, pendingSaveCount.current - 1);
       });
-    saveQueue.current = queued;
+    saveQueue.current = queued.then(() => undefined, () => undefined);
     return queued;
   }, [persistLatestVault]);
 
@@ -1237,29 +1242,7 @@ function App() {
     let unlistenQuit: (() => void) | undefined;
     let unregisterExitGuard: (() => void) | undefined;
 
-    const lockAndSaveLatest = async () => {
-      if (closingRef.current) return false;
-      closingRef.current = true;
-      setClosing(true);
-      if (saveTimer.current) {
-        window.clearTimeout(saveTimer.current);
-        saveTimer.current = null;
-      }
-      try {
-        if (persistenceEnabledRef.current) {
-          await queueSnapshotSave(vaultRef.current);
-        }
-        return true;
-      } catch (error) {
-        closingRef.current = false;
-        setClosing(false);
-        showToast(
-          "Quit paused — vault not saved",
-          error instanceof Error ? error.message : String(error),
-        );
-        return false;
-      }
-    };
+    let exitGuard: ReturnType<typeof createWindowExitGuard<OrionVault>> | undefined;
 
     void (async () => {
       const [{ invoke }, { listen }, { getCurrentWindow }] = await Promise.all([
@@ -1269,46 +1252,44 @@ function App() {
       ]);
       if (disposed) return;
 
+      exitGuard = createWindowExitGuard({
+        read: () => {
+          // Include async AI/import results queued in React before acknowledging
+          // either save round, even though ordinary autosave is paused by the veil.
+          flushSync(() => setVault((current) => { vaultRef.current = current; return current; }));
+          return vaultRef.current;
+        },
+        save: queueSnapshotSave,
+        canSave: () => persistenceEnabledRef.current,
+        lock: () => {
+          closingRef.current = true;
+          setClosing(true);
+          if (saveTimer.current) {
+            window.clearTimeout(saveTimer.current);
+            saveTimer.current = null;
+          }
+        },
+        unlock: () => { closingRef.current = false; setClosing(false); },
+        complete: (attempt) => attempt === null
+          ? invoke("close_orion_window")
+          : invoke("complete_app_exit", { attempt }),
+        cancel: (attempt) => invoke("cancel_app_exit", { attempt }),
+        onError: (error, stage, attempt) => showToast(
+          stage === "save" ? "Quit paused — vault not saved" : attempt === null ? "Close paused" : "Quit paused",
+          error instanceof Error ? error.message : String(error),
+        ),
+      });
       const appWindow = getCurrentWindow();
       const stopClose = await appWindow.onCloseRequested(async (event) => {
         event.preventDefault();
-        if (!(await lockAndSaveLatest())) return;
-        try {
-          await invoke("close_orion_window");
-        } catch (error) {
-          closingRef.current = false;
-          setClosing(false);
-          showToast(
-            "Close paused",
-            error instanceof Error ? error.message : String(error),
-          );
-        }
+        await exitGuard?.close();
       });
       const stopQuit = await listen<number>(
         "orion-quit-requested",
-        async (event) => {
-          const attempt = event.payload;
-          try {
-            if (closingRef.current) return;
-            if (!(await lockAndSaveLatest())) {
-              await invoke("cancel_app_exit", { attempt });
-              return;
-            }
-            await invoke("complete_app_exit", { attempt });
-          } catch (error) {
-            void invoke("cancel_app_exit", { attempt });
-            closingRef.current = false;
-            setClosing(false);
-            showToast(
-              "Quit paused",
-              error instanceof Error ? error.message : String(error),
-            );
-          }
-        },
+        async (event) => { await exitGuard?.quit(event.payload); },
       );
       const stopQuitCancelled = await listen("orion-quit-cancelled", () => {
-        closingRef.current = false;
-        setClosing(false);
+        exitGuard?.cancelled();
       });
 
       if (disposed) {
@@ -1334,6 +1315,7 @@ function App() {
 
     return () => {
       disposed = true;
+      exitGuard?.dispose();
       unregisterExitGuard?.();
       unlistenClose?.();
       unlistenQuit?.();
@@ -2044,13 +2026,14 @@ function App() {
 
   const prepareVoiceMemoForNote = useCallback(
     async (noteId: EntityId, sessionId: string) => {
-      const workspaceId = vaultRef.current.activeSpaceId;
+      const workspaceId = snapshotRef.current.workspace.id;
       const workspace = vaultRef.current.spaces.find(
         (space) => space.workspace.id === workspaceId,
       );
       if (!workspace?.notes.some((note) => note.id === noteId)) {
         throw new Error("This note is no longer available.");
       }
+      dictationSessions.current.set(sessionId, { spaceId: workspaceId, noteId, settings: workspace.settings });
       await startVoiceMemoSession(sessionId, {
         language: workspace.settings.whisperLanguage || undefined,
       });
@@ -2060,7 +2043,9 @@ function App() {
 
   const transcribeVoiceMemoForNote = useCallback(
     async (noteId: EntityId, audio: Blob, sessionId: string) => {
-      const workspaceId = vaultRef.current.activeSpaceId;
+      const session = dictationSessions.current.get(sessionId);
+      if (!session || session.noteId !== noteId) throw new Error("The dictation session is no longer active.");
+      const workspaceId = session.spaceId;
       const workspace = vaultRef.current.spaces.find(
         (space) => space.workspace.id === workspaceId,
       );
@@ -2068,7 +2053,7 @@ function App() {
         throw new Error("This note is no longer available.");
       }
       const transcript = await transcribeVoiceMemo(audio, {
-        language: workspace.settings.whisperLanguage || undefined,
+        language: session.settings.whisperLanguage || undefined,
       }, sessionId);
       const liveSpace = vaultRef.current.spaces.find(
         (space) => space.workspace.id === workspaceId,
@@ -2083,8 +2068,41 @@ function App() {
   );
 
   const finishVoiceMemoForNote = useCallback(async (sessionId: string) => {
+    dictationSessions.current.delete(sessionId);
     await finishVoiceMemoSession(sessionId);
   }, []);
+
+  const prepareCompletedDictation = useCallback(async (
+    sessionId: string, transcript: string, options: DictationCompletionOptions,
+  ) => {
+    const session = dictationSessions.current.get(sessionId);
+    if (!session) throw new Error("The dictation session is no longer active.");
+    // Whisper's microphone/model work is finished; do not retain it during provider work.
+    await finishVoiceMemoSession(sessionId).catch(() => undefined);
+    return prepareDictation({
+      transcript,
+      aiAvailable: isSelectedAIConfigured(session.settings),
+      ...options,
+      preserveOriginal: async () => {
+        const source = dictationOriginalSource(session.noteId, sessionId, transcript, new Date().toISOString());
+        const current = vaultRef.current;
+        const origin = current.spaces.find(space => space.workspace.id === session.spaceId);
+        if (!origin) throw new Error("The dictation Space is no longer available.");
+        const updated = attachDictationOriginal(origin, session.noteId, source);
+        const next = { ...current, spaces: current.spaces.map(space => space === origin ? updated : space), updatedAt: updated.updatedAt };
+        flushSync(() => { vaultRef.current = next; setVault(next); });
+        await queueSnapshotSave(next);
+        // A concurrent deletion must not turn cleanup into a write to another note.
+        const saved = persistedVault.current?.spaces.find(space => space.workspace.id === session.spaceId);
+        if (!saved?.sources.some(item => item.id === source.id && item.text === transcript) ||
+            !saved.notes.some(note => note.id === session.noteId && note.sourceIds.includes(source.id))) {
+          throw new Error("The original dictation could not be saved with this note.");
+        }
+        return source.id;
+      },
+      clean: signal => cleanUpDictation(transcript, session.settings, signal),
+    });
+  }, [queueSnapshotSave]);
 
   const updateNote = useCallback((nextNote: Note) => {
     overviewWritingIdle.current?.activity();
@@ -3438,7 +3456,7 @@ function App() {
         const updated = { ...vaultRef.current, spaces: vaultRef.current.spaces.map(space => space.workspace.id === workspaceId ? marked : space), updatedAt: next.updatedAt };
         flushSync(() => { vaultRef.current = updated; setVault(updated); });
       },
-      persist: () => queueSnapshotSave(vaultRef.current),
+      persist: async () => { await queueSnapshotSave(vaultRef.current); },
       persistedSnapshot: () => persistedVault.current?.spaces.find(space => space.workspace.id === workspaceId),
       createNoteId: () => `note-${nanoid(10)}`,
       now: () => new Date().toISOString(),
@@ -4099,6 +4117,7 @@ function App() {
             transcribeVoiceMemoForNote(activeNote.id, audio, sessionId)
           }
           onFinishVoiceMemoSession={finishVoiceMemoForNote}
+          onPrepareDictation={prepareCompletedDictation}
         />
       );
     }

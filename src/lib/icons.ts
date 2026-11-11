@@ -23,6 +23,7 @@ export { default as ChevronDown } from "lucide-react/dist/esm/icons/chevron-down
 export { default as ChevronRight } from "lucide-react/dist/esm/icons/chevron-right.mjs";
 export { default as ChevronUp } from "lucide-react/dist/esm/icons/chevron-up.mjs";
 export { default as CircleDot } from "lucide-react/dist/esm/icons/circle-dot.mjs";
+export { default as CircleArrowUp } from "lucide-react/dist/esm/icons/circle-arrow-up.mjs";
 export { default as CirclePlay } from "lucide-react/dist/esm/icons/circle-play.mjs";
 export { default as Clock3 } from "lucide-react/dist/esm/icons/clock-3.mjs";
 export { default as Command } from "lucide-react/dist/esm/icons/command.mjs";
@@ -59,6 +60,8 @@ export { default as Maximize2 } from "lucide-react/dist/esm/icons/maximize-2.mjs
 export { default as Minus } from "lucide-react/dist/esm/icons/minus.mjs";
 export { default as MessageCircle } from "lucide-react/dist/esm/icons/message-circle.mjs";
 export { default as Minimize2 } from "lucide-react/dist/esm/icons/minimize-2.mjs";
+export { default as Mic } from "lucide-react/dist/esm/icons/mic.mjs";
+export { default as MicOff } from "lucide-react/dist/esm/icons/mic-off.mjs";
 export { default as Mic2 } from "lucide-react/dist/esm/icons/mic-2.mjs";
 export { default as Network } from "lucide-react/dist/esm/icons/network.mjs";
 export { default as Palette } from "lucide-react/dist/esm/icons/palette.mjs";

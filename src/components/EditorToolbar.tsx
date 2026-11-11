@@ -8,6 +8,7 @@ import { AIWritingMark } from "./icons/AIWritingMark";
 import { BlocksMark } from "./icons/BlocksMark";
 import { NOTE_IMAGE_ACCEPT } from "../lib/noteImages";
 import { VoiceMemoButton } from "./VoiceMemoButton";
+import type { DictationCompletionOptions } from "../lib/dictationCleanup";
 import { HeadingPicker } from "./editor/HeadingPicker";
 import { ImageToolbar } from "./editor/NoteImage";
 import { TableToolbar } from "./editor/TablePicker";
@@ -43,7 +44,8 @@ interface EditorToolbarProps {
   onCompleteVoiceMemo?: (
     sessionId: string,
     transcript: string,
-  ) => Promise<void>;
+    options: DictationCompletionOptions,
+  ) => Promise<string | void>;
   aiWritingBusy?: boolean;
   aiWritingUnavailableReason?: string;
   onOpenAIWriting?: () => void;

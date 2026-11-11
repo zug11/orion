@@ -22,6 +22,17 @@ RENDERER_STAMP_RELATIVE_PATH="Contents/Resources/orion-renderer.sha256"
 HELPER_ENTITLEMENTS="$ROOT_DIR/src-tauri/entitlements/helper-runtime.plist"
 APP_ENTITLEMENTS="$ROOT_DIR/src-tauri/entitlements/app.plist"
 NOTARY_PROFILE="${ORION_NOTARY_PROFILE:-}"
+UPDATE_NOTES_FILE="${ORION_UPDATE_NOTES_FILE:-}"
+CREATE_UPDATER=false
+if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}${TAURI_SIGNING_PRIVATE_KEY_PATH:-}$UPDATE_NOTES_FILE" ]]; then
+  CREATE_UPDATER=true
+  if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]] ||
+    [[ ! -f "$UPDATE_NOTES_FILE" ]] || [[ -z "$NOTARY_PROFILE" ]]; then
+    echo "Updater releases require TAURI_SIGNING_PRIVATE_KEY, ORION_UPDATE_NOTES_FILE and ORION_NOTARY_PROFILE." >&2
+    exit 2
+  fi
+  UPDATE_NOTES_FILE="$(cd "$(dirname "$UPDATE_NOTES_FILE")" && pwd)/$(basename "$UPDATE_NOTES_FILE")"
+fi
 CODE_SIGN_IDENTITY="${ORION_CODESIGN_IDENTITY:-}"
 WHISPER_MODEL_EDITION="${ORION_WHISPER_MODEL:-small}"
 EXPECTED_YT_DLP_VERSION="2026.08.19"
@@ -44,6 +55,11 @@ case "$WHISPER_MODEL_EDITION" in
     exit 2
     ;;
 esac
+
+if [[ "$CREATE_UPDATER" == true ]] && [[ "$WHISPER_MODEL_EDITION" != medium ]]; then
+  echo "The public updater feed ships Whisper Medium; set ORION_WHISPER_MODEL=medium." >&2
+  exit 2
+fi
 
 if [[ -z "$APP_VERSION" ]]; then
   echo "could not read Orion version from package.json" >&2
@@ -229,6 +245,9 @@ source_fingerprint() (
       script/build_ocr_sidecar.sh \
       script/build_transcription_sidecar.sh \
       script/package_release.sh \
+      script/package_updater.mjs \
+      script/updater_manifest.mjs \
+      script/test_updater_manifest.mjs \
       script/test_codex_plugin.mjs \
       script/test_mcp_connector.mjs \
       script/test_mcp_workflows.mjs \
@@ -444,6 +463,36 @@ prepare_existing_connectors() {
     "$APP_BUNDLE/$CODEX_PLUGIN_RELATIVE_PATH"
 }
 
+notarize_updater_app() (
+  set -euo pipefail
+  if [[ "$CREATE_UPDATER" != true ]]; then
+    return
+  fi
+  # A DMG's ticket is not a replacement for the app's own stapled ticket when
+  # distributing that app through Tauri's tar.gz updater. Notarize and staple
+  # first, then build both download formats around this exact finished app.
+  local staging_dir status submission_id
+  staging_dir="$(mktemp -d /private/tmp/orion-app-notary.XXXXXX)"
+  trap 'rm -rf -- "$staging_dir"' EXIT
+  ditto -c -k --keepParent "$APP_BUNDLE" "$staging_dir/Orion.zip"
+  xcrun notarytool submit "$staging_dir/Orion.zip" \
+    --keychain-profile "$NOTARY_PROFILE" \
+    --wait --output-format json >"$staging_dir/result.json"
+  status="$(plutil -extract status raw -o - "$staging_dir/result.json")"
+  submission_id="$(plutil -extract id raw -o - "$staging_dir/result.json")"
+  mkdir -p "$OUTPUT_DIR/releases/v$APP_VERSION"
+  cp "$staging_dir/result.json" "$OUTPUT_DIR/releases/v$APP_VERSION/app-notarization.json"
+  if [[ "$status" != Accepted ]]; then
+    xcrun notarytool log "$submission_id" --keychain-profile "$NOTARY_PROFILE" >&2 || true
+    echo "Apple did not accept the updater app notarization." >&2
+    exit 1
+  fi
+  xcrun stapler staple "$APP_BUNDLE"
+  xcrun stapler validate "$APP_BUNDLE"
+  codesign --verify --deep --strict "$APP_BUNDLE"
+  spctl -a -t execute -vv "$APP_BUNDLE"
+)
+
 repack_signed_app() (
   set -euo pipefail
 
@@ -525,6 +574,9 @@ sign_and_optionally_notarize_dmg() {
     --keychain-profile "$NOTARY_PROFILE" \
     --wait --output-format json >"$result_file"
   status="$(plutil -extract status raw -o - "$result_file")"
+  if [[ "$CREATE_UPDATER" == true ]]; then
+    cp "$result_file" "$OUTPUT_DIR/releases/v$APP_VERSION/dmg-notarization.json"
+  fi
   if [[ "$status" != "Accepted" ]]; then
     submission_id="$(plutil -extract id raw -o - "$result_file")"
     cat "$result_file" >&2
@@ -593,6 +645,10 @@ verify_final_dmg() (
   device=""
 
   codesign --verify --deep --strict --verbose=4 "$copied_app"
+  if [[ "$CREATE_UPDATER" == true ]]; then
+    xcrun stapler validate "$copied_app"
+    spctl -a -t execute -vv "$copied_app"
+  fi
   verify_bundled_whisper_model "$copied_app"
   if [[ "$(tr -d '[:space:]' <"$copied_app/$SOURCE_STAMP_RELATIVE_PATH")" != "$(source_fingerprint)" ]] ||
     [[ "$(tr -d '[:space:]' <"$copied_app/$RENDERER_STAMP_RELATIVE_PATH")" != "$(renderer_fingerprint)" ]]; then
@@ -653,8 +709,12 @@ esac
 # preliminary Finder-scripted Tauri DMG is needed.
 mkdir -p "$OUTPUT_DIR" "$(dirname "$SOURCE_DMG")"
 sign_app_bundle
+notarize_updater_app
 repack_signed_app
 stage_final_dmg
 sign_and_optionally_notarize_dmg
+if [[ "$CREATE_UPDATER" == true ]]; then
+  node "$ROOT_DIR/script/package_updater.mjs" "$APP_BUNDLE" "$FINAL_DMG" "$UPDATE_NOTES_FILE"
+fi
 shasum -a 256 "$FINAL_DMG"
 echo "$FINAL_DMG"

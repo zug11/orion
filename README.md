@@ -13,9 +13,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zug11/orion/releases/download/v0.5.3/Orion-0.5.3-scroll-chat-20261111.m-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/zug11/orion/releases/download/v0.6.0/Orion-0.6.0.m-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
   ·
-  <a href="https://github.com/zug11/orion/releases/tag/v0.5.3">Release notes · Whisper Medium edition</a>
+  <a href="https://github.com/zug11/orion/releases/tag/v0.6.0">Release notes · Whisper Medium edition</a>
   ·
   <a href="#the-orchestration-topology">How it works</a>
   ·
@@ -24,7 +24,7 @@
   <a href="#local-first-by-construction">Privacy</a>
 </p>
 
-> Orion 0.5.3 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
+> Orion 0.6.0 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
 
 ## Knowledge work should produce knowledge, not another inbox
 
@@ -91,18 +91,26 @@ decoded audio; longer material can be split into separate files.
 **Settings → Intelligence** includes **GPT-6 Astra** for complex research and
 synthesis through your OpenAI connection, with Low through Extra high reasoning.
 
-## Orion 0.5.3
+## Orion 0.6.0
 
-Version 0.5.3 keeps writing responsive with autosave, fixes delayed refreshes
-that could trigger false multi-window conflicts, and adds an edit-only word
-count with selected-word counts. Notes can begin without a title or subtitle.
-Image generation uses GPT Image 2.6 at high quality, with acceptance controls
-kept clear of the note's word count.
+Install this version once, then get future releases from inside Orion. A small
+update button appears when a newer version is available. Download when you
+choose, then **Restart and update**; every open window saves before installation.
+You can also check manually in Settings. Updates come from GitHub Releases and
+must pass signature and signed-version verification. The website remains the
+public download page. See [how updates are packaged](docs/updating-orion.md).
 
-Voice and text share one compact conversation: begin with the voice scene,
-reveal just enough room for a typed prompt, and scroll to expand the chat.
-Research findings and citations appear in the conversation; worker queues and
-counts stay out of the interface. See the [0.5.3 release notes](releases/0.5.3.md).
+Dictation now optionally cleans up the local Whisper transcript before insertion:
+hesitations, accidental repetition, punctuation, clear self-corrections, lists
+and explicit tasks. Your voice and uncertainty are preserved, and the original
+transcript remains recoverable from the note. With no key for the selected
+provider, dictation stays entirely local. Processing uses the existing microphone
+button without status bubbles over your writing.
+
+Voice waits for you to speak. A slimmer composer brings send, stop and mute into
+one place while the other orbs continue their research. The responsive editor,
+multi-window fixes, edit-only word count and scrolling voice/chat experience
+remain included. See the [0.6.0 release notes](releases/0.6.0.md).
 
 The current Apple Silicon download includes Whisper Medium. It is Developer ID
 signed, Apple-notarized, stapled and Gatekeeper-accepted. Small edition builds
@@ -302,6 +310,10 @@ for interactions, persistence, limitations and historical preview validation.
 There is no Markdown mode and no read/write split. Click **Edit**, write with a lightweight word-processing toolbar, and return to the same page. Headings, tables, task lists, code, quotes, images, links, and numbered source citations remain portable Markdown underneath.
 
 While editing a note, the microphone in the sticky writing toolbar records dictation and inserts the transcript at the preserved text cursor. The control remains available as the note scrolls. Recording and transcription stay on-device; the temporary M4A is deleted when bundled Whisper finishes.
+
+After you stop, Orion saves the original transcript and, when the selected AI provider has a key, sends just that transcript for a cleanup pass before insertion. Cleanup removes nonsemantic hesitations and accidental repetition, adds punctuation, handles clear self-corrections, and turns clear lists or explicit to-dos into ordinary bullets and unchecked tasks. It is instructed to preserve your voice, meaning, qualifications and genuine uncertainty—not to summarize or expand your thoughts. For example, “Friday—oh no, actually Thursday” becomes “Thursday”; “maybe Friday or Thursday” keeps the uncertainty.
+
+After Stop, the microphone button quietly shows processing without progress or success pop-ups. During cleanup, click that same button (**Use original** in its tooltip) to insert the local transcript immediately. Without a key for the selected provider, Orion uses only local Whisper transcription and never attempts AI cleanup. Provider errors, a timeout or invalid output also fall back to the original. Cleanup has a 45-second limit and accepts up to 24,000 Unicode characters; longer dictation stays complete and local. Insertion is one Undo step. **Original dictations** at the bottom of the note opens the unedited transcript, also available in **Sources** after reopening Orion. Original transcripts stay local except for the optional text cleanup request; audio is never sent for this step. Moving to another note or an incoming edit from another window prevents late insertion into the wrong document.
 
 Small edition builds process two-minute segments. The current `0.5.3` Medium download bundles Whisper Medium, loads it once per dictation, and transcribes overlapping 30-second windows in the background. Both keep all generated text hidden until you press Stop, and neither imposes a fixed recording-duration cap.
 
@@ -679,12 +691,12 @@ See [all 21 tools and their contracts](docs/mcp-library-tools.md).
 
 ## Download
 
-[**Download Orion 0.5.3 for Apple Silicon — Whisper Medium**](https://github.com/zug11/orion/releases/download/v0.5.3/Orion-0.5.3-scroll-chat-20261111.m-Apple-Silicon.dmg)
+[**Download Orion 0.6.0 for Apple Silicon — Whisper Medium**](https://github.com/zug11/orion/releases/download/v0.6.0/Orion-0.6.0.m-Apple-Silicon.dmg)
 
 This release includes Whisper Medium and its persistent dictation worker, the
 Claude connector and the Codex plugin. It is Developer ID signed,
 Apple-notarized, stapled and Gatekeeper-accepted. Verify the installer with the
-[SHA-256 checksum](releases/0.5.3-sha256.txt). Small edition builds are available
+[SHA-256 checksum](releases/0.6.0-sha256.txt). Small edition builds are available
 in [earlier releases](https://github.com/zug11/orion/releases).
 
 Requirements:
@@ -752,7 +764,7 @@ Browser preview is a renderer-development convenience, not Orion's desktop secur
 | `cargo test --manifest-path src-tauri/Cargo.toml` | Run Rust host tests |
 | `cargo test --manifest-path src-tauri/mcp-server/Cargo.toml` | Run MCP server tests |
 
-Native bundles are written below `src-tauri/target/release/bundle/`. Public release packaging additionally requires Developer ID signing and notarization. Use `./script/package_release.sh 0.5.3` for Small and `ORION_WHISPER_MODEL=medium ./script/package_release.sh 0.5.3.m` for Medium rather than treating a local ad-hoc build as a distributable release. Set `ORION_NOTARY_PROFILE=orion-notary` on the maintainer's Mac to submit and verify the finished installers with Apple.
+Native bundles are written below `src-tauri/target/release/bundle/`. Public release packaging additionally requires Developer ID signing and notarization. Use `./script/package_release.sh 0.6.0` for Small and `ORION_WHISPER_MODEL=medium ./script/package_release.sh 0.6.0.m` for Medium rather than treating a local ad-hoc build as a distributable release. Set `ORION_NOTARY_PROFILE=orion-notary` on the maintainer's Mac to submit and verify the finished installers with Apple.
 
 ## Architecture
 
@@ -881,7 +893,10 @@ typing replaces it with the send arrow. **Talk to Space** starts an optional onl
 an OpenAI key. Voice starts with a bounded excerpt of the open note and can
 retrieve further notes and sources in the same Space, delegate independent
 research questions, and keep listening while research runs. During a call the
-same composer button becomes a square **Stop voice** control. Stop immediately
+empty composer shows a square **Stop voice** control. Typing replaces it with
+Send, and a running text response shows a square **Stop response** control.
+Microphone mute and Voice options share the slim, auto-growing input pill;
+**End voice call** remains in Voice options while typing. Stop voice immediately
 releases the microphone and ends playback; **Cancel research** remains separate. References and
 partial coverage remain available on screen. Explicit save requests create normal
 notes, with confirmation after disk persistence; editing opens the existing note
@@ -938,9 +953,10 @@ prompts. Choosing one puts that exact prompt in the composer for you to adjust
 and send. Editing suggestions keep their original note target if you navigate
 before sending; all changes still use the usual review and acceptance.
 
-Fresh voice conversations offer one brief neutral welcome after a short pause,
-skipping it if you begin speaking. Reconnecting or switching orbs does not greet
-you again, and the open note never becomes an unsolicited opening topic.
+Voice begins silently, with a small **Listening** cue beneath the scene when
+connected. Orion waits for you to speak rather than introducing itself or asking
+an opening question. Reconnecting or switching orbs also stays quiet, and the
+open note never becomes an unsolicited opening topic.
 Voice research now uses identifiable work orders. Ordinary conversation leaves
 them running; a new assignment can run alongside earlier work. Name a request
 to cancel or correct it, or use its compact Cancel control. Ambiguous references

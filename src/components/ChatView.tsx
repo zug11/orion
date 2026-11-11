@@ -13,6 +13,7 @@ import {
 } from "../lib/icons";
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -80,6 +81,21 @@ const idleVoiceActivity = { inputActive: false, outputActive: false, measured: f
   inputMeasured: false, outputMeasured: false, inputMuted: false };
 const noVoiceAction = () => {};
 
+function sizeComposer(input: HTMLTextAreaElement) {
+  const field = input.parentElement;
+  if (!field || !field.clientWidth) return;
+  // Measure the one-line layout first so shrinking text can return to a pill.
+  // Observe the outer width, not this textarea's width: expanding moves the
+  // controls onto their own row and must not create a resize feedback loop.
+  field.removeAttribute("data-multiline");
+  input.style.height = "auto";
+  const style = getComputedStyle(input);
+  const oneLine = parseFloat(style.lineHeight) + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+  if (input.scrollHeight > oneLine + 1) field.setAttribute("data-multiline", "true");
+  input.style.height = `${input.scrollHeight}px`;
+}
+
+
 export function ChatView({
   snapshot,
   passageChat,
@@ -129,6 +145,27 @@ export function ChatView({
   const [suggestionRevision, setSuggestionRevision] = useState(0);
   const [suggestedContext, setSuggestedContext] = useState<{ spaceId: string; noteId?: string; title?: string; editing: boolean }>();
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  // Grow only the composer; audio frames never participate in text measurement.
+  useLayoutEffect(() => {
+    const input = composerRef.current;
+    if (input) sizeComposer(input);
+  }, [draft, visible, compact, voiceActive]);
+  useLayoutEffect(() => {
+    const input = composerRef.current;
+    const field = input?.parentElement;
+    if (!input || !field || typeof ResizeObserver === "undefined") return;
+    const actions = field.querySelector<HTMLElement>(".chat-composer__actions");
+    let width = field.clientWidth, actionsWidth = actions?.clientWidth ?? 0;
+    const observer = new ResizeObserver(() => {
+      const nextActionsWidth = actions?.clientWidth ?? 0;
+      if (!field.clientWidth || (field.clientWidth === width && nextActionsWidth === actionsWidth)) return;
+      width = field.clientWidth; actionsWidth = nextActionsWidth;
+      sizeComposer(input);
+    });
+    observer.observe(field);
+    if (actions) observer.observe(actions);
+    return () => observer.disconnect();
+  }, [passageChat?.key]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messages = snapshot.studio.messages;
   const noteById = useMemo(
@@ -446,7 +483,6 @@ export function ChatView({
           {scrollVoice && <div className="chat-view__prompt-tail" aria-hidden="true" />}
         </div>
 
-        <div className="chat-view__voice-controls" ref={voiceControlsRef} />
         <form className="chat-composer" onSubmit={handleSubmit}>
           {selection?.spaceId === snapshot.workspace.id && selection.noteId === focusNote?.id && (
             <div className="chat-composer__suggested-target" title={selection.text.slice(0, 240)}>
@@ -488,32 +524,29 @@ export function ChatView({
                   : `Add an ${providerName} key to start chatting…`
               }
               aria-label="Message Orion"
-              rows={2}
+              rows={1}
               maxLength={8_000}
               disabled={isSending || !canSend}
             />
-            {voiceActive ? <button type="button" className="chat-composer__voice"
-              aria-label="Stop voice" title="Stop voice"
-              onClick={(event) => { event.preventDefault(); toggleVoice(); }}>
-              <Square size={14} fill="currentColor" strokeWidth={0} aria-hidden="true" />
-            </button> : isSending && onCancel ? <button type="button" onClick={(event) => {
-              // Cancelling restores the draft and can turn this same DOM node
-              // into Submit before the click's default action runs.
-              event.preventDefault();
-              onCancel();
-            }} aria-label="Stop response" className="chat-composer__stop">Stop</button> : !draft.trim() && onVoiceCommit ? <button
-              type="button" className="chat-composer__voice" disabled={!voiceEnabled || isSending}
-              aria-label="Talk to Space"
-              title="Talk to Space"
-              onClick={toggleVoice}>
-              <AudioLines size={19} strokeWidth={1.8} />
-            </button> : <button
-              type="submit"
-              disabled={!draft.trim() || isSending || !canSend}
-              aria-label="Send message"
-            >
-              <ArrowUp size={16} />
-            </button>}
+            <div className="chat-composer__actions">
+              <div className="chat-view__voice-controls" ref={voiceControlsRef} />
+              {isSending && onCancel ? <button key="stop-response" type="button" onClick={(event) => {
+                event.preventDefault();
+                onCancel();
+              }} aria-label="Stop response" title="Stop response" className="chat-composer__stop">
+                <Square size={14} fill="currentColor" strokeWidth={0} aria-hidden="true" />
+              </button> : draft.trim() ? <button key="send" type="submit" disabled={isSending || !canSend} aria-label="Send message" title="Send message">
+                <ArrowUp size={17} aria-hidden="true" />
+              </button> : voiceActive ? <button key="stop-voice" type="button" className="chat-composer__voice"
+                aria-label="Stop voice" title="Stop voice" onClick={(event) => { event.preventDefault(); toggleVoice(); }}>
+                <Square size={14} fill="currentColor" strokeWidth={0} aria-hidden="true" />
+              </button> : onVoiceCommit ? <button key="start-voice" type="button" className="chat-composer__voice" disabled={!voiceEnabled || isSending}
+                aria-label="Talk to Space" title="Talk to Space" onClick={toggleVoice}>
+                <AudioLines size={19} strokeWidth={1.8} aria-hidden="true" />
+              </button> : <button key="empty-send" type="submit" disabled aria-label="Send message" title="Send message">
+                <ArrowUp size={17} aria-hidden="true" />
+              </button>}
+            </div>
           </div>
           <div className="chat-composer__footer">
             <button type="button" className="chat-web-toggle" aria-pressed={webEnabled}

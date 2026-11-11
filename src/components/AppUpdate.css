@@ -1,0 +1,128 @@
+.app-update {
+  position: relative;
+  flex: 0 0 auto;
+  -webkit-app-region: no-drag;
+}
+
+.app-update-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 29px;
+  padding: 4px 9px 4px 7px;
+  border: 1px solid color-mix(in srgb, var(--periwinkle) 26%, var(--line));
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--periwinkle) 9%, var(--surface-1));
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.app-update-trigger:hover,
+.app-update-trigger[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--periwinkle) 16%, var(--surface-1));
+  border-color: color-mix(in srgb, var(--periwinkle) 46%, var(--line));
+}
+
+.app-update-trigger svg {
+  color: var(--periwinkle);
+}
+
+.app-update-popover {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 12px);
+  right: 0;
+  width: min(310px, calc(100vw - 32px));
+  padding: 21px 18px 17px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--surface-1);
+  color: var(--text);
+  box-shadow: 0 12px 36px #0002;
+  -webkit-app-region: no-drag;
+}
+
+.app-update-close {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 22px;
+  height: 22px;
+}
+
+.app-update-copy strong {
+  display: block;
+  padding-right: 15px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.app-update-copy p,
+.app-update-error {
+  margin: 7px 0 14px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-soft);
+}
+
+.app-update-error {
+  color: var(--danger, #b84444);
+  overflow-wrap: anywhere;
+}
+
+.app-update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.app-update-actions .button {
+  min-height: 30px;
+  padding: 6px 11px;
+  font-size: 11px;
+}
+
+.app-update-progress {
+  height: 3px;
+  margin: 0 0 15px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--line);
+}
+
+.app-update-progress span {
+  display: block;
+  height: 100%;
+  background: var(--periwinkle);
+  transition: width 150ms linear;
+}
+
+.app-update-progress .indeterminate {
+  width: 100%;
+  opacity: 0.45;
+}
+
+.app-update-spinner {
+  animation: app-update-spin 1.2s linear infinite;
+}
+
+.app-update-settings {
+  padding: 20px;
+}
+
+@keyframes app-update-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 1100px) {
+  .app-update-trigger { width: 29px; padding: 0; }
+  .app-update-trigger > span { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-update-spinner { animation: none; }
+  .app-update-progress span { transition: none; }
+}

@@ -91,7 +91,8 @@ import {
   type ConceptLinkSelection,
 } from "./editor/conceptLinkSelection";
 import { FindInNote, findInNotePluginKey } from "./editor/FindInNote";
-import { insertVoiceTranscriptAt } from "./editor/voiceDictation";
+import { insertVoiceTranscriptAt, insertCleanedVoiceTranscriptAt } from "./editor/voiceDictation";
+import type { PrepareDictation, DictationCompletionOptions, PreparedDictation } from "../lib/dictationCleanup";
 import { AIWritingPreview } from "./editor/AIWritingPreview";
 import { FlowWriting, finishInlineFlow, FLOW_INTERNAL, getInlineFlow } from "./editor/FlowWriting";
 import {
@@ -161,6 +162,7 @@ interface RichNoteEditorProps {
   onPrepareVoiceMemoSession?: (sessionId: string) => Promise<void>;
   onTranscribeVoiceMemo?: (audio: Blob, sessionId: string) => Promise<string>;
   onFinishVoiceMemoSession?: (sessionId: string) => Promise<void>;
+  onPrepareDictation?: PrepareDictation;
   aiArticleWritingEnabled?: boolean;
   aiImageGenerationEnabled?: boolean;
   aiWritingUnavailableReason?: string;
@@ -285,6 +287,7 @@ export function RichNoteEditor({
   onPrepareVoiceMemoSession,
   onTranscribeVoiceMemo,
   onFinishVoiceMemoSession,
+  onPrepareDictation,
   aiArticleWritingEnabled = false,
   aiImageGenerationEnabled = false,
   aiWritingUnavailableReason,
@@ -327,6 +330,7 @@ export function RichNoteEditor({
     sessionId: string;
     position: number;
     editor: Editor;
+    cancelCleanup?: () => void;
     track: (event: EditorEvents["transaction"]) => void;
   } | null>(null);
   const externalActionRef = useRef<ExternalEditorOperation | null>(null);
@@ -597,6 +601,10 @@ export function RichNoteEditor({
       return;
     }
     pendingEchoes.clear();
+    if (voiceMemoInsertionRef.current) {
+      clearVoiceMemoInsertion();
+      setAnnouncement("Dictation insertion cancelled because this note changed elsewhere. A completed original remains in Sources.");
+    }
     actionDocumentVersion.current = `editor-doc_${nanoid(16)}`;
     if (externalActionRef.current && !externalActionRef.current.options) externalActionRef.current.invalidated = true;
     if (chatReviewRef.current) {
@@ -1293,6 +1301,7 @@ export function RichNoteEditor({
     if (!insertion || (sessionId !== undefined && insertion.sessionId !== sessionId)) {
       return;
     }
+    insertion.cancelCleanup?.();
     if (!insertion.editor.isDestroyed) {
       insertion.editor.off("transaction", insertion.track);
     }
@@ -1307,24 +1316,42 @@ export function RichNoteEditor({
   async function insertCompletedVoiceMemo(
     sessionId: string,
     transcript: string,
+    options: DictationCompletionOptions,
   ) {
     const currentEditor = editorRef.current;
-    if (!currentEditor || currentEditor.isDestroyed) return;
     const insertion = voiceMemoInsertionRef.current;
-    const insertionPosition =
-      insertion?.sessionId === sessionId
-        ? insertion.position
-        : currentEditor.state.selection.to;
+    const controller = new AbortController();
+    const cancel = () => controller.abort(options.signal.reason);
+    options.signal.addEventListener("abort", cancel, { once: true });
+    if (options.signal.aborted || !insertion || insertion.sessionId !== sessionId) cancel();
+    if (insertion?.sessionId === sessionId) insertion.cancelCleanup = () => controller.abort();
     try {
+      const prepared: PreparedDictation | undefined = onPrepareDictation
+        ? await onPrepareDictation(sessionId, transcript, { ...options, signal: controller.signal }).catch(() => ({
+            original: transcript, blocks: undefined, notice: "Original inserted. AI cleanup was unavailable.",
+          }))
+        : undefined;
+      // Navigation/external replacement invalidates the capture. Never insert into a new cursor or note.
+      if (!currentEditor || currentEditor.isDestroyed || !insertion || insertion.sessionId !== sessionId ||
+          editorRef.current !== currentEditor || voiceMemoInsertionRef.current !== insertion) {
+        throw new Error(prepared?.sourceId
+          ? "This note changed, so dictation was not inserted. Its original is saved in Sources."
+          : "This note changed before dictation could be inserted.");
+      }
+      const inserted = prepared?.blocks
+        ? insertCleanedVoiceTranscriptAt(currentEditor, insertion.position, prepared.blocks)
+        : insertVoiceTranscriptAt(currentEditor, insertion.position, transcript);
       if (
-        !insertVoiceTranscriptAt(currentEditor, insertionPosition, transcript)
+        !inserted && !insertVoiceTranscriptAt(currentEditor, insertion.position, transcript)
       ) {
         throw new Error(
           "Orion could not insert the dictation at this cursor position.",
         );
       }
       setAnnouncement("Dictation inserted at the cursor. Undo is available.");
+      return inserted ? prepared?.notice : "Original dictation inserted.";
     } finally {
+      options.signal.removeEventListener("abort", cancel);
       clearVoiceMemoInsertion(sessionId);
     }
   }
@@ -2076,8 +2103,8 @@ export function RichNoteEditor({
           }
           onCompleteVoiceMemo={
             onTranscribeVoiceMemo
-              ? (sessionId, transcript) =>
-                  insertCompletedVoiceMemo(sessionId, transcript)
+              ? (sessionId, transcript, options) =>
+                  insertCompletedVoiceMemo(sessionId, transcript, options)
               : undefined
           }
           aiWritingUnavailableReason={aiWritingUnavailableReason}

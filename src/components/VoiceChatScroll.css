@@ -2,7 +2,7 @@
 .chat-view[data-voice-active="false"] .chat-view__voice-intro { display: none; }
 .chat-view__voice-intro > .chat-view__voice-scene { width: 100%; height: 100%; }
 .chat-dock__panel[data-voice-scroll="true"] { height: var(--chat-scroll-height, 440px); }
-.chat-view[data-voice-scroll="true"] .chat-view__stage { grid-template-rows: minmax(0, var(--chat-scroll-scene, 220px)) minmax(0, 1fr) auto auto; }
+.chat-view[data-voice-scroll="true"] .chat-view__stage { grid-template-rows: minmax(0, var(--chat-scroll-scene, 220px)) minmax(0, 1fr) auto; }
 .chat-view[data-voice-scroll="true"] .chat-view__voice-intro .chat-view__voice-scene { opacity: clamp(0, calc(1 - var(--chat-scroll-progress, 0) * 1.15), 1); }
 .chat-view[data-voice-scroll="true"] .chat-view__voice-intro:has(.chat-view__conversation-cue) .chat-view__voice-scene { padding-bottom: 32px; }
 .chat-view[data-voice-scroll="true"] .chat-view__voice-intro[inert] { visibility: hidden; }

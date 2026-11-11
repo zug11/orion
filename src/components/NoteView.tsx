@@ -55,6 +55,7 @@ import type { AIImageProposal, AIImageRequestInput } from "../lib/aiImages";
 import type { AIImageGenerationCallbacks, RichEditorContextState } from "./RichNoteEditor";
 import type { EditorActionHost } from "../lib/assistant/editorActionHost";
 import type { VoiceSelectionStore } from "../lib/voiceSelection";
+import { isDictationOriginal, type PrepareDictation } from "../lib/dictationCleanup";
 import { editorContextIdentity, type EditorCaptureState, type EditorSelectionSnapshot } from "../lib/editorSelectionContext";
 import type { EditorContextDocument } from "../lib/assistant/editorContext";
 import { useVoiceSelection } from "./useVoiceSelection";
@@ -171,6 +172,7 @@ interface NoteViewProps {
   onPrepareVoiceMemoSession?: (sessionId: string) => Promise<void>;
   onTranscribeVoiceMemo?: (audio: Blob, sessionId: string) => Promise<string>;
   onFinishVoiceMemoSession?: (sessionId: string) => Promise<void>;
+  onPrepareDictation?: PrepareDictation;
   onDisableConceptAutoLink: (conceptId: string) => void;
   aiArticleWritingEnabled?: boolean;
   aiImageGenerationEnabled?: boolean;
@@ -231,6 +233,7 @@ export function NoteView({
   onPrepareVoiceMemoSession,
   onTranscribeVoiceMemo,
   onFinishVoiceMemoSession,
+  onPrepareDictation,
   onDisableConceptAutoLink,
   aiArticleWritingEnabled = false,
   aiImageGenerationEnabled = false,
@@ -339,6 +342,10 @@ export function NoteView({
   useVoiceSelection(findScopeRef, note, voiceSelection, voiceSelection?.spaceId, displayedNote, { state: captureState });
   const shownTitle = editableNoteTitle(note);
   const shownSummary = useMemo(() => editableNoteSubtitle({ summary: visibleNoteSummary(note, sources) }), [note.summary, note.sourceIds, sources]);
+  const dictationOriginals = useMemo(() => {
+    const attached = new Set(note.sourceIds);
+    return sources.filter(source => isDictationOriginal(source) && attached.has(source.id)).slice().reverse();
+  }, [sources, note.sourceIds]);
   const headingVisibility = noteHeadingVisibility({ ...note, title: shownTitle, summary: shownSummary });
   useLayoutEffect(() => {
     const pending = pendingHeadingFocus.current;
@@ -1647,6 +1654,7 @@ export function NoteView({
               onPrepareVoiceMemoSession={onPrepareVoiceMemoSession}
               onTranscribeVoiceMemo={onTranscribeVoiceMemo}
               onFinishVoiceMemoSession={onFinishVoiceMemoSession}
+              onPrepareDictation={onPrepareDictation}
               aiArticleWritingEnabled={aiArticleWritingEnabled}
               aiImageGenerationEnabled={aiImageGenerationEnabled}
               aiWritingUnavailableReason={aiWritingUnavailableReason}
@@ -1683,6 +1691,18 @@ export function NoteView({
         )}
       </div>
 
+        {onOpenSource && dictationOriginals.length > 0 && (
+          <details className="dictation-originals" key={`dictation-${note.id}`}>
+            <summary>Original dictations</summary>
+            <p>Unedited Whisper transcripts. Select one to read or copy it.</p>
+            <ul>{dictationOriginals.map(source => (
+              <li key={source.id}><button type="button" onClick={() => onOpenSource(source.id)}>
+                {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(source.importedAt))}
+                <span>{source.text.slice(0, 90)}{source.text.length > 90 ? "…" : ""}</span>
+              </button></li>
+            ))}</ul>
+          </details>
+        )}
         <footer className="note-footer">
           <div className="tag-row">
             {visibleNoteTags(note).map((tag) => (

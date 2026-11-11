@@ -212,8 +212,10 @@ it("shows voice in the send position only while the composer is empty, with auto
   expect(screen.queryByRole("button", { name: "Talk to Space" })).not.toBeInTheDocument();
   expect(screen.queryByText(/Online · OpenAI voice/)).not.toBeInTheDocument();
   fireEvent.change(input, { target: { value: "Keep this draft" } });
-  expect(screen.getByRole("button", { name: "Stop voice" })).toBeVisible();
-  fireEvent.click(screen.getByRole("button", { name: "Stop voice" }));
+  expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "Stop voice" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+  fireEvent.click(screen.getByRole("button", { name: "End voice call" }));
   expect(screen.getByRole("button", { name: "Send message" })).toBeVisible();
   expect(input).toHaveValue("Keep this draft");
   expect(p.onSend).not.toHaveBeenCalled();
@@ -248,6 +250,7 @@ it("a sidebar voice request keeps the note and call alive through Chat collapse 
   expect(voiceCalls.mute).toHaveBeenLastCalledWith(true); expect(screen.getByLabelText("Voice active, microphone muted")).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Open chat" }));
   expect(screen.getByRole("textbox")).toHaveValue("A thought while talking");
+  fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
   fireEvent.click(screen.getByRole("button", { name: "End voice call" }));
   expect(voiceCalls.close).toHaveBeenCalledOnce(); expect(screen.queryByLabelText("Voice active, microphone muted")).not.toBeInTheDocument();
 });
@@ -292,4 +295,35 @@ it("switching Space disposes the call and never replays an earlier sidebar micro
   rerender(<ChatDock key={second.snapshot.workspace.id} {...second} onVoiceCommit={vi.fn()} voiceToggleRequest={2} />);
   expect(voiceCalls.start).toHaveBeenCalledTimes(2);
   expect(screen.getByRole("button", { name: "End voice call" })).toBeVisible();
+});
+
+
+it("sends and cancels typed prompts during a call without stopping or restarting voice", async () => {
+  const p = props(); let reject!: (error: Error) => void;
+  p.onSend.mockImplementation(() => new Promise((_, fail) => { reject = fail; }));
+  const onCancel = vi.fn(() => reject(new Error("Stopped")));
+  render(<ChatDock {...p} onCancel={onCancel} onVoiceCommit={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Open chat" }));
+  fireEvent.click(screen.getByRole("button", { name: "Talk to Space" }));
+  const input = screen.getByRole("textbox", { name: "Message Orion" });
+  expect(screen.getByText("Listening")).toBeVisible();
+  expect(screen.queryByText("Talk to Space")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "End voice call" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Mute microphone" }));
+  expect(screen.getByRole("button", { name: "Unmute microphone" })).toHaveAttribute("aria-pressed", "true");
+  fireEvent.click(screen.getByRole("button", { name: "Unmute microphone" }));
+  fireEvent.change(input, { target: { value: "Read this while we talk" } });
+  expect(screen.queryByRole("button", { name: "Stop voice" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+  expect(p.onSend).toHaveBeenCalledExactlyOnceWith("Read this while we talk");
+  expect(screen.getByRole("button", { name: "Stop response" })).toHaveTextContent("");
+  expect(screen.queryByRole("button", { name: "Stop voice" })).not.toBeInTheDocument();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "Stop response" })));
+  expect(input).toHaveValue("Read this while we talk");
+  expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+  expect(voiceCalls.close).not.toHaveBeenCalled(); expect(voiceCalls.start).toHaveBeenCalledOnce();
+  expect(p.onSend).toHaveBeenCalledOnce();
+  fireEvent.change(input, { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "Stop voice" }));
+  expect(voiceCalls.close).toHaveBeenCalledOnce();
 });

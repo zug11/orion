@@ -29,9 +29,9 @@
 .chat-dock .chat-view--compact .chat-message { margin-bottom: 20px; }
 .chat-dock .chat-view--compact .chat-message__body { font-size: 13px; line-height: 1.7; }
 .chat-dock .chat-view--compact .chat-composer { padding: 8px 12px 12px; }
-.chat-dock .chat-view--compact .chat-composer__field, .chat-dock .chat-view--compact .chat-composer__field:focus-within { min-height: 72px; padding: 7px; border-radius: 14px; box-shadow: none; grid-template-columns: minmax(0, 1fr) 30px; gap: 6px; }
-.chat-dock .chat-view--compact .chat-composer__field textarea { min-height: 48px; font-size: 13px; }
-.chat-dock .chat-view--compact .chat-composer__field > button { width: 30px; height: 30px; border-radius: 10px; box-shadow: none; }
+.chat-dock .chat-view--compact .chat-composer__field { min-height: 42px; padding: 5px 6px 5px 13px; gap: 6px; border-radius: 22px; }
+.chat-dock .chat-view--compact .chat-composer__field textarea { min-height: 30px; font-size: 13px; line-height: 20px; }
+.chat-dock .chat-view--compact .chat-composer__actions > button { width: 30px; height: 30px; }
 .chat-dock .chat-view--compact .chat-composer__footer { font-size: 10px; padding-top: 8px; }
 .chat-dock .chat-view--compact .chat-composer__footer > span:last-child { display: none; }
 .chat-dock .chat-view--compact .chat-message--thinking { font-size: 12px; }
