@@ -73,7 +73,9 @@ syntax whose source is a compact `orion-image://localhost/<asset-id>` reference;
 never put native absolute paths or desktop base64 payloads in note bodies or
 `vault.json`. The filename-derived alt text must remain visible to Markdown,
 MCP clients, exports, and assistive technology, and users can select and delete
-the image as one editor node.
+the image as one editor node. Alt text is escaped when written and unescaped
+when read (`escapeNoteImageMarkdownText` and `unescapeNoteImageMarkdownText`):
+a note must serialize identically however often it is reopened.
 
 The native `save_note_image` boundary accepts at most 12 MiB per image, validates
 the opaque asset ID, safe filename, canonical MIME, decoded byte count, and file

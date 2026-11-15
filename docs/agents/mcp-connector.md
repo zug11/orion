@@ -55,8 +55,14 @@ ordinary Claude user to configure a filesystem path.
 Preserve these trust boundaries:
 
 - Reread `vault.json` for every tool call so Claude sees current Orion data.
-- Validate vault schema 2 and Space schema 1; never interpret an invalid file as
-  an empty atlas.
+- Validate vault schema 2 or 3 and Space schema 1; never interpret an invalid
+  file as an empty atlas. Schema 3 means some sources keep their text beside the
+  vault as `textRef` (see [Vault storage](vault-storage.md)). Resolve every
+  reference while reading, so tools always see complete source text; a missing
+  or damaged text fails the call instead of returning an empty source. The
+  server never writes or prunes those files, and a write preserves each
+  source's `textRef` exactly. A connector built before schema 3 rejects such a
+  library, so reinstall the connector after updating Orion.
 - Browse, search, note lookup, source lookup, and the living Space overview
   default only to `activeSpaceId` when `space_id` is omitted and must never
   implicitly span every Space. An ID in another Space must not resolve.

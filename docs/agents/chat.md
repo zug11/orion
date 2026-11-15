@@ -335,8 +335,8 @@ heuristic; it never bypasses the local acceptance or stale-body checks.
 
 When the agent first selects rewrite, the host lazily supplies the complete
 authored body of the captured attached note in `readingContext.editTarget.body`,
-up to 24,000 code points and 72,000 encoded bytes within the existing
-96,000-byte packet ceiling. Oversized notes get an explicit unavailable result;
+up to 24,000 code points and 72,000 encoded bytes within the reading packet's
+320,000-byte ceiling. Oversized notes get an explicit unavailable result;
 the agent uses exact section reads and focused proposals with scope disclosure.
 Its final `noteRewrite` string is at most 24,000 code points. No other note body is automatically attached. Frontmatter and generated
 evidence/source footers stay outside the replacement and are retained by the

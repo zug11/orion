@@ -63,9 +63,15 @@ Related: [Notes and the editor](notes-and-editor.md), [Import pipeline](import-p
   loses a segment, preserve and insert recovered segments through the same source
   archival path, skip AI interpretation, and keep an actionable incomplete-recording
   error visible; never present partial recovered speech as a complete original.
-  Navigating/unmounting or an external document replacement cancels cleanup and
-  prevents a late insertion into another/replaced note. The completed original
-  remains in its originating Space. Each audio recording is discarded after its
+  Leaving the note or unmounting the editor while it records, transcribes or
+  cleans up never discards speech. The session detaches from the button:
+  recording stops, the remaining segments are transcribed in the background with
+  the callbacks of the note being left, and the combined original is archived as
+  that note's dictation Source. A detached session makes no AI cleanup request
+  and never inserts text, so it cannot write into another or replaced note. One
+  toast reports that the dictation was saved to Sources, or why it could not be.
+  An external document replacement still cancels cleanup and prevents a late
+  insertion. The completed original remains in its originating Space. Each audio recording is discarded after its
   transcription command finishes; cleanup never sends audio to a provider.
   After Stop, show processing only in the existing microphone button; do not
   display transcription, recovery-saving, cleanup or success status bubbles.
@@ -87,6 +93,13 @@ the same controlled transcription helpers. Provider speech generation, credentia
 and the Preview Keychain-service rewrite remain in `lib.rs`. Keep temporary-media
 cleanup, partial batch results, deadlines and on-device-only transcription intact
 when changing this module.
+
+Each persistent dictation worker has its own lock, so a dictation never waits on
+another window's worker. A reader thread forwards the worker's replies and every
+wait has a deadline: 120 seconds to load the model, 120 seconds for a control
+request and 240 seconds for a segment. A worker that misses a deadline is killed
+and removed, and that dictation reports an actionable error; other dictations
+continue. Never hold the worker registry lock while waiting on a worker.
 
 ## Offline transcription contract
 
@@ -120,6 +133,19 @@ Segment transcripts stay buffered until recording stops; the renderer removes
 overlap duplicates and then preserves the combined ordered original before the
 optional cleanup/insertion step. Silent intermediate windows are valid. The
 overall dictation session has no fixed duration limit.
+
+`mergeVoiceTranscriptParts` in `src/lib/transcription.ts` joins the windows in
+order. Only the Medium edition's windows share audio, so only there are a
+window's opening words treated as a repeat of the previous window's ending. The
+cut rarely falls between words, so the seam tolerates up to two misheard or
+clipped opening words before a run of at least three matching words (two when
+the repeat is exact), lets the later window complete a word the earlier one cut
+off, and compares character by character in scripts written without spaces. One
+word, a word fragment or punctuation alone never establishes a repeat. A window
+that follows a silent one has nothing to repeat. The Small edition's segments
+share no audio, so nothing is removed: a phrase repeated at their boundary was
+spoken twice. Media import's Swift `appendTranscript` still uses an exact match
+on the later window's first words.
 
 `dictationCleanup.ts` archives the exact combined transcript using the existing
 Source schema and defines cleanup fallback/deadline behavior. Sessions capture

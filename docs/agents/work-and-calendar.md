@@ -145,6 +145,20 @@ Related: [Notes and the editor](notes-and-editor.md), [Claude connector and Code
   move; relative inferred mentions resolve against the note's saved `updatedAt`
   and expose this reference in their tooltip. Editing the note may change that
   reference. All-day dates avoid UTC conversion; numeric dates use day/month.
+  An inferred mention must be a date by its own wording or its immediate
+  surroundings. Drop bare durations and decades ("45 minutes", "3 days", "the
+  1990s"), anything measured in seconds, minutes or hours, "now", and vague
+  quantities ("a few days ago"); keep an anchored relative phrase ("in 3 days",
+  "two weeks ago", "within 2 weeks", "next week", "end of month"). Keep a bare
+  weekday abbreviation only when capitalised and preceded by a date cue (on, by,
+  due, until, next…), followed by a day number, or used as a schedule label
+  ("Mon: gym"); "the Sun" and "they wed" are words. Keep a day/month without a
+  year only at the start of its block, after a date cue, or beside a label
+  separator; "3/4 of the total" and "24/7" are not dates. "On the 15th" resolves
+  to the next such day on or after the saved date, and only when a sentence
+  boundary or connective follows ("on the 15th floor" is not a date). Whether a
+  phrase is found must not depend on an unrelated digit in its paragraph, and a
+  phrase cut by a scan window is read once, from the window that holds it whole.
   Keep inferred mentions visibly distinct from picked dates and firm ticket
   deadlines, with navigation back to the note. An inferred entry has a small
   Remove control on hover or keyboard focus (always shown without hover).

@@ -119,20 +119,17 @@ src/components/SettingsView.tsx     AI, transcription, linking, theme, data
 src/components/HomeAtmosphere.tsx   lazy home-atmosphere selection
 src/components/SignalDecay.tsx      low-power responsive harmonic shader
 src/components/LineWaves.tsx        low-power OGL contour shader
-src/components/QuietLoom.tsx        original local WebGL woven-light shader
-src/components/Nova.tsx             original animated plasma volume and sparks
-src/components/Flux.tsx             full-width flowing plasma currents
-src/components/TidalGlass.tsx       full-width procedural liquid caustics
-src/components/PrismDrift.tsx       animated crystalline height-field facets
-src/components/Nebula.tsx           layered full-width cloud and star field
-src/components/Emberwake.tsx        advected full-width spark streams and wakes
-src/components/GravitySilk.tsx      billowing satin field with analytic normals
 src/components/Mirage.tsx           drifting procedural glass-lens field
 src/components/Opal.tsx          local iridescent glass ribbons
 src/components/RippleGlass.tsx   local refractive optical ripples
 src/components/ProceduralAtmosphere.tsx shared bounded WebGL lifecycle
 src/components/atmosphereShader.ts  local GLSL palette and room composition
 src/components/DotField.tsx         settling Canvas 2D interaction field
+src/components/{QuietLoom,Nova,Flux,TidalGlass,PrismDrift,Nebula,Emberwake,GravitySilk}.tsx
+                                    retired atmospheres; kept on disk, never imported
+src/components/ErrorBoundary.tsx    contains a rendering failure to one surface
+src/components/VaultBackupRestore.tsx backup list and restore on a failed load
+src/lib/diagnostics.ts              bounded in-memory record of recent problems
 src/lib/icons.ts                    direct Lucide exports; never use its barrel
 src/lib/files.ts                    local document parsing
 src/lib/concepts.ts                 vocabulary reconciliation and link teaching
@@ -150,7 +147,10 @@ src/lib/aiImagePlanningProtocol.json shared read-only image planning instruction
 src-tauri/src/image_planning.rs     cancellable provider transport for illustration plans
 src/lib/studio.ts                   dormant Studio-state normalization
 src/lib/storage.ts                  validated IPC and browser-preview fallbacks
-src/lib/transcription.ts            transcript-to-source normalization
+src/lib/sourceTextStore.ts          source text beside the vault: hydrate and externalize
+src/lib/windowVault.ts              three-way merge and guarded save for a window
+src/lib/transcription.ts            transcript-to-source normalization, dictation window stitching
+src/lib/dictationOutcome.ts         outcome of a dictation that outlived its note
 src/lib/tasks.ts                    Space task extraction and persisted toggles
 src/lib/tickets.ts                  cached note-backed tickets and board markers
 src/lib/ticketInference.ts          whole-note bounded readers, local task collection and guarded acceptance
@@ -161,6 +161,9 @@ src/components/HomeTickets.tsx     adaptive To-dos/Tickets sections and session 
 src/components/Tickets.tsx         shared board, inline ticket entry and creation dialog
 src/lib/webExport.tsx               offline HTML scope, rendering, and privacy
 src-tauri/src/lib.rs                native commands and trust boundaries
+src-tauri/src/source_texts.rs       content-addressed source text store and pruning
+src-tauri/src/vault_backups.rs      rotating vault backups and guarded restore
+src-tauri/shared/source_text_ref.rs text reference format shared with the MCP server
 src-tauri/src/local_transcription.rs offline media/dictation, Whisper runtime and speech alignment
 src-tauri/src/knowledge_schemas.rs  pure organizer/knowledge JSON schemas and provider schema adapters
 src-tauri/src/connector_installation.rs bundled connector validation and native install-page openers
@@ -180,6 +183,7 @@ script/build_codex_plugin.sh         Codex plugin staging and validation
 script/build_ocr_sidecar.sh          Apple Silicon Vision OCR helper builder
 script/test_codex_plugin.mjs         plugin contract and read-write MCP harness
 script/test_mcp_connector.mjs        stdio lifecycle and Space-isolation harness
+docs/agents/                        the per-area manuals indexed above
 README.md                           user and contributor documentation
 ```
 
@@ -210,8 +214,8 @@ maintained application tests belong in `src/`. TypeScript excludes local
 not maintained application source and must not be imported.
 `npm run tauri build` is the canonical native integration and release check.
 Native artifacts are produced under `src-tauri/target/release/bundle/`.
-Preview builds, the pinned voice SDK patch and release packaging are in
-`docs/agents/build-and-release.md`.
+Preview builds, the pinned voice SDK patch, release packaging and how to run
+these checks on Linux are in `docs/agents/build-and-release.md`.
 
 ## Persistence and schema rules
 
@@ -238,8 +242,53 @@ flushed temporary file plus atomic replacement.
   note-array order is the stable visible order.
 - Settings currently apply across all Spaces; content remains Space-local.
 
+These hold for every change that touches the library on disk. The details are
+in `docs/agents/vault-storage.md`:
+
+- The vault has two writers, the desktop host and the bundled MCP server. Both
+  take `vault.lock`, check the expected revision and replace the file
+  atomically. Never add a writer that skips any of the three, and never write
+  the vault from the renderer.
+- Source text lives beside the vault in `attachments/sources/<sha256>.txt`. A
+  persisted source carries `textRef` and no `text`, and such a vault is schema
+  3. In memory `Source.text` is always the complete string. Only
+  `src/lib/sourceTextStore.ts`, `src-tauri/src/source_texts.rs` and
+  `src-tauri/shared/source_text_ref.rs` know the on-disk form. Never put source
+  text back into `vault.json`, and never write a vault that refers to a text
+  which is not on disk.
+- A change to the vault format must load every existing library and must fail
+  closed in a binary that does not understand it. Bump the vault schema for a
+  change an older reader would misread, and update the host, the MCP server
+  and both connector packages together.
+- The host keeps rotating backups of the vault before replacing it and offers
+  them when a load fails. Keep that path working: a restore validates the
+  backup and sets the replaced file aside.
+- Autosave cost must follow what changed, not the size of the library. Do not
+  add per-save work that serializes, hashes or scans every note or source.
+
 Multiple windows and their merge rules are in `docs/agents/vault-storage.md`.
 Persisted appearance settings are in `docs/agents/ui-and-appearance.md`.
+
+## Failure containment
+
+A defect in one surface must not cost the user the window or unsaved work.
+
+- `ErrorBoundary` wraps the window, the current screen, Chat, the side panels
+  and each dialog. A rendering failure shows a contained message with Try again
+  and Copy details, or closes the dialog with a toast, while the rest of the
+  window and the autosave path keep running. Wrap a new top-level surface the
+  same way; do not catch rendering errors by other means.
+- `src/lib/diagnostics.ts` keeps a bounded in-memory list of recent problems,
+  including unhandled errors and rejections. It records error messages and
+  component stacks only, is never persisted and is never sent anywhere. Copy
+  details is the only way out, and the user chooses it. Never record note text,
+  source text or keys there, and do not turn it into a log file.
+- Work that outlives its surface finishes or fails visibly. A dictation whose
+  note is left is archived in the background and reported with a toast. A late
+  result for a cancelled or replaced target is discarded, never applied
+  elsewhere.
+- Every wait on a subprocess or a provider has a deadline, and no lock is held
+  across such a wait.
 
 Browser preview uses `localStorage` for development and keeps both provider keys
 in memory for the current tab. Desktop behavior is authoritative.

@@ -6,6 +6,37 @@ container (browser-preview mode, no Tauri). Treat absolute timings as
 indicative and rerun on a Mac; the *shapes* (cliffs, O(size) costs) are the
 point. Probe scripts are listed in the appendix.
 
+## Status
+
+Updated 2026-11-15 after the first reliability pass on
+`claude/dazzling-keller-ogf0q6`. The evidence sections below describe the code
+before that pass and are kept as the record of why each change was made.
+
+| Item | Status |
+| --- | --- |
+| P0-1 Vault backups and restore | Done. Rotating hard-link backups before each replace; the load-error screen lists and restores them. |
+| P0-2 Hung Whisper worker | Done. Per-worker locks, a reader thread and deadlines on every wait. |
+| P0-3 Dictation lost on navigation | Done. The session detaches, finishes in the background and is archived to Sources. |
+| P0-4 Error boundaries | Done. Window, screen, Chat, panels and dialogs are contained; global handlers record problems. |
+| P1-1 Automatic link cliff | Done. Trie matcher plus plugin caching: 1,407 ms to 2.7 ms per pass at 2,000 concepts. |
+| P1-2 Autosave scales with library bytes | Done for saving: source text lives beside the vault (62 MB to 5 MB, about 1,030 ms to 51 ms per autosave on the heavy library). Open: a revision-only check so a focus refresh of an unchanged vault loads nothing. |
+| P1-3 Calendar false positives | Done, including "on the 15th". |
+| P1-4 Markdown round trips | Partly. Image descriptions are stable. Open: plain HTML comments are still dropped by the editor, and adjacent same-kind lists still merge. |
+| P1-5 Dictation stitching | Done in the renderer (tolerant, script-aware seam; no removal in the Small edition). Open: media import's Swift `appendTranscript`, and a timestamp-based seam. |
+| P1-6 Dictation structure is all-or-nothing | Not changed. It is the documented contract; needs a product decision. |
+| P2-1 Image files never deleted | Open. |
+| P2-2 New note jumps after a concurrent save | Done. |
+| P2-3 Voice fan-out and English-only heuristics | Not changed. It is the documented contract; needs a product decision. |
+| P2-4 Startup bundle | Open. |
+| P2-5 Diagnostics | Partly. A bounded in-memory record with Copy details on the error screens. Open: a Settings entry and stage timings. |
+| P2-6 Tests and process | Partly. The timing-sensitive NoteView tests are fixed. Open: CI. |
+| P2-7 AGENTS.md | Done. 343 KB to a 23 KB core plus one manual per area in `docs/agents/`; the stale atmosphere list and packet ceiling are corrected. |
+| P2-8 Pasted-text import defaults | Open. |
+
+A library in the new layout is vault schema 3. An older Orion build or an older
+installed connector rejects it, so connectors must be reinstalled after
+updating.
+
 ## Context
 
 Orion's hard parts are already done well: the vault write path is lock → CAS →

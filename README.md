@@ -737,6 +737,8 @@ Local-first does not mean pretending network AI is local. Orion makes the bounda
 | Data or operation | Where it happens |
 | --- | --- |
 | Notes, concepts, relationships, sources, Chat history | Plaintext `vault.json` in Orion's local application-data folder |
+| Preserved source text | Plaintext files beside the vault in `attachments/sources/`, one per distinct text |
+| Vault backups | Recent versions of `vault.json` in a local `backups/` folder beside the vault |
 | Provider credentials | OS credential store; never written to the vault or returned to the renderer |
 | Text/PDF/DOCX parsing | On-device |
 | Image and scanned-PDF OCR | On-device through the macOS Vision framework |
@@ -938,7 +940,13 @@ The canonical desktop vault is:
 
 It is schema-versioned and stores all Spaces in one snapshot. Saves are serialized, flushed to a temporary file, and atomically replaced. Orion and its MCP server coordinate through a sibling advisory lock and revision checks so an external agent write cannot be silently overwritten by stale renderer state.
 
-An invalid or unsupported vault opens a recovery screen; Orion never silently replaces it with an empty library. A fresh installation starts completely empty—no sample notes, sources, or conversations are seeded.
+The vault holds notes, concepts, relationships, Chat history and source records. The preserved text of each source lives beside it, in `attachments/sources/<sha256>.txt`, the same way note images are kept in `attachments/images/`. Source text never changes after import, so keeping it out of the file that every autosave rewrites means saving stays fast however many books and transcripts a library holds. An existing library is moved to this layout once, in the background, the first time it is opened; nothing in a note or source changes.
+
+A library in this layout needs a current Orion and current connectors. An older Orion build, or a Claude or Codex connector installed before the change, reports the library as unsupported instead of showing sources as empty. Reinstall the connector from **Settings → Connections** after updating Orion.
+
+Before Orion replaces the vault it keeps the version being replaced in a `backups/` folder beside it: the three most recent, one per day for a week and one per week for a month, at most one every ten minutes. These are local safety copies, not a substitute for backing up the application-data folder.
+
+An invalid or unsupported vault opens a recovery screen that lists those backups and can restore one; the file being replaced is set aside, not deleted. Orion never silently replaces a vault with an empty library. A fresh installation starts completely empty—no sample notes, sources, or conversations are seeded.
 
 ## Repository map
 
@@ -979,7 +987,7 @@ cargo fmt --manifest-path src-tauri/mcp-server/Cargo.toml -- --check
 
 For native or release changes, also run `npm run tauri build`. Connector builds run lifecycle, schema, citation, read/write, and Space-isolation harnesses against the exact packaged binaries.
 
-Contributors should read [AGENTS.md](AGENTS.md) before changing Orion. It is the durable product and engineering contract for persistence, privacy, orchestration, links, connectors, native packaging, and release safety. Deferred product directions live in [ROADMAP.md](ROADMAP.md), and bundled dependency attributions live in [THIRD_PARTY_NOTICES.md](src-tauri/resources/THIRD_PARTY_NOTICES.md).
+Contributors should read [AGENTS.md](AGENTS.md) before changing Orion, then the manual in [docs/agents/](docs/agents/) for each area they touch. Together they are the durable product and engineering contract for persistence, privacy, orchestration, links, connectors, native packaging, and release safety. Deferred product directions live in [ROADMAP.md](ROADMAP.md), and bundled dependency attributions live in [THIRD_PARTY_NOTICES.md](src-tauri/resources/THIRD_PARTY_NOTICES.md).
 
 ---
 

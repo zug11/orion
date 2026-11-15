@@ -188,7 +188,13 @@ the ambiguity canvas part of ordinary canonical navigation.
 
 Automatic matching must prefer longer phrases, respect word boundaries and case
 settings, avoid unsafe ranges such as code and existing links, and never mutate
-the underlying prose merely to render a link. Do not merge project notes merely
+the underlying prose merely to render a link. Its cost must not grow with the
+vocabulary: `decorateAutoLinks` in `src/lib/wiki.ts` walks a trie of folded word
+tokens from each word start and verifies only the phrases that trie proposes,
+longest first, with each phrase's own sticky pattern. Never return to testing
+every concept against every text node. The editor plugin answers a caret move
+from its last pass (same document and vocabulary objects) and remembers results
+per text, so a keystroke matches only the text that changed. Do not merge project notes merely
 because they mention the same phrase. All target IDs must resolve inside the
 active Space.
 

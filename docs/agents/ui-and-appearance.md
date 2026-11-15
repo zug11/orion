@@ -260,17 +260,17 @@ Reuse the existing colors, surfaces, typography, radii, and compact scale in
   edge and halo; never replace it with a radial spotlight beneath the pointer or
   reveal a persistent solid outline; both edge and halo must inherit the exact
   card radius without square filter bleed at the corners;
-- a persisted, reduced-motion-safe home atmosphere chosen from Line Waves,
-  Signal Decay, Field, Quiet Loom, Nova, Flux, Tidal Glass, Prism Drift, Nebula,
-  Emberwake, Gravity Silk, and Mirage, with curated or custom accent and motion controls;
-  only the active renderer should load or animate. The nine original procedural
-  effects share a local WebGL lifecycle with no external artwork or shader
-  dependency, a 600,000-pixel
-  budget and 30 fps cap, hidden/offscreen suspension, static fallbacks, and
-  context-loss recovery. Still draws only on resize or pointer input; system
-  reduced motion also disables pointer response. The seven full-field effects
-  (Flux, Tidal Glass, Prism Drift, Nebula, Emberwake, Gravity Silk, Mirage)
-  occupy the whole hero rather than a central object;
+- a persisted, reduced-motion-safe home atmosphere chosen from Mirage, Signal
+  Decay, Field, Line Waves, Opal, and Ripple Glass, with curated or custom accent
+  and motion controls; only the active renderer should load or animate. Mirage,
+  Opal and Ripple Glass share a local WebGL lifecycle with no external artwork
+  or shader dependency, a 600,000-pixel budget and 30 fps cap, hidden/offscreen
+  suspension, static fallbacks, and context-loss recovery. Still draws only on
+  resize or pointer input; system reduced motion also disables pointer response.
+  Mirage occupies the whole hero rather than a central object. The retired
+  effects (Quiet Loom, Nova, Flux, Tidal Glass, Prism Drift, Nebula, Emberwake,
+  Gravity Silk) remain on disk but are never offered or imported; see Persisted
+  appearance settings above for how their saved IDs hydrate;
 - direct canonical article navigation, with the right-hand connections canvas
   reserved for unresolved legacy ambiguity instead of a graph;
 - route-aware Back/Forward: a note opened from Notes returns to Notes, a note

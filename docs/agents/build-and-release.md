@@ -50,6 +50,25 @@ misaligned proc-macro dylibs with the macOS 27 toolchain
 until the supported compiler includes the fix. The independent MCP package
 keeps its existing remapping, stripping, signing, and verification pipeline.
 
+## Running the checks on Linux
+
+The release target is Apple Silicon macOS, but the renderer checks and both
+Rust test suites also run on Linux, which is what a cloud agent or CI has.
+
+- `npm run check` needs nothing beyond `npm ci`.
+- The MCP server crate builds and tests as is. Its Node harnesses
+  (`script/test_mcp_connector.mjs`, `script/test_mcp_library.mjs` and the
+  workflow harness) use `/private/tmp`; create that directory first.
+- The desktop crate needs the WebKitGTK development packages:
+  `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev
+  libjavascriptcoregtk-4.1-dev librsvg2-dev libayatana-appindicator3-dev
+  libssl-dev libdbus-1-dev pkg-config`. With those, `cargo test --manifest-path
+  src-tauri/Cargo.toml` compiles and runs the host's unit tests. The macOS-only
+  tests are ignored there.
+- Swift sidecars, native glass, signing, the updater and anything that needs
+  AppKit can only be built and verified on macOS. Say so in a handoff instead
+  of implying they were exercised.
+
 ## Application updates
 
 Public Apple Silicon releases from 0.6.0 use the Tauri updater plugin with
