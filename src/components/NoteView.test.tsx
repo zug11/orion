@@ -14,6 +14,10 @@ import { NOTE_BLOCK_CLOSE, NOTE_BLOCK_OPEN } from "../lib/noteBlocks";
 import { buildNarrationDocument } from "../lib/noteNarration";
 
 const NOW = "2026-07-29T01:00:00.000Z";
+// The rich editor is loaded lazily. Under a full parallel run that import can
+// take longer than Testing Library's one-second default.
+const LAZY_EDITOR = { timeout: 10_000 };
+const LAZY_EDITOR_TEST = 20_000;
 
 describe("NoteView", () => {
   it("restores each note's last edit mode through navigation and remounts, with independent Space state", () => {
@@ -60,7 +64,7 @@ describe("NoteView", () => {
       onDisableConceptAutoLink: vi.fn(), initialEditing: true,
     };
     const { rerender } = render(<NoteView {...props} note={note} />);
-    expect(await screen.findByRole("textbox", { name: "Note title" })).toHaveValue(note.title);
+    expect(await screen.findByRole("textbox", { name: "Note title" }, LAZY_EDITOR)).toHaveValue(note.title);
     expect(screen.getByRole("button", { name: "Done" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
@@ -68,7 +72,7 @@ describe("NoteView", () => {
     rerender(<NoteView {...props} note={{ ...note, id: "note-next", title: "Next document" }} />);
     expect(screen.getByRole("textbox", { name: "Note title" })).toHaveValue("Next document");
     expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
-  });
+  }, LAZY_EDITOR_TEST);
 
   it("renders Orion-managed note images without treating them as external links", () => {
     const note: Note = {
@@ -536,14 +540,14 @@ describe("NoteView", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    fireEvent.change(await screen.findByRole("textbox", { name: "Note title" }), {
+    fireEvent.change(await screen.findByRole("textbox", { name: "Note title" }, LAZY_EDITOR), {
       target: { value: "Revised first note" },
     });
     rerender(<NoteView note={second} notes={[first, second]} {...shared} />);
 
     expect(onFinishEditing).toHaveBeenCalledOnce();
     expect(onFinishEditing).toHaveBeenCalledWith("note-first");
-  });
+  }, LAZY_EDITOR_TEST);
 
   it("checks a task directly while reading without entering edit mode", () => {
     const onUpdateNote = vi.fn();
