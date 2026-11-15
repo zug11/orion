@@ -119,6 +119,39 @@ describe("shared vault, independent windows", () => {
     expect(base.spaces[0].notes[0].body).toBe("Original one");
   });
 
+  it("keeps a note created in this window where it was created when another writer also saved", () => {
+    const base = fixture(), local = copy(base), remote = copy(base);
+    const extra = (id: string): Note => ({ ...base.spaces[0].notes[0], id, title: id, slug: id, body: `New ${id}` });
+    // New notes go to the top of the list. Another writer edits an existing note.
+    local.spaces[0].notes = [extra("mine"), ...local.spaces[0].notes];
+    remote.spaces[0].notes[1].body = "Other window text";
+    expect(mergeWindowVault(base, local, remote).spaces[0].notes.map((n) => n.id)).toEqual(["mine", "one", "two"]);
+
+    // Both writers add at the top: both stay at the top, the saved one first.
+    remote.spaces[0].notes = [extra("theirs"), ...remote.spaces[0].notes];
+    expect(mergeWindowVault(base, local, remote).spaces[0].notes.map((n) => n.id)).toEqual(["theirs", "mine", "one", "two"]);
+
+    // A record inserted between two existing ones stays between them.
+    const between = copy(base);
+    between.spaces[0].notes = [between.spaces[0].notes[0], extra("middle"), extra("middle-2"), between.spaces[0].notes[1]];
+    expect(mergeWindowVault(base, between, remote).spaces[0].notes.map((n) => n.id)).toEqual(["theirs", "one", "middle", "middle-2", "two"]);
+  });
+  it("keeps appended records in the order they reached disk", () => {
+    const base = fixture(), local = copy(base), remote = copy(base);
+    const extra = (id: string): Note => ({ ...base.spaces[0].notes[0], id, title: id, slug: id });
+    local.spaces[0].notes.push(extra("mine"));
+    remote.spaces[0].notes.push(extra("theirs"), extra("theirs-2"));
+    expect(mergeWindowVault(base, local, remote).spaces[0].notes.map((n) => n.id)).toEqual(["one", "two", "theirs", "theirs-2", "mine"]);
+  });
+  it("puts a record back in its place when its remote deletion loses a conflict", () => {
+    const base = fixture(), local = copy(base), remote = copy(base);
+    local.spaces[0].notes[0].body = "Edited here";
+    remote.spaces[0].notes = remote.spaces[0].notes.slice(1);
+    expect(() => mergeWindowVault(base, local, remote)).toThrow(WindowVaultConflict);
+    expect(mergeWindowVault(base, local, remote, "local").spaces[0].notes.map((n) => n.id)).toEqual(["one", "two"]);
+    expect(mergeWindowVault(base, local, remote, "remote").spaces[0].notes.map((n) => n.id)).toEqual(["two"]);
+  });
+
   it("merges different fields on one note and keeps independent tag changes", () => {
     const base = fixture(), local = copy(base), remote = copy(base);
     local.spaces[0].notes[0].body = "Edited prose";
