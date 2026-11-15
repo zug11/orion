@@ -98,7 +98,7 @@ import {
 } from "./editor/conceptLinkSelection";
 import { FindInNote, findInNotePluginKey } from "./editor/FindInNote";
 import { insertVoiceTranscriptAt, insertCleanedVoiceTranscriptAt, insertStructuredVoiceTranscriptAt, restoreOriginalDictation } from "./editor/voiceDictation";
-import type { PrepareDictation, DictationCompletionOptions, PreparedDictation } from "../lib/dictationCleanup";
+import { DictationNotInsertedError, type PrepareDictation, type DictationCompletionOptions, type PreparedDictation } from "../lib/dictationCleanup";
 import { AIWritingPreview } from "./editor/AIWritingPreview";
 import { FlowWriting, finishInlineFlow, FLOW_INTERNAL, getInlineFlow } from "./editor/FlowWriting";
 import {
@@ -1396,9 +1396,9 @@ export function RichNoteEditor({
       // Navigation/external replacement invalidates the capture. Never insert into a new cursor or note.
       if (!currentEditor || currentEditor.isDestroyed || !insertion || insertion.sessionId !== sessionId ||
           editorRef.current !== currentEditor || voiceMemoInsertionRef.current !== insertion) {
-        throw new Error(prepared?.sourceId
+        throw new DictationNotInsertedError(prepared?.sourceId
           ? "This note changed, so dictation was not inserted. Its original is saved in Sources."
-          : "This note changed before dictation could be inserted.");
+          : "This note changed before dictation could be inserted.", prepared?.sourceId);
       }
       const position = insertion.position;
       const before = currentEditor.state.doc;

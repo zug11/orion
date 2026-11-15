@@ -60,6 +60,7 @@ import {
 } from "./components/ImportStudio";
 import { NoteView } from "./components/NoteView";
 import { VaultBackupRestore } from "./components/VaultBackupRestore";
+import { onDetachedDictation } from "./lib/dictationOutcome";
 import { NotesIndex } from "./components/NotesIndex";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar, type WorkspaceView } from "./components/Sidebar";
@@ -2133,6 +2134,16 @@ function App() {
     },
     [],
   );
+
+  // A recording that was still running when its note was left finishes in the
+  // background. Its button is gone, so the window reports what became of it.
+  useEffect(() => onDetachedDictation((outcome) => {
+    if (outcome.saved) {
+      showToast("Dictation saved to Sources", "You left the note while it was recording, so it was not inserted. Open the note’s original dictations to use it.");
+    } else {
+      showToast("Dictation could not be saved", outcome.message ?? "The recording ended before any speech was transcribed.");
+    }
+  }), [showToast]);
 
   const prepareVoiceMemoForNote = useCallback(
     async (noteId: EntityId, sessionId: string) => {

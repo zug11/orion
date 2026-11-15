@@ -241,6 +241,17 @@ export function resolveDictationBoard(boardName: string, boards: readonly Pick<N
 }
 
 /** Archive first. Cleanup is optional and cannot prevent the original being inserted. */
+/**
+ * A finished dictation could not be inserted because its note or cursor is no
+ * longer there. `sourceId` is set when the original was archived to Sources.
+ */
+export class DictationNotInsertedError extends Error {
+  constructor(message: string, readonly sourceId?: string) {
+    super(message);
+    this.name = "DictationNotInsertedError";
+  }
+}
+
 export async function prepareDictation({
   transcript, aiAvailable, preserveOriginal, clean, signal, onPhase,
 }: {
