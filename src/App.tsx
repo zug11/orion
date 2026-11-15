@@ -60,6 +60,7 @@ import {
 } from "./components/ImportStudio";
 import { NoteView } from "./components/NoteView";
 import { VaultBackupRestore } from "./components/VaultBackupRestore";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { onDetachedDictation } from "./lib/dictationOutcome";
 import { NotesIndex } from "./components/NotesIndex";
 import { SettingsView } from "./components/SettingsView";
@@ -602,6 +603,12 @@ function App() {
     },
     [],
   );
+
+  // A panel or sheet that failed to render is removed rather than left broken
+  // over the work beneath it, so say what happened.
+  const reportSurfaceProblem = useCallback((label: string) => {
+    showToast(`Orion couldn’t show ${label}`, "The rest of Orion is still working. Open it again to retry.");
+  }, [showToast]);
 
   const scheduleSpaceOverviewRefresh = useCallback(
     (spaceId: string, delayMs = 1_400) => {
@@ -4563,7 +4570,15 @@ function App() {
           }
         />}
         <main ref={workspaceContentRef} className="workspace-content">
-          {renderScreen()}
+          {/* A view that fails to render must not take the window, and the
+              saving that runs above it, down with it. Navigating away retries. */}
+          <ErrorBoundary
+            label={screen === "note" || writingWindow ? "this note" : "this view"}
+            resetKey={`${snapshot.workspace.id}:${screen}:${activeNote?.id ?? ""}`}
+          >
+            {renderScreen()}
+          </ErrorBoundary>
+          <ErrorBoundary label="Chat" fallback="none" resetKey={snapshot.workspace.id} onError={reportSurfaceProblem}>
           <ChatDock
             key={snapshot.workspace.id}
             voicePresence={voicePresence}
@@ -4602,8 +4617,10 @@ function App() {
             onSaveReply={saveChatMessageAsNote}
             onOpenSettings={() => openView("settings")}
           />
+          </ErrorBoundary>
         </main>
       </div>
+      <ErrorBoundary label="the connections panel" fallback="none" resetKey={`${contextOpen}:${connectionConcept?.id ?? ""}:${activeNote?.id ?? ""}`} onError={reportSurfaceProblem}>
       {!connectionConcept && contextOpen && screen === "note" && (
         <ContextPanel
           note={activeNote}
@@ -4626,7 +4643,9 @@ function App() {
           onClose={closeConnections}
         />
       )}
+      </ErrorBoundary>
 
+      <ErrorBoundary label="search" fallback="none" resetKey={commandOpen} onError={reportSurfaceProblem}>
       <CommandPalette
         onAskSpace={(query, signal, onProgress) => {
           const space = snapshotRef.current;
@@ -4649,7 +4668,9 @@ function App() {
         onNewNote={createNote}
         onImport={() => setImportOpen(true)}
       />
+      </ErrorBoundary>
 
+      <ErrorBoundary label="the export sheet" fallback="none" resetKey={exportOpen} onError={reportSurfaceProblem}>
       <ExportDialog
         open={exportOpen}
         snapshot={snapshot}
@@ -4657,14 +4678,18 @@ function App() {
         onClose={() => setExportOpen(false)}
         onExport={handleExport}
       />
+      </ErrorBoundary>
 
+      <ErrorBoundary label="Import" fallback="none" resetKey={importOpen} onError={reportSurfaceProblem}>
       <ImportStudio
         open={importOpen}
         snapshot={snapshot}
         onClose={() => setImportOpen(false)}
         onApply={applyImport}
       />
+      </ErrorBoundary>
 
+      <ErrorBoundary label="that source" fallback="none" resetKey={selectedSource?.id ?? ""} onError={reportSurfaceProblem}>
       {selectedSource && (
         <SourceViewer
           source={selectedSource}
@@ -4677,6 +4702,7 @@ function App() {
           onClose={() => setSelectedSourceId(null)}
         />
       )}
+      </ErrorBoundary>
 
       {toast && (
         <div className="toast" key={toast.id}>

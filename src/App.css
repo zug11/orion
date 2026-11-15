@@ -10032,6 +10032,46 @@ button.source-citation-marker:focus-visible {
   font-size: 13px;
 }
 
+.error-boundary {
+  display: flex;
+  max-width: 460px;
+  align-items: center;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12vh auto;
+  padding: 32px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  color: var(--text);
+  font-family: var(--ui-font);
+  text-align: center;
+}
+
+.error-boundary.is-window {
+  margin: 22vh auto;
+}
+
+.error-boundary > strong {
+  font-size: 18px;
+  font-weight: 560;
+}
+
+.error-boundary > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.error-boundary > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 @keyframes loading-orbit {
   0%,
   100% {
