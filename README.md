@@ -13,9 +13,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zug11/orion/releases/download/v0.6.0/Orion-0.6.0.m-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/zug11/orion/releases/download/v0.6.1/Orion-0.6.1.m-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
   ·
-  <a href="https://github.com/zug11/orion/releases/tag/v0.6.0">Release notes · Whisper Medium edition</a>
+  <a href="https://github.com/zug11/orion/releases/tag/v0.6.1">Release notes · Whisper Medium edition</a>
   ·
   <a href="#the-orchestration-topology">How it works</a>
   ·
@@ -24,7 +24,7 @@
   <a href="#local-first-by-construction">Privacy</a>
 </p>
 
-> Orion 0.6.0 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
+> Orion 0.6.1 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
 
 ## ChatGPT plan access and voice choices
 
@@ -145,6 +145,26 @@ for focused, efficient tasks. Existing GPT-5.6 choices remain selected and visib
 until you choose another model; this update does not migrate your saved model or
 change the default. ChatGPT plan model choices come from the connected account’s
 catalog separately.
+
+## Orion 0.6.1
+
+Keep project work beside the writing: create tickets and kanban boards inside
+notes, drag cards between columns, and add optional urgency and due dates. Home
+gathers the Space's boards, plain to-dos and locally recognized dates. Dismiss an
+inferred date without changing its source sentence. A single dictation can now
+create prose, checklists, tickets, a new board and tables together when the spoken
+material supports them, while retaining the original transcript.
+
+Separate chats stay inside their own Space, with a collapsible history panel.
+Connect through ChatGPT sign-in or provider API keys for supported text features.
+Choose OpenAI or ElevenLabs conversation, and keep talking while research orbs
+work. OpenAI web research works through an API key or ChatGPT sign-in alongside
+Perplexity, with source links and clear distinctions between cited summaries and
+original passages. This release also fixes completed ChatGPT response-stream
+assembly used by Chat and suggestions.
+
+See the [0.6.1 release notes](releases/0.6.1.md) for the complete update. Existing
+0.6.0 installations can choose the signed update from inside Orion.
 
 ## Orion 0.6.0
 
@@ -820,12 +840,12 @@ See [all 21 tools and their contracts](docs/mcp-library-tools.md).
 
 ## Download
 
-[**Download Orion 0.6.0 for Apple Silicon — Whisper Medium**](https://github.com/zug11/orion/releases/download/v0.6.0/Orion-0.6.0.m-Apple-Silicon.dmg)
+[**Download Orion 0.6.1 for Apple Silicon — Whisper Medium**](https://github.com/zug11/orion/releases/download/v0.6.1/Orion-0.6.1.m-Apple-Silicon.dmg)
 
 This release includes Whisper Medium and its persistent dictation worker, the
 Claude connector and the Codex plugin. It is Developer ID signed,
 Apple-notarized, stapled and Gatekeeper-accepted. Verify the installer with the
-[SHA-256 checksum](releases/0.6.0-sha256.txt). Small edition builds are available
+[SHA-256 checksum](releases/0.6.1-sha256.txt). Small edition builds are available
 in [earlier releases](https://github.com/zug11/orion/releases).
 
 Requirements:

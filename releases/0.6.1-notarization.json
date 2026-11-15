@@ -1,0 +1,67 @@
+{
+  "version": "0.6.1",
+  "source_commit": "a111ffc14e8d56a9e323832fd40937031aa9abeb",
+  "source_capture": "The release source commit contains application inputs. The canonical packaging functions verified source and renderer fingerprints. Publication records and generated signed connectors do not change application source.",
+  "bundle_id": "app.orion.knowledge",
+  "edition": "Whisper Medium",
+  "platform": "darwin-aarch64",
+  "artifacts": [
+    {
+      "artifact": "Orion-0.6.1.m-Apple-Silicon.dmg",
+      "bytes": 1508372265,
+      "sha256": "17d7432b1d579dca7113f698fb4b174a4dfb37ac53a41424750220235c1bbcc6"
+    },
+    {
+      "artifact": "Orion-0.6.1-Apple-Silicon.app.tar.gz",
+      "bytes": 1506340954,
+      "sha256": "4c19dd1154e3a3faf3405ae355725b40dcf608142febbc833e880120421ae7b5"
+    },
+    {
+      "artifact": "Orion-0.6.1-Apple-Silicon.app.tar.gz.sig",
+      "bytes": 448,
+      "sha256": "49d898f1056f3f20912c32ddaa8ee5caa018b7b0aefe66302fae3e7b110fe8f5"
+    },
+    {
+      "artifact": "latest.json",
+      "bytes": 3231,
+      "sha256": "d53dec7317606ebabe941656c604283b487763c34a8837b23661635b42c1c29d"
+    }
+  ],
+  "notarization": {
+    "app": {
+      "id": "d73c8724-aa0d-4750-a7e8-ad4dca8cd9d6",
+      "message": "Processing complete",
+      "status": "Accepted"
+    },
+    "dmg": {
+      "id": "4688135c-ae1b-4a6c-8225-c3737091519d",
+      "status": "Accepted",
+      "message": "Processing complete"
+    }
+  },
+  "app_and_dmg_stapled": true,
+  "app_and_dmg_gatekeeper": "accepted",
+  "copied_app_deep_strict_signature": "passed",
+  "main_executable_sha256": "1d39f4eb1dc4090c9b426cda8eed3ccc691c55741f794669f10b66b618ce3eff",
+  "stamps": {
+    "orion-source.sha256": "865ba9084e05913af57d508338d9ce700c663a9c2c7a93509858b214f0c3d004",
+    "orion-renderer.sha256": "d59c72146ee7ceeb9a2e36d58db2b91fb68eff87abf3d3a4c1ceb9b30993d03f"
+  },
+  "updater": {
+    "signature": "verified",
+    "signed_version": "0.6.1",
+    "extracted_archive_identity_signature_ticket_gatekeeper": "passed",
+    "installed_over_user_app": false,
+    "endpoint": "https://github.com/zug11/orion/releases/latest/download/latest.json"
+  },
+  "implementation_verification": {
+    "renderer_passed": 3472,
+    "renderer_skipped": 1,
+    "mcp_passed": 120,
+    "updater_signing_tests": 8,
+    "production_renderer_build": true,
+    "connector_contracts": true,
+    "website_typecheck_lint_voice_integrity_build": true,
+    "website_desktop_mobile_keyboard_reduced_motion": "passed"
+  }
+}
