@@ -852,7 +852,7 @@ Requirements:
 
 - Apple Silicon Mac
 - macOS 13.3 or later
-- An OpenAI or Anthropic API key only for optional AI features
+- A supported ChatGPT sign-in or provider API key only for optional AI features
 
 Each release bundle is self-contained. It includes the Vision OCR helper, its selected Whisper model and runtime, `yt-dlp`, Deno, Claude connector, and Codex plugin. The two editions share the same app identity, so installing one replaces the other. No Homebrew package, Python environment, ffmpeg installation, local model server, or transcription API key is required.
 

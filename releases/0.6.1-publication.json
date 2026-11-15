@@ -1,0 +1,76 @@
+{
+  "version": "0.6.1",
+  "release_id": 445882319,
+  "release_url": "https://github.com/zug11/orion/releases/tag/v0.6.1",
+  "published_at": "2026-11-15T08:51:06Z",
+  "release_tag_commit": "2ba14082fd27d380041806c20383fc8326464fe9",
+  "assets": [
+    {
+      "name": "Orion-0.6.1.m-Apple-Silicon.dmg",
+      "bytes": 1508372265,
+      "sha256": "17d7432b1d579dca7113f698fb4b174a4dfb37ac53a41424750220235c1bbcc6",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.1/Orion-0.6.1.m-Apple-Silicon.dmg"
+    },
+    {
+      "name": "Orion-0.6.1-Apple-Silicon.app.tar.gz",
+      "bytes": 1506340954,
+      "sha256": "4c19dd1154e3a3faf3405ae355725b40dcf608142febbc833e880120421ae7b5",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.1/Orion-0.6.1-Apple-Silicon.app.tar.gz"
+    },
+    {
+      "name": "Orion-0.6.1-Apple-Silicon.app.tar.gz.sig",
+      "bytes": 448,
+      "sha256": "49d898f1056f3f20912c32ddaa8ee5caa018b7b0aefe66302fae3e7b110fe8f5",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.1/Orion-0.6.1-Apple-Silicon.app.tar.gz.sig"
+    },
+    {
+      "name": "latest.json",
+      "bytes": 3231,
+      "sha256": "d53dec7317606ebabe941656c604283b487763c34a8837b23661635b42c1c29d",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.1/latest.json"
+    },
+    {
+      "name": "Orion-0.6.1-SHA256SUMS.txt",
+      "bytes": 386,
+      "sha256": "98657f5d2e873006e00a629c869d4ca5bad7ad4b803d597921a7b95bef9acc4d",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.1/Orion-0.6.1-SHA256SUMS.txt"
+    }
+  ],
+  "all_github_asset_digests_match": true,
+  "public_updater": {
+    "endpoint": "https://github.com/zug11/orion/releases/latest/download/latest.json",
+    "exact_manifest_match": true,
+    "url": "https://github.com/zug11/orion/releases/download/v0.6.1/Orion-0.6.1-Apple-Silicon.app.tar.gz",
+    "sha256": "4c19dd1154e3a3faf3405ae355725b40dcf608142febbc833e880120421ae7b5",
+    "bytes": 1506340954,
+    "elapsed_seconds": 259.17,
+    "matches_signature_verified_archive": true,
+    "installed_over_user_app": false
+  },
+  "website": {
+    "url": "https://orion-xi-three.vercel.app",
+    "deployment_id": "dpl_AeUYHEL9vqJMKAqyKHAyaeycZj2g",
+    "deployment_url": "https://orion-rexbxymm3-zug11s-projects.vercel.app",
+    "status": "READY",
+    "environment": "production",
+    "source_commit": "55c0f75300fc3b9b09aaa0009d30715d244f76b2",
+    "source": "Committed standalone website repository; authenticated CLI deployment.",
+    "promoted_after_staged_response_validation": true,
+    "public_anonymous_response_verified": true,
+    "current_download_and_checksum_links_verified": true,
+    "temporary_staging_access_revoked": true,
+    "checks": [
+      "lint",
+      "TypeScript",
+      "desktop voice renderer integrity",
+      "production static build",
+      "desktop and mobile layout",
+      "all three example Spaces",
+      "canonical wiki navigation",
+      "keyboard entry",
+      "reduced motion",
+      "voice and import pause controls",
+      "public 0.6.1 release links"
+    ]
+  }
+}
