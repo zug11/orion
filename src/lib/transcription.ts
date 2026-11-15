@@ -20,34 +20,160 @@ function canonicalVoiceToken(token: string): string {
     .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
 }
 
-export function mergeVoiceTranscriptParts(parts: readonly string[]): string {
-  const nonEmptyParts = parts
-    .map((part) => part.trim().replace(/\s+/g, " "))
-    .filter(Boolean);
-  if (nonEmptyParts.length === 0) return "";
+const SEAM_TOKENS = 24;
+const SEAM_CHARACTERS = 48;
+const MINIMUM_SEAM_CHARACTERS = 4;
+/** Words the next window may have misheard or clipped before the repeat begins. */
+const MISHEARD_LEADING = 2;
+/** Scripts written without spaces between words, where a "token" is a whole sentence. */
+const SPACELESS_SCRIPT =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
 
-  const mergedTokens = nonEmptyParts[0].split(" ");
-  for (const part of nonEmptyParts.slice(1)) {
-    const nextTokens = part.split(" ");
-    const maximumOverlap = Math.min(24, mergedTokens.length, nextTokens.length);
-    let overlap = 0;
-    for (let length = maximumOverlap; length >= 2; length -= 1) {
-      const previous = mergedTokens
-        .slice(-length)
-        .map(canonicalVoiceToken)
-        .join("\u0000");
-      const next = nextTokens
-        .slice(0, length)
-        .map(canonicalVoiceToken)
-        .join("\u0000");
-      if (previous && previous === next) {
-        overlap = length;
+interface TokenSeam {
+  /** Trailing tokens of the earlier window that the later one transcribed in full. */
+  dropPrevious: number;
+  /** Leading tokens of the later window that repeat the earlier one. */
+  skipNext: number;
+}
+
+/**
+ * Finds where a window that began two seconds early stops repeating the window
+ * before it. The cut rarely falls between words, so the repeat may begin with a
+ * misheard or clipped word, and the earlier window may end on a clipped one.
+ * The longest run of at least two matching words wins; an exact repeat wins ties.
+ * A repeat that only appears after discarding a misheard opening needs three,
+ * so "First complete passage." and "Second complete passage." stay two sentences.
+ */
+function tokenSeam(previous: readonly string[], next: readonly string[]): TokenSeam {
+  const tail = previous.slice(-(SEAM_TOKENS + 1)).map(canonicalVoiceToken);
+  const head = next.slice(0, SEAM_TOKENS + MISHEARD_LEADING + 1).map(canonicalVoiceToken);
+  let best = { length: 0, dropPrevious: 0, skipNext: 0 };
+  for (const clipped of [0, 1]) {
+    for (let skip = 0; skip <= MISHEARD_LEADING; skip += 1) {
+      const maximum = Math.min(SEAM_TOKENS, tail.length - clipped, head.length - skip - clipped);
+      const minimum = skip > 0 ? 3 : 2;
+      for (let length = maximum; length >= minimum && length > best.length; length -= 1) {
+        const from = tail.length - clipped - length;
+        let spoken = 0;
+        let matches = true;
+        for (let index = 0; index < length; index += 1) {
+          if (tail[from + index] !== head[skip + index]) {
+            matches = false;
+            break;
+          }
+          if (tail[from + index]) spoken += 1;
+        }
+        // Punctuation alone never establishes a repeat.
+        if (!matches || spoken < 2) continue;
+        if (clipped) {
+          const cut = tail[tail.length - 1];
+          const whole = head[skip + length];
+          if (!cut || !whole || whole.length <= cut.length || !whole.startsWith(cut)) continue;
+        }
+        best = { length, dropPrevious: clipped, skipNext: skip + length };
         break;
       }
     }
-    mergedTokens.push(...nextTokens.slice(overlap));
   }
-  return mergedTokens.join(" ").trim();
+  return best;
+}
+
+interface SpokenCharacter {
+  value: string;
+  /** Index just past this character in the original text. */
+  end: number;
+}
+
+function spokenCharacters(text: string): SpokenCharacter[] {
+  const characters: SpokenCharacter[] = [];
+  let index = 0;
+  for (const character of text) {
+    index += character.length;
+    if (/[\p{L}\p{N}]/u.test(character)) {
+      characters.push({ value: character.toLocaleLowerCase(), end: index });
+    }
+  }
+  return characters;
+}
+
+/**
+ * The same seam for text without spaces between words, compared character by
+ * character. Returns the index in `next` where new speech begins, or 0.
+ */
+function characterSeam(previous: string, next: string): number {
+  const tail = spokenCharacters(previous.slice(-SEAM_CHARACTERS * 4))
+    .slice(-SEAM_CHARACTERS)
+    .map((character) => character.value);
+  const head = spokenCharacters(next.slice(0, SEAM_CHARACTERS * 4)).slice(
+    0,
+    SEAM_CHARACTERS + MISHEARD_LEADING,
+  );
+  let best = { length: 0, resume: 0 };
+  for (let skip = 0; skip <= MISHEARD_LEADING; skip += 1) {
+    const maximum = Math.min(tail.length, head.length - skip);
+    const minimum = MINIMUM_SEAM_CHARACTERS + (skip > 0 ? 2 : 0);
+    for (let length = maximum; length >= minimum && length > best.length; length -= 1) {
+      const from = tail.length - length;
+      let matches = true;
+      for (let index = 0; index < length; index += 1) {
+        if (tail[from + index] !== head[skip + index].value) {
+          matches = false;
+          break;
+        }
+      }
+      if (!matches) continue;
+      best = { length, resume: head[skip + length - 1].end };
+      break;
+    }
+  }
+  return best.resume;
+}
+
+/**
+ * Joins the transcripts of consecutive dictation windows in order.
+ *
+ * With `acousticOverlap`, each window began with the last two seconds of the
+ * one before it, so its opening words repeat that window's ending and are
+ * removed. Without it the windows share no audio: a phrase at a boundary that
+ * appears twice was spoken twice, and nothing is removed. A silent window means
+ * the following one has nothing to repeat.
+ */
+export function mergeVoiceTranscriptParts(
+  parts: readonly string[],
+  acousticOverlap: boolean = USE_PERSISTENT_VOICE_MEMO_WORKER,
+): string {
+  let merged = "";
+  let afterSilence = false;
+  for (const raw of parts) {
+    const part = raw.trim().replace(/\s+/g, " ");
+    if (!part) {
+      afterSilence = true;
+      continue;
+    }
+    if (!merged) {
+      merged = part;
+    } else if (!acousticOverlap || afterSilence) {
+      merged = `${merged} ${part}`;
+    } else if (SPACELESS_SCRIPT.test(merged.slice(-SEAM_CHARACTERS) + part.slice(0, SEAM_CHARACTERS))) {
+      const resume = characterSeam(merged, part);
+      let addition = part.slice(resume).trimStart();
+      // Both windows may close the repeated sentence with their own full stop.
+      if (resume > 0 && /[^\p{L}\p{N}\s]$/u.test(merged)) {
+        addition = addition.replace(/^[^\p{L}\p{N}]+/u, "");
+      }
+      if (addition) merged = resume > 0 ? `${merged}${addition}` : `${merged} ${addition}`;
+    } else {
+      const previousTokens = merged.split(" ");
+      const nextTokens = part.split(" ");
+      const seam = tokenSeam(previousTokens, nextTokens);
+      merged = [
+        ...previousTokens.slice(0, previousTokens.length - seam.dropPrevious),
+        ...nextTokens.slice(seam.skipNext),
+      ].join(" ");
+    }
+    afterSilence = false;
+  }
+  return merged.trim();
 }
 
 export function transcriptToParsedImport(
