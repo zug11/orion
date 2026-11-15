@@ -10003,6 +10003,35 @@ button.source-citation-marker:focus-visible {
   margin-top: 8px;
 }
 
+.vault-error-card > .vault-backup-restore {
+  width: 100%;
+  align-items: center;
+  flex-wrap: wrap;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.vault-backup-restore label {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-family: var(--ui-font);
+  font-size: 12px;
+}
+
+.vault-backup-restore select {
+  min-width: 0;
+  max-width: 260px;
+  flex: 1 1 180px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--ui-font);
+  font-size: 13px;
+}
+
 @keyframes loading-orbit {
   0%,
   100% {

@@ -59,6 +59,7 @@ import {
   type ImportStudioApplyPayload,
 } from "./components/ImportStudio";
 import { NoteView } from "./components/NoteView";
+import { VaultBackupRestore } from "./components/VaultBackupRestore";
 import { NotesIndex } from "./components/NotesIndex";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar, type WorkspaceView } from "./components/Sidebar";
@@ -4746,6 +4747,10 @@ function App() {
               Automatic saving is paused so the existing vault cannot be
               overwritten. Repair or move the vault file, then retry.
             </p>
+            <VaultBackupRestore
+              onRestored={() => setLoadAttempt((value) => value + 1)}
+              onError={(message) => showToast("Couldn’t restore that backup", message)}
+            />
             <div>
               {isTauriRuntime() ? (
                 <button

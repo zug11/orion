@@ -245,6 +245,32 @@ export async function saveSnapshot(
   }
 }
 
+export interface VaultBackup {
+  name: string;
+  /** When this version stopped being the live library. */
+  savedAt: string;
+  bytes: number;
+}
+
+/** Retained backups of the desktop library, newest first. */
+export async function listVaultBackups(): Promise<VaultBackup[]> {
+  if (!isTauriRuntime()) return [];
+  const value = await invokeTauri<unknown>("list_vault_backups");
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is VaultBackup =>
+    isRecord(item) &&
+    typeof item.name === "string" &&
+    typeof item.savedAt === "string" &&
+    Number.isFinite(Date.parse(item.savedAt)) &&
+    typeof item.bytes === "number" &&
+    item.bytes >= 0);
+}
+
+/** Replaces the library with a backup. The native host validates it first and sets the replaced file aside. */
+export async function restoreVaultBackup(name: string): Promise<void> {
+  await invokeTauri<void>("restore_vault_backup", { name });
+}
+
 export async function openDataDirectory(): Promise<string> {
   if (isTauriRuntime()) {
     return invokeTauri<string>("open_data_directory");
