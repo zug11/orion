@@ -1,8 +1,9 @@
 import { Extension } from "@tiptap/core";
+import type { Node } from "@tiptap/pm/model";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { decorateAutoLinks } from "../../lib/wiki";
-import type { Concept } from "../../types";
+import type { AutoLinkSegment, Concept } from "../../types";
 
 interface AutoConceptLinksOptions {
   getConcepts: () => readonly Concept[];
@@ -10,6 +11,8 @@ interface AutoConceptLinksOptions {
 }
 
 const autoConceptLinksKey = new PluginKey("orionAutoConceptLinks");
+/** Distinct text nodes remembered between passes. Cleared when it fills. */
+const MAX_REMEMBERED_TEXTS = 4_000;
 
 export const AutoConceptLinks = Extension.create<AutoConceptLinksOptions>({
   name: "orionAutoConceptLinks",
@@ -23,13 +26,28 @@ export const AutoConceptLinks = Extension.create<AutoConceptLinksOptions>({
 
   addProseMirrorPlugins() {
     const options = this.options;
+    // The view asks for decorations on every state update, including caret
+    // moves. Documents are immutable, so the same document and vocabulary
+    // always decorate the same way: answer those from the last pass. When the
+    // document does change, only text that is new needs matching.
+    let last: { doc: Node; concepts: readonly Concept[]; set: DecorationSet } | undefined;
+    let remembered = new Map<string, AutoLinkSegment[]>();
+    let rememberedFor: readonly Concept[] | undefined;
+
     return [
       new Plugin({
         key: autoConceptLinksKey,
         props: {
           decorations(state) {
-            const decorations: Decoration[] = [];
             const concepts = options.getConcepts();
+            if (last && last.doc === state.doc && last.concepts === concepts) {
+              return last.set;
+            }
+            if (rememberedFor !== concepts || remembered.size > MAX_REMEMBERED_TEXTS) {
+              remembered = new Map();
+              rememberedFor = concepts;
+            }
+            const decorations: Decoration[] = [];
             state.doc.descendants((node, position) => {
               if (!node.isText || !node.text) {
                 return;
@@ -41,9 +59,13 @@ export const AutoConceptLinks = Extension.create<AutoConceptLinksOptions>({
               ) {
                 return;
               }
-              const segments = decorateAutoLinks(node.text, concepts, {
-                excludeNoteIdFromTargets: options.excludeNoteId,
-              });
+              let segments = remembered.get(node.text);
+              if (!segments) {
+                segments = decorateAutoLinks(node.text, concepts, {
+                  excludeNoteIdFromTargets: options.excludeNoteId,
+                });
+                remembered.set(node.text, segments);
+              }
               for (const segment of segments) {
                 if (
                   segment.type !== "concept" ||
@@ -65,7 +87,9 @@ export const AutoConceptLinks = Extension.create<AutoConceptLinksOptions>({
                 );
               }
             });
-            return DecorationSet.create(state.doc, decorations);
+            const set = DecorationSet.create(state.doc, decorations);
+            last = { doc: state.doc, concepts, set };
+            return set;
           },
         },
       }),
