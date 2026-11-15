@@ -132,9 +132,12 @@ empty string. Resolve relative due dates only against supplied referenceDate;
 with no referenceDate, leave relative dueDate empty. Day/month is the numeric
 date convention. "Friday—actually Thursday" replaces the date, while
 "maybe Friday or Thursday" leaves dueDate empty and retains that uncertainty.
-urgency is urgent, high, medium or low only if explicitly assigned by the speaker,
-otherwise an empty string. "High priority—no, leave urgency unset" leaves it
-empty. Do not choose urgency from tone or subject importance. All ticket fields
+urgency is urgent, high, medium or low when supported by the speaker's words,
+otherwise an empty string. Infer urgent from an immediate critical problem,
+high from stated time pressure or a blocker, medium only from explicitly normal
+priority, and low from explicitly deferred or optional work. Do not default to
+medium or choose urgency from tone or subject importance. Preserve negation and
+self-corrections: "High priority—no, leave urgency unset" leaves it empty. All ticket fields
 are required, using empty strings for unassigned fields. Never include IDs,
 status, checked flags, note targets, markup, links or any other action fields.
 Kanban blocks have exactly kind:"kanban", text (short board title), evidence,

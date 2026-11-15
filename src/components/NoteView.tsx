@@ -1,6 +1,6 @@
 import { calendarDateFromUrl } from '../lib/calendarDate';
 import { TicketCardControls, TicketDeleteButton } from './Tickets';
-import { collectWork, remarkNoteBoards } from "../lib/tickets";
+import { collectWork, noteWork, remarkNoteBoards } from "../lib/tickets";
 import { KanbanBoard, type TicketWorkspace, type CreateWorkItem } from "./Tickets";
 import { visibleNoteSummary } from "../lib/importSummary";
 import { NoteWordCount } from "./NoteWordCount";
@@ -34,10 +34,12 @@ import {
 import {
   Children,
   cloneElement,
+  createContext,
   isValidElement,
   lazy,
   Suspense,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -112,6 +114,14 @@ const RichNoteEditor = lazy(() =>
 );
 
 const EMPTY_SOURCES: readonly Source[] = [];
+
+const ReadingBoardContext = createContext<{ noteId: string; workspace: TicketWorkspace } | null>(null);
+/** Keep the component identity stable across saves so pagination, forms and focus survive. */
+function ReadingBoard({ children, node }: { children?: ReactNode; node?: MarkdownElement }) {
+  const context = useContext(ReadingBoardContext);
+  const board = context?.workspace.work.boards.find(b => b.id === node?.properties?.['data-orion-board'] && b.noteId === context.noteId);
+  return board && context ? <section className="note-kanban"><h3>{board.title}</h3><KanbanBoard board={board} workspace={context.workspace}/></section> : <section>{children}</section>;
+}
 
 /** Loose GFM lists nest their marker in a paragraph. Nested lists keep their
  * own markers so each list-item renderer can replace exactly one checkbox. */
@@ -1242,12 +1252,7 @@ export function NoteView({
     p: ({ children, node, ...props }: { children?: ReactNode; node?: MarkdownElement }) => (
       <p {...props} style={paragraphMarginStyle(node)}>{renderLinkedChildren(children)}</p>
     ),
-    section: ({children,node}:{children?:ReactNode;node?:MarkdownElement}) => {
-      const id = node?.properties?.["data-orion-board"];
-      const board = collectWork(notes).boards.find(b => b.id === id && b.noteId === note.id);
-      return board ? <section className="note-kanban"><h3>{board.title}</h3><KanbanBoard board={board} workspace={{work:collectWork(notes),onPatch:onPatchTicket,onDelete:onDeleteTicket,onOpenNote,inference:ticketInference,
-        onCreateTicket:onCreateWork ? (target,title,status,dueDate) => onCreateWork('ticket',title,target.noteId,target.id,status,dueDate) : undefined}}/></section> : <section>{children}</section>;
-    },
+    section: ReadingBoard,
     li: ({
       children,
       className,
@@ -1267,6 +1272,8 @@ export function NoteView({
       }
       const taskBody = withoutTaskMarker(renderedChildren);
       const ticket = collectWork(notes).tickets.find(t => t.noteId === note.id && t.lineIndex === task.lineIndex && t.durable);
+      if (ticket && collectWork(notes).boards.some(board => board.id === ticket.boardId && board.noteId === note.id) &&
+          noteWork(note).tickets.filter(t => t.id === ticket.id).length === 1) return null;
       if (ticket) return <li className="note-ticket-card">{onDeleteTicket && <TicketDeleteButton title={ticket.title} onDelete={() => onDeleteTicket(ticket)}/>}<div className="note-ticket-prose">{taskBody}</div><TicketCardControls status={ticket.status} dueDate={ticket.dueDate} urgency={ticket.urgency} onPatch={onPatchTicket ? patch => onPatchTicket(ticket, patch) : undefined}/></li>;
       return (
         <li className={className}>
@@ -1400,9 +1407,12 @@ export function NoteView({
   // Playback ticks must not remount the reading text: its native ranges also
   // anchor Find, selection, excerpts and narration highlighting.
   const renderedMarkdown = useMemo(() => (
+    <ReadingBoardContext.Provider value={{noteId:note.id,workspace:{work:collectWork(notes),onPatch:onPatchTicket,onDelete:onDeleteTicket,onOpenNote,inference:ticketInference,
+      onCreateTicket:onCreateWork ? (target,title,status,dueDate) => onCreateWork('ticket',title,target.noteId,target.id,status,dueDate) : undefined}}}>
     <ReactMarkdown remarkPlugins={[remarkGfm, remarkNoteBoards, remarkNoteTableMetadata, remarkNoteBlocks, remarkNoteMargins, remarkNoteTextAlignment]} components={markdownComponents} urlTransform={safeUrl}>
       {visibleMarkdown}
     </ReactMarkdown>
+    </ReadingBoardContext.Provider>
   ), [visibleMarkdown, note, notes, concepts, sources, findQuery, selectedPassageId,
     onOpenNote, onOpenConcept, onOpenSource, onUpdateNote, onPatchTicket, onDeleteTicket, onCreateWork, ticketInference]);
 

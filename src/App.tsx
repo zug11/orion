@@ -2353,12 +2353,12 @@ function App() {
       if (latest.workspace.id !== current.workspace.id || !note || note.body !== result.baseBody || note.title !== result.noteTitle) throw new Error("The note changed. Infer again to use its current text.");
       return result;
     },
-    apply: (board, result, titles, taskIds) => {
+    apply: (board, result, titles, taskIds, urgencies) => {
       const current = snapshotRef.current;
       if (current.workspace.id !== snapshot.workspace.id || !collectWork(current.notes).boards.some(b => b.id === board.id && b.noteId === board.noteId)) return false;
       const note = current.notes.find(n => n.id === board.noteId);
       if (!note) return false;
-      const body = applyInferredTickets(note, board, result, titles, taskIds);
+      const body = applyInferredTickets(note, board, result, titles, taskIds, urgencies);
       if (body === null) return false;
       updateNote({ ...note, body, updatedAt: new Date().toISOString() });
       return true;

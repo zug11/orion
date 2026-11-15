@@ -22,7 +22,18 @@ describe('reviewing inferred board tickets',()=>{
     expect(actions.apply).not.toHaveBeenCalled();expect(screen.getByText('We should ask Jo.')).toBeVisible();
     fireEvent.change(title,{target:{value:'Ask Jo about the venue'}});fireEvent.click(screen.getByRole('checkbox',{name:'Include suggestion 2'}));
     fireEvent.click(screen.getByRole('button',{name:'Add 1 ticket'}));
-    expect(actions.apply).toHaveBeenCalledWith(board,result,['Ask Jo about the venue'],undefined);expect(onClose).toHaveBeenCalledOnce();
+    expect(actions.apply).toHaveBeenCalledWith(board,result,['Ask Jo about the venue'],undefined,['']);expect(onClose).toHaveBeenCalledOnce();
+  });
+  it('shows inferred urgency and lets the user change or clear it before applying', async () => {
+    const inferred: TicketInference = { ...result, suggestions: result.suggestions.map(s => ({ ...s, urgency: 'high' })) };
+    const apply = vi.fn(() => true);
+    render(<TicketInferenceDialog board={board} actions={{generate:async()=>inferred, apply}} onClose={vi.fn()}/>);
+    const first = await screen.findByRole('combobox', {name:'Urgency for suggestion 1'});
+    expect(first).toHaveValue('high');
+    fireEvent.change(first, {target:{value:''}});
+    fireEvent.change(screen.getByRole('combobox', {name:'Urgency for suggestion 2'}), {target:{value:'low'}});
+    fireEvent.click(screen.getByRole('button', {name:'Add 2 tickets'}));
+    expect(apply).toHaveBeenCalledWith(board, inferred, result.suggestions.map(s=>s.title), undefined, ['', 'low']);
   });
   it('keeps a stale review unsaved and allows a fresh inference attempt',async()=>{
     const actions={generate:vi.fn(async()=>result),apply:vi.fn(()=>false)};

@@ -45,6 +45,12 @@
 .kanban-card-options { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:4px 8px; min-width:0; }
 .kanban-add { display:flex; align-items:center; justify-content:center; gap:6px; width:100%; padding:9px; border-radius:6px; font-size:12px; color:var(--muted); }
 .kanban-add:hover { background:var(--surface-1); color:var(--text); }
+.ticket-load-more { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:4px 10px; width:100%; padding:12px 8px; border:0; border-radius:7px; background:transparent; color:var(--text-soft); font:12px/1.5 var(--ui-font); cursor:pointer; }
+.ticket-load-more span { color:var(--muted); font-size:11px; }
+.ticket-load-more:hover { color:var(--text); background:var(--periwinkle-wash); }
+.ticket-load-more:focus-visible { outline:2px solid var(--periwinkle); outline-offset:2px; }
+.ticket-suggestion > .ticket-urgency-field { display:flex; margin:6px 0 0 26px; }
+.work-item-composer .ticket-urgency { width:105px; padding:4px 20px 4px 18px; margin:0; border:0; font-size:12px; }
 .kanban-create { padding:10px; background:var(--surface-1); border:1px solid var(--line-strong); border-radius:8px; }
 .kanban-create input { width:100%; min-width:0; padding:4px 0 8px; font:13px var(--ui-font); color:var(--text); background:none; border:0; outline:none; }
 .kanban-create:focus-within { border-color:var(--periwinkle); }
@@ -150,6 +156,7 @@
 .kanban-ticket,.note-prose li.note-ticket-card,.editor-prose li.note-ticket-card { border:0; background:var(--surface-raised); box-shadow:0 2px 4px #0000000a,0 7px 20px #00000012; }
 .kanban-ticket > .ticket-open { display:block; width:100%; }
 .note-ticket-card { position:relative; }
+.note-prose ul.contains-task-list:not(:has(> li)),.note-prose ul:empty { display:none; }
 .kanban-ticket:has(.ticket-delete) > .ticket-open,.note-ticket-card:has(.ticket-delete) > .note-ticket-prose { padding-right:28px; }
 .ticket-delete { position:absolute; top:8px; right:8px; display:grid; place-items:center; width:24px; height:24px; padding:0; border:0; border-radius:5px; background:transparent; color:var(--text-soft); cursor:pointer; opacity:0; pointer-events:none; }
 .kanban-ticket:hover > .ticket-delete,.kanban-ticket:focus-within > .ticket-delete,.note-ticket-card:hover .ticket-delete,.note-ticket-card:focus-within .ticket-delete { opacity:1; pointer-events:auto; }

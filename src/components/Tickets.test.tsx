@@ -41,6 +41,93 @@ async function keyboardCommand(editor: Editor, text: string) {
   fireEvent.keyDown(editor.view.dom,{key:'Enter'});
 }
 describe('tickets in the real Orion surfaces', () => {
+  it.each(['editor','reading','dashboard'] as const)('loads a large board in exact batches on the %s surface', async surface => {
+    const tasks = Array.from({length:123},(_,i)=>`- [ ] Action ${i + 1} ${ticketMarker({id:`t-${i}`,boardId:'b1',status:'todo'})}`).join('\n');
+    const n=note(`${board}\n\n${tasks}\n\nAfter the board.`);
+    if(surface==='editor') render(<EditorFixture body={n.body}/>);
+    else if(surface==='dashboard') render(<HomeTickets spaceId="s" notes={[n]} work={collectWork([n])} onOpenNote={vi.fn()} onPatch={vi.fn(()=>true)}/>);
+    else render(<NoteView note={n} notes={[n]} concepts={[]} onOpenNote={vi.fn()} onOpenConcept={vi.fn()} onUpdateNote={vi.fn()} onDeleteNote={vi.fn()} onRegisterConcept={vi.fn()} onDisableConceptAutoLink={vi.fn()} onPatchTicket={vi.fn(()=>true)}/>);
+    const boardUI=await screen.findByRole('group',{name:'Launch board'});
+    expect(within(boardUI).getAllByRole('article')).toHaveLength(10);
+    expect(within(boardUI).getByRole('region',{name:'To do'}).querySelector('h4')).toHaveTextContent('123');
+    fireEvent.click(within(boardUI).getByRole('button',{name:'Load 10 more tickets in To do'}));
+    expect(within(boardUI).getAllByRole('article')).toHaveLength(20);
+    expect(within(boardUI).getByRole('article',{name:'Action 11'})).toHaveFocus();
+    for(let page=0;page<10;page++) fireEvent.click(within(boardUI).getByRole('button',{name:'Load 10 more tickets in To do'}));
+    expect(within(boardUI).getAllByRole('article')).toHaveLength(120);
+    fireEvent.click(within(boardUI).getByRole('button',{name:'Load 3 more tickets in To do'}));
+    expect(within(boardUI).getAllByRole('article')).toHaveLength(123);
+    expect(within(boardUI).queryByRole('button',{name:/Load .* more/})).toBeNull();
+  });
+  it('keeps board-backed tasks hidden, lets a card open its original for editing, and restores cards if the board is removed', async () => {
+    const view=render(<EditorFixture body={`${board}\n\n${task}\n\nAfter.`}/>);
+    const editor=editorFor(view.container);
+    const boardUI=await screen.findByRole('group',{name:'Launch board'});
+    const backing=()=>view.container.querySelector<HTMLElement>('.tiptap [data-ticket-id="t1"]')!;
+    expect(backing()).not.toBeVisible();
+    expect(noteWork(note(editor.getMarkdown())).tickets).toHaveLength(1);
+    fireEvent.click(within(boardUI).getByRole('button',{name:'Call Jo'}));
+    expect(backing()).toBeVisible();
+    act(()=>editor.commands.insertContent('Now '));
+    expect(noteWork(note(editor.getMarkdown())).tickets[0].title).toBe('Now Call Jo');
+    act(()=>editor.commands.setTextSelection(editor.state.doc.content.size-1));
+    expect(backing()).not.toBeVisible();
+    let start=0,size=0;
+    editor.state.doc.descendants((node,pos)=>{if(node.type.name==='noteKanban'){start=pos;size=node.nodeSize;}});
+    act(()=>editor.commands.deleteRange({from:start,to:start+size}));
+    expect(backing()).toBeVisible();
+    act(()=>editor.commands.undo());
+    expect(backing()).not.toBeVisible();
+    expect(noteWork(note(editor.getMarkdown())).tickets[0].title).toBe('Now Call Jo');
+  });
+  it('does not duplicate board cards in reading mode or hide standalone tickets', () => {
+    const standalone=`- [ ] Independent ${ticketMarker({id:'independent',boardId:'missing',status:'todo'})}`;
+    const n=note(`${board}\n\n${task}\n${standalone}`);
+    const view=render(<NoteView note={n} notes={[n]} concepts={[]} onOpenNote={vi.fn()} onOpenConcept={vi.fn()} onUpdateNote={vi.fn()} onDeleteNote={vi.fn()} onRegisterConcept={vi.fn()} onDisableConceptAutoLink={vi.fn()}/>);
+    expect(screen.getAllByText('Call Jo')).toHaveLength(1);
+    expect(view.container.querySelectorAll('.note-ticket-card')).toHaveLength(1);
+    expect(view.container.querySelector('.note-ticket-card')).toHaveTextContent('Independent');
+  });
+  it('bounds the dashboard list and completed tasks independently', () => {
+    const n=note(Array.from({length:25},(_,i)=>`- [ ] Open ${i}`).concat(Array.from({length:23},(_,i)=>`- [x] Done ${i}`)).join('\n'));
+    render(<HomeTickets spaceId="s" notes={[n]} work={collectWork([n])} onOpenNote={vi.fn()} onPatch={vi.fn(()=>true)}/>);
+    expect(screen.getAllByRole('checkbox')).toHaveLength(20);
+    fireEvent.click(screen.getByRole('button',{name:'Load 5 more open items'}));
+    expect(screen.getAllByRole('checkbox')).toHaveLength(25);
+    expect(screen.getByRole('checkbox',{name:'Complete Open 20'})).toHaveFocus();
+    fireEvent.click(screen.getByRole('button',{name:/Completed/}));
+    expect(screen.getAllByRole('checkbox')).toHaveLength(45);
+    fireEvent.click(screen.getByRole('button',{name:'Load 3 more completed items'}));
+    expect(screen.getAllByRole('checkbox')).toHaveLength(48);
+  });
+  it('keeps a moved card visible and focused without expanding a full destination column', async () => {
+    const filled=Array.from({length:100},(_,i)=>`- [ ] Working ${i} ${ticketMarker({id:`working-${i}`,boardId:'b1',status:'progress'})}`).join('\n');
+    render(<EditorFixture body={`${board}\n\n${filled}\n${task}\n\nAfter.`}/>);
+    const boardUI=await screen.findByRole('group',{name:'Launch board'});
+    const card=within(boardUI).getByRole('article',{name:'Call Jo'});card.focus();
+    fireEvent.keyDown(card,{key:'ArrowRight'});
+    const progress=within(boardUI).getByRole('region',{name:'In progress'});
+    expect(within(progress).getAllByRole('article')).toHaveLength(11);
+    expect(within(progress).getByRole('article',{name:'Call Jo'})).toHaveFocus();
+    expect(within(progress).getByText('90 remaining')).toBeVisible();
+  });
+  it('retains loaded pages and focus after saving a board move in reading mode', () => {
+    const tasks=Array.from({length:30},(_,i)=>`- [ ] Action ${i} ${ticketMarker({id:`read-${i}`,boardId:'b1',status:'todo'})}`).join('\n');
+    function ReadingFixture() {
+      const [n,setNote]=useState(note(`${board}\n\n${tasks}`));
+      return <NoteView note={n} notes={[n]} concepts={[]} onOpenNote={vi.fn()} onOpenConcept={vi.fn()} onUpdateNote={setNote} onDeleteNote={vi.fn()} onRegisterConcept={vi.fn()} onDisableConceptAutoLink={vi.fn()} onPatchTicket={(ticket,patch)=>{
+        const body=patchTicket(n.body,ticket,patch);if(body===null)return false;setNote({...n,body});return true;
+      }}/>;
+    }
+    render(<ReadingFixture/>);
+    fireEvent.click(screen.getByRole('button',{name:'Load 10 more tickets in To do'}));
+    const moved=screen.getByRole('article',{name:'Action 19'});moved.focus();
+    fireEvent.keyDown(moved,{key:'ArrowRight'});
+    expect(screen.getByRole('article',{name:'Action 19'})).toHaveFocus();
+    expect(screen.getByRole('article',{name:'Action 18'})).toBeVisible();
+    expect(within(screen.getByRole('group',{name:'Launch board'})).getAllByRole('article')).toHaveLength(20);
+    expect(within(screen.getByRole('region',{name:'In progress'})).getByRole('article',{name:'Action 19'})).toBeVisible();
+  });
   it('confirms inline ticket deletion and restores the card with one Undo', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     try {

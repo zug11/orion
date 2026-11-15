@@ -191,6 +191,14 @@ These product decisions are intentional:
   Ignore code, quoted examples and frontmatter. Keep board controls out of
   narration/word counts. Readable exports show static boards using only notes
   included in the chosen scope. Markdown retains metadata and checkboxes.
+  In notes, tickets assigned to a uniquely resolved board in that same note
+  appear in the board without repeating their backing task cards below it.
+  This is presentation only: keep the complete Markdown, identities, nested
+  content and Undo. Missing/ambiguous boards and standalone tickets stay visible.
+  In edit mode, clicking a board card's title reveals that original task for
+  direct rich editing; leaving it collapses it again. Cursor navigation skips
+  hidden backing tasks, and adjacent Backspace/Delete must not erase them.
+  Removing the board reveals its tickets again; Undo restores the presentation.
 - Home adapts to the active Space's authored work: omit unused To-dos/Tickets
   sections, place the kanban/ticket view first above a paired To-do and Across
   this Space card row, then Continue exploring, and compact the atmosphere
@@ -225,6 +233,13 @@ These product decisions are intentional:
   or use Left/Right on a focused card. Keep urgency at the far right of the footer. Home's
   board chips accept dragged list tickets/to-dos; a small board-choice dialog
   supplies the keyboard alternative. Preserve focus after moves/completion.
+  Shared note/dashboard boards initially show ten cards per column, retaining
+  the full column count. Load N more reveals up to ten additional cards, shows
+  the remaining count and focuses the first newly revealed card. New/moved
+  tickets remain visible without expanding an entire full column. Pagination
+  is transient and never truncates the work index, exports or saved notes.
+  Dashboard ticket/to-do lists independently load open/completed items in batches
+  of twenty; completed items still sit behind their disclosure.
 - Infer tickets from note first collects open written to-dos from the whole note,
   then optionally uses the selected provider for prose inference. Collect original
   task structure while excluding completed items, preserving independently open
@@ -244,6 +259,18 @@ These product decisions are intentional:
   prose suggestions append tasks. Recheck Space, unique board, exact captured
   body/title and live editor document; acceptance is one note write/editor Undo.
   Do not revive completed work or reassign tickets already on another board.
+  Infer optional urgency in the same bounded reader request for both new prose
+  actions and collected open checklist tasks. Ground it in quoted timing,
+  blockers, consequences or explicit priority; leave unclear urgency blank and
+  never assign medium by default. Existing authored urgency wins. Task annotations
+  quote a unique exact checkbox line in the supplied section, never choose an
+  arbitrary note or task ID. Validate enum/evidence and expose urgency in review
+  for changing/clearing before the same guarded write. Without AI, recognize only
+  explicit urgency labels. Dictation may infer urgency from the speaker's stated
+  timing/blockers under the same meaning-preservation rules, without another call.
+  Re-running inference may also suggest missing urgency for open tickets already
+  on this board, updating those same identities instead of adding copies. Ignore
+  urgency suggestions for another board and keep authored urgency unchanged.
 - `/calendar` inserts a fixed inline date using a keyboard month grid: arrows
   move days/weeks, Home/End move within the week, PageUp/Down change month, Enter
   chooses, Escape cancels without removing the command. Store a readable

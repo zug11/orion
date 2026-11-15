@@ -9,6 +9,7 @@ import { Slice } from '@tiptap/pm/model';
 import { copyWorkIdentities, NoteKanban, insertWorkItem, insertBoardTickets, patchEditorTicket, deleteEditorTicket, deleteEditorTicketNode } from './NoteKanban';
 import { boardMarker, noteWork, ticketMarker } from '../../lib/tickets';
 import type { Note } from '../../types';
+import { boardTicketVisibilityKey, editBoardTicket } from './boardTicketVisibility';
 const editors: Editor[] = [];
 function create(content: string) {
   const editor = new Editor({ extensions: [NoteStarterKit, TaskList, NoteTaskItem.configure({ nested: true }), NoteBlock, NoteMargins, NoteKanban, NoteMarkdown], content, contentType: 'markdown' });
@@ -18,6 +19,32 @@ afterEach(() => editors.splice(0).forEach(e => e.destroy()));
 const n = (body: string): Note => ({ id:'n', title:'Note', body, slug:'n', summary:'', aliases:[], tags:[], sourceIds:[], conceptIds:[], kind:'article', status:'ready', createdAt:'2026-11-13T00:00:00Z', updatedAt:'2026-11-13T00:00:00Z' });
 
 describe('ticket and board editor transactions', () => {
+  it('skips hidden task text without changing Markdown, but explicitly opens the original card for editing', () => {
+    const editor=create(`Before.\n\n${boardMarker({id:'b1',title:'Launch'})}\n\n- [ ] Call Jo ${ticketMarker({id:'t1',boardId:'b1',status:'todo'})}\n\nAfter.`);
+    const original=editor.getJSON();
+    const hidden=boardTicketVisibilityKey.getState(editor.state)!.hidden;
+    expect(hidden).toHaveLength(1);
+    editor.commands.setTextSelection(hidden[0].from+2);
+    expect(editor.state.selection.from).toBeGreaterThanOrEqual(hidden[0].to);
+    expect(editor.getJSON()).toEqual(original);
+    expect(editBoardTicket(editor,noteWork(n(editor.getMarkdown())).tickets[0])).toBe(true);
+    expect(boardTicketVisibilityKey.getState(editor.state)!.hidden).toHaveLength(0);
+    editor.commands.setTextSelection(editor.state.doc.content.size-1);
+    expect(boardTicketVisibilityKey.getState(editor.state)!.hidden).toHaveLength(1);
+    editor.commands.setTextSelection(editor.state.doc.content.size-7);
+    const event=new KeyboardEvent('keydown',{key:'Backspace',bubbles:true,cancelable:true});
+    editor.view.someProp('handleKeyDown',handler=>handler(editor.view,event));
+    expect(editor.getJSON()).toEqual(original);
+  });
+  it('keeps ambiguous and orphaned backing tasks visible', () => {
+    const board=boardMarker({id:'b1',title:'Launch'}), marker=ticketMarker({id:'t1',boardId:'b1',status:'todo'});
+    for(const body of [
+      `- [ ] Orphan ${marker}`,
+      `${board}\n\n${board}\n\n- [ ] Duplicate board ${marker}`,
+      `${board}\n\n- [ ] One ${marker}\n- [ ] Two ${marker}`,
+      `${board}\n\n- [ ] One ${marker}\n- [ ] Ambiguous ${marker} ${ticketMarker({id:'t2',boardId:'b1',status:'todo'})}`,
+    ]) expect(boardTicketVisibilityKey.getState(create(body).state)!.hidden).toHaveLength(0);
+  });
   it('deletes the confirmed ticket and its contents, preserves siblings, and restores all of it with one Undo', () => {
     const marker = ticketMarker({id:'delete-me',boardId:'b',status:'progress',urgency:'high'});
     const editor = create(`Before.\n\n- [ ] Call Jo ${marker}\n\n  Keep the agenda.\n\n  - [ ] Nested task\n- [ ] Keep this sibling\n\nAfter.`);

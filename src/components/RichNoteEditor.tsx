@@ -2,6 +2,7 @@ import { CalendarPicker } from './CalendarPicker';
 import { insertCalendarDate } from './editor/NoteCalendar';
 import { EMPTY_WORK, TicketContext, WorkItemComposer, type TicketWorkspace } from "./Tickets";
 import { applyInferredTickets, type TicketInference } from "../lib/ticketInference";
+import { boardTicketVisibilityKey, editBoardTicket } from './editor/boardTicketVisibility';
 import { collectWork, type Ticket, type TicketPatch } from "../lib/tickets";
 import { NoteKanban, containsNoteBoard, insertWorkItem, insertBoardTickets, patchEditorTicket, deleteEditorTicket } from "./editor/NoteKanban";
 import { captureCommentCursor, type CommentCursor } from "../lib/commentCursor";
@@ -436,7 +437,7 @@ export function RichNoteEditor({
       TableKit.configure({ table: false }),
       NoteTable,
       NoteBlockFrame,
-      NoteKanban,
+      NoteKanban.configure({ allowedBoard: (id: string) => collectWork(notesRef.current).boards.some(b => b.id === id && b.noteId === noteId) }),
       NoteExcerpt,
       TaskList,
       NoteTaskItem.configure({ nested: true }),
@@ -578,6 +579,9 @@ export function RichNoteEditor({
   useEffect(() => { onFlowActiveChange?.(flowActive); }, [flowActive, onFlowActiveChange]);
   useEffect(() => () => onFlowActiveChange?.(false), [onFlowActiveChange]);
   const hasBoard = useEditorState({ editor, selector: ({ editor: current }) => Boolean(current && containsNoteBoard(current.state.doc)) }) ?? false;
+  useEffect(() => {
+    if (editor && !editor.isDestroyed && hasBoard) editor.view.dispatch(editor.state.tr.setMeta(boardTicketVisibilityKey, { refresh: true }));
+  }, [editor, notes, hasBoard]);
   const blockSelected = useEditorState({ editor, selector: ({ editor: current }) => current?.isActive("noteBlock") ?? false }) ?? false;
 
   useEffect(() => {
@@ -2208,6 +2212,7 @@ export function RichNoteEditor({
         editor.state.doc.eq(workInsert.document) && (!boardId || collectWork(notes).boards.some(board => board.id === boardId)) &&
         insertWorkItem(editor,workInsert.kind,title,workInsert.range,boardId,dueDate)}/> }
       <TicketContext.Provider value={{work:hasBoard ? collectWork(notes) : EMPTY_WORK,onOpenNote,
+        onEditTicket:ticket => ticket.noteId === noteId && editBoardTicket(editor, ticket),
         onPatch:(ticket,patch) => ticket.noteId === noteId ? patchEditorTicket(editor,ticket,patch) : onPatchTicket?.(ticket,patch) ?? false,
         onDelete:ticket => reviewReadyRef.current() && (ticket.noteId === noteId ? deleteEditorTicket(editor,ticket) : onDeleteTicket?.(ticket) ?? false),
         onCreateTicket:(board,title,status,dueDate) => reviewReadyRef.current() && insertBoardTickets(editor,board.id,[title],status,false,dueDate),
@@ -2219,12 +2224,12 @@ export function RichNoteEditor({
             if (editor.isDestroyed || !editor.state.doc.eq(document)) throw new Error('The note changed. Infer again to use its current text.');
             inferredTickets.current={result,document};return result;
           },
-          apply:(board,result,titles,taskIds) => {
+          apply:(board,result,titles,taskIds,urgencies) => {
             const captured=inferredTickets.current;
             if (!captured || captured.result!==result || !editor.state.doc.eq(captured.document) || !reviewReadyRef.current() || result.boardId!==board.id || result.noteId!==noteId) return false;
             const note = notes.find(n => n.id === noteId);
             if (!note) return false;
-            const body = applyInferredTickets(note, board, result, titles, taskIds);
+            const body = applyInferredTickets(note, board, result, titles, taskIds, urgencies);
             if (body === null) return false;
             try { applyPreparedChatChange(editor, prepareChatEditorChange(editor, result.baseBody, body)); inferredTickets.current=null; return true; }
             catch { return false; }

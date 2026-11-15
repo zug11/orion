@@ -6,7 +6,7 @@ import { collectWork, type Ticket } from '../lib/tickets';
 import { taskConcept } from '../lib/tasks';
 import BorderGlow from './BorderGlow';
 import { ChevronRight, Columns3, List, ListTodo, Plus, X } from '../lib/icons';
-import { UrgencyPicker, KanbanBoard, WorkItemComposer, type CreateWorkItem, type TicketWorkspace } from './Tickets';
+import { UrgencyPicker, KanbanBoard, LoadMoreTickets, WorkItemComposer, type CreateWorkItem, type TicketWorkspace } from './Tickets';
 import { useTicketDrag } from './useTicketDrag';
 import type { DismissCalendarMention } from '../lib/calendarDismissal';
 
@@ -29,12 +29,14 @@ function WorkList({ tickets, workspace, concepts, completed, onCompletedChange, 
   const open = tickets.filter(t => t.status !== 'done');
   const done = tickets.filter(t => t.status === 'done');
   const [error, setError] = useState('');
+  const [openLimit, setOpenLimit] = useState(20);
+  const [doneLimit, setDoneLimit] = useState(20);
   useLayoutEffect(() => {
     if (!restore.current) return;
     const row = [...(root.current?.querySelectorAll<HTMLElement>('[data-work-key]') ?? [])].find(e => e.dataset.workKey === restore.current);
     (row?.querySelector<HTMLElement>('input') ?? disclosure.current)?.focus({ preventScroll: true });
     restore.current = null;
-  }, [tickets]);
+  }, [tickets, openLimit, doneLimit]);
   function toggle(ticket: Ticket, checked: boolean) {
     const focused = root.current?.contains(document.activeElement);
     const ok = workspace.onPatch?.(ticket, { status: checked ? 'done' : 'todo' });
@@ -59,10 +61,11 @@ function WorkList({ tickets, workspace, concepts, completed, onCompletedChange, 
     </div>;
   }
   return <div ref={root} className="ticket-list">
-    {open.map(row)}
+    {open.slice(0, openLimit).map(row)}
+    <LoadMoreTickets remaining={open.length - openLimit} pageSize={20} label="open items" onLoad={() => { restore.current = rowKey(open[openLimit]); setOpenLimit(limit => limit + 20); }}/>
     {!open.length && <p className="kanban-empty">{done.length ? 'All caught up.' : 'No tickets yet.'}</p>}
     {done.length > 0 && <><button ref={disclosure} type="button" className="ticket-completed-toggle" aria-expanded={completed} aria-controls={completedId} onClick={() => onCompletedChange(!completed)}><ChevronRight size={13}/>Completed <span>{done.length}</span></button>
-      {completed && <div id={completedId}>{done.map(row)}</div>}</>}
+      {completed && <div id={completedId}>{done.slice(0, doneLimit).map(row)}<LoadMoreTickets remaining={done.length - doneLimit} pageSize={20} label="completed items" onLoad={() => { restore.current = rowKey(done[doneLimit]); setDoneLimit(limit => limit + 20); }}/></div>}</>}
     {error && <p role="alert" className="ticket-error">{error}</p>}
   </div>;
 }

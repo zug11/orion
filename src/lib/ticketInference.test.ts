@@ -11,6 +11,56 @@ function snapshot() { const s=createEmptySnapshot('Launch');s.settings.apiKeyCon
 const reply = JSON.stringify({tickets:[{title:'Ask Jo about the launch date',evidence:'We need to ask Jo about the launch date.'}]});
 
 describe('note-local ticket inference', () => {
+  it('infers urgency for written and new actions in the same reader call and persists it without duplicating tasks', async () => {
+    const s = snapshot();
+    s.notes = [note(`${boardMarker(board)}\n\n- [ ] Fix sign-in: it is blocking launch.\n- [ ] Pick a colour.\n\nThe checkout is down. Restore payments immediately.`)];
+    const call = vi.fn(async () => ({ reply: JSON.stringify({
+      tickets: [{title:'Restore payments',evidence:'The checkout is down. Restore payments immediately.',urgency:'urgent'}],
+      taskUrgencies: [{task:'- [ ] Fix sign-in: it is blocking launch.', evidence:'it is blocking launch.', urgency:'high'}],
+    }) }));
+    const result = await inferBoardTickets(s, board, call, new AbortController().signal);
+    expect(call).toHaveBeenCalledOnce();
+    expect(result.suggestions.map(s=>s.urgency || '')).toEqual(['high', '', 'urgent']);
+    const updated = applyInferredTickets(s.notes[0], board, result, result.suggestions.map(s=>s.title), result.suggestions.map(s=>s.taskId))!;
+    expect(noteWork(note(updated)).tickets).toMatchObject([
+      {title:'Fix sign-in: it is blocking launch.',boardId:'b',urgency:'high'}, {title:'Pick a colour.',boardId:'b'}, {title:'Restore payments',boardId:'b',urgency:'urgent'},
+    ]);
+    expect(noteWork(note(updated)).tickets[1].urgency).toBeUndefined();
+  });
+  it('preserves authored urgency, supports explicit local labels, and validates the review values', async () => {
+    const s = snapshot(); s.settings.apiKeyConfigured = false;
+    s.notes = [note(`${boardMarker(board)}\n\n${newTicketMarkdown('Keep existing', '', 'todo', '', undefined, 'low')}\n- [ ] Urgent: restore service\n- [ ] This is not urgent` )];
+    const result = await inferBoardTickets(s, board, vi.fn(), new AbortController().signal);
+    expect(result.suggestions.map(s=>s.urgency)).toEqual(['low', 'urgent', '']);
+    const titles=result.suggestions.map(s=>s.title), ids=result.suggestions.map(s=>s.taskId);
+    expect(applyInferredTickets(s.notes[0],board,result,titles,ids,['high'])).toBeNull();
+    expect(applyInferredTickets(s.notes[0],board,result,titles,ids,['critical' as never,'',''])).toBeNull();
+    const updated=applyInferredTickets(s.notes[0],board,result,titles,ids,['','',''])!;
+    expect(noteWork(note(updated)).tickets.every(t=>!t.urgency)).toBe(true);
+    s.notes=[note(`${boardMarker(board)}\n\n- [ ] High-quality thumbnails\n- [ ] Low-level rendering work\n- [ ] Medium-sized export`)];
+    const ordinary=await inferBoardTickets(s,board,vi.fn(),new AbortController().signal);
+    expect(ordinary.suggestions.every(s=>!s.urgency)).toBe(true);
+  });
+  it('rejects urgency without evidence or with an invalid value and cannot annotate completed tasks', () => {
+    for (const value of [
+      {tickets:[{title:'Ask Jo',evidence:'launch date',urgency:'critical'}]},
+      {tickets:[],taskUrgencies:[{task:'- [ ] Existing task',urgency:'high',evidence:'invented'}]},
+      {tickets:[],taskUrgencies:[{task:'- [x] Secret finished action',urgency:'high',evidence:'Secret finished action'}]},
+    ]) expect(()=>parseTicketSuggestions(JSON.stringify(value),body,note())).toThrow();
+  });
+  it('keeps the prompt below the native limit even with hundreds of short checklist tasks', () => {
+    const s=snapshot();s.notes=[note(`${boardMarker(board)}\n\n${Array.from({length:300},(_,i)=>`- [ ] Task ${i}`).join('\n')}`)];
+    expect(buildTicketInferenceRequest(s,board).request.prompt.length).toBeLessThan(8000);
+  });
+  it('can infer missing urgency for tickets already on this board without recreating them or overwriting authored urgency', async () => {
+    const s=snapshot();
+    s.notes=[note(`${boardMarker(board)}\n\n${newTicketMarkdown('Restore sign-in', 'b')}\n\nSign-in is blocking launch.\n\n${newTicketMarkdown('Authored urgency', 'b', 'todo', '', undefined, 'low')}`)];
+    const result=await inferBoardTickets(s,board,async()=>({reply:JSON.stringify({tickets:[],taskUrgencies:[{task:'- [ ] Restore sign\\-in',urgency:'high',evidence:'Sign-in is blocking launch.'},{task:'- [ ] Authored urgency',urgency:'high',evidence:'Authored urgency'}]})}),new AbortController().signal);
+    expect(result.suggestions).toMatchObject([{title:'Restore sign-in',onBoard:true,urgency:'high'}]);
+    const body=applyInferredTickets(s.notes[0],board,result,result.suggestions.map(s=>s.title),result.suggestions.map(s=>s.taskId))!;
+    expect(noteWork(note(body)).tickets).toMatchObject([{title:'Restore sign-in',urgency:'high'},{title:'Authored urgency',urgency:'low'}]);
+    expect(noteWork(note(body)).tickets).toHaveLength(2);
+  });
   it('sends only the board note, excludes completed work and metadata, and grants no writes', () => {
     const {request}=buildTicketInferenceRequest(snapshot(),board);
     expect(request.notes).toHaveLength(1);

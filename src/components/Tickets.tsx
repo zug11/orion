@@ -15,12 +15,20 @@ export interface TicketWorkspace {
   onPatch?: (ticket: Ticket, patch: TicketPatch) => boolean;
   onDelete?: (ticket: Ticket) => boolean;
   onOpenNote?: (id: string) => void;
+  onEditTicket?: (ticket: Ticket) => boolean;
   onCreateTicket?: (board: NoteBoard, title: string, status: TicketStatus, dueDate?: string) => boolean;
   inference?: TicketInferenceActions;
 }
 export const EMPTY_WORK: ReturnType<typeof collectWork> = { tickets: [], boards: [] };
 export const TicketContext = createContext<TicketWorkspace>({ work: EMPTY_WORK });
 export const useTickets = () => useContext(TicketContext);
+export const BOARD_PAGE_SIZE = 10;
+
+export function LoadMoreTickets({ remaining, pageSize, label, onLoad }: { remaining: number; pageSize: number; label: string; onLoad: () => void }) {
+  return remaining > 0 ? <button type="button" className="ticket-load-more" aria-label={`Load ${Math.min(pageSize, remaining)} more ${label}`} onClick={onLoad}>
+    Load {Math.min(pageSize, remaining)} more <span>{remaining} remaining</span>
+  </button> : null;
+}
 
 export function KanbanBoard({ board, workspace, showSource = false }: { board: NoteBoard; workspace: TicketWorkspace; showSource?: boolean }) {
   const root = useRef<HTMLDivElement>(null);
@@ -35,13 +43,23 @@ export function KanbanBoard({ board, workspace, showSource = false }: { board: N
   const [dueDate, setDueDate] = useState('');
   const [inferring, setInferring] = useState(false);
   const [error, setError] = useState('');
+  const [pages, setPages] = useState({ board: board.id, extra: new Set<string>() });
+  const extra = pages.board === board.id ? pages.extra : new Set<string>();
+  const ticketKey = (ticket: Ticket) => `${ticket.noteId}:${ticket.id}`;
+  const reveal = (tickets: Ticket[]) => setPages(current => ({ board: board.id,
+    extra: new Set([...(current.board === board.id ? current.extra : []), ...tickets.map(ticketKey)]) }));
+  const pendingCreation = useRef<{ ids: Set<string>; status: TicketStatus } | null>(null);
   const move = (ticket: Ticket, status: TicketStatus) => {
     const focused = root.current?.contains(document.activeElement);
     const changed = workspace.onPatch?.(ticket, { status });
-    if (changed && focused) restoreFocus.current = `${ticket.noteId}:${ticket.id}`;
+    if (changed) { reveal([ticket]); if (focused) restoreFocus.current = ticketKey(ticket); }
     setError(changed ? '' : 'This ticket changed. Try again.');
   };
-  const drag = useTicketDrag(root, workspace.onPatch);
+  const drag = useTicketDrag(root, workspace.onPatch ? (ticket, patch) => {
+    const changed = workspace.onPatch?.(ticket, patch) ?? false;
+    if (changed) { reveal([ticket]); restoreFocus.current = ticketKey(ticket); }
+    return changed;
+  } : undefined);
   const remove = (ticket: Ticket) => {
     const focused = root.current?.contains(document.activeElement);
     const column = workspace.work.tickets.filter(candidate => candidate.boardId === board.id && candidate.status === ticket.status);
@@ -52,6 +70,11 @@ export function KanbanBoard({ board, workspace, showSource = false }: { board: N
     return deleted;
   };
   useLayoutEffect(() => {
+    if (pendingCreation.current) {
+      const pending = pendingCreation.current;
+      const added = workspace.work.tickets.filter(t => t.boardId === board.id && t.status === pending.status && !pending.ids.has(ticketKey(t)));
+      if (added.length) { pendingCreation.current = null; reveal(added); }
+    }
     if (restoreAfterDelete.current) {
       const pending = restoreAfterDelete.current;
       restoreAfterDelete.current = null;
@@ -64,7 +87,7 @@ export function KanbanBoard({ board, workspace, showSource = false }: { board: N
       .find(element => element.dataset.ticketKey === restoreFocus.current);
     restoreFocus.current = null;
     target?.focus({ preventScroll: true });
-  }, [workspace.work]);
+  }, [workspace.work, pages]);
   useLayoutEffect(() => {
     if (creating) input.current?.focus({ preventScroll: true });
     else if (focusAdd.current) { addButtons.current.get(focusAdd.current)?.focus({ preventScroll: true }); focusAdd.current = null; }
@@ -78,9 +101,12 @@ export function KanbanBoard({ board, workspace, showSource = false }: { board: N
     <div className="orion-kanban">
       {TICKET_STATUSES.map(([status, label], columnIndex) => {
         const tickets = workspace.work.tickets.filter(t => t.boardId === board.id && t.status === status);
+        const visible = tickets.filter((t, i) => i < BOARD_PAGE_SIZE || extra.has(ticketKey(t)));
+        const visibleKeys = new Set(visible.map(ticketKey));
+        const remaining = tickets.filter(t => !visibleKeys.has(ticketKey(t)));
         return <section key={status} aria-label={label} className="kanban-column" data-ticket-drop-board={board.id} data-ticket-drop-status={status}>
           <h4>{label}<span>{tickets.length}</span></h4>
-          {tickets.map(t => <article className="kanban-ticket" data-ticket-key={`${t.noteId}:${t.id}`} key={`${t.noteId}:${t.id}`} tabIndex={workspace.onPatch ? 0 : undefined}
+          {visible.map(t => <article className="kanban-ticket" data-ticket-key={`${t.noteId}:${t.id}`} key={`${t.noteId}:${t.id}`} tabIndex={workspace.onPatch ? 0 : undefined}
             aria-label={t.title} aria-keyshortcuts="ArrowLeft ArrowRight" {...drag.cardProps(t)}
             onKeyDown={event => {
               if (event.target !== event.currentTarget || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
@@ -88,7 +114,9 @@ export function KanbanBoard({ board, workspace, showSource = false }: { board: N
               if (next && workspace.onPatch) { event.preventDefault(); move(t, next[0]); }
             }}>
             {workspace.onDelete && <TicketDeleteButton title={t.title} onDelete={() => remove(t)}/>}
-            <button type="button" className="ticket-open" disabled={!workspace.onOpenNote} onClick={() => workspace.onOpenNote?.(t.noteId)}>{t.title}</button>
+            <button type="button" className="ticket-open" disabled={!workspace.onOpenNote && !workspace.onEditTicket} title={workspace.onEditTicket ? 'Edit ticket' : undefined} onClick={() => {
+              if (!workspace.onEditTicket?.(t)) workspace.onOpenNote?.(t.noteId);
+            }}>{t.title}</button>
             {t.origin !== 'board' && <small>{t.noteTitle}</small>}
             {workspace.onPatch && <div className="kanban-card-footer">
               <DateButton value={t.dueDate} label={`Due date for ${t.title}`} onChange={dueDate => workspace.onPatch?.(t, { dueDate }) ?? false}/>
@@ -97,12 +125,16 @@ export function KanbanBoard({ board, workspace, showSource = false }: { board: N
               </div>
             </div>}
           </article>)}
+          <LoadMoreTickets remaining={remaining.length} pageSize={BOARD_PAGE_SIZE} label={`tickets in ${label}`} onLoad={() => {
+            restoreFocus.current = ticketKey(remaining[0]); reveal(remaining.slice(0, BOARD_PAGE_SIZE));
+          }}/>
           {creating === status ? <form className="kanban-create" onKeyDown={event => {
             event.stopPropagation(); if (event.key === 'Escape') { event.preventDefault(); cancel(); }
           }} onSubmit={event => {
             event.preventDefault(); event.stopPropagation(); if (!title.trim()) return;
+            pendingCreation.current = { ids: new Set(workspace.work.tickets.map(ticketKey)), status };
             if (workspace.onCreateTicket?.(board, title.trim(), status, dueDate)) { setTitle(''); setDueDate(''); setError(''); input.current?.focus({ preventScroll: true }); }
-            else setError('The board changed. Close this field and try again.');
+            else { pendingCreation.current = null; setError('The board changed. Close this field and try again.'); }
           }}>
             <input ref={input} aria-label={`New ticket in ${label}`} placeholder="What needs doing?" maxLength={140} required value={title} onChange={event => setTitle(event.target.value)}/>
             <DateButton value={dueDate} onChange={setDueDate}/>

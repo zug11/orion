@@ -4,6 +4,7 @@ import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from '@tip
 import { closeHistory } from '@tiptap/pm/history';
 import { Fragment, Slice, Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { Plugin } from '@tiptap/pm/state';
+import { boardTicketVisibility } from './boardTicketVisibility';
 import { KanbanBoard, useTickets } from '../Tickets';
 import { validTicketUrgency, boardMarker, effectiveTicketStatus, newBoardId, newTicketId, parseBoardMarker, parseTicketMarker, type Ticket, type TicketPatch, type TicketStatus } from '../../lib/tickets';
 import { MAX_INFERRED_TICKETS, ticketTitleKey, validTicketTitle } from '../../lib/ticketInference';
@@ -46,6 +47,7 @@ function BoardView({ node, updateAttributes }: NodeViewProps) {
 }
 export const NoteKanban = Node.create({
   name: 'noteKanban', group: 'block', atom: true, selectable: true,
+  addOptions() { return { allowedBoard: undefined as ((id: string) => boolean) | undefined }; },
   addAttributes() { return {
     boardId: { default: '', parseHTML: el => el.dataset.orionBoard || '', renderHTML: attrs => ({ 'data-orion-board': attrs.boardId }) },
     title: { default: 'Untitled board', parseHTML: el => el.dataset.boardTitle || 'Untitled board', renderHTML: attrs => ({ 'data-board-title': attrs.title }) },
@@ -62,7 +64,7 @@ export const NoteKanban = Node.create({
   addNodeView() { return ReactNodeViewRenderer(BoardView, {
     stopEvent: ({ event }) => event.target instanceof Element && Boolean(event.target.closest('.kanban-workspace,input')),
   }); },
-  addProseMirrorPlugins() { return [new Plugin({ props: { transformPasted: copyWorkIdentities } })]; },
+  addProseMirrorPlugins() { return [new Plugin({ props: { transformPasted: copyWorkIdentities } }), boardTicketVisibility(this.options.allowedBoard)]; },
 });
 
 /** Add beside the board in the ordinary document, in one Undo, without stealing form focus. */
