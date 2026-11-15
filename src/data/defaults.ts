@@ -3,6 +3,7 @@ import type {
   HomeAtmosphere,
   HomeAtmosphereMotion,
   HomeAtmosphereTone,
+  LiveVoiceProvider,
   OrionVault,
   SavedElevenLabsVoice,
   Settings,
@@ -25,9 +26,11 @@ export const defaultSettings: Settings = {
   anthropicApiKeyConfigured: false,
   elevenLabsApiKeyConfigured: false,
   perplexityApiKeyConfigured: false,
+  webResearchProvider: "auto",
   elevenLabsVoiceId: "",
   elevenLabsVoices: [],
   speechVoice: "system",
+  liveVoiceProvider: "openai",
   sidebarCollapsed: false,
   providerFailoverEnabled: false,
   autoLink: true,
@@ -64,6 +67,10 @@ export function normalizeSpeechVoice(value: unknown): SpeechVoice {
     return value;
   }
   return defaultSettings.speechVoice;
+}
+
+export function normalizeLiveVoiceProvider(value: unknown): LiveVoiceProvider {
+  return value === "elevenlabs" ? "elevenlabs" : "openai";
 }
 
 const ELEVENLABS_VOICE_ID = /^[A-Za-z0-9]{8,40}$/;

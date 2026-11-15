@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptySnapshot } from "../data/defaults";
 import { generateChatSuggestions } from "../lib/chatSuggestions";
 import type { AppSnapshot, ChatPromptSuggestion } from "../types";
-import { CHAT_SUGGESTION_DELAY_MS, useChatSuggestions } from "./useChatSuggestions";
+import { CHAT_SUGGESTION_DELAY_MS, invalidateChatSuggestionConnection, useChatSuggestions } from "./useChatSuggestions";
 
 vi.mock("../lib/chatSuggestions", async importOriginal => ({
   ...await importOriginal<typeof import("../lib/chatSuggestions")>(),
@@ -176,6 +176,72 @@ describe("generated Chat suggestions lifecycle", () => {
     expect(generateChatSuggestions).toHaveBeenCalledOnce();
     rerender({ current: snapshot }); await tick();
     expect(result.current.suggestions).toEqual(generated("Configured again"));
+  });
+
+  it("skips generation without the selected connection even if the caller enables it, then starts after sign-in", async () => {
+    const snapshot = fixture(); snapshot.settings.model = "chatgpt:gpt-6.1-sol";
+    snapshot.settings.chatgptConfigured = false;
+    const { result, rerender } = renderHook(({ current }) => useChatSuggestions(current, { enabled: true }), { initialProps: { current: snapshot } });
+    await tick(10_000); expect(generateChatSuggestions).not.toHaveBeenCalled(); expect(result.current.status).toBe("idle");
+    rerender({ current: { ...snapshot, settings: { ...snapshot.settings, chatgptConfigured: true, chatgptAccountId: "account-a" } } });
+    await tick(); expect(generateChatSuggestions).toHaveBeenCalledOnce(); expect(result.current.status).toBe("ready");
+  });
+
+  it("recovers a cached failure after disconnecting and reconnecting the same ChatGPT account", async () => {
+    const snapshot = fixture(); Object.assign(snapshot.settings, { model: "chatgpt:gpt-6.1-sol", chatgptConfigured: true, chatgptAccountId: "account-a" });
+    vi.mocked(generateChatSuggestions).mockRejectedValueOnce(new Error("Expired connection"));
+    const { result, rerender } = renderHook(({ current, enabled }) => useChatSuggestions(current, { enabled }), { initialProps: { current: snapshot, enabled: true } });
+    await tick(); expect(result.current.status).toBe("error");
+    rerender({ current: snapshot, enabled: false }); rerender({ current: snapshot, enabled: true });
+    await tick(10_000); expect(generateChatSuggestions).toHaveBeenCalledOnce();
+    rerender({ current: { ...snapshot, settings: { ...snapshot.settings, chatgptConfigured: false } }, enabled: false });
+    rerender({ current: snapshot, enabled: true }); await tick();
+    expect(generateChatSuggestions).toHaveBeenCalledTimes(2); expect(result.current.status).toBe("ready");
+    expect(vi.mocked(generateChatSuggestions).mock.calls[1][0].settings.chatgptAccountId).toBe("account-a");
+  });
+
+  it("switches accounts without reusing old failure history or publishing an old in-flight response", async () => {
+    const snapshot = fixture(); Object.assign(snapshot.settings, { model: "chatgpt:gpt-6.1-sol", chatgptConfigured: true, chatgptAccountId: "account-a" });
+    const old = deferred();
+    vi.mocked(generateChatSuggestions).mockReturnValueOnce(old.promise).mockResolvedValue(generated("Second account"));
+    const { result, rerender } = renderHook(({ current }) => useChatSuggestions(current, { enabled: true }), { initialProps: { current: snapshot } });
+    await tick();
+    rerender({ current: { ...snapshot, settings: { ...snapshot.settings, chatgptAccountId: "account-b" } } });
+    expect(result.current.suggestions).toEqual([]); expect(vi.mocked(generateChatSuggestions).mock.calls[0][2]?.aborted).toBe(true);
+    await tick(); await act(async () => old.resolve(generated("Old account")));
+    expect(result.current.suggestions).toEqual(generated("Second account"));
+    expect(vi.mocked(generateChatSuggestions).mock.calls[1][0].settings.chatgptAccountId).toBe("account-b");
+    expect(vi.mocked(generateChatSuggestions).mock.calls[1][1].previousPrompts).toEqual([]);
+  });
+
+  it("invalidates cached failure on an explicit same-account connection event while Chat is unmounted", async () => {
+    const snapshot = fixture(); Object.assign(snapshot.settings, { model: "chatgpt:gpt-6.1-sol", chatgptConfigured: true, chatgptAccountId: "account-a" });
+    vi.mocked(generateChatSuggestions).mockRejectedValueOnce(new Error("Non-SSE stream"));
+    const first = renderHook(() => useChatSuggestions(snapshot, { enabled: true }));
+    await tick(); expect(first.result.current.status).toBe("error"); first.unmount();
+    invalidateChatSuggestionConnection("chatgpt");
+    const second = renderHook(() => useChatSuggestions(snapshot, { enabled: true }));
+    expect(second.result.current.status).toBe("loading"); await tick();
+    expect(second.result.current.status).toBe("ready"); expect(generateChatSuggestions).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a late response immediately after a connection event even before new account status arrives", async () => {
+    const snapshot = fixture(); Object.assign(snapshot.settings, { model: "chatgpt:gpt-6.1-sol", chatgptConfigured: true, chatgptAccountId: "account-a" });
+    const old = deferred(); vi.mocked(generateChatSuggestions).mockReturnValueOnce(old.promise).mockResolvedValue(generated("Reconnected"));
+    const { result } = renderHook(() => useChatSuggestions(snapshot, { enabled: true }));
+    await tick();
+    await act(async () => { invalidateChatSuggestionConnection("chatgpt"); old.resolve(generated("Obsolete credential")); });
+    expect(result.current.suggestions).toEqual([]); await tick();
+    expect(result.current.suggestions).toEqual(generated("Reconnected")); expect(generateChatSuggestions).toHaveBeenCalledTimes(2);
+    await tick(10_000); expect(generateChatSuggestions).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps successful suggestions when another provider's connection changes", async () => {
+    const snapshot = fixture(); const { result, rerender } = renderHook(({ current }) => useChatSuggestions(current, { enabled: true }), { initialProps: { current: snapshot } });
+    await tick();
+    act(() => invalidateChatSuggestionConnection("chatgpt"));
+    rerender({ current: { ...snapshot, settings: { ...snapshot.settings, chatgptConfigured: true, chatgptAccountId: "other-account" } } });
+    await tick(); expect(result.current.suggestions).toEqual(generated()); expect(generateChatSuggestions).toHaveBeenCalledOnce();
   });
 
   it("creates a fresh batch for an explicit New chat seed", async () => {

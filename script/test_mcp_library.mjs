@@ -133,8 +133,8 @@ try {
   await request("initialize", { protocolVersion: "2025-06-18", clientInfo: { name: "isolated-library-harness", version: "1" }, capabilities: {} });
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   definitions = (await request("tools/list")).result.tools;
-  assert.equal(definitions.length, 57);
-  assert.equal(new Set(definitions.map((tool) => tool.name)).size, 57);
+  assert.equal(definitions.length, 64);
+  assert.equal(new Set(definitions.map((tool) => tool.name)).size, 64);
   const sources = await tool("orion_list_sources", { query: "Contract evidence" }); assert.equal(sources.sources[0].id, "knowledge-source");
   const evidence = await tool("orion_search_sources", { query: "evidence", source_ids: ["knowledge-source"] }); assert.equal(evidence.matches[0].matchStart, 3);
   const passage = await tool("orion_get_source_passage", { source_id: "knowledge-source", start: 1, max_chars: 2 }); assert.equal(passage.text, "😀 ");
@@ -429,9 +429,36 @@ try {
   assert.equal(JSON.parse(commentSaved).spaces.find(item => item.workspace.id === scope).notes.find(item => item.id === b.id).body, commentBefore);
   await tool("orion_propose_passage_comment", commentArgs, true);
   assert.equal(await readFile(vaultPath, "utf8"), commentSaved);
+  const createBoard = { space_id: scope, note_id: b.id, expected_version: await version(b.id), title: "Release – café" };
+  const board = (await tool("orion_create_board", createBoard)).work.boards[0];
+  await tool("orion_create_board", createBoard, true);
+  const beforeBoardReads = await readFile(vaultPath, "utf8");
+  assert.equal((await tool("orion_list_boards", { note_id: b.id })).boards[0].id, board.id);
+  const boardContext = await tool("orion_get_board", { board_id: board.id });
+  assert(boardContext.sourceNote.body.includes("A focused search view"));
+  assert.equal(await readFile(vaultPath, "utf8"), beforeBoardReads, "Board reads changed the vault.");
+  const createTickets = { space_id: scope, note_id: b.id, expected_version: boardContext.sourceNote.version,
+    board_id: board.id, status: "progress", tickets: [{ title: "Review [search] clarity", evidence: "A focused search view keeps the answer readable" }] };
+  const ticket = (await tool("orion_create_tickets", createTickets)).work.tickets[0];
+  assert.equal(ticket.boardId, board.id); assert.equal(ticket.status, "progress");
+  await tool("orion_create_tickets", createTickets, true);
+  const move = { space_id: scope, note_id: b.id, expected_version: await version(b.id), ticket_id: ticket.id, status: "done" };
+  await tool("orion_update_ticket", move);
+  await tool("orion_update_ticket", move, true);
+  assert.equal((await tool("orion_list_tickets", { board_id: board.id })).tickets.length, 0);
+  assert.equal((await tool("orion_list_tickets", { board_id: board.id, state: "all" })).tickets[0].id, ticket.id);
+  const rename = await tool("orion_update_board", { space_id: scope, note_id: b.id, expected_version: await version(b.id), board_id: board.id, title: "Shipping" });
+  assert.equal(rename.work.boards[0].title, "Shipping");
+  const beforeInvalidBoard = await readFile(vaultPath, "utf8");
+  await tool("orion_create_tickets", { ...createTickets, expected_version: await version(b.id), tickets: [{ title: "Invented", evidence: "This evidence is absent" }] }, true);
+  await tool("orion_update_ticket", { ...move, expected_version: await version(b.id), board_id: "foreign-board" }, true);
+  assert.equal(await readFile(vaultPath, "utf8"), beforeInvalidBoard);
   const saved = JSON.parse(await readFile(vaultPath, "utf8"));
   assert.deepEqual(saved.spaces.filter((space) => space.workspace.id !== scope), original.spaces.filter((space) => space.workspace.id !== scope));
   const updated = saved.spaces.find((space) => space.workspace.id === scope);
+  const boardBody = updated.notes.find(note => note.id === b.id).body;
+  assert(boardBody.includes(`<!-- orion-kanban:v1 ${board.id} Shipping -->`));
+  assert(boardBody.includes(`- [x] Review \\[search\\] clarity <!-- orion-ticket:v1 ${ticket.id} done ${board.id} -->`));
   assert.deepEqual(updated.settings, space.settings); assert.deepEqual(updated.concepts, space.concepts);
   assert.deepEqual(updated.sources, space.sources.map(source => source.id === "citation-source" ? { ...source, noteIds: ["citation-primary", "citation-protected"] } : source.id === "citation-second" ? { ...source, noteIds: ["citation-primary"] } : source.id === "citation-証拠" ? { ...source, noteIds: ["citation-unicode"] } : source));
   assert(updated.notes.find((note) => note.id === a.id).body.includes("- [x] Read beta"));
@@ -456,8 +483,8 @@ try {
   if (process.env.ORION_EDITOR_FIXTURE_OUT) {
     await writeFile(resolve(process.env.ORION_EDITOR_FIXTURE_OUT), JSON.stringify({ spaceId: scope, note: editorNote, sourceNote: updated.notes.find((note) => note.id === b.id), tableStates, inlineStates, citationStates, citationSources: updated.sources.filter(source => source.id.startsWith("citation-")) }, null, 2) + "\n");
   }
-  assert.equal(exercised.size, 23, "Not every new tool was exercised against the packaged executable.");
-  console.log("All 23 library tools verified against the exact executable: working/history visibility, fresh completion reads, original versions/scalar offsets/line indices, unchanged Markdown, guarded edits, pending passage comments without prose changes, safe external links, portable paragraph/document/image/table layout, structured table edits, inline marks/unlink, source citations and atomic attachments, rejected semantic hazards, atomicity, citations, and Space isolation.");
+  assert.equal(exercised.size, 30, "Not every new tool was exercised against the packaged executable.");
+  console.log("All 30 library tools verified against the exact executable: note-backed boards/tickets, guarded moves and inference evidence, working/history visibility, fresh completion reads, original versions/scalar offsets/line indices, unchanged Markdown, guarded edits, pending passage comments without prose changes, safe external links, portable paragraph/document/image/table layout, structured table edits, inline marks/unlink, source citations and atomic attachments, rejected semantic hazards, atomicity, citations, and Space isolation.");
 } finally {
   child.kill();
   await rm(directory, { recursive: true, force: true });

@@ -245,6 +245,7 @@ source_fingerprint() (
       script/build_ocr_sidecar.sh \
       script/build_transcription_sidecar.sh \
       script/package_release.sh \
+      script/patch_elevenlabs_client.mjs \
       script/package_updater.mjs \
       script/updater_manifest.mjs \
       script/test_updater_manifest.mjs \
@@ -351,6 +352,10 @@ build_renderer_in_staging() (
 
   cp -RX "$ROOT_DIR/src" "$build_dir/src"
   cp -RX "$ROOT_DIR/public" "$build_dir/public"
+  # The renderer's prebuild hook applies the pinned ElevenLabs cancellation
+  # patch. Keep that hook available in the isolated release build as well.
+  mkdir -p "$build_dir/script"
+  cp "$ROOT_DIR/script/patch_elevenlabs_client.mjs" "$build_dir/script/"
   cp "$ROOT_DIR/package.json" "$ROOT_DIR/package-lock.json" \
     "$ROOT_DIR/tsconfig.json" "$ROOT_DIR/tsconfig.node.json" \
     "$ROOT_DIR/vite.config.ts" "$ROOT_DIR/index.html" "$build_dir/"

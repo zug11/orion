@@ -6,6 +6,18 @@ import { deleteNoteFromSnapshot } from "./noteDeletion";
 const NOW = "2026-07-29T01:00:00.000Z";
 
 describe("deleteNoteFromSnapshot", () => {
+  it("removes only dictation originals owned solely by the deleted note", () => {
+    const snapshot = createEmptySnapshot("Dictation", NOW);
+    snapshot.notes = [makeNote("deleted", "Draft", { sourceIds: ["source-dictation-own", "source-dictation-shared"] }),
+      makeNote("kept", "Other", { sourceIds: ["source-dictation-shared"] })];
+    snapshot.sources = ["source-dictation-own", "source-dictation-shared", "imported-audio"].map(id => ({
+      id, title: "Audio", kind: "audio", text: "Original words", importedAt: NOW, noteIds: ["deleted"],
+    }));
+    const result = deleteNoteFromSnapshot(snapshot, "deleted", NOW).snapshot;
+    expect(result.sources.map(source => source.id)).toEqual(["source-dictation-shared", "imported-audio"]);
+    expect(result.notes[0].sourceIds).toEqual(["source-dictation-shared"]);
+    expect(snapshot.sources).toHaveLength(3);
+  });
   it("removes the note and cleans links, concepts, relationships, and provenance", () => {
     const snapshot = createEmptySnapshot(
       "Philosophy",

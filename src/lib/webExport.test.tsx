@@ -1,3 +1,4 @@
+import { boardMarker, ticketMarker } from './tickets';
 // @vitest-environment jsdom
 
 import { describe, expect, it } from "vitest";
@@ -550,5 +551,22 @@ describe("preview editor export compatibility", () => {
     expect(document.querySelector(".export-card span")?.textContent).toBe("Material Finding Glass Clear");
     expect(document.querySelector(".export-note-meta")?.textContent).toContain("4 words");
     expect(document.body.textContent).not.toContain("orion-table:v1");
+  });
+});
+
+
+describe("kanban export scope", () => {
+  it("exports a readable board using only included notes and no interactive controls", () => {
+    const snapshot = createEmptySnapshot("Project", NOW);
+    const board = boardMarker({ id: "board-plan", title: "Launch plan" });
+    const task = (id: string, title: string) => `- [ ] ${title} ${ticketMarker({ id, status: "progress", boardId: "board-plan" })}`;
+    snapshot.notes = [note("plan", "Plan", `${board}\n\n${task("one", "Public task")}`), note("private", "Private", task("two", "Excluded secret"))];
+    const single = new DOMParser().parseFromString(buildWebExportDocument(snapshot, "note", "plan").html, "text/html");
+    expect(single.querySelector(".export-kanban")?.textContent).toContain("Public task");
+    expect(single.querySelector(".export-kanban")?.textContent).not.toContain("Excluded secret");
+    expect(single.querySelector(".export-kanban select")).toBeNull();
+    expect(single.body.textContent).not.toContain("orion-kanban:v1");
+    const space = new DOMParser().parseFromString(buildWebExportDocument(snapshot, "space", null).html, "text/html");
+    expect(space.querySelector(".export-kanban")?.textContent).toContain("Excluded secret");
   });
 });

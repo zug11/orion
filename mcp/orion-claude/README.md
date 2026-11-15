@@ -20,8 +20,8 @@ This local Claude Desktop extension gives Claude direct access to Orion.
 
 ## Additional local tools
 
-The connector also exposes 23 additional local library tools (57 tools total:
-32 local library tools, 14 desktop workflows, three edit-review tools, one
+The connector also exposes 30 additional local library tools (64 tools total:
+39 local library tools, 14 desktop workflows, three edit-review tools, one
 active-editor-context reader, three voice work-order tools and four selected-editor-action tools):
 exact source passages and note sections, batch reads, concepts, link resolution
 and paths, provenance, tags, Markdown tasks, duplicate detection, integrity,
@@ -29,6 +29,16 @@ recent changes, guarded text edits, and atomic metadata batches. These work
 with Orion closed. Every new write requires an exact Space and current note
 version; conflicts stop before saving. Source offsets count Unicode scalar
 values. Coverage flags distinguish bounded discovery from exhaustive reads.
+
+Boards and tickets use portable metadata inside those same notes. Read with
+`orion_list_boards`, `orion_get_board`, and `orion_list_tickets`; create or rename
+boards with `orion_create_board` / `orion_update_board`, add up to 12 tickets with
+`orion_create_tickets`, and move an exact ticket with `orion_update_ticket`.
+Every write needs its explicit Space and current source-note version. Inference
+is performed by the calling assistant from the board's source note; the local
+writer can validate exact evidence and deduplicate titles before saving an
+authorized batch. It does not make a provider request. Completed tasks remain
+excluded from ordinary working reads; unsupported or stale edits save nothing.
 
 The separate `orion_get_editor_context` tool requires Orion to be open, desktop
 workflows enabled and the exact Space allowed. Choose a current `editorTargets`
@@ -168,3 +178,5 @@ write tools retain their existing immediate-write behavior.
 
 See the [review contract](../../docs/mcp-intelligence.md#edits-reviewed-in-the-open-note)
 for bounds, lifecycle and window ownership.
+
+Ticket tools also return optional all-day `dueDate`, `urgency` and creation `origin`. Set per-ticket `due_date` (YYYY-MM-DD) and `urgency` (urgent/high/medium/low) when creating, or patch them through `orion_update_ticket`; empty strings clear either field. Moves preserve omitted fields and dashboard origin. `sourceNoteId` is null for dashboard-created tickets; `noteId` remains the storage note needed for version-guarded writes.

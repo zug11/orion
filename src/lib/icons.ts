@@ -94,3 +94,6 @@ export { default as Volume2 } from "lucide-react/dist/esm/icons/volume-2.mjs";
 export { default as X } from "lucide-react/dist/esm/icons/x.mjs";
 
 export { default as Globe } from "lucide-react/dist/esm/icons/globe.mjs";
+
+export { default as Columns3 } from "lucide-react/dist/esm/icons/columns-3.mjs";
+export { default as CalendarDays } from "lucide-react/dist/esm/icons/calendar-days.mjs";

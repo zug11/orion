@@ -8,6 +8,20 @@ const finding: ChatResult = { reply: "The passage suggests a connection [1](#ori
 function input(result = finding) { return { id: "private-job-identity", revision: 7, sequence: 3, subject: "Causation", state: "running" as const, result }; }
 
 describe("natural finding delivery", () => {
+  it("keeps provider-cited summaries distinct from source excerpts in the voice handoff", () => {
+    const web = { url: "https://example.org/research", retrievedAt: "2026-11-15T00:00:00Z", evidenceType: "cited_summary" as const };
+    const evidence = [{ ...finding.evidence![0], kind: "web" as const, web }];
+    const delivery = voiceFindingDelivery(input({ ...finding, evidence }));
+    const quiet = JSON.parse(delivery.quiet);
+    expect(quiet.sourceReferences[0]).toMatchObject({ kind: "web", ...web });
+    expect(quiet.notice).toContain("never a quotation from the original webpage");
+    expect(delivery.commentary).not.toContain("cited_summary");
+    delete (web as { evidenceType?: string }).evidenceType;
+    expect(JSON.parse(voiceFindingDelivery(input({ ...finding, evidence })).quiet).sourceReferences[0].evidenceType).toBe("source_excerpt");
+    (web as { evidenceType: string }).evidenceType = "full_page";
+    expect(JSON.parse(voiceFindingDelivery(input({ ...finding, evidence })).quiet)).toMatchObject({ sourceReferences: [], sourceReferencesOmitted: 1 });
+  });
+
   it("preserves a failed follow-up beside the spoken summary without discarding returned web evidence", () => {
     const webResearch = { attempted: 2, completed: 1, issue: "Perplexity's shared request limit is busy. Retry in about 20 seconds. (WEB_REQUEST_RATE_LIMIT)" };
     const delivery = voiceFindingDelivery({ ...input({ ...finding, webResearch, voice: { label: "Connection", summary: finding.reply } }), state: "completed" });

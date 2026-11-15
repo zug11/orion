@@ -29,3 +29,9 @@
 .theme-color-override { flex-wrap: wrap; }
 .theme-color-override input.theme-color-hex { width: 80px; padding: 5px 6px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text-soft); background: var(--surface-1); font-size: 11px; font-variant-numeric: tabular-nums; }
 .theme-color-override input.theme-color-hex[aria-invalid="true"] { border-color: var(--danger); }
+
+.chatgpt-welcome { position: fixed; inset: 0; z-index: 2000; display: grid; place-items: center; padding: 24px; background: #0006; backdrop-filter: blur(12px); }
+.chatgpt-welcome > .setting-card { max-width: 440px; background: var(--surface-raised, #292929); padding: 28px; }
+.chatgpt-welcome p { line-height: 1.6; margin-block: 16px; }
+
+.chatgpt-sign-in { background: #111; color: #fff; border: 1px solid #8885; min-height: 40px; border-radius: 8px; padding: 10px 16px; }

@@ -206,7 +206,7 @@ export async function generateChatSuggestions(
   signal?: AbortSignal,
 ): Promise<ChatPromptSuggestion[]> {
   if (signal?.aborted) throw new DOMException("Suggestion generation was cancelled.", "AbortError");
-  if (!isSelectedAIConfigured(snapshot.settings)) throw new Error("Add a key for the selected provider to get suggestions.");
+  if (!isSelectedAIConfigured(snapshot.settings)) throw new Error("Connect the selected provider in Settings to get suggestions.");
   const validated = parseChatSuggestionContext(JSON.stringify(context));
   const current = getChatSuggestionContext(snapshot, { focusNoteId: validated.attachedNoteId ?? undefined, previousPrompts: validated.previousPrompts });
   if (!current || getChatSuggestionContextKey(current) !== getChatSuggestionContextKey(validated)) {

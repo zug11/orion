@@ -1,21 +1,30 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { clearMocks, mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { emit } from "@tauri-apps/api/event";
+import * as suggestionConnection from "./components/useChatSuggestions";
 import { createEmptyVault, createEmptySnapshot } from "./data/defaults";
 import type { ComponentProps } from "react";
 import type { Sidebar } from "./components/Sidebar";
 import type { NoteView } from "./components/NoteView";
+import type { HomeView } from "./components/HomeView";
 import type { ChatRequest, Note, OrionVault } from "./types";
 import type { PassageThreadHandler } from "./lib/passageThreads";
 import type { ChatViewProps } from "./components/ChatView";
+import { LEGACY_CHAT_THREAD_ID } from "./lib/chatThreads";
+import { stableSnapshotVersion } from "./lib/knowledgeOrchestration/context";
+import type { VoiceCommit, VoiceReceipt } from "./lib/voiceResearch";
 
 const runtime = vi.hoisted(() => ({ disk: null as OrionVault | null, chatProps: null as ChatViewProps | null,
   sidebarProps: null as ComponentProps<typeof Sidebar> | null,
   noteProps: null as ComponentProps<typeof NoteView> | null,
+  homeProps: null as ComponentProps<typeof HomeView> | null,
   updateNote: null as ((note: Note) => void) | null,
   threadAction: null as PassageThreadHandler | null, load: vi.fn(), save: vi.fn(), invoke: vi.fn(), chat: vi.fn() }));
+vi.mock("./lib/chatgpt", async original => ({ ...await original<typeof import("./lib/chatgpt")>(),
+  chatGPTCommand: (command: string, args?: unknown) => runtime.invoke(command, args) }));
 vi.mock("./lib/storage", async original => ({ ...await original<typeof import("./lib/storage")>(),
   isTauriRuntime: () => true, loadSnapshot: runtime.load, saveSnapshot: runtime.save, chatWithOrion: runtime.chat }));
 vi.mock("./lib/useResolvedTheme", async () => {
@@ -27,7 +36,7 @@ vi.mock("./lib/useResolvedTheme", async () => {
 vi.mock("./lib/useThemeIcon", () => ({ useThemeIcon: () => ({ mark: "", message: null }) }));
 vi.mock("./lib/assistant/executor", () => ({ startAssistantExecutor: () => () => undefined }));
 vi.mock("./components/Sidebar", () => ({ Sidebar: (props: ComponentProps<typeof Sidebar>) => { runtime.sidebarProps = props; return null; } }));
-vi.mock("./components/HomeView", () => ({ HomeView: () => null }));
+vi.mock("./components/HomeView", () => ({ HomeView: (props: ComponentProps<typeof HomeView>) => { runtime.homeProps = props; return <h1>Home fixture</h1>; } }));
 vi.mock("./components/ImportStudio", () => ({ ImportStudio: () => null }));
 vi.mock("./components/CommandPalette", () => ({ CommandPalette: () => null }));
 vi.mock("./components/ExportDialog", () => ({ ExportDialog: () => null }));
@@ -36,7 +45,7 @@ vi.mock("./components/ChatDock", () => ({ ChatDock: (props: ChatViewProps) => { 
 import App from "./App";
 
 beforeEach(() => {
-  runtime.noteProps = null;
+  runtime.noteProps = null; runtime.homeProps = null;
   runtime.load.mockReset(); runtime.save.mockReset(); runtime.chat.mockReset();
   runtime.invoke.mockReset().mockResolvedValue(undefined);
   mockIPC((command, payload) => runtime.invoke(command, payload), { shouldMockEvents: true });
@@ -61,6 +70,168 @@ async function launch() {
   render(<App />); await screen.findByRole("heading", { name: "Original draft" });
   await waitFor(() => expect(runtime.save).toHaveBeenCalled());
 }
+
+it("invalidates suggestions immediately on a same-account ChatGPT connection event before status hydration", async () => {
+  Object.assign(runtime.disk!.spaces[0].settings, { model: "chatgpt:gpt-6.1-sol", chatgptConfigured: true, chatgptAccountId: "account-a" });
+  const invalidate = vi.spyOn(suggestionConnection, "invalidateChatSuggestionConnection");
+  try {
+    await launch(); await act(async () => { await vi.dynamicImportSettled(); });
+    expect(invalidate).not.toHaveBeenCalled();
+    let resolve!: (status: unknown) => void;
+    runtime.invoke.mockImplementation(command => command === "chatgpt_status" ? new Promise(done => { resolve = done; }) : Promise.resolve(undefined));
+    await act(async () => { await emit("chatgpt-connection-changed", {}); });
+    expect(invalidate).toHaveBeenCalledExactlyOnceWith("chatgpt");
+    expect(resolve).toBeTypeOf("function");
+    await act(async () => resolve({ configured: true, activeId: "account-a", accounts: [], firstConnection: false }));
+    expect(runtime.chatProps!.snapshot.settings).toMatchObject({ chatgptConfigured: true, chatgptAccountId: "account-a" });
+    expect(invalidate).toHaveBeenCalledTimes(1);
+  } finally { invalidate.mockRestore(); }
+});
+
+it("dismisses a calendar occurrence through normal persistence and Undo preserves later editor changes", async () => {
+  await launch();
+  const captured = structuredClone(runtime.noteProps!.note), edit = runtime.updateNote!;
+  act(() => runtime.sidebarProps!.onViewChange("home")); await screen.findByRole("heading", { name: "Home fixture" });
+  const key = "v1:0123456789abcdef:0:1", before = runtime.homeProps!.snapshot;
+  let accepted = false;
+  act(() => { accepted = runtime.homeProps!.onDismissCalendarMention!(captured, key); });
+  expect(accepted).toBe(true);
+  const dismissed = runtime.homeProps!.snapshot.notes.find(note => note.id === captured.id)!;
+  expect(dismissed).toEqual({ ...captured, dismissedCalendarMentions: [key] });
+  expect(runtime.homeProps!.snapshot.updatedAt).not.toBe(before.updatedAt);
+  expect(runtime.homeProps!.snapshot.spaceOverview).toEqual(before.spaceOverview);
+  await waitFor(() => expect(runtime.disk!.spaces[0].notes[0].dismissedCalendarMentions).toEqual([key]), { timeout: 5000 });
+  // Simulate the editor publishing its captured whole Note before receiving the
+  // Home metadata update. Its prose edit must not erase the dismissal.
+  const updatedAt = "2026-11-16T00:00:00.000Z";
+  act(() => edit({ ...captured, body: "A later authored revision.", updatedAt }));
+  expect(runtime.homeProps!.snapshot.notes[0]).toMatchObject({ body: "A later authored revision.", updatedAt, dismissedCalendarMentions: [key] });
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(runtime.homeProps!.snapshot.notes[0]).toMatchObject({ body: "A later authored revision.", updatedAt, dismissedCalendarMentions: [] });
+  await waitFor(() => expect(runtime.disk!.spaces[0].notes[0]).toMatchObject({ body: "A later authored revision.", updatedAt, dismissedCalendarMentions: [] }), { timeout: 5000 });
+});
+
+it("rejects stale calendar captures and callbacks from a different active Space", async () => {
+  const other = createEmptySnapshot("Other Space", runtime.disk!.updatedAt, "other");
+  other.notes = [structuredClone(runtime.disk!.spaces[0].notes[0])]; runtime.disk!.spaces.push(other);
+  await launch(); const captured = structuredClone(runtime.noteProps!.note), edit = runtime.updateNote!;
+  act(() => runtime.sidebarProps!.onViewChange("home")); await screen.findByRole("heading", { name: "Home fixture" });
+  const dismiss = runtime.homeProps!.onDismissCalendarMention!, key = "v1:0123456789abcdef:0:1";
+  act(() => edit({ ...captured, body: "Changed before dismissal." }));
+  let accepted = true; act(() => { accepted = dismiss(captured, key); }); expect(accepted).toBe(false);
+  expect(runtime.homeProps!.snapshot.notes[0].dismissedCalendarMentions).toBeUndefined();
+  act(() => runtime.sidebarProps!.onSwitchSpace("other"));
+  act(() => { accepted = dismiss(captured, key); }); expect(accepted).toBe(false);
+  expect(runtime.chatProps!.snapshot.workspace.id).toBe("other");
+  expect(runtime.chatProps!.snapshot.notes[0].dismissedCalendarMentions).toBeUndefined();
+});
+
+it("does not undo a dismissal into a different Space with the same note identity", async () => {
+  const other = createEmptySnapshot("Other Space", runtime.disk!.updatedAt, "other");
+  const key = "v1:0123456789abcdef:0:1";
+  other.notes = [{ ...runtime.disk!.spaces[0].notes[0], dismissedCalendarMentions: [key] }]; runtime.disk!.spaces.push(other);
+  await launch(); const captured = runtime.noteProps!.note;
+  act(() => runtime.sidebarProps!.onViewChange("home"));
+  act(() => { expect(runtime.homeProps!.onDismissCalendarMention!(captured, key)).toBe(true); });
+  act(() => runtime.sidebarProps!.onSwitchSpace("other"));
+  // Space navigation may replace the toast; a retained Undo must still be scoped.
+  const undo = screen.queryByRole("button", { name: "Undo" }); if (undo) fireEvent.click(undo);
+  expect(runtime.chatProps!.snapshot.notes[0].dismissedCalendarMentions).toEqual([key]);
+});
+
+it("starts a new chat without erasing legacy history and sends only the selected conversation", async () => {
+  runtime.chat.mockResolvedValue({ reply: "An independent answer.", editIntent: "none" });
+  await launch();
+  const original = structuredClone(runtime.chatProps!.snapshot.studio.messages);
+  act(() => runtime.chatProps!.onClear());
+  const threadId = runtime.chatProps!.threadNavigation!.activeThreadId;
+  expect(threadId).not.toBe(LEGACY_CHAT_THREAD_ID);
+  expect(runtime.chatProps!.snapshot.studio.messages).toEqual([]);
+  expect(runtime.chatProps!.threadNavigation!.threads).toHaveLength(2);
+  await act(async () => { await runtime.chatProps!.onSend("A different question"); });
+  expect(runtime.chat.mock.calls[0][0].history).toEqual([]);
+  expect(runtime.chatProps!.snapshot.studio.messages.map(message => message.content)).toEqual(["A different question", "An independent answer."]);
+  expect(runtime.chatProps!.snapshot.studio.messages.every(message => message.threadId === threadId)).toBe(true);
+  act(() => runtime.chatProps!.threadNavigation!.onSelect(LEGACY_CHAT_THREAD_ID));
+  expect(runtime.chatProps!.snapshot.studio.messages).toEqual(original);
+  await waitFor(() => expect(runtime.disk!.spaces[0].studio.messages).toHaveLength(4), { timeout: 5000 });
+  await act(async () => cleanup());
+  await launch();
+  expect(runtime.chatProps!.threadNavigation!.threads).toHaveLength(2);
+  expect(runtime.chatProps!.threadNavigation!.activeThreadId).toBe(threadId);
+  expect(runtime.chatProps!.snapshot.studio.messages).toHaveLength(2);
+});
+
+it("keeps the initially empty conversation reachable after New chat", async () => {
+  runtime.disk!.spaces[0].studio.messages = [];
+  await launch();
+  expect(runtime.chatProps!.threadNavigation!.activeThreadId).toBe(LEGACY_CHAT_THREAD_ID);
+  act(() => runtime.chatProps!.onClear());
+  const newId = runtime.chatProps!.threadNavigation!.activeThreadId;
+  expect(newId).not.toBe(LEGACY_CHAT_THREAD_ID);
+  expect(runtime.chatProps!.threadNavigation!.threads.map(thread => thread.id)).toContain(LEGACY_CHAT_THREAD_ID);
+  act(() => runtime.chatProps!.threadNavigation!.onSelect(LEGACY_CHAT_THREAD_ID));
+  expect(runtime.chatProps!.threadNavigation!.activeThreadId).toBe(LEGACY_CHAT_THREAD_ID);
+  expect(runtime.chatProps!.snapshot.studio.messages).toEqual([]);
+  await waitFor(() => expect(runtime.disk!.spaces[0].studio.threads?.map(thread => thread.id)).toEqual([LEGACY_CHAT_THREAD_ID, newId]), { timeout: 5000 });
+});
+
+it("retains independent selections and history in each Space", async () => {
+  const firstSpaceId = runtime.disk!.activeSpaceId;
+  const other = createEmptySnapshot("Other Space", runtime.disk!.updatedAt, "other");
+  other.studio.messages = [{ id: "other-question", role: "user", content: "A private question in the other Space", cardIds: [], contextCardIds: [], createdAt: runtime.disk!.updatedAt }];
+  runtime.disk!.spaces.push(other);
+  await launch();
+  act(() => runtime.chatProps!.onClear());
+  const firstThread = runtime.chatProps!.threadNavigation!.activeThreadId;
+  act(() => runtime.sidebarProps!.onSwitchSpace("other"));
+  await waitFor(() => expect(runtime.chatProps!.snapshot.workspace.id).toBe("other"));
+  expect(runtime.chatProps!.threadNavigation!.threads).toHaveLength(1);
+  expect(runtime.chatProps!.snapshot.studio.messages[0].id).toBe("other-question");
+  expect(runtime.chatProps!.threadNavigation!.threads.some(thread => thread.id === firstThread)).toBe(false);
+  act(() => runtime.sidebarProps!.onSwitchSpace(firstSpaceId));
+  await waitFor(() => expect(runtime.chatProps!.snapshot.workspace.id).toBe(firstSpaceId));
+  expect(runtime.chatProps!.threadNavigation!.activeThreadId).toBe(firstThread);
+  expect(runtime.chatProps!.snapshot.studio.messages).toEqual([]);
+});
+
+it("rejects a late answer after switching and lets the new chat send immediately", async () => {
+  let finishOld!: (result: { reply: string }) => void;
+  runtime.chat.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }))
+    .mockResolvedValue({ reply: "The new chat's answer.", editIntent: "none" });
+  await launch();
+  let oldOutcome!: Promise<unknown>;
+  act(() => { oldOutcome = runtime.chatProps!.onSend("Old pending question").catch(error => error); });
+  await waitFor(() => expect(runtime.chat).toHaveBeenCalledTimes(1));
+  act(() => runtime.chatProps!.onClear());
+  await act(async () => { await runtime.chatProps!.onSend("New question"); });
+  expect(runtime.chat.mock.calls[1][0].history).toEqual([]);
+  await act(async () => { finishOld({ reply: "Late old answer" }); });
+  expect(await oldOutcome).toBeInstanceOf(Error);
+  expect(runtime.chatProps!.busy).toBe(false);
+  expect(runtime.chatProps!.snapshot.studio.messages.map(message => message.content)).toEqual(["New question", "The new chat's answer."]);
+  act(() => runtime.chatProps!.threadNavigation!.onSelect(LEGACY_CHAT_THREAD_ID));
+  expect(runtime.chatProps!.snapshot.studio.messages.map(message => message.id)).toEqual(["question", "reply"]);
+});
+
+it("renames and deletes only the selected chat and rejects a delayed voice save to it", async () => {
+  await launch();
+  act(() => runtime.chatProps!.threadNavigation!.onRename(LEGACY_CHAT_THREAD_ID, "River ideas"));
+  expect(runtime.chatProps!.threadNavigation!.threads[0].title).toBe("River ideas");
+  act(() => runtime.chatProps!.onClear());
+  const newThread = runtime.chatProps!.threadNavigation!.activeThreadId;
+  act(() => runtime.chatProps!.threadNavigation!.onDelete(LEGACY_CHAT_THREAD_ID));
+  expect(runtime.chatProps!.threadNavigation!.threads.map(thread => thread.id)).toEqual([newThread]);
+  expect(runtime.chatProps!.snapshot.notes).toHaveLength(1);
+  await act(async () => {
+    await expect(runtime.chatProps!.onVoiceCommit!({ id: "late-voice", spaceId: runtime.disk!.activeSpaceId,
+      threadId: LEGACY_CHAT_THREAD_ID, version: "old", prompt: "Create a note", result: { reply: "Late" } })).rejects.toThrow(/conversation was deleted/);
+  });
+  act(() => runtime.chatProps!.threadNavigation!.onDelete(newThread));
+  expect(runtime.chatProps!.threadNavigation!.activeThreadId).not.toBe(newThread);
+  expect(runtime.chatProps!.threadNavigation!.activeThreadId).not.toBe(LEGACY_CHAT_THREAD_ID);
+  expect(runtime.chatProps!.snapshot.studio.messages).toEqual([]);
+});
 
 function addPassageThread() {
   runtime.disk!.spaces[0].settings.includeExistingNotesInAIContext = false;
@@ -200,6 +371,55 @@ it("App retries a failed persistence request without making another note or repo
   await act(async () => { expect(await runtime.chatProps!.onSaveReply("reply")).toMatchObject({ noteId: retained }); });
   expect(runtime.disk!.spaces[0].notes).toHaveLength(2);
   expect(runtime.disk!.spaces[0].studio.messages).toHaveLength(2);
+});
+
+function voiceNoteRequest(id: string): VoiceCommit {
+  const snapshot = runtime.chatProps!.snapshot;
+  return { id, spaceId: snapshot.workspace.id, threadId: LEGACY_CHAT_THREAD_ID,
+    version: stableSnapshotVersion(snapshot), prompt: "Save your findings as a new note",
+    result: { reply: "The river image can connect the opening and ending.", noteActions: [
+      { title: "River imagery", body: "The river image can connect the opening and ending.", summary: "", aliases: [], tags: [] },
+    ] } };
+}
+
+it("voice save receipts wait for disk and retry the same note after a failed write", async () => {
+  await launch();
+  const request = voiceNoteRequest("worker-one-save");
+  runtime.save.mockRejectedValueOnce(new Error("Disk is full"));
+  await act(async () => { await expect(runtime.chatProps!.onVoiceCommit!(request)).rejects.toThrow("Disk is full"); });
+  expect(runtime.disk!.spaces[0].notes).toHaveLength(1);
+  expect(runtime.chatProps!.snapshot.notes).toHaveLength(2);
+  const retainedId = runtime.chatProps!.snapshot.notes.find(note => note.id !== "draft")!.id;
+
+  let finish!: () => void;
+  runtime.save.mockImplementationOnce((next: OrionVault) => new Promise<void>(resolve => {
+    finish = () => { runtime.disk = structuredClone(next); resolve(); };
+  }));
+  let pending!: Promise<VoiceReceipt>; let resolved = false;
+  act(() => { pending = runtime.chatProps!.onVoiceCommit!(request); void pending.then(() => { resolved = true; }); });
+  await waitFor(() => expect(finish).toBeTypeOf("function"));
+  expect(resolved).toBe(false);
+  expect(runtime.disk!.spaces[0].notes).toHaveLength(1);
+  await act(async () => { finish(); await pending; });
+  expect(await pending).toEqual({ savedNoteIds: [retainedId], savedTitles: ["River imagery"] });
+  expect(runtime.disk!.spaces[0].notes).toHaveLength(2);
+  await act(async () => { expect(await runtime.chatProps!.onVoiceCommit!(request)).toEqual(await pending); });
+  expect(runtime.disk!.spaces[0].notes).toHaveLength(2);
+  expect(screen.getByRole("heading", { name: "Original draft" })).toBeVisible();
+});
+
+it("independent voice workers save separate notes in the captured chat without replacing authored prose", async () => {
+  await launch();
+  let first!: VoiceReceipt; let second!: VoiceReceipt;
+  await act(async () => { first = await runtime.chatProps!.onVoiceCommit!(voiceNoteRequest("worker-first-save")); });
+  await act(async () => { second = await runtime.chatProps!.onVoiceCommit!(voiceNoteRequest("worker-second-save")); });
+  expect(new Set([...first.savedNoteIds, ...second.savedNoteIds]).size).toBe(2);
+  expect(runtime.disk!.spaces[0].notes).toHaveLength(3);
+  expect(runtime.disk!.spaces[0].notes.find(note => note.id === "draft")?.body).toBe("The river was dark.");
+  for (const id of ["worker-first-save", "worker-second-save"]) {
+    expect(runtime.disk!.spaces[0].studio.messages.find(message => message.id === `${id}-assistant`))
+      .toMatchObject({ threadId: LEGACY_CHAT_THREAD_ID, createdNoteIds: [`${id}-note-1`] });
+  }
 });
 
 it("App prepares Use in note through the existing reader without adding internal prompts or applying the proposal", async () => {

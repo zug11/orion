@@ -42,6 +42,7 @@ import {
 import { defaultThemePreferences } from "./savedThemePalettes";
 import { prepareSpaceKnowledgeIndex } from "./spaceKnowledge";
 import { isTransientProviderFailure } from "./providerHealth";
+import { createChatThread } from "./chatThreads";
 
 const invokeTauriMock = vi.hoisted(() => vi.fn());
 
@@ -1205,6 +1206,29 @@ describe("browser persistence fallback", () => {
     },
   );
 
+  it.each([undefined, [], ["v1:0123456789abcdef:0:12"]])("round-trips optional calendar dismissal metadata %j", async dismissedCalendarMentions => {
+    const vault = createEmptyVault("Calendar metadata", TEST_NOW);
+    vault.spaces[0] = createPopulatedSnapshot(); vault.activeSpaceId = vault.spaces[0].workspace.id;
+    const note = vault.spaces[0].notes[0];
+    if (dismissedCalendarMentions !== undefined) note.dismissedCalendarMentions = dismissedCalendarMentions;
+    await saveSnapshot(vault);
+    expect((await loadSnapshot())?.spaces[0].notes[0]).toEqual(note);
+  });
+
+  it.each([
+    ["null", null], ["nonarray", "v1:0123456789abcdef:0:12"], ["invalid version", ["v2:0123456789abcdef:0:12"]],
+    ["duplicate", ["v1:0123456789abcdef:0:12", "v1:0123456789abcdef:0:12"]],
+    ["oversize key", [`v1:0123456789abcdef:0:${"1".repeat(50)}`]],
+    ["oversize list", Array.from({ length: 5001 }, (_, i) => `v1:0123456789abcdef:0:${i}`)],
+  ])("rejects %s dismissal metadata without replacing the existing vault", async (_label, dismissedCalendarMentions) => {
+    const vault = createEmptyVault("Invalid calendar metadata", TEST_NOW);
+    vault.spaces[0] = createPopulatedSnapshot(); vault.activeSpaceId = vault.spaces[0].workspace.id;
+    Object.assign(vault.spaces[0].notes[0], { dismissedCalendarMentions });
+    const original = JSON.stringify(vault); window.localStorage.setItem("orion:vault:v2", original);
+    await expect(loadSnapshot()).rejects.toThrow();
+    expect(window.localStorage.getItem("orion:vault:v2")).toBe(original);
+  });
+
   it("round-trips named voices and the active selection", async () => {
     const vault = createEmptyVault("Voice preferences", TEST_NOW);
     const settings = activeSpace(vault).settings;
@@ -1217,6 +1241,32 @@ describe("browser persistence fallback", () => {
     const loaded = await loadSnapshot();
     expect(activeSpace(loaded!).settings).toEqual(settings);
   });
+
+  it.each(["openai", "elevenlabs"] as const)("round-trips the %s conversation provider independently of narration", async liveVoiceProvider => {
+    const vault = createEmptyVault("Voice conversations", TEST_NOW);
+    const settings = activeSpace(vault).settings;
+    settings.liveVoiceProvider = liveVoiceProvider;
+    settings.speechVoice = "system";
+    await saveSnapshot(vault);
+    const loaded = await loadSnapshot();
+    expect(activeSpace(loaded!).settings).toMatchObject({ liveVoiceProvider, speechVoice: "system" });
+  });
+
+  it("accepts legacy settings without a conversation provider", async () => {
+    const legacy = mutablePopulatedSnapshot();
+    delete legacy.settings.liveVoiceProvider;
+    window.localStorage.setItem("orion:vault:v1", JSON.stringify(legacy));
+    const loaded = await loadSnapshot();
+    expect(activeSpace(loaded!).settings.liveVoiceProvider).toBeUndefined();
+  });
+
+  it.each(["system", "ElevenLabs", "openai ", "", null, false, {}])(
+    "rejects an invalid conversation provider (%j) without clearing the vault", async provider => {
+      const snapshot = mutablePopulatedSnapshot();
+      snapshot.settings.liveVoiceProvider = provider;
+      await expectInvalidBrowserVault(snapshot);
+    },
+  );
 
   it("accepts older settings without saved voices", async () => {
     const legacy = mutablePopulatedSnapshot();
@@ -1676,6 +1726,40 @@ describe("browser persistence fallback", () => {
     });
   });
 
+  it("round-trips optional chat threads without migrating legacy messages or mixing Spaces", async () => {
+    const vault = createEmptyVault("Threaded", TEST_NOW);
+    vault.spaces[0] = createChatThread(vault.spaces[0], "chat-one", TEST_NOW);
+    vault.spaces[0].studio.messages = [
+      { id: "legacy", role: "user", content: "Legacy words", cardIds: [], contextCardIds: [], createdAt: TEST_NOW },
+      { id: "threaded", threadId: "chat-one", role: "assistant", content: "New reply", cardIds: [], contextCardIds: [], createdAt: TEST_NOW },
+    ];
+    vault.spaces.push(createEmptySnapshot("Other", TEST_NOW, "space-other"));
+    await saveSnapshot(vault);
+    const loaded = await loadSnapshot();
+    expect(loaded?.spaces[0].studio).toEqual(vault.spaces[0].studio);
+    expect(loaded?.spaces[0].studio.messages[0]).not.toHaveProperty("threadId");
+    expect(loaded?.spaces[1].studio.messages).toEqual([]);
+  });
+
+  it("rejects malformed, duplicate and orphaned chat metadata without replacing the vault", async () => {
+    const base = createEmptyVault("Threaded", TEST_NOW);
+    base.spaces[0] = createChatThread(base.spaces[0], "chat-one", TEST_NOW);
+    const badValues = [
+      (vault: typeof base) => { vault.spaces[0].studio.threads![0].id = "bad id"; },
+      (vault: typeof base) => { vault.spaces[0].studio.threads!.push({ ...vault.spaces[0].studio.threads![0] }); },
+      (vault: typeof base) => { vault.spaces[0].studio.threads![0].title = "x".repeat(161); },
+      (vault: typeof base) => { vault.spaces[0].studio.threads![0].updatedAt = "not-a-date"; },
+      (vault: typeof base) => { vault.spaces[0].studio.messages.push({ id: "orphan", threadId: "chat-missing", role: "user", content: "Don't lose me", cardIds: [], contextCardIds: [], createdAt: TEST_NOW }); },
+    ];
+    for (const mutate of badValues) {
+      const invalid = structuredClone(base); mutate(invalid);
+      const serialized = JSON.stringify(invalid);
+      window.localStorage.setItem("orion:vault:v2", serialized);
+      await expect(loadSnapshot()).rejects.toThrow();
+      expect(window.localStorage.getItem("orion:vault:v2")).toBe(serialized);
+    }
+  });
+
   it("accepts only a non-empty reply from Chat", () => {
     expect(parseChatResult({ reply: "A grounded answer." })).toEqual({
       reply: "A grounded answer.",
@@ -1781,6 +1865,18 @@ describe("browser persistence fallback", () => {
     await expect(loadSnapshot()).rejects.toThrow(
       "browser preview vault could not be loaded",
     );
+  });
+
+  it("round-trips web research choices and accepts older vaults without a preference", async () => {
+    const vault = createEmptyVault("Web preference", TEST_NOW);
+    for (const preference of [undefined, "auto", "openai", "perplexity"] as const) {
+      vault.spaces[0].settings.webResearchProvider = preference;
+      window.localStorage.setItem("orion:vault:v2", JSON.stringify(vault));
+      expect((await loadSnapshot())?.spaces[0].settings.webResearchProvider).toBe(preference);
+    }
+    Reflect.set(vault.spaces[0].settings, "webResearchProvider", "unknown");
+    window.localStorage.setItem("orion:vault:v2", JSON.stringify(vault));
+    await expect(loadSnapshot()).rejects.toThrow("browser preview vault could not be loaded");
   });
 
   it("accepts old vaults without workflow grants and validates the new opt-in grant shape", async () => {

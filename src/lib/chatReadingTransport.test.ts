@@ -22,6 +22,18 @@ afterEach(async () => {
 });
 
 describe("Chat reading transport and persistence", () => {
+  it("retains web-summary provenance and rejects malformed provenance before provider transport", () => {
+    const packet = { finalizing: false, evidence: [{ kind: "web", web: { url: "https://example.org/paper", retrievedAt: "2026-11-15T00:00:00Z", evidenceType: "cited_summary" } }] };
+    expect(parseChatReadingContext(JSON.stringify(packet))).toEqual(packet);
+    for (const evidenceType of ["full_page", "", null, 4, { kind: "source_excerpt" }]) {
+      const invalid = structuredClone(packet);
+      Object.assign(invalid.evidence[0].web, { evidenceType });
+      expect(() => parseChatReadingContext(JSON.stringify(invalid))).toThrow("invalid reading packet");
+    }
+    packet.evidence[0].kind = "note";
+    expect(() => parseChatReadingContext(JSON.stringify(packet))).toThrow("invalid reading packet");
+  });
+
   it.each(["gpt-5.6-sol", "claude-sonnet-5"])("carries bounded public checkpoints through %s while discarding reading prose and writes", async model => {
     const checkpoint = { finding: "The note records three [[e1]].", decisions: ["Check the original next."], openQuestions: ["Does the source agree?"] };
     const payload = { reply: "Not an answer yet", readRequests: [{ kind: "source", id: "original", query: "", start: null }], checkpoint };

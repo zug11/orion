@@ -24,6 +24,7 @@ interface BorderGlowProps {
   animated?: boolean;
   type?: "button" | "reset" | "submit";
   onClick?: MouseEventHandler<HTMLElement>;
+  "aria-label"?: string;
 }
 
 export default function BorderGlow({
@@ -39,6 +40,7 @@ export default function BorderGlow({
   style,
   type = "button",
   onClick,
+  "aria-label": ariaLabel,
 }: BorderGlowProps) {
   const surfaceRef = useRef<HTMLElement | null>(null);
   const pointerRef = useRef({ x: 0, y: 0 });
@@ -143,6 +145,7 @@ export default function BorderGlow({
     return (
       <button
         ref={setSurfaceRef}
+        aria-label={ariaLabel}
         type={type}
         className={glowClassName}
         style={glowStyle}
@@ -159,6 +162,7 @@ export default function BorderGlow({
   return (
     <div
       ref={setSurfaceRef}
+      aria-label={ariaLabel}
       className={glowClassName}
       style={glowStyle}
       onClick={onClick}

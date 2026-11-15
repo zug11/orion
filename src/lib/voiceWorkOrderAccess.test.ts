@@ -31,6 +31,22 @@ const publicProse = (detail: VoiceWorkOrderDetail) => [detail.subject, ...[...(d
   ...[...detail.decisions, ...detail.openQuestions].flatMap(item => item.fragments.map(part => part.text))].join("");
 
  describe("finite external voice work-order access", () => {
+  it("preserves cited-summary provenance through bounded worker inspection and omits invalid provenance", async () => {
+    const f = setup();
+    await f.engine.run("a", "Research alpha", "", "n");
+    const job = f.engine.getJobs()[0];
+    const text = "A provider-cited summary 🧭.";
+    const web = { url: "https://example.org/paper", retrievedAt: "2026-11-15T00:00:00Z", evidenceType: "cited_summary" as const };
+    job.result = { reply: "A finding", evidence: [{ id: "e1", kind: "web", entityId: "web_1", title: "Research", version: "v1", start: 0, end: text.length, text, offsetUnit: "utf16", web }] };
+    const detail = voiceWorkOrderDetail(job, undefined, { taskView: "working", maxChars: 200, current: true });
+    expect(detail.result?.evidence[0]).toMatchObject({ web, text, start: 0, end: text.length });
+    const short = voiceWorkOrderDetail(job, undefined, { taskView: "working", maxChars: 100, current: true });
+    if (short.result?.evidence.length) expect(short.result.evidence[0].web).toEqual(web);
+    (web as { evidenceType: string }).evidenceType = "full_page";
+    const invalid = voiceWorkOrderDetail(job, undefined, { taskView: "working", maxChars: 200, current: true });
+    expect(invalid.result).toMatchObject({ evidence: [], omittedEvidence: 1 });
+  });
+
   it("projects lightweight public state without raw prompts, selections, progress errors or checkpoint discovery", async () => {
     const f = setup();
     await f.engine.run("a", "Research alpha with PRIVATE PROMPT", "PRIVATE CONVERSATION", "n");

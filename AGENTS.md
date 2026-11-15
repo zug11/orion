@@ -78,14 +78,45 @@ These product decisions are intentional:
   an attached ordinary audio Source (`source-dictation-<session>`), flush it
   through the shared vault save queue, then optionally clean up that transcript
   with the selected configured AI provider before insertion. Cleanup receives
-  only the transcript, never note/Space context, and preserves meaning, voice,
+  only the transcript and the local calendar date captured at recording start,
+  never note/Space context, and preserves meaning, voice,
   uncertainty and intentional emphasis. It can remove nonsemantic hesitation,
   accidental repetition and clear self-corrections, add punctuation, and return
-  literal paragraphs, bullets or explicit unchecked tasks. Insert at the mapped
-  original cursor in one Undo group. Original dictations at the note's footer
+  literal paragraphs, bullets or explicit unchecked tasks. In that same request,
+  the provider can structure concrete spoken material as new tickets, new kanban
+  boards with tickets, and literal editable tables, interleaved with prose and
+  ordinary checklists. These insert automatically at the mapped original cursor,
+  with no approval or review step, as one Undo group. Explicit commands are not
+  required when the structure clearly fits: concrete project work may form a board,
+  comparable stated attributes a table, and simple errands an ordinary checklist.
+  Use a board for an identifiable project with several independently completable
+  work items; a project description is sufficient without a formal name. Keep
+  each separate work item or errand as its own ticket or checkbox,
+  including when they share one spoken sentence; preserve genuinely single actions.
+  Preserve tentative, quoted, cancelled and hypothetical content as prose; never
+  invent commitments, facts, dates or urgency. Never mutate existing work or run
+  research. The host generates all identities; nested tickets belong to their new
+  board. Resolve spoken existing-board names only against unique boards in the
+  originating Space at insertion; missing or ambiguous names remain unassigned.
+  An optional Use original dictation toolbar action replaces the insertion with
+  its local transcript while the inserted document remains unchanged. Subsequent
+  document edits, navigation and external replacement invalidate that immediate
+  replacement so it cannot overwrite later work. Original recovery remains in
+  Sources. New structures use ordinary note Markdown, board/ticket metadata and
+  tables, never a separate action store or persisted review state. Literal pipes inside table cells must be
+  escaped before GFM row delimiters are emitted, preserving adjacent values and
+  literal markup across Markdown reloads, including repeated round trips.
+  Original dictations at the note's footer
   opens preserved text in Sources, including after reopening. Missing keys,
-  offline/failed/invalid responses, a 45-second deadline, oversize input, failed
-  recovery save, or Use original keep the complete local transcript instead.
+  offline/failed responses, invalid faithful cleanup, a 45-second deadline,
+  oversize input, failed recovery save, or Use original keep the complete local
+  transcript instead. Validate faithful cleanup independently of optional
+  structures: malformed ticket/board/table output discards the proposal and
+  preserves validated cleaned blocks, without another provider request. Strict
+  envelope, literal text and loss/inflation guards still apply. If transcription
+  loses a segment, preserve and insert recovered segments through the same source
+  archival path, skip AI interpretation, and keep an actionable incomplete-recording
+  error visible; never present partial recovered speech as a complete original.
   Navigating/unmounting or an external document replacement cancels cleanup and
   prevents a late insertion into another/replaced note. The completed original
   remains in its originating Space. Each audio recording is discarded after its
@@ -96,18 +127,171 @@ These product decisions are intentional:
   busy microphone button remains operable as Use original (accessible name and
   tooltip), aborting cleanup and inserting the local transcript. Completion
   immediately restores the ordinary microphone button without a notice timer.
-  With no key for the selected provider, skip AI cleanup entirely and insert
+  With no configured connection (API key or ChatGPT plan) for the selected provider, skip AI cleanup entirely and insert
   only the local Whisper transcript; keep the original recovery copy local.
 - To-do items use portable Markdown task lists inside ordinary notes. Home
-  derives a scrollable open-task list for the active Space, including source
+  derives a scrollable To-dos section for ordinary checklists in the active Space, including source
   note and best matching canonical concept; do not add a parallel task schema.
   Checkboxes remain interactive in the reading surface, so completing a task
   never requires entering edit mode. Home collapses exact task copies only when
   provenance establishes the same derivation (a shared imported source or a
   derivative canonical article), and prefers the ordinary source note. Identical
   recurring tasks in unrelated notes remain distinct.
+- Tickets remain ordinary Markdown tasks, with optional validated
+  `<!-- orion-ticket:v1 ID STATUS BOARD_OR_DASH [due=YYYY-MM-DD] [origin=board] [urgency=LEVEL] -->` metadata on their first
+  line. `STATUS` is `todo`, `progress`, or `done`; the checkbox is authoritative
+  for completion. Explicit tickets appear in Home's separate Tickets section.
+  Checking an ordinary to-do preserves its plain Markdown and To-dos membership;
+  assigning one to a board explicitly promotes it into a ticket. Explicit
+  separate ticket IDs are not collapsed as derived copies. `/ticket` and
+  `/kanban` use the existing keyboard slash picker, a small named-item dialog,
+  and one undoable cursor insertion. Escape preserves the command and prose;
+  changed documents reject a delayed insertion. Home creation chooses an
+  existing storage note. Dashboard-created tickets record `origin=board` and show
+  no source-note label; tickets authored/inferred in a note retain attribution.
+  Older tickets without origin retain their note attribution; do not guess or migrate it.
+  Explicit tickets render as editable cards in notes and reading mode, with a soft
+  shadow instead of a border. Ordinary to-dos retain the native TaskItem node view.
+  Card footers anchor the date control at bottom left; urgency and status actions
+  sit to the right and may wrap without displacing that date alignment.
+  Ticket cards expose a small top-right delete button on hover or keyboard focus
+  (always visible without hover). It is excluded from drag initiation. Confirm
+  before removing the complete authored task item and its contents from its note
+  and derived boards. Resolve a unique durable identity and reject stale captured
+  content; preserve unrelated prose and siblings. The optional derived rawBlock
+  on Ticket is transient deletion evidence, never a persisted field. Editor
+  deletion uses one Undo and restores focus; board deletion focuses a neighbouring
+  card or the column's Add ticket action.
+  Promote/demote node views when ticket identity changes, including Undo. Card
+  actions resolve the current editor node by position and unique durable ticket ID,
+  preserving its live text and attributes if React's rendered props lag behind a
+  transaction. A different, removed or duplicated identity still rejects the action.
+  Status/date/urgency controls are not prose or narration. Urgency is optional
+  (`urgent`, `high`, `medium`, `low`), unset by default. Its native dropdown shows
+  a muted Set urgency action with a chevron until chosen, and Clear urgency
+  clears the selection. Selected urgency uses a small semantic colour dot beside
+  neutral text, without a coloured border or persistent fill. Keep native keyboard
+  selection and a visible focus ring. Due dates are strict valid all-day Gregorian dates.
+  Preserve both optional values and origin across moves, copies, autosave and MCP.
+  Exactly one valid first-line marker establishes ticket identity. Multiple valid
+  markers remain ambiguous ordinary tasks; preserve their comments through editor
+  round-trips and reject ticket mutations rather than choosing one identity.
+  Do not create a second ticket store.
+  A board is an atomic rich-editor node serialized as
+  `<!-- orion-kanban:v1 ID URI_ENCODED_TITLE -->`. Home and note boards derive
+  the same Space-local tasks through `src/lib/tickets.ts`; statuses and board
+  assignment write the originating note through ordinary autosave. Changes to
+  the open note use editor transactions and retain Undo. Never replace the
+  live document just to move a card. Stable IDs locate moved lines, exact
+  captured lines guard concurrent changes, and duplicated IDs fail closed.
+  Pasted copies receive new identities; copied board/ticket assignments remain
+  together. Missing/deleted boards leave tickets as No board. Deleting a note
+  naturally removes its work from the derived list. Cache immutable notes and
+  editor branches; ordinary typing without a board does not index the library.
+  Ignore code, quoted examples and frontmatter. Keep board controls out of
+  narration/word counts. Readable exports show static boards using only notes
+  included in the chosen scope. Markdown retains metadata and checkboxes.
+- Home adapts to the active Space's authored work: omit unused To-dos/Tickets
+  sections, place the kanban/ticket view first above a paired To-do and Across
+  this Space card row, then Continue exploring, and compact the atmosphere
+  hero around the Space name. Fold completed list items behind a disclosure;
+  completing the final item keeps a compact All caught up state in place.
+  Board view exists only when boards do and is the default whenever a board exists.
+  An explicitly chosen List view is remembered for that Space/window session.
+  Remember view, selected board and completed disclosures per Space/window in
+  App-owned session refs, never in the vault or autosave. Use the cached work
+  index, not per-keystroke dashboard extraction. Keep source-note/concept links.
+  The paired cards retain independent internal scrolling and stack at narrow widths.
+  Work dialogs use the opaque theme surface-raised colour with readable text;
+  backdrop dimming and 18px blur apply behind the dialog, never through it.
+  `HomeTickets.tsx` owns this presentation; ordinary checkbox completion and
+  ticket changes use the same guarded note update path.
+  Continue exploring has no Recent notes heading or three-note limit. Show every
+  active-Space note in a keyboard-focusable horizontal strip, newest updated
+  first, with contained horizontal overflow and offscreen rendering containment.
+- Boards in Home and notes offer Add ticket inside every column. Enter creates
+  in that board's source note with the column's status and keeps the field ready
+  for another; Escape cancels and restores its Add button. Editor creation is
+  one Undo, with literal titles and fresh IDs. Cards use pointer capture for drag,
+  not native HTML drag (Tauri's file-drop bridge can intercept it). Highlight
+  valid destinations, ignore drops outside the local board/work section, and
+  cancel on Escape, pointer cancellation or window blur.
+  Cancel native selection on eligible pointer-down while retaining click focus.
+  Suppress selection across the work area only during an active drag, restoring
+  it on drop, cancellation, capture loss, blur and unmount. Date/urgency inputs,
+  checkboxes and assignment/concept/delete buttons remain ordinary
+  controls; dragging must never select column headings or surrounding prose.
+  Board cards have no directional buttons or status dropdowns: drag between columns,
+  or use Left/Right on a focused card. Keep urgency at the far right of the footer. Home's
+  board chips accept dragged list tickets/to-dos; a small board-choice dialog
+  supplies the keyboard alternative. Preserve focus after moves/completion.
+- Infer tickets from note first collects open written to-dos from the whole note,
+  then optionally uses the selected provider for prose inference. Collect original
+  task structure while excluding completed items, preserving independently open
+  subtasks under completed parents. Mask completed prose before splitting or any
+  provider request; summaries,
+  sources, other notes and history are excluded. A coordinator splits working
+  text into at most 6,000 UTF-16-character sections (below native Chat's 8,000
+  Unicode-character note-body cap), with 500-character overlap. Two bounded
+  readers return up to 32 literal titles with exact section evidence; a local
+  reducer deduplicates across readers and existing tickets. No tools or writes
+  are granted. Every section is read; no first-24,000-character cutoff. Report
+  section progress, cancel sibling readers on failure/close and enforce a
+  60-second deadline per call. Failure must not claim complete coverage.
+  Review is capped at 2,000 actions with explicit continuation guidance, never a
+  silent note-reading cutoff. Without a key, collect open written to-dos locally.
+  Reviewed existing to-dos retain their text and are promoted in place; only new
+  prose suggestions append tasks. Recheck Space, unique board, exact captured
+  body/title and live editor document; acceptance is one note write/editor Undo.
+  Do not revive completed work or reassign tickets already on another board.
+- `/calendar` inserts a fixed inline date using a keyboard month grid: arrows
+  move days/weeks, Home/End move within the week, PageUp/Down change month, Enter
+  chooses, Escape cancels without removing the command. Store a readable
+  `[date label](orion-date://YYYY-MM-DD)` link in portable Markdown. Native editor
+  links allow this exact scheme; reading/export render a `time`, never open it
+  externally. Insert in one Undo at the captured unchanged cursor/document.
+  Use the same picker for optional ticket due dates, including removal.
+- Home derives a Space-local calendar between the top kanban and paired context
+  cards when undismissed dates/ranges reach the current month or later, or an
+  unfinished ticket has a due date (including overdue work). Older historical
+  mentions alone do not keep it on the dashboard; they remain browseable when
+  the calendar has current work. Lazy local English/Australian date recognition
+  runs in yielded batches on saved notes, never on the typing path. Cache
+  immutable note results. Infer dates/ranges only in prose, skipping code, raw
+  HTML, frontmatter, quoted examples and completed task prose; independently open
+  nested tasks remain eligible. A ticket's chosen due
+  date takes precedence over prose mentions in its task. Picked dates never
+  move; relative inferred mentions resolve against the note's saved `updatedAt`
+  and expose this reference in their tooltip. Editing the note may change that
+  reference. All-day dates avoid UTC conversion; numeric dates use day/month.
+  Keep inferred mentions visibly distinct from picked dates and firm ticket
+  deadlines, with navigation back to the note. An inferred entry has a small
+  Remove control on hover or keyboard focus (always shown without hover).
+  Removing it stores a versioned key in optional `Note.dismissedCalendarMentions`,
+  leaving its prose and `Note.updatedAt` unchanged; use ordinary vault autosave
+  and a metadata-only Undo. Keys are bounded, unique strings derived from the
+  full source block, duplicate-group size, block occurrence and match position,
+  never the resolved date or document offset. A yielded prepass counts completed
+  and due-dated duplicate blocks before eligibility filtering so dismissals cannot
+  transfer to another task; adding/removing identical blocks conservatively makes
+  that group eligible again. Different source wording may produce a new mention.
+  Filter after date deduplication and before counts, grid marks and visibility.
+  Dismissal-only saves reuse the completed scan. Guard Space, unique note identity
+  and captured body; Undo preserves subsequent prose. Merge concurrent first
+  dismissal lists as independent additions and preserve live metadata when an
+  editor saves older captured props. When no relevant entries remain, unmount
+  the complete calendar and restore keyboard focus to Home; keep picked dates
+  and ticket deadlines independent. Detection never rewrites prose,
+  triggers autosave or creates external calendar events. All calendar features
+  work without AI or a key.
+- Work-item dialogs use an 18px blurred backdrop, with opaque accessibility
+  fallbacks for Reduce Transparency/Increase Contrast.
 - Every note can be deleted from its header, the complete active-Space sidebar
   list, or the Notes index after confirmation. Deletion must remove orphaned
+  original-dictation recovery sources attached only to that note. Preserve
+  originals referenced by another surviving note and ordinary imported sources.
+  Use source deletion cleanup for removed originals so provenance is detached.
+  Deletion also removes orphaned
   concepts, relationships, source/import references, dead Orion link marks,
   navigation state, and affected transient AI jobs without deleting the
   surviving prose around a removed link.
@@ -129,7 +313,13 @@ These product decisions are intentional:
   never create automatic concepts merely because they appear on a note.
 - Spaces are hard project boundaries. Notes, concepts, sources, relationships,
   Chat history, navigation, and automatic links must never leak across Spaces.
-- Chat is one Space-scoped conversation surface. It must not expose a card,
+- Chat is one Space-scoped surface with separate saved conversations. Full Chat
+  offers a collapsible right-hand Chats list; the compact dock keeps its existing
+  layout. Each Space has its own list, with New chat, local prompt-derived titles,
+  rename and confirmed deletion. New chat preserves earlier conversations.
+  Selection, draft text, attached context and sidebar expansion remain local to
+  each window, with independent conversation selection per Space. Never send
+  another thread's history as context for the selected conversation. It must not expose a card,
   curation, dialectic, promotion, or canvas workflow. A requested text edit is reviewed in the actual note, with highlighted
   replacements, gray additions, and Accept changes/Discard. When the user
   explicitly asks Chat to create or save notes, the host may authorize one
@@ -222,6 +412,13 @@ src/lib/studio.ts                   dormant Studio-state normalization
 src/lib/storage.ts                  validated IPC and browser-preview fallbacks
 src/lib/transcription.ts            transcript-to-source normalization
 src/lib/tasks.ts                    Space task extraction and persisted toggles
+src/lib/tickets.ts                  cached note-backed tickets and board markers
+src/lib/ticketInference.ts          whole-note bounded readers, local task collection and guarded acceptance
+src/lib/calendarRecognition.ts      yielded local date recognition over immutable notes
+src/components/CalendarPicker.tsx   shared keyboard all-day picker and due-date control
+src/components/HomeCalendar.tsx     Space-local dates and agenda
+src/components/HomeTickets.tsx     adaptive To-dos/Tickets sections and session views
+src/components/Tickets.tsx         shared board, inline ticket entry and creation dialog
 src/lib/webExport.tsx               offline HTML scope, rendering, and privacy
 src-tauri/src/lib.rs                native commands and trust boundaries
 src-tauri/src/local_transcription.rs offline media/dictation, Whisper runtime and speech alignment
@@ -284,6 +481,22 @@ hashes (including untracked files), Git HEAD and Preview identity patches in
 `source-manifest.json`; this identifies the captured staging tree, not an atomic
 snapshot of a concurrently edited checkout. Shared Cargo caches are excluded.
 This ad-hoc local app is not a release artifact.
+The ElevenLabs browser client is pinned to 1.36.1. The idempotent
+`script/patch_elevenlabs_client.mjs` verifies exact upstream hashes before adding
+abort support to pending microphone permission, WebSocket and audio-worklet setup.
+The same bounded patch gates input until connected and unmuted, drops startup
+audio before buffering until the first finalized human utterance, and loads the
+local resampler whenever the actual device sample rate differs from the request.
+Interruption clears current and queued worklet samples and output gain
+immediately. Reject audio older than the monotonic interruption boundary before
+callbacks and playback, including pre-attachment queues; ignore duplicate/older
+interruptions so they cannot erase a newer reply. Preserve audio at the boundary
+and newer audio. Only accepted new audio restores output after interruption;
+ordinary volume changes cannot reopen the old buffer.
+Install, dev, test and renderer-build hooks apply it; the renderer-build hook also
+covers Preview's `npm ci --ignore-scripts`. SDK upgrades require reviewing and
+updating this patch and running the actual-SDK cancellation regressions. Do not
+replace Stop with a timer that leaves a pending microphone capture alive.
 Vitest excludes `outputs/`, which may contain archived diagnostic test fixtures;
 maintained application tests belong in `src/`. TypeScript excludes local
 `* 2.ts` / `* 2.tsx` duplicate copies under `src/`; these retained copies are
@@ -598,7 +811,7 @@ Preserve these trust boundaries:
 
 ### Additional local library tools
 
-The independent MCP crate also exposes 23 tools from `src/library`:
+The independent MCP crate also exposes 30 tools from `src/library`:
 `orion_list_sources`, `orion_search_sources`, `orion_get_source_passage`,
 `orion_get_note_section`, `orion_get_notes`, `orion_list_concepts`,
 `orion_get_concept`, `orion_resolve_link`, `orion_get_related_notes`,
@@ -606,7 +819,10 @@ The independent MCP crate also exposes 23 tools from `src/library`:
 `orion_set_task_completion`, `orion_edit_note_text`, `orion_append_to_note`,
 `orion_batch_update_metadata`, `orion_find_duplicate_notes`,
 `orion_check_space_integrity`, `orion_get_recent_changes`, and
-`orion_get_link_path`, and `orion_apply_note_command`. They work with Orion closed, without credentials or
+`orion_get_link_path`, `orion_apply_note_command`, `orion_propose_passage_comment`,
+`orion_get_passage_threads`, `orion_list_boards`, `orion_get_board`,
+`orion_list_tickets`, `orion_create_board`, `orion_update_board`,
+`orion_create_tickets`, and `orion_update_ticket`. They work with Orion closed, without credentials or
 provider calls, under the existing direct local-library access contract.
 
 - Reads default only to the active Space. Every write requires an explicit
@@ -675,6 +891,18 @@ provider calls, under the existing direct local-library access contract.
   indices, ignore frontmatter/fenced examples, and change only the requested
   marker. Collapse matching task copies only with shared provenance or a wiki
   derivation, preserving unrelated recurring tasks and ordinary-note authority.
+- Board/ticket tools use the renderer's portable Markdown markers, never a second
+  store. Parse actual Markdown tasks/comments; ignore code, quotes, frontmatter
+  and raw HTML examples. Reads scan at most 2,000 notes/32 MiB and 5,000 matches,
+  reporting coverage and lower-bound totals. Assignment and board renaming
+  require complete identity coverage and unique same-Space board IDs. Ticket
+  moves require a unique ID in the exact source note and preserve all other bytes.
+  Creation appends at most 12 literal tickets in one atomic version-guarded write;
+  optional exact evidence must occur in that source note's working text. Titles
+  already present in the note are skipped unless explicit deduplicate:false is
+  supplied. MCP inference is performed by the calling assistant after reading
+  the board/source note, never by adding provider or credential access to this
+  independent crate. Completed work stays omitted unless history is requested.
 - Source and section ranges use Unicode scalar offsets, with exclusive ends.
   Carry versions and exact note citations. Paginated reads expose a vault
   revision and optionally reject a changed revision between pages. Versions
@@ -689,7 +917,7 @@ provider calls, under the existing direct local-library access contract.
   version history. Integrity tooling never silently repairs or deletes data.
 - Run `script/test_mcp_library.mjs` against each exact extracted package binary
   and include this harness in release fingerprints. The harness uses only
-  isolated fixtures and exercises all 21 local additions, including real atomic edits.
+  isolated fixtures and exercises all 30 local additions, including real atomic edits.
   Its completed-task contract checks default and explicit working reads, scoped
   history, cached derivative suppression, completion followed by a fresh read in
   the same process, original versions/Unicode-scalar ranges/CRLF line positions,
@@ -700,7 +928,7 @@ provider calls, under the existing direct local-library access contract.
 
 ### Optional native desktop workflows
 
-The shared connector now exposes 57 tools: 32 local library tools, 14 desktop
+The shared connector now exposes 64 tools: 39 local library tools, 14 desktop
 workflow/capability/job tools, three native edit-review tools and one read-only
 active-editor-context tool, plus three finite voice work-order tools and four
 captured-editor-generation tools. The optional workflows are
@@ -2291,15 +2519,35 @@ overall dictation session has no fixed duration limit.
 
 `dictationCleanup.ts` archives the exact combined transcript using the existing
 Source schema and defines cleanup fallback/deadline behavior. Sessions capture
-their exact Space, note, language, selected model and reasoning settings at
+their exact Space, note, language, local reference date, selected model and reasoning settings at
 recording start. `src-tauri/src/dictation_cleanup.rs` owns the narrow
 `cleanup_dictation` command, using the existing provider scheduler and knowledge
 request cancellation registry. It accepts at most 24,000 Unicode characters,
-never truncates, and returns at most 256 typed blocks / 32,000 characters.
-Strict validation, bounded response reads and obvious size-loss/inflation guards
-fall back to original text; they do not prove semantic correctness. Model output
-has no markup, note-write or tool authority. `voiceDictation.ts` creates literal
-ProseMirror text/list/task nodes, not interpreted provider HTML or Markdown.
+never truncates, and returns at most 256 typed blocks / 32,000 characters per
+alternative, with at most 32 tickets (including nested board tickets), four new
+boards and four tables. Each table has at most 12 columns, 20 data rows plus its
+header, and 500 Unicode characters per literal cell. The provider emits faithful
+cleaned blocks once; optional structured content references unchanged blocks and
+replaces consecutive blocks with ticket, board or table data. Validate complete,
+ordered, single coverage before expanding for IPC. Evidence must be an exact
+excerpt of the transcript; dates, urgency, title lengths, rectangular tables,
+nested ticket counts and every supported field are strictly bounded. No second
+AI request or Space-context read is added to this path.
+Validate faithful blocks independently from the optional proposal. Invalid
+proposal fields, evidence or source coverage discard the entire proposal while
+preserving valid faithful cleanup; do not repair guessed values or add a second
+provider call. Invalid JSON/envelopes, invalid faithful text, bounded response
+read failures and obvious size-loss/inflation failures retain original fallback.
+Structural checks do not prove semantic correctness. Model output
+has no markup, target-note or tool authority. `voiceDictation.ts` validates the
+whole insertion before creating literal ProseMirror text/list/task/board/table
+nodes in one Undo group. It never interprets provider HTML or Markdown. New
+boards and tickets receive fresh host IDs and use the existing note-backed schema.
+The renderer revalidates structures at insertion; unavailable schema support
+falls back to the faithful cleaned blocks. Navigation and external replacement
+cancel pending cleanup. An optional post-insertion recovery action is guarded by
+exact before/after documents and disappears on subsequent document edits; it is
+not an approval step. It restores the original in one separately undoable action.
 Oversized dictation retains ordinary complete local insertion. A saved original
 is available via Sources and the note footer even if cleanup or insertion is
 cancelled; no raw audio is retained and no provider credentials enter recovery.
@@ -2890,12 +3138,13 @@ already-started request or its API usage.
 
 ## Chat contract
 
-The visible route and navigation label are **Chat**. It is one persistent
-conversation scoped to the captured active Space, not a thinking-card workspace.
-A quiet bottom-right circle opens the same conversation beside the document.
+The visible route and navigation label are **Chat**. It is one conversation
+surface with separate persistent threads scoped to the captured active Space.
+A quiet bottom-right circle opens the selected conversation beside the document.
 It appears when the selected provider is configured and is hidden during Flow
 and on the full Chat route. `ChatDock` keeps one `ChatView` mounted across collapse and expansion, retaining the draft,
-pending prompt, cancellation and reply. Space changes remount transient UI;
+pending prompt, cancellation and reply. Thread changes remount the text view
+while the dock retains each thread's unsent draft and attachment; Space changes remount transient UI;
 history stays in that Space's existing `studio.messages`. The panel is nonmodal
 and does not replace the editor or its scroll position. Writing windows keep
 Chat compact so expanding it cannot replace their bound draft.
@@ -2923,6 +3172,14 @@ ideas, with previous prompts provided to avoid repetition. Space/content/focus
 or model changes invalidate the visible batch; discard late responses. Failed
 generation stays quiet and offers explicit retry, never canned filler or an
 automatic retry loop. Empty content does not call a provider.
+Suggestion batches also belong to the selected connection and ChatGPT account.
+An explicit native ChatGPT connection-change event invalidates that connection's
+window-local cache and pending results immediately, including when Chat is
+unmounted in Settings and when the same account signs in again. A transient
+connection generation fences late results before status hydration completes;
+ordinary status reads and unrelated vault updates do not invalidate or retry.
+Use the selected connection's availability, including ChatGPT plan access without
+an API key, rather than gating suggestions on an OpenAI key alone.
 
 The visible suggestion is the exact prompt placed in the composer. Selecting it
 only fills and focuses the composer; it does not send or create anything. Edit
@@ -2983,19 +3240,46 @@ vault access, provider calls and write authority.
 Reads never apply accompanying prose or note actions. Preserve host-derived
 creation authority only for the final answer. Never grant writes from context.
 
-### Perplexity web research
+### Web research connections
+
+`Settings.webResearchProvider` is an optional `auto | openai | perplexity`
+preference (legacy absence means Auto). Auto retains Perplexity when configured,
+otherwise uses the selected OpenAI connection. Explicit OpenAI uses the selected
+OpenAI model and its API-key or `chatgpt:` sign-in route; an Anthropic model does
+not silently select another model or credential. Explicit Perplexity requires
+its key. Settings shows the active route and allows switching without deleting
+credentials. `src/lib/webResearchProvider.ts` owns capability selection for typed
+Chat, voice workers and live voice context. Capture the route at submission;
+never switch provider or billing connection after an error. Provider preference,
+model and account changes invalidate retained research contexts.
+
+`src-tauri/src/openai_web.rs` sends foreground Responses requests with the hosted
+`web_search` tool using the existing OpenAI API key or ChatGPT sign-in. It reuses
+`chatgpt::text_request` and the strict completed-response reader, including the
+SIWC missing-Content-Type stream handling. Retain bounded finalized
+`response.output_item.done` items and reconcile them with the terminal output:
+the real plan route may send an empty terminal output list after completed
+search/message events. Publish only after `response.completed`; deltas, added
+items, interruption or failed/incomplete terminal events never establish success.
+Conflicting identities or positions fail closed. No other tools or note material are
+sent. Query bounds, depth deadlines and window-scoped cancellation match the
+shared research capability. API requests can bound tool calls/output; SIWC
+omits unsupported background/output/tool-count parameters, so its depth is
+reasoning/search-context guidance plus a host deadline, not a guaranteed remote
+step cap. Model/account/workspace web restrictions return an explicit error.
+Never automatically retry an ambiguous paid POST or fall back to another key.
 
 `src-tauri/src/perplexity.rs` owns the separate `perplexity-api-key` Keychain
 entry and fixed Perplexity Agent API transport. It inherits `KEYCHAIN_SERVICE`
 from the host, including the Preview identity rewrite. Settings → Web research
 offers Save, Test connection (authenticated model listing, no research), and
-Remove. Only optional `Settings.perplexityApiKeyConfigured` is persisted; older
-vaults hydrate to false. Never read the credential at startup or persist it in
+Remove. Optional `Settings.perplexityApiKeyConfigured` stores connection status;
+older vaults hydrate to false. Never read the credential at startup or persist it in
 the vault, browser storage, exports, or logs. Browser previews can inspect the UI
 but real web research and credential storage require the desktop host.
 
 Text Chat's Web pill grants the shared reader a capability captured for that
-submission. It defaults off and resets across Spaces or key removal. A voice
+submission. It defaults off and resets across Spaces or research-connection changes. A voice
 call does not implicitly enable Web for typed messages. Voice workers receive
 the capability automatically when configured, and use it when external evidence
 is useful; greetings, selection and idle time never initiate web research.
@@ -3011,7 +3295,7 @@ identifying material; this is not a deterministic privacy classifier. The existi
 reader chooses `depth: quick | standard | deep` for each new web request from
 the current user's question and actual evidence gaps. It uses null for local
 reads and retained web pages. Older responses without depth remain valid and
-default to standard. The shared `src/lib/webResearchProfiles.json` fixes model,
+default to standard. For Perplexity, `src/lib/webResearchProfiles.json` fixes model,
 reasoning, tools and budgets: quick uses GPT-6 Luna/minimal with 5 steps and
 110 seconds; standard uses Luna/medium with 12 steps and 240 seconds; deep uses
 GPT-6.1 Sol/high with 24 steps and 480 seconds. These are ceilings, not required
@@ -3020,7 +3304,7 @@ silently add tools. There is no extra classifier call or user depth selector.
 There is no fixed paid-lookup quota or total web-research turn/time ceiling.
 The reader continues with specific evidence gaps in the current user question
 and is instructed to finish when adequately supported. Two consecutive lookups
-that fail or add no new source excerpts require final synthesis with remaining
+that fail or add no new source evidence require final synthesis with remaining
 uncertainty; new retrieval timestamps and response IDs do not count as evidence
 progress. Exact repeated reads also retain their no-progress stop. Local-only
 reading keeps its three-minute deadline. An actual new lookup renews both the
@@ -3052,12 +3336,21 @@ ID if cancellation arrives in flight, so the host can attempt remote cancel.
 All waits remain inside the per-lookup deadline; remote cancellation is bounded
 to eight seconds and can be prevented by a longer shared provider cooldown.
 
-Web evidence uses `kind: web` with validated HTTP(S) URL, retrieval date and
-optional publication date. Its UTF-16 range addresses the retained provider
-search excerpt, never the full remote page. Collect search output batches and
-map citation numbers by provider source ID, not array order. Synthesis alone is
-not a source. Saved replies/notes retain excerpts and ordinary web links through
-the existing portable citation footer; local source arrays remain unchanged.
+Web evidence uses `kind: web` with validated HTTP(S) URL, retrieval date,
+optional publication date and optional `evidenceType`. Absent or `source_excerpt`
+means a retained provider search excerpt. `cited_summary` means exact retained
+provider-generated text associated with an official URL citation, never a quote
+from the remote page. OpenAI must return a completed web search and valid source
+annotations; URLs mentioned only in generated prose cannot become citations.
+Its generated answer IDs are not presumed to be Perplexity numeric markers.
+The reader, realtime handoff, native/MCP validators, saved citation footer and
+export preserve this distinction. UI labels summaries before their text; readers
+may paraphrase supported findings but cannot claim verbatim page text or a full
+page read. Reworded summaries of the same URL do not count as new evidence.
+UTF-16 ranges address only the retained text. Perplexity citation numbers map by
+provider source ID, not array order. Uncited synthesis alone is not evidence.
+Saved replies/notes retain evidence and ordinary web links through the existing
+portable citation footer; local source arrays remain unchanged.
 Completed reads resume from local checkpoints. Public findings may arrive at
 existing reader checkpoints; individual Perplexity calls currently poll to a
 terminal response, rather than stream provider tokens or reasoning into voice.
@@ -3167,7 +3460,7 @@ without appending its internal prompt or an action-only answer to Chat. Keep its
 progress, failure/retry and Review in note beside the original reply. The user's
 draft, selection and Chat scroll remain unchanged while that action runs; only
 explicit Review in note navigates to the editor. A retry retains its captured
-target, and clearing Chat revokes pending edit preparation.
+target, and changing conversations revokes pending edit preparation.
 Review revalidates Space/body, opens the bound note's ordinary editor and waits
 for Tiptap to mount. `ChatNoteReview` decorates the unchanged rich document with
 highlighted removals and gray additions; heavy paragraph rewrites use whole
@@ -3187,6 +3480,11 @@ edit another Space, or alter source records.
 For note creation, the host derives note-write intent from the current user prompt before calling
 the provider, and the native boundary independently recomputes the same gate.
 The renderer's `allowNoteActions` flag is necessary but never sufficient.
+Recognize ordinary explicit human wording such as Create a new note, Write new
+notes, spoken note counts, and requests for workers to write notes. Quoted/code
+examples, capability questions and tentative descriptions never grant authority.
+The canonical Create a note prefix for generated Chat suggestions is a separate
+strict suggestion-format contract, not a restriction on human phrasing.
 Negated requests, meta-questions about creating notes, and ordinary
 conversational prompts are no-write requests. For those requests use the
 reply-only schema, the no-write instruction, and a 6,000-token output ceiling;
@@ -3229,6 +3527,38 @@ as note may introduce a review queue, reserved lifecycle tag, agent attribution,
 card, or new note lifecycle.
 
 For vault compatibility, Chat history remains in `Space.studio.messages`.
+The additive thread migration uses optional `StudioMessage.threadId` and
+`studio.threads` metadata (`id`, `title`, `createdAt`, `updatedAt`). Untagged
+messages belong to the implicit `chat-legacy` conversation without being copied
+or rewritten. Missing metadata remains valid in older vaults; new nonlegacy
+message references must resolve within that Space. Empty metadata titles become
+the first prompt's local title, with no title-generation API request.
+New chat first materializes the selected implicit conversation, even if it only
+has an unsent draft or retained voice work, so its identity stays navigable.
+`chatThreads.ts` derives the list and projects one thread for display/provider
+requests; never persist a projected snapshot. Append responses and note-save
+receipts to the full canonical Space with the captured conversation identity.
+Switching cancels text generation and pending reply-edit preparation; captured
+history revisions guard changes independently of the Space knowledge version.
+Old completions cannot clear a newer request's progress or write into its thread.
+Three-way merging handles concurrent first thread additions and reconciles
+deletion against concurrent replies as one conversation conflict. A conflict
+choice must not leave orphan messages or discard unrelated thread edits.
+The right rail defaults to collapsed. Its last explicit open/closed choice is
+stored locally under `orion:chat-history-expanded:v1` and restored on launch,
+independent of Space and without a vault save. Missing or unavailable storage
+defaults to collapsed; storage failure must not prevent toggling.
+The right rail spans the full Chat section, including its header. One persistent
+toggle remains at the same top-right coordinates when open or closed, independent
+of voice header height. Only the history list scrolls inside the rail. Its narrow
+overlay makes both the Chat header and stage inert and retains its keyboard focus
+loop and Escape restoration. The rail does not remount the conversation or voice when collapsed. Live
+voice prevents changing chats; after the call ends, browsing other threads
+preserves findings in their originating conversation. Resuming voice elsewhere
+returns to that origin, and saved voice receipts retain its thread ID. Explicit
+deletion of that conversation disposes its transient voice work. Passage
+discussions remain separate note metadata, with no duplicate ordinary Chat
+history. Their Back to the note and Space chat routes retain their semantics.
 Existing `studio.cards`, `selectedCardIds`, `activeConceptId`, `view`, `zoom`,
 `chatCollapsed`, and `canvasCollapsed` fields must continue to validate and
 round-trip, but they are dormant compatibility data. Do not render them, mutate
@@ -3236,6 +3566,75 @@ them as a workflow, include them in Chat requests, or use them to reactivate
 card proposals, selection, promotion, dialectic, or canvas UI. Do not add a
 parallel Chat persistence field without an explicit schema migration.
 `StudioMessage.createdNoteIds` is optional so older vaults continue to validate.
+
+## ChatGPT plan authentication and voice creation
+
+`src-tauri/src/chatgpt.rs` implements the documented local SIWC dynamic-registration
+flow for Orion. Use `agent_name_hint=Orion`, a stable installation host UUID, fresh
+state/nonce/S256 PKCE and an HTTP 127.0.0.1 `/auth/callback` listener. Preserve each
+issued client registration across sign-out and failed code exchange. Validate ID
+signature/JWKS, issuer, audience, expiry, nonce and returning subject; require the
+plan-use scope before activating. Never expose tokens or authorization URLs through
+IPC, diagnostics, MCP or the vault. Credential records are atomic generations of
+small base64 OS-keychain entries (Windows credential-size compatible); the root
+manifest is published only after all new entries are written. Refresh is serialized
+inside the single native application process. Sign-out attempts remote revocation,
+clears local tokens, retains registration/host and reports unconfirmed revocation.
+
+`chatgpt:<slug>` is an explicit text-model route. Its selected account’s OAuth token
+is used only for supported public Responses requests. `text_request` owns request
+preparation and content negotiation together: plan requests use
+`Accept: text/event-stream`, while ordinary API-key requests retain
+`Accept: application/json`. Its private `prepare` strips the plan prefix,
+sets `store:false`/`stream:true`, converts text input to a user-message array and
+removes unsupported preview parameters. All native text callers, including Chat,
+suggestions, imports, knowledge generation, dictation cleanup and illustration
+planning, use this shared builder rather than overriding its Accept header.
+Loopback HTTP tests exercise the actual negotiated request for Chat and suggestion
+schemas, API-key JSON compatibility and interrupted-stream rejection.
+The direct ChatGPT route can omit `Content-Type` on valid SSE, as documented in
+OpenAI's sign-in DevKit. A missing or empty MIME value therefore enters the same
+bounded SSE parser; an explicit non-SSE MIME type still fails. Never treat a
+missing header as permission to accept arbitrary JSON or partial output. The
+parser requires `response.completed`; deltas, interrupted streams, failed and
+incomplete responses are not successful results. Account catalogs come from
+`/v1/models` with that token.
+No subscription request falls back to an API key. Normal configured provider
+failover remains separately opt-in. Settings may retain only non-secret connection
+flags/account IDs and model selection. Credential reads do not happen on startup;
+explicit settings/AI work reads credentials. Connection-change events refresh status
+across windows and Spaces. API media endpoints retain API credentials. Dictation
+cleanup accepts plan text access while Whisper stays local.
+Fresh OAuth exchanges must explicitly grant the plan-use scope; do not inherit an
+older grant when the new response omits it. Cancellation and account changes
+invalidate late authorization and catalog results. Confirmed invalid/revoked
+refresh credentials are cleared without deleting the registration; transient
+provider failures retain the connection. All plan text callers require a terminal
+SSE response through `read_for_model` or the bounded plan reader. The shared
+provider HTTP client refuses redirects so credential headers cannot be forwarded;
+ordinary webpage fetching keeps its separate guarded redirect handling.
+
+`src-tauri/src/elevenlabs_voices.rs` owns native-picked sample staging per window,
+cloning/editing metadata, voice catalogs, voice settings and bounded preview audio.
+Never accept renderer filesystem paths or arbitrary provider URLs. Validate count,
+aggregate size, audio signatures, IDs, metadata and numeric ranges. Clear sample
+memory after a successful upload, component disposal or owner-window destruction.
+Upload completion clears only its captured sample generation, never newer samples.
+Studio voice IDs must be explicit; blank values never select narration's default.
+Do not automatically replay voice-creation POSTs after ambiguous failures: tell the
+user to inspect their ElevenLabs library. The clone response’s verification flag
+prevents automatic selection and remains enforced after refresh, reselection and
+metadata edits until the provider reports verification complete. Invalid or
+missing creation-verification fields and incomplete pagination fail explicitly.
+Closing the studio invalidates pending UI results and releases preview audio.
+Creation is audio-based Instant Voice Cloning only;
+professional training/verification is handled by ElevenLabs. Delivery controls save
+remote defaults; `elevenLabsModelId` and `elevenLabsVoiceRevision` are optional,
+validated non-secret settings. Their changes clear prepared speech caches. ChatGPT
+plan flags must never enable OpenAI image, audio or live-session API capabilities.
+Model-specific previews omit unsupported delivery controls. Preview responses must
+contain bounded MP3 audio, not an arbitrary successful response body. A failed old
+speech request cannot evict newly prepared audio after a model/control change.
 
 ## AI boundaries
 
@@ -3401,14 +3800,14 @@ Reuse the existing colors, surfaces, typography, radii, and compact scale in
   content; closing Find must preserve the current reading position and restore
   focus with `preventScroll`;
 - a gradient-free writing surface, with to-do list formatting in the same
-  toolbar and one fixed-size scrollable Home task card replacing the redundant
+  toolbar and a scrollable Home To-dos section replacing the redundant
   lower Import Studio card; task rows are plain, proportionate typography beside
   the checkbox, without colored text containers or nested card surfaces; use the
   blue/periwinkle Orion checkbox in every state, and keep task spacing visually
   identical between the editing and reading surfaces;
-- the Home lower row with Tasks on the left at 40% width and a fixed-size,
-  scrollable living Space overview on the right at 60% width, stacking only at
-  narrower breakpoints. Task text and overview headlines wrap naturally instead
+- Home's content-driven To-dos/Tickets sections above recent notes, followed by
+  the full-width, scrollable living Space overview. Unused work sections stay
+  absent; narrow boards stack their columns. Task text and overview headlines wrap naturally instead
   of truncating; the overview is a first-class optional Space field, keeps its
   previous text visible during refresh, becomes stale whenever substantive
   knowledge changes, rejects late results against a knowledge fingerprint, and
@@ -3847,6 +4246,9 @@ source mirror with a symlinked native directory from embedding a stale renderer
 from another checkout. Build the renderer and connector explicitly before the
 Tauri release step and disable Tauri's nested `beforeBuildCommand` for that
 step; the renderer must be built once, fingerprinted once, and embedded once.
+The isolated renderer stage includes `script/patch_elevenlabs_client.mjs` so
+the normal prebuild hook applies and verifies the pinned voice SDK patch;
+include that script in the release source fingerprint.
 Release builds sign `whisper.framework`, `orion-ocr`, `orion-whisper`, `yt-dlp`,
 Deno, the main Orion executable, and the outer app with one Developer ID
 Application identity, secure timestamps, and Hardened Runtime. The PyInstaller
@@ -3926,11 +4328,53 @@ not decoding, model inference, or current YouTube extraction.
 
 ## Space voice and completed-task working views
 
-`SpaceVoice.tsx`, `liveVoice.ts`, `voiceResearch.ts` and native `live_voice.rs`
-own optional GPT-Live client delegation within the current Space and window. Never start
-the microphone or reconnect automatically. Authenticate the fixed-endpoint native
-SDP handshake with the OpenAI Keychain entry, never a renderer key. Keep audio
-storage off, input/output lifecycle bounded, and the selected Intelligence model
+`SpaceVoice.tsx`, `liveVoice.ts`, `elevenLabsLiveVoice.ts`, `voiceResearch.ts` and
+native `live_voice.rs` / `elevenlabs_live.rs` own optional conversations within the
+current Space and window. `Settings.liveVoiceProvider` chooses `openai` or
+`elevenlabs`; missing settings retain OpenAI. This choice is independent of note
+narration and of the selected Intelligence connection used by research workers.
+Note/deck playback respects the explicit `speechVoice` selection, including
+System when an ElevenLabs key exists; missing cloud credentials produce the
+existing configuration error rather than silently choosing another provider.
+Settings loads the connected ElevenLabs account's paginated voice catalog after
+key save/test and on opening with a configured connection. Keep that catalog
+transient, preserve saved custom labels, and persist only chosen voice preferences.
+Key replacement/removal invalidates pending catalog and Voice Studio responses.
+Only a complete catalog may establish that an unchanged selection is unavailable;
+failed or partial reads preserve it. Verification-required voices are disabled.
+Never start the microphone or reconnect automatically. Authenticate OpenAI's
+fixed-endpoint native SDP handshake with its Keychain entry, never a renderer key.
+ElevenLabs uses a private Orion-managed ElevenAgent and a native-issued signed
+conversation URL; the long-lived ElevenLabs key never crosses IPC. Its generic
+agent record pins the provider's generated client-tool identity. Resolve and
+verify that tool's exact configuration before use; subsequent agent updates
+reference the verified ID instead of creating another inline tool. Accept the
+provider's documented numeric/system-tool normalization and inert default
+workflow layout, while rejecting additional tools or executable workflows.
+The generic
+agent policy contains no Space notes. Each call attaches compact context quietly
+and uses the saved ElevenLabs voice. Before ElevenLabs startup, App flushes the
+selected provider/voice through the existing vault save queue, awaits its real
+save result, and rechecks the originating window's Space and persisted settings.
+Stop, a failed save or a changed selection prevents the native handshake. Keep
+this outside typing/autosave effects; never replace it with a fixed delay.
+A provider switch stops the departing audio
+without starting a new microphone or discarding admitted research, even if the
+destination provider has no configured key. Require a fresh explicit call.
+The SDK loads only when an ElevenLabs call is explicitly started. Its worklets
+and sample-rate converter are bundled locally. Renderer CSP allows only the
+fixed ElevenLabs conversation WebSocket path plus local IPC; WebAssembly support
+is limited to the bundled converter, with no general JavaScript eval permission,
+remote scripts or CDN audio worklets. Configure the managed agent with recording
+disabled and zero-day scheduled transcript/audio deletion; this is not a claim
+of enterprise zero-retention processing. Provider-side agent setup is generic,
+and each call uses the existing Space-scoped research coordinator and authority
+checks. A client-tool request never substitutes for the human transcript.
+Only completed ElevenLabs user transcriptions enter that coordinator, once per
+utterance. Capture the note, selected passage and focused worker at speech onset;
+use that same target when its transcript arrives, rejecting an unmatched target.
+Late transcription must not retarget a spoken edit to a newly opened note.
+Keep audio storage off, input/output lifecycle bounded, and the selected Intelligence model
 for research. Voice receives compact context and cited assignment results, not an
 entire Space. Calls start silently and wait for the user to speak. Do not schedule
 an opening instruction, synthetic user turn, greeting or introduction. A quiet
@@ -3982,6 +4426,23 @@ distinguish JSON, structure, reads, checkpoints, reply and edit failures without
 logging or echoing raw provider output or note contents.
 Only the current user transcript or explicit Keep action grants creation authority;
 edit proposals retain their captured target and existing Accept/Discard/Undo flow.
+An explicit request for assigned workers to write notes uses host-owned saving of
+their finished findings. Assigned providers remain read-only and cannot supply
+note actions. The host validates the original human request and exact worker
+IDs/revisions, waits for supported final results, then saves one note per worker
+through the ordinary receipt-backed persistence path, up to three notes per
+request. Do not silently reduce a larger group or change its requested output
+count; continue research and explain the saving limit. While this save is pending,
+readers should write useful finished content without save/refusal boilerplate or
+unverified success claims. Serialize sibling saves, recheck supporting evidence
+and capture the current write version immediately before each commit. A failed
+save cannot block unrelated findings or produce a confirmed receipt. Preserve
+per-worker save identity across retries so a failed flush cannot duplicate notes.
+Saving runs in the background and never blocks the ongoing voice conversation.
+A focused finished worker can respond to an explicit deictic request such as
+Turn this into a note by saving that captured revision without repeating research.
+A request for a different topic must retain its ordinary writing route. Generated
+scopes, old conversation and external/MCP work orders cannot grant this authority.
 
 Space IDs, task revisions, original knowledge versions and persistent Chat receipt
 IDs guard results and writes. Each identifiable work order owns a revision and
@@ -4028,8 +4489,9 @@ and selection capture. Clarification, unrelated speech and note navigation canno
 drop reservations. Cancelling a reservation aborts any dependent answer route so
 a stale batch cannot revive it. Generated child scopes never grant save/edit
 authority; the exact current transcript remains the prompt and search purpose
-strips writes. Existing single-worker explicit save/edit requests retain their
-normal authority and review flow.
+strips model-supplied writes. Explicit host-authorized saving of finished findings
+uses the bounded persistence path above. Existing single-worker explicit save/edit
+requests retain their normal authority and review flow.
 Reference-only clarification answers such as “this note” and “what I highlighted”
 may complete that original request. They still require a complete validated batch
 of scopes; a generic comment or a compound new instruction is not a reference-only
@@ -4221,8 +4683,10 @@ API's 500-token cap. No provider speech-start/stop or audio-done event is assume
 commentary cannot be retracted or treated as heard. Keep result controls alongside their findings in
 the conversation. End voice immediately releases capture and closes
 the connection while already requested work can finish. ChatDock owns the
-mounted call outside its hidden Chat panel. Collapsing/clearing Chat and note or
-view navigation preserve it. Flow, Space changes and window teardown close
+mounted call outside its hidden Chat panel. Collapsing Chat and note or
+view navigation preserve it. Creating or switching conversation threads waits
+until live voice ends; stopped findings retain their original thread. Flow,
+Space changes and window teardown close
 capture and cancel work. An inherited sidebar toggle counter must never start a
 new Space's microphone. Mute gates only input; playback and work continue.
 Permanent loss of every microphone track disconnects with a capture-loss message,
@@ -4290,16 +4754,26 @@ retains mute/end, Chat and Voice options.
 Retained research, errors and clarification keep ownership of that dock after audio
 ends: hide the ordinary Chat circle and native circle glass whenever voice controls
 remain visible. Report only visibility transitions to ChatDock, never audio frames.
-Voice options contains View conversation, Stop research and Clear voice chat, plus
+In compact Chat, Voice options contains View conversation, Stop research and Clear voice chat, plus
 Return to Space conversation for a focused finding. Its popover keeps the pill's
 width and does not change the Chat layout; closing it or Escape returns focus to
 the options button. Research findings, citations, saved-note links and actionable
-errors appear in Chat's conversation through a stable results portal. There is no
+errors appear in compact Chat's conversation through a stable results portal. There is no
 worker list, queue count or delivery-state badge. Interim findings use a closed
 Latest finding disclosure, completed findings show their answer directly, and
 Retry research, Retry voice summary, Read aloud, Discuss by voice and Keep as note
 retain their existing authority and revision checks. Clearing voice work restores
 the ordinary Chat launcher. No result opens Chat or captures the writer's cursor.
+
+The full main Chat screen presents voice workers through their orbs and spoken
+responses only. `ChatDock` passes `hideConversationText` to its retained
+`SpaceVoice`: do not mount worker Markdown, progress, receipts or View conversation,
+and do not publish worker content as a reason to reveal or expand the text pane.
+Ordinary typed Chat history remains visible. Research, routing, spoken summaries,
+captured ownership and retained findings continue unchanged. Keep actionable
+disconnect/clarification notices with voice controls, and preserve Cancel note
+changes in Voice options during edit preparation. Switching between full and
+compact layouts changes presentation only, never restarts the call or research.
 
 When either full or compact Chat is open, the same call renders its orb scene
 inside Chat and integrates controls into the composer; no fixed pill overlays Chat.
@@ -4393,8 +4867,8 @@ contained while open and returns to the icon on close. Unsent replies survive
 closing; generated note actions close the chat to reveal the ordinary review.
 **Continue in Chat** binds the main Chat surface to the exact Space/note/thread
 and carries the unsent reply. The note metadata stays the single conversation
-source; never clone the exchange into `studio.messages` or introduce a chat-history
-list. Replies in either surface commit to the same thread with the same approval,
+source; never clone the exchange into `studio.messages` or list passage discussions
+as ordinary Space chats. Replies in either surface commit to the same thread with the same approval,
 version and Space guards. **Back to the note** uses exact passage navigation;
 **Space chat** restores the ordinary Chat and its draft. Thread reader history is
 projected from that thread only, with saved citations restored and unaccepted

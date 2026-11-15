@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createEmptySnapshot } from "../data/defaults";
 import type { ChatRequest, ChatResult } from "../types";
-import { VoiceResearch, voiceContext, type VoiceCommit, type VoiceResearchAssignment } from "./voiceResearch";
+import { VoiceResearch, voiceContext, voicePromptSavesCurrentFinding, type VoiceCommit, type VoiceResearchAssignment } from "./voiceResearch";
 import { runChatReading } from "./chatReading";
+import { createWebResearch } from "./webResearchProvider";
 import { stableSnapshotVersion } from "./knowledgeOrchestration/context";
 import { spaceNoteVersion } from "./spaceKnowledge";
 import type { VoiceSelection } from "./voiceSelection";
@@ -33,6 +34,146 @@ function childScope(request: ChatRequest): VoiceResearchAssignment {
   const line = request.history[0].content.split("\n")[0];
   return JSON.parse(line.slice("Read-only child research scope: ".length));
 }
+
+describe("host-authorized worker finding saves", () => {
+  const scopes = ["Connection", "Strengths", "Gaps"].map(subject => ({ subject, focus: `Investigate ${subject}.` }));
+  it("keeps three real readers parallel and saves each final finding serially with fresh versions and durable receipts", async () => {
+    const prompt = "Have three workers research the connection and write three new notes";
+    const finishes = new Map<string, () => void>();
+    const config = options(async request => {
+      expect(request.allowNoteActions).toBe(false); expect(request.editNoteId).toBeUndefined();
+      expect(request.history[0].content).toContain("host has separately authorized saving");
+      expect(request.history[0].content).not.toContain("separate main-conversation request");
+      const answer = exactAnswer(request);
+      if (answer.readRequests?.length) return answer;
+      await new Promise<void>(resolve => finishes.set(childScope(request).subject, resolve));
+      return { ...answer, noteActions: writeResult.noteActions };
+    });
+    let active = 0, maximum = 0;
+    config.commit.mockImplementation(async request => {
+      active++; maximum = Math.max(active, maximum);
+      expect(request.prompt).toBe(prompt); expect(request.version).toBe(stableSnapshotVersion(config.snapshot()));
+      expect(request.result.noteActions).toHaveLength(1);
+      const action = request.result.noteActions![0];
+      expect(action.body).toContain("Alpha relates to beta"); expect(action.body).not.toBe(writeResult.noteActions[0].body);
+      await Promise.resolve();
+      config.snapshot().notes.push({ ...config.snapshot().notes[0], id: request.id, title: action.title });
+      active--; return { savedNoteIds: [request.id], savedTitles: [action.title] };
+    });
+    const engine = new VoiceResearch(config);
+    const work = scopes.map((scope, i) => engine.run(`reader-${i}`, prompt, "", "n", null, false, undefined, scope));
+    const targets = engine.getJobs().map(({ id, revision }) => ({ id, revision }));
+    const saves = engine.saveRequestedFindings(prompt, targets);
+    await vi.waitFor(() => expect(finishes.size).toBe(3));
+    expect(config.commit).not.toHaveBeenCalled(); expect(engine.getJobs().every(job => job.state === "running")).toBe(true);
+    finishes.get("Gaps")!();
+    await vi.waitFor(() => expect(config.commit).toHaveBeenCalledTimes(1));
+    expect(engine.getJobs().filter(job => job.state === "running")).toHaveLength(2);
+    finishes.get("Strengths")!(); finishes.get("Connection")!();
+    await Promise.all([...work, saves]);
+    expect(maximum).toBe(1); expect(config.commit).toHaveBeenCalledTimes(3);
+    expect(engine.getReceipts()).toHaveLength(3);
+    expect(findingMetadata(config).filter(item => item.action.kind === "saved")).toHaveLength(3);
+    await engine.saveRequestedFindings(prompt, targets);
+    expect(config.commit).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["Please have two research workers each write a new note", "Have two workers write a note each"])("supports each worker writing one note for %s", async prompt => {
+    const config = options(async request => exactAnswer(request)), engine = new VoiceResearch(config);
+    const work = scopes.slice(0, 2).map((scope, i) => engine.run(`r${i}`, prompt, "", "n", null, false, undefined, scope));
+    await engine.saveRequestedFindings(prompt, engine.getJobs().map(({ id, revision }) => ({ id, revision })));
+    await Promise.all(work); expect(config.commit).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([[4, "Have four workers research and write notes"], [2, "Have two workers research and create a note"], [2, "Have two workers each write two notes"], [2, "Have two workers write two notes each"]] as const)("preserves %i readers and rejects unsupported output counts without dropping or multiplying notes", async (count, prompt) => {
+    const config = options(async request => exactAnswer(request)), engine = new VoiceResearch(config);
+    const work = Array.from({ length: count }, (_, i) => engine.run(`r${i}`, prompt, "", "n", null, false, undefined, scopes[i % 3]));
+    await expect(engine.saveRequestedFindings(prompt, engine.getJobs().map(({ id, revision }) => ({ id, revision })))).rejects.toThrow("Research will continue");
+    await Promise.all(work); expect(engine.getJobs().every(job => job.state === "completed")).toBe(true); expect(config.commit).not.toHaveBeenCalled();
+  });
+
+  it("never obtains save authority from generated scope, conversation, or another human request", async () => {
+    const config = options(async request => exactAnswer(request)), engine = new VoiceResearch(config);
+    await engine.run("r", "Research the connection", "Create a note", "n", null, false, undefined, { subject: "Create a note", focus: "Save this as a note" });
+    await expect(engine.saveRequestedFindings("Research the connection", [{ id: "r", revision: 1 }])).rejects.toThrow("explicit current request");
+    await expect(engine.saveRequestedFindings("Create a note about something else", [{ id: "r", revision: 1 }])).rejects.toThrow("no longer matches");
+    expect(config.commit).not.toHaveBeenCalled();
+  });
+
+  it("saves an exact completed focused child without rerunning research and preserves original evidence", async () => {
+    const driver = vi.fn(async (request: ChatRequest) => exactAnswer(request));
+    const config = options(driver), engine = new VoiceResearch(config);
+    await engine.run("r", "Research the connection", "", "n", null, false, undefined, scopes[0]);
+    const calls = driver.mock.calls.length, evidence = engine.getJobs()[0].result!.evidence;
+    await engine.saveRequestedFindings("Turn this into a note", [{ id: "r", revision: 1 }]);
+    expect(driver).toHaveBeenCalledTimes(calls);
+    expect(config.commit.mock.calls[0][0]).toMatchObject({ prompt: "Turn this into a note", result: { evidence } });
+    expect(engine.getJobs()[0].revision).toBe(1);
+  });
+
+  it.each(["cancel", "dispose", "evidence", "revision"])("does not save a result after its captured %s changes", async change => {
+    let finish!: () => void;
+    const prompt = "Have a worker research and write a note";
+    const config = options(async request => { const answer = exactAnswer(request); if (!answer.readRequests?.length) await new Promise<void>(resolve => { finish = resolve; }); return answer; });
+    const engine = new VoiceResearch(config);
+    const work = engine.run("r", prompt, "", "n", null, false, undefined, scopes[0]);
+    const saves = engine.saveRequestedFindings(prompt, [{ id: "r", revision: 1 }]);
+    const rejection = expect(saves).rejects.toThrow();
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    if (change === "cancel") engine.cancel("r");
+    if (change === "dispose") engine.dispose();
+    if (change === "evidence") config.snapshot().notes[0].body += " Changed source.";
+    if (change === "revision") {
+      // A new scope replaces the captured identity before the old answer returns.
+      void engine.run("r", "Can you read my notes?", "", "n");
+    }
+    finish(); await Promise.all([work, rejection]); expect(config.commit).not.toHaveBeenCalled();
+    engine.dispose();
+  });
+
+  it("retains research after a failed disk save and confirms only a successful retry", async () => {
+    const prompt = "Have a worker research and write a note";
+    const config = options(async request => exactAnswer(request)), engine = new VoiceResearch(config);
+    config.commit.mockRejectedValueOnce(new Error("Disk unavailable"));
+    void engine.run("r", prompt, "", "n", null, false, undefined, scopes[0]);
+    await expect(engine.saveRequestedFindings(prompt, [{ id: "r", revision: 1 }])).rejects.toThrow("No new save was confirmed. Disk unavailable");
+    expect(engine.getJobs()[0]).toMatchObject({ state: "completed" }); expect(engine.getReceipts()).toEqual([]);
+    expect(findingMetadata(config).some(item => item.action.kind === "saved")).toBe(false);
+    await engine.saveRequestedFindings("Save this as a note", [{ id: "r", revision: 1 }]);
+    expect(engine.getReceipts()).toHaveLength(1);
+  });
+
+  it.each(["I cannot save notes. Alpha relates to beta [[e1]].", "I am not saving notes. Alpha relates to beta [[e1]]."])("does not turn a provider's procedural refusal into an automatic note", async reply => {
+    const prompt = "Have a worker research and write a note";
+    const config = options(async request => { const result = exactAnswer(request); return result.readRequests?.length ? result : { reply }; }), engine = new VoiceResearch(config);
+    void engine.run("r", prompt, "", "n", null, false, undefined, scopes[0]);
+    await expect(engine.saveRequestedFindings(prompt, [{ id: "r", revision: 1 }])).rejects.toThrow("instead of a finished note");
+    expect(config.commit).not.toHaveBeenCalled();
+  });
+
+  it("does not turn an externally originated worker into automatic write capability", async () => {
+    const config = options(async request => exactAnswer(request)), engine = new VoiceResearch(config);
+    engine.admitExternalReserved("external", "Research the connection", {}, { grantId: "grant", taskView: "working", assertCurrent: async () => {} });
+    await vi.waitFor(() => expect(engine.getJobs()[0].state).toBe("completed"));
+    expect(JSON.parse(engine.conversationContext("external")!).worker.hostCanSaveOnExplicitRequest).toBe(false);
+    await expect(engine.saveRequestedFindings("Save this as a note", [{ id: "external", revision: 1 }])).rejects.toThrow("no longer matches");
+    expect(config.commit).not.toHaveBeenCalled();
+  });
+
+  it.each([4000, 6001])("uses the same Unicode character bound as ordinary note creation for %i astral characters", async length => {
+    const reply = "😀".repeat(length) + " [[e1]]";
+    const config = options(async request => { const result = exactAnswer(request); return result.readRequests?.length ? result : { reply }; }), engine = new VoiceResearch(config);
+    await engine.run("r", "Research the connection", "", "n", null, false, undefined, scopes[0]);
+    const saving = engine.saveRequestedFindings("Save this as a note", [{ id: "r", revision: 1 }]);
+    if (length === 4000) { await saving; expect(config.commit).toHaveBeenCalledOnce(); }
+    else { await expect(saving).rejects.toThrow("too long"); expect(config.commit).not.toHaveBeenCalled(); }
+  });
+
+  it("recognizes only an explicit save of the current finding", () => {
+    for (const prompt of ["Turn this into a note", "Please save your findings as a new note", "Keep that answer as a note", "Convert the results into a note", "Create a new note from your findings", "Write a note from this research"]) expect(voicePromptSavesCurrentFinding(prompt)).toBe(true);
+    for (const prompt of ["Create a note about another topic", "Don't save this as a note", "Should I save this as a note?", "Save this as a note and add something else", "Maybe turn this into a note"]) expect(voicePromptSavesCurrentFinding(prompt)).toBe(false);
+  });
+});
 
 describe("parallel voice research scopes", () => {
   it("lets the reading model name its assignment without changing its identity, scope or user authority", async () => {
@@ -339,7 +480,7 @@ describe("voice delegated work", () => {
     expect(config.onProgress).toHaveBeenLastCalledWith("");
     expect(config.onResult).toHaveBeenCalledOnce(); expect(config.commit).not.toHaveBeenCalled();
   });
-  it("uses the same prompt and reading requests as typed Chat for a named note outside the voice directory", async () => {
+  it("uses the same prompt and reading requests as typed Chat with the same Web capability for a named note outside the voice directory", async () => {
     const prompt = "Um, can you read the note Primordial Wound";
     const driver = vi.fn(async (request: ChatRequest): Promise<ChatResult> => {
       expect(request.mode).toBe("chat-reading");
@@ -359,7 +500,7 @@ describe("voice delegated work", () => {
     config.snapshot().notes = Array.from({ length: 113 }, (_, i) => ({ ...config.snapshot().notes[0], id: `unrelated-${i}`, title: `Other ${i}` }));
     config.snapshot().notes.push({ ...config.snapshot().notes[0], id: "target", title: "Primordial Wound", body: "An unresolved loss shapes this fictional example." });
     expect(voiceContext(config.snapshot(), "")).not.toContain("Primordial Wound");
-    const typed = await runChatReading(config.snapshot(), prompt, driver);
+    const typed = await runChatReading(config.snapshot(), prompt, driver, { webResearch: createWebResearch(config.snapshot().settings) });
     const typedRequests = driver.mock.calls.map(([request]) => request);
     driver.mockClear();
     const coordinator = new VoiceResearch(config);

@@ -26,6 +26,54 @@
 
 > Orion 0.6.0 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
 
+## ChatGPT plan access and voice choices
+
+In the desktop app, **Settings → Intelligence → Continue with ChatGPT** connects
+an eligible ChatGPT subscription for text Chat, organisation, writing and dictation
+cleanup. Orion opens OpenAI’s browser authorization, requests ChatGPT plan usage,
+and lists the models available to that account. Choose a **ChatGPT plan** model
+to use the subscription; the ordinary OpenAI and Anthropic API-key choices remain
+separate. Account registrations can be switched, reauthorized and signed out.
+**Manage usage** opens ChatGPT’s usage settings. Sign-in does not import your
+ChatGPT conversations. Tokens stay in the OS credential store, never in the vault
+or renderer. Local Whisper dictation remains available without any cloud account.
+Live voice, image generation and cloud narration retain their separate API-key
+requirements. Plan eligibility, models and available usage are controlled by OpenAI.
+See [OpenAI’s integration documentation](https://developers.openai.com/siwc/token-sharing-open-source).
+
+**Settings → Voice → Voice conversations** lets you choose OpenAI or ElevenLabs
+for live conversation in Chat. OpenAI remains the default for existing libraries.
+Each choice uses its own API key; an ElevenLabs conversation uses the ElevenLabs
+voice selected in Voice settings. You can keep talking while Orion’s research
+workers use your selected Intelligence connection. Conversation and note narration
+have independent provider choices. There is no separate agent ID to configure.
+Saving an ElevenLabs key loads that account's voices into the voice picker,
+including custom voices. **Refresh voices** picks up later account changes;
+voices still awaiting ElevenLabs verification cannot be selected.
+
+**Settings → Voice → Open voice studio** uses your ElevenLabs key to browse your
+voice library or create an Instant Voice Clone from imported WAV, MP3, M4A, FLAC,
+OGG or AIFF recordings. The native picker stages up to 20 files and 50 MiB total in
+memory; audio uploads only when you create or update a voice. Add a name,
+description, language/accent/gender/age labels and optional background-noise
+removal. Use recordings you have permission to clone. Provider-required voice
+verification remains in ElevenLabs; a voice requiring verification cannot be
+previewed or selected in the studio until verification is complete and refreshed.
+This feature does not create text-prompt voice designs.
+
+The delivery editor includes stability, similarity, style exaggeration, speed,
+speaker boost and, where applicable, professional v4 clone strength. Available
+controls depend on the selected speech model. Generate a preview before saving;
+previews consume ElevenLabs credits. **Save voice controls** changes that voice’s
+defaults in your ElevenLabs account. **Use this voice in Orion** selects the voice
+for ElevenLabs conversations without changing your narration provider. With OpenAI
+conversations selected, it chooses ElevenLabs for note/deck narration. The saved
+speech model applies to narration and previews. New generation uses saved defaults;
+previously prepared audio is invalidated after voice-control changes. Professional
+clone training and verification remain managed by ElevenLabs. The selected voice
+also applies to ElevenLabs narration when enabled; live conversation uses its
+compatible realtime speech model.
+
 ## Knowledge work should produce knowledge, not another inbox
 
 Most note tools leave you with a folder of summaries. Most AI tools flatten a library into one giant prompt.
@@ -43,8 +91,9 @@ The result is a personal wiki that gets more coherent over time:
 - **Word count while editing.** A small translucent pill at the bottom centre of the note shows its word count, including authored title and subtitle text. Highlight a passage while editing to see selected words out of the total. Done hides the count; it also steps aside while AI generation or review controls are open, keeping Accept and Insert visible. Counting stays local to the open note and reuses unchanged paragraphs.
 - **Projects stay separate.** Spaces are hard boundaries for notes, sources, concepts, Chat, navigation, and AI context.
 - **Chat beside your writing.** A quiet glass circle in the bottom-right opens your Space conversation without leaving the document. It appears when the selected AI provider is configured, without an AI toggle, and stays hidden during Flow. Collapse it or expand into full Chat without losing your draft or pending reply. An attached-note picker makes the reading and editing target explicit; Orion searches, follows connections and reads exact passages before citing them. Stop interrupts the response. Ask naturally: Orion infers whether to answer in Chat, change specific passages, or revise the whole attached note. There is no editing-mode picker. **Review in note** shows highlighted replacements and gray additions in the actual editor. **Accept changes** saves through normal autosave with one Undo; **Discard** keeps the original. Existing chat replies also offer **Use in note**. Newer typing invalidates old suggestions. Creating notes still requires an explicit request.
+- **Separate conversations for each Space.** Full Chat has a collapsible list on the right. Start a new chat, return to an earlier discussion, rename it or delete it after confirmation. New chat preserves your earlier conversations, and switching restores each chat's unsent draft. Titles come from your first prompt without an extra AI request. The list contains only the current Space's chats; each reply uses its own conversation history alongside that Space's knowledge. Existing history appears as the first conversation.
 - **Chat reads as it goes.** Chat uses the Space hierarchy and compact note directories to find promising material, searches note and source bodies, then opens exact passages and follows connections as needed. Replies can cite the passages actually read; click a citation to inspect it or open the original item. Reading is bounded, can be stopped, and reports partial coverage. Chat can create notes only when explicitly asked. Created notes and **Keep as note** retain exact quoted passages and source links, including when an original later changes or is removed. This uses the selected OpenAI or Anthropic model and may make several requests for a question.
-- **Optional web research.** Add your Perplexity API key in **Settings → Web research**, then use **Test connection** to check it. Voice workers can look up external evidence automatically when useful, while the conversation continues. Text Chat uses web research only when its **Web** pill is selected; it starts off and resets when you change Spaces. Orion chooses quick, standard or deep research from your request, with more reasoning, source coverage and time for complex investigations. It can deepen an insufficient lookup while reusing completed research when it is enough; no separate depth control is needed. Your selected OpenAI or Anthropic model still handles conversation and proposed edits. Web citations show the website, retrieval date and retained search excerpt, and survive **Keep as note**. Long research stays with its worker and is read in sections internally without repeating the web lookup. Research that cannot produce supported findings shows a retryable failure instead of an empty ready result. Research questions are sent to Perplexity and incur API usage. The key stays in macOS Keychain; this connection requires the desktop app.
+- **Optional web research.** Use your selected OpenAI API connection or ChatGPT sign-in, or add a Perplexity key in **Settings → Web research**. Choose the research connection there; Auto keeps Perplexity when configured and otherwise uses the selected OpenAI connection. Voice workers can look up external evidence while you keep talking. Text Chat uses web research only when its **Web** pill is selected; it starts off and resets when you change Spaces or research connections. Orion chooses quick, standard or deep research from your request and reuses completed research instead of repeating the lookup. Your selected intelligence model still handles conversation and proposed edits. Citations retain the website and retrieval date through **Keep as note**: Perplexity search excerpts remain excerpts, while OpenAI's generated, source-linked passages are labelled **AI-cited summary**, never presented as quotations from the webpage. Long results stay with their worker and are read in sections. Unsupported models, account restrictions and failed research report an error without silently using a different connection. API research incurs provider usage; ChatGPT research uses the signed-in account's access and limits. Credentials stay in macOS Keychain, and the connection requires the desktop app.
 - **Search reaches the original text.** Search finds phrases and relevant combinations of words throughout note bodies and preserved sources. Filter Notes, Sources, or Concepts, see highlighted matches, and jump to the passage. Choose **Ask AI** at the right of the search field for a cited answer from the current Space. Switch between Matches and Answer without repeating the request; ordinary search stays local and works without a key.
 - **AI stays optional.** Manual organization and the entire local knowledge layer work without OpenAI or Anthropic.
 
@@ -90,6 +139,12 @@ decoded audio; longer material can be split into separate files.
 
 **Settings → Intelligence** includes **GPT-6 Astra** for complex research and
 synthesis through your OpenAI connection, with Low through Extra high reasoning.
+The current OpenAI model cards also offer **GPT-6.1 Sol** for complex work,
+**GPT-6.1 Terra** for natural writing and visual reasoning, and **GPT-6 Luna**
+for focused, efficient tasks. Existing GPT-5.6 choices remain selected and visible
+until you choose another model; this update does not migrate your saved model or
+change the default. ChatGPT plan model choices come from the connected account’s
+catalog separately.
 
 ## Orion 0.6.0
 
@@ -222,6 +277,68 @@ unhighlighted until you interact with it. Keyboard opening focuses the first
 control; arrow keys navigate the menu and Escape returns to **…**, preserving
 the selected passage.
 
+Tickets and kanban boards live in ordinary notes. Type **/ticket** or **/kanban**
+at a word boundary, choose with ↑/↓ and Enter (or Tab), name it, and press Enter
+again. Escape cancels without consuming your text. Insertion preserves the
+surrounding prose and returns the cursor to the note; Cmd+Z undoes it.
+
+Home adapts to the work in each Space. Ordinary checklists appear in **To-dos**;
+created tickets appear in **Tickets**, including those with no board. These
+Kanban appears first, followed by paired **To do** and **Across this Space** cards,
+then **Continue exploring**. The cards scroll independently and stack in narrow
+windows; completed checklist items stay folded away.
+Checking a to-do does not turn it into a ticket. Home remembers your chosen view
+and completed-item disclosures when you return from a note, separately in each
+Space and window, for that session. Boards open in **Board** view by default;
+you can choose List whenever it suits you. Continue exploring is one horizontally
+scrollable row containing every note in the Space, with recently updated notes first.
+
+Drag a ticket onto a board chip to assign it, or onto **No board** to unassign
+it. Clicking its board label offers the same choices with the keyboard. Dragging
+an ordinary to-do onto a board turns it into a ticket. The **Board** view and
+boards embedded in notes show the same items. Drag cards between To do,
+In progress and Done; focused cards also move with the Left/Right keyboard keys.
+Card footers keep the date on the left and urgency on the right.
+A small delete button appears at a card's top right on hover or keyboard focus.
+After confirmation it removes the ticket and its contents from the source note
+and every board; deletions made in the editor can be undone with Cmd+Z.
+
+Every column has **Add ticket**: type, press Enter, and continue adding or press
+Escape to finish. The new ticket belongs to that board and column, and is saved
+in the note containing the board. In the editor, one Undo removes the insertion.
+**Infer tickets from note** reads the whole note. It first collects existing
+open to-dos, then uses two bounded AI readers to find additional actions in
+sections of the remaining prose. Completed to-dos are filtered out before any
+AI request. Section results are combined and deduplicated locally, with supporting
+passages for review. Existing to-dos are promoted to tickets in place; new actions
+are added only after you accept them. A changed note requires a fresh review.
+Without an AI key, it still collects written open to-dos locally.
+
+Tickets appear as editable cards in notes as well as on boards, with soft shadows.
+The optional **Set urgency** action offers Urgent, High, Medium or Low, with no
+default urgency; choose Clear urgency to remove it. **Add date** opens an all-day date
+picker. Dates and urgency follow tickets when moved between columns or boards.
+Dashboard-created cards have no source-note label; note-created and inferred cards
+retain theirs. Existing tickets keep their recorded attribution.
+
+Type **/calendar** in a note to insert a date. Use arrow keys for days/weeks,
+Page Up/Down for months, Enter to choose and Escape to cancel. Picked dates stay
+fixed and round-trip through Markdown. Home shows a calendar when this Space
+contains dated tickets, picked dates or recognised date mentions. Local recognition
+understands phrases such as “next Friday”, ordinary written dates and ranges;
+numeric dates use day/month. Inferred mentions are labelled separately from chosen
+dates and deadlines. Relative mentions use the note's last saved date, visible in
+the tooltip; editing that note may update the inferred date. Click an entry to
+return to its note. This is entirely local and needs no AI key or calendar account.
+
+Creating from Home's header asks which note should contain the new item; in board
+view it preselects that board and its note. Rename an
+embedded board directly in edit mode. Deleting its block leaves the tickets in
+their source notes; they return to No board. Deleting the source note removes its
+tickets from Home. Everything uses ordinary local autosave and window conflict
+handling. Markdown retains portable checkboxes and invisible ticket/board
+metadata; offline HTML exports render a static board using only included notes.
+
 The current development toolbar promotes row/column insertion and deletion,
 header and alternating-row controls to icons with hover labels. **Justify text**
 (Cmd+Shift+J, or More in a narrow toolbar) formats the selected paragraphs and
@@ -311,9 +428,13 @@ There is no Markdown mode and no read/write split. Click **Edit**, write with a 
 
 While editing a note, the microphone in the sticky writing toolbar records dictation and inserts the transcript at the preserved text cursor. The control remains available as the note scrolls. Recording and transcription stay on-device; the temporary M4A is deleted when bundled Whisper finishes.
 
-After you stop, Orion saves the original transcript and, when the selected AI provider has a key, sends just that transcript for a cleanup pass before insertion. Cleanup removes nonsemantic hesitations and accidental repetition, adds punctuation, handles clear self-corrections, and turns clear lists or explicit to-dos into ordinary bullets and unchecked tasks. It is instructed to preserve your voice, meaning, qualifications and genuine uncertainty—not to summarize or expand your thoughts. For example, “Friday—oh no, actually Thursday” becomes “Thursday”; “maybe Friday or Thursday” keeps the uncertainty.
+After you stop, Orion saves the original transcript and, when the selected AI provider has a key, cleans up the transcript before insertion. Cleanup removes nonsemantic hesitations and accidental repetition, adds punctuation, handles clear self-corrections, and turns clear lists or explicit to-dos into ordinary bullets and unchecked tasks. It preserves your voice, meaning, qualifications and genuine uncertainty. For example, “Friday—oh no, actually Thursday” becomes “Thursday”; “maybe Friday or Thursday” keeps the uncertainty. Only the transcript and the local date captured when recording started are sent for this step.
 
-After Stop, the microphone button quietly shows processing without progress or success pop-ups. During cleanup, click that same button (**Use original** in its tooltip) to insert the local transcript immediately. Without a key for the selected provider, Orion uses only local Whisper transcription and never attempts AI cleanup. Provider errors, a timeout or invalid output also fall back to the original. Cleanup has a 45-second limit and accepts up to 24,000 Unicode characters; longer dictation stays complete and local. Insertion is one Undo step. **Original dictations** at the bottom of the note opens the unedited transcript, also available in **Sources** after reopening Orion. Original transcripts stay local except for the optional text cleanup request; audio is never sent for this step. Moving to another note or an incoming edit from another window prevents late insertion into the wrong document.
+One dictation can mix prose, tickets, new kanban boards, to-do lists and editable tables. For example: “Create a Launch board with tickets to check the download page and test updates. Remind me to bring a notebook. Put these costs in a table: Small is ten dollars, Medium twenty dollars.” Orion inserts the result directly in one Undo step, without a review screen. It can also choose useful structure without being told explicitly: a clear project work breakdown may become a board, a comparison with stated values a table, and simple errands a checklist. Uncertain thoughts, quotations and cancelled ideas should remain prose; it must not invent tasks or missing table values. Named existing boards are matched within the current Space, with ambiguous or missing matches left unassigned. This uses the same cleanup request, not a second AI pass.
+
+Distinct project tasks and errands stay separate cards or checkboxes, even when you say them in one sentence. Immediately after AI insertion, **Use original dictation** in the writing toolbar replaces the result with the local transcript. That shortcut disappears when you make another document edit, so it cannot overwrite later writing. The full original remains accessible from **Original dictations** and **Sources**. You can also undo the entire insertion normally.
+
+After Stop, the microphone button quietly shows processing without progress or success pop-ups. During cleanup, click that same button (**Use original** in its tooltip) to insert the local transcript immediately. Without a key for the selected provider, Orion uses only local Whisper transcription and never attempts AI cleanup. If an optional ticket, board or table is invalid, Orion keeps the validated cleaned writing without another AI request. Provider errors, a timeout or an invalid cleaned transcript still use the original. If an audio segment fails, Orion preserves the words it did recover and shows an incomplete-recording error; it skips AI interpretation because the missing speech might change your intent. Cleanup has a 45-second limit and accepts up to 24,000 Unicode characters; longer dictation stays complete and local. Insertion is one Undo step. **Original dictations** at the bottom of the note opens the unedited transcript, also available in **Sources** after reopening Orion. Original transcripts stay local except for the optional text cleanup request; audio is never sent for this step. Moving to another note or an incoming edit from another window prevents late insertion into the wrong document.
 
 Small edition builds process two-minute segments. The current `0.5.3` Medium download bundles Whisper Medium, loads it once per dictation, and transcribes overlapping 30-second windows in the background. Both keep all generated text hidden until you press Stop, and neither imposes a fixed recording-duration cap.
 
@@ -342,7 +463,7 @@ Short sources read concurrently. In a fresh Space, a small batch with clear, sep
 Ready sources can proceed while other files download or transcribe; unfinished inputs stay queued after you apply the completed import. PDF pages extract in a separate four-slot local pool. Source readers share slots fairly, start at four, and grow to six after clean responses. All AI work shares a ten-call cap, while recent successful provider calls avoid repeated credential probes. Actual latency still depends on the provider and the amount of writing needed.
 
 In **Settings → Voice**, save ElevenLabs voice IDs with names and choose the
-voice used by Play throughout Orion. You can rename or remove saved voices
+voice used for ElevenLabs conversations and Play throughout Orion. You can rename or remove saved voices
 there without changing your ElevenLabs library. Your previously selected voice
 is preserved when upgrading.
 
@@ -411,7 +532,7 @@ Every citation opens the preserved source. Every open Markdown task appears on H
 
 ### A Space has memory
 
-Home carries a living **Across this Space** orientation beside the task list. It keeps the last useful overview visible while knowledge changes and falls back to a deterministic local summary when AI is unavailable.
+Home carries a living **Across this Space** orientation below work and recent notes. It keeps the last useful overview visible while knowledge changes and falls back to a deterministic local summary when AI is unavailable.
 Even one short note can produce a summary. The overview grows with the material;
 brief Spaces can stay at a sentence or a few short paragraphs. Blank starter
 notes do not count as knowledge, and a local summary stays visible during AI refreshes.
@@ -626,7 +747,7 @@ Enable **Settings → Connections → Orion workflows**, select allowed Spaces,
 and independently allow API use and workflow writes. Older libraries start with
 these workflows disabled. The existing direct read/write tools keep their access.
 
-The expanded MCP surface has **57 tools**: 32 local library tools, fourteen
+The expanded MCP surface has **64 tools**: 39 local library tools, fourteen
 workflow/capability/job tools, three edit-review tools, one active-editor-context
 reader, three existing voice work-order tools and four selected-editor-action tools. It can build local evidence packets; research,
 compare, review, find gaps, or prepare briefs using Orion's configured AI;
@@ -635,6 +756,14 @@ reprocess preserved sources without duplicate provenance; generate notes,
 podcast scripts, and decks; develop canonical articles; enrich knowledge; and
 refresh the Space hierarchy. AI work is billed to the provider account configured
 in Orion. Its existing-note context preference remains authoritative.
+
+Boards and tickets are also available through MCP. Connected assistants can list
+boards and tickets, read a board with its source note, create or rename boards,
+add tickets, and move tickets between columns or boards. To infer work from a
+note, the assistant reads that board's source, proposes actions supported by the
+text, and saves authorized tickets with the current note version. These local
+tools work with Orion closed and do not call a provider themselves. Stale writes
+and cross-Space assignments are rejected; tasks remain portable Markdown.
 
 Workflows return jobs with status, cancellation, exact note citations, bounded
 evidence, freshness, and available usage metadata. They commit through the same

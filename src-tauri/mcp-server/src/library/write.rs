@@ -135,6 +135,9 @@ pub(super) fn call(path: &Path, name: &str, args: &Map<String, Value>) -> ToolRe
                         }
                         body
                     }
+                    name if boards::WRITES.contains(&name) => {
+                        boards::edit(scope, current, name, args)?
+                    }
                     _ => return Err(ToolFailure::new("Unknown guarded edit.")),
                 };
                 if body.chars().count() > MAX_NOTE_BODY_CHARS {
@@ -208,6 +211,16 @@ pub(super) fn call(path: &Path, name: &str, args: &Map<String, Value>) -> ToolRe
             results.push(result);
         }
         let mut result = json!({"spaceId":space_id,"changed":changed,"notes":results,"vaultRevision":after.updated_at,"atomic":true});
+        if boards::WRITES.contains(&name) {
+            let before_scope = require_space(&vault, &space_id)?;
+            result["work"] = boards::receipt(
+                scope,
+                note(before_scope, arg(args, "note_id"))?,
+                note(scope, arg(args, "note_id"))?,
+                name,
+                args,
+            );
+        }
         if !attachments.is_empty() {
             let attached: Vec<_> = attachments.iter().map(|(note_id, id, _, changed)| {
                 Ok(json!({"noteId":note_id,"changed":changed,"source":source_ref(source(scope,id)?)}))

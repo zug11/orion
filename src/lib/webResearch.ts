@@ -12,7 +12,8 @@ export interface WebResearchResult {
   responseId: string;
   answer: string;
   retrievedAt: string;
-  sources: { id: number; title: string; url: string; snippet: string; publishedAt?: string }[];
+  sources: { id: number; title: string; url: string; snippet: string; publishedAt?: string;
+    evidenceType?: "source_excerpt" | "cited_summary" }[];
 }
 export type WebResearch = (query: string, signal: AbortSignal, depth?: WebResearchDepth) => Promise<WebResearchResult>;
 
@@ -28,7 +29,8 @@ export function safeWebUrl(value: unknown): value is string {
 export function validWebMetadata(value: unknown): value is NonNullable<ChatEvidence["web"]> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const item = value as Record<string, unknown>;
-  return Object.keys(item).every(key => ["url", "retrievedAt", "publishedAt"].includes(key)) && safeWebUrl(item.url) &&
+  return Object.keys(item).every(key => ["url", "retrievedAt", "publishedAt", "evidenceType"].includes(key)) && safeWebUrl(item.url) &&
+    (item.evidenceType === undefined || item.evidenceType === "source_excerpt" || item.evidenceType === "cited_summary") &&
     typeof item.retrievedAt === "string" && item.retrievedAt.length <= 40 && Number.isFinite(Date.parse(item.retrievedAt)) &&
     (item.publishedAt === undefined || (typeof item.publishedAt === "string" && item.publishedAt.length <= 100 && !/[\u0000-\u001f]/.test(item.publishedAt)));
 }
@@ -45,7 +47,9 @@ export function validateWebResult(value: unknown): WebResearchResult {
     item.sources.some(source => !Number.isSafeInteger(source.id) || source.id < 1 ||
       typeof source.title !== "string" || !source.title.trim() || source.title.length > 600 ||
       typeof source.snippet !== "string" || !source.snippet.trim() || source.snippet.length > 3_000 ||
-      !validWebMetadata({ url: source.url, retrievedAt: item.retrievedAt, ...(source.publishedAt ? { publishedAt: source.publishedAt } : {}) }))) {
+      !validWebMetadata({ url: source.url, retrievedAt: item.retrievedAt,
+        ...(source.publishedAt !== undefined ? { publishedAt: source.publishedAt } : {}),
+        ...(source.evidenceType !== undefined ? { evidenceType: source.evidenceType } : {}) }))) {
     throw new Error("Web research returned invalid or missing source evidence. Retry the request.");
   }
   return item;

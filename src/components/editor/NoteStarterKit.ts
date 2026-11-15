@@ -1,3 +1,4 @@
+import { withTickets } from "./TicketTaskItem";
 import { getExtensionField, Mark, Node, type JSONContent, type MarkdownExtensionSpec } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import TaskItem from "@tiptap/extension-task-item";
@@ -57,7 +58,7 @@ function withAlignmentParsing(extension: Node) {
   });
 }
 
-export const NoteTaskItem = withAlignmentParsing(TaskItem);
+export const NoteTaskItem = withTickets(withAlignmentParsing(TaskItem));
 
 function marginAttribute(side: "left" | "right") {
   const attribute = side === "left" ? "marginLeft" : "marginRight";

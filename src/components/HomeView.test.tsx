@@ -7,6 +7,28 @@ import { resolveThemePalette } from "../lib/theme";
 import { HomeView } from "./HomeView";
 
 describe("HomeView atmosphere", () => {
+  it("includes every note in Continue exploring without a Recent notes heading", () => {
+    const snapshot = createEmptySnapshot("Research");
+    snapshot.notes = Array.from({ length: 8 }, (_, i) => ({
+      id: `n${i}`, title: `Note ${i}`, slug: `n${i}`, body: "Some prose.", summary: "",
+      aliases: [], tags: [], kind: "article" as const, status: "ready" as const,
+      conceptIds: [], sourceIds: [], createdAt: snapshot.updatedAt,
+      updatedAt: `2026-11-${String(i + 1).padStart(2, "0")}T00:00:00Z`,
+    }));
+    const open = vi.fn();
+    render(<HomeView snapshot={snapshot} onOpenNote={open} onOpenConcept={vi.fn()}
+      onNewNote={vi.fn()} onImport={vi.fn()} onOpenNotes={vi.fn()}
+      onPatchTicket={vi.fn()} onRefreshOverview={vi.fn()} />);
+    expect(screen.queryByText("Recent notes")).toBeNull();
+    const strip = screen.getByLabelText("All notes, scroll horizontally");
+    expect(strip).toHaveAttribute("tabindex", "0");
+    const cards = strip.querySelectorAll("button");
+    expect(cards).toHaveLength(8);
+    expect(cards[0]).toHaveTextContent("Note 7");
+    expect(cards[0]).toHaveAccessibleName("Note 7");
+    fireEvent.click(cards[7]);
+    expect(open).toHaveBeenCalledWith("n0");
+  });
   it("shows a local summary for one short note with or without AI configured", () => {
     const snapshot = createEmptySnapshot("Research");
     snapshot.notes = [{
@@ -15,7 +37,7 @@ describe("HomeView atmosphere", () => {
       createdAt: snapshot.updatedAt, updatedAt: snapshot.updatedAt,
     }];
     const props = { onOpenNote: vi.fn(), onOpenConcept: vi.fn(), onNewNote: vi.fn(), onImport: vi.fn(),
-      onOpenNotes: vi.fn(), onToggleTask: vi.fn(), onRefreshOverview: vi.fn() };
+      onOpenNotes: vi.fn(), onPatchTicket: vi.fn(), onRefreshOverview: vi.fn() };
     const { rerender } = render(<HomeView {...props} snapshot={snapshot} />);
     expect(document.querySelector(".space-overview-body")).toHaveTextContent("Use PostgreSQL.");
     expect(screen.getByText("Based on your notes · Updated locally")).toBeVisible();
@@ -30,7 +52,7 @@ describe("HomeView atmosphere", () => {
     const light = resolveThemePalette(snapshot.settings, "light");
     const dark = resolveThemePalette(snapshot.settings, "dark");
     render(<HomeView snapshot={snapshot} themePalette={light} onOpenNote={vi.fn()} onOpenConcept={vi.fn()}
-      onNewNote={vi.fn()} onImport={vi.fn()} onOpenNotes={vi.fn()} onToggleTask={vi.fn()} onRefreshOverview={vi.fn()} />);
+      onNewNote={vi.fn()} onImport={vi.fn()} onOpenNotes={vi.fn()} onPatchTicket={vi.fn()} onRefreshOverview={vi.fn()} />);
     const hero = document.querySelector<HTMLElement>(".home-hero")!;
     expect(hero.dataset.atmosphereMode).toBe("dark");
     expect(hero.style.getPropertyValue("--text")).toBe(dark.text);
@@ -59,7 +81,7 @@ describe("HomeView atmosphere", () => {
         onNewNote={onNewNote}
         onImport={onImport}
         onOpenNotes={vi.fn()}
-        onToggleTask={vi.fn()}
+        onPatchTicket={vi.fn()}
         onRefreshOverview={vi.fn()}
       />,
     );
@@ -100,7 +122,7 @@ describe("HomeView atmosphere", () => {
     expect(onNewNote).toHaveBeenCalledOnce();
   });
 
-  it("collects open note tasks with their note and concept in the fixed home card", () => {
+  it("shows ordinary checklist tasks in their own To-dos section", () => {
     const snapshot = createEmptySnapshot(
       "Data",
       "2026-07-31T00:00:00.000Z",
@@ -134,7 +156,7 @@ describe("HomeView atmosphere", () => {
         autoLink: true,
       },
     ];
-    const onToggleTask = vi.fn();
+    const onPatchTicket = vi.fn();
 
     render(
       <HomeView
@@ -144,7 +166,7 @@ describe("HomeView atmosphere", () => {
         onNewNote={vi.fn()}
         onImport={vi.fn()}
         onOpenNotes={vi.fn()}
-        onToggleTask={onToggleTask}
+        onPatchTicket={onPatchTicket}
         onRefreshOverview={vi.fn()}
       />,
     );
@@ -156,25 +178,19 @@ describe("HomeView atmosphere", () => {
     expect(
       screen.queryByText("Project", { exact: true }),
     ).not.toBeInTheDocument();
-    expect(document.querySelector(".home-task-copy strong")).toHaveTextContent(
+    expect(document.querySelector(".ticket-open")).toHaveTextContent(
       "Compare SQL migrations",
     );
-    expect(document.querySelector(".home-task-concept")).toHaveTextContent(
+    expect(document.querySelector(".ticket-concept")).toHaveTextContent(
       "SQL",
     );
-    fireEvent.click(
-      screen.getByRole("checkbox", {
-        name: "Complete Compare SQL migrations",
-      }),
-    );
-    expect(onToggleTask).toHaveBeenCalledWith(
-      expect.objectContaining({
-        noteId: "note-plan",
-        conceptLabel: "SQL",
-      }),
-      true,
-    );
-    expect(screen.queryByText("Archive old export")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Complete Compare SQL migrations" }));
+    expect(onPatchTicket).toHaveBeenCalledWith(expect.objectContaining({ noteId: "note-plan", title: "Compare SQL migrations" }), { status: "done" });
+    expect(screen.getByRole("region", {name:"To-dos"})).toBeVisible();
+    expect(screen.queryByRole("region", {name:"Tickets"})).toBeNull();
+    expect(screen.queryByRole("button", { name: "Archive old export" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name:/Completed/}));
+    expect(screen.getByRole("button", { name: "Archive old export" })).toBeVisible();
     expect(screen.queryByText("Concepts with gravity")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Around SQL" })).toBeVisible();
   });
@@ -218,7 +234,7 @@ describe("HomeView atmosphere", () => {
         onNewNote={vi.fn()}
         onImport={vi.fn()}
         onOpenNotes={vi.fn()}
-        onToggleTask={vi.fn()}
+        onPatchTicket={vi.fn()}
         onRefreshOverview={vi.fn()}
         overviewBusy
       />,
@@ -271,7 +287,7 @@ describe("HomeView atmosphere", () => {
         onNewNote={vi.fn()}
         onImport={vi.fn()}
         onOpenNotes={vi.fn()}
-        onToggleTask={vi.fn()}
+        onPatchTicket={vi.fn()}
         onRefreshOverview={vi.fn()}
       />,
     );

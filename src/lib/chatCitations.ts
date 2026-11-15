@@ -22,7 +22,7 @@ export function splitSavedChatPassages(markdown: string): SavedPassageSection {
   for (let index = 0; index < evidence.length; index += 1) {
     if (!paragraphs[index * 3].includes(`](#orion-passage-${evidence[index].id} "${SAVED_PASSAGE_PREFIX}`) ||
       !paragraphs[index * 3 + 1].split("\n").every((line) => line.startsWith("> ") || line === ">") ||
-      !/^Original:[^\r\n]*$/.test(paragraphs[index * 3 + 2])) return unchanged;
+      !/^(?:Original|Cited website):[^\r\n]*$/.test(paragraphs[index * 3 + 2])) return unchanged;
   }
   return { body: markdown.slice(0, start), footer, evidence };
 }
@@ -98,7 +98,7 @@ export function resolveChatEvidenceMarkers(markdown: string, evidence: ChatEvide
   });
 }
 
-/** Host-only conversion after action validation: exact quotes remain portable. */
+/** Host-only conversion: retained evidence and its provenance remain portable. */
 export function portableChatEvidence(markdown: string, evidence: readonly ChatEvidence[]): string {
   const cited = new Map<string, ChatEvidence>();
   // A provider cannot mint historical evidence by copying a generated section.
@@ -115,9 +115,11 @@ export function portableChatEvidence(markdown: string, evidence: readonly ChatEv
   const passages = [...cited.values()].map((item, index) => {
     const encoded = encodeEvidence(item);
     if (encoded.length > MAX_ENCODED_PASSAGE_LENGTH) throw new Error("The cited passage is too large to keep safely.");
-    return `[Passage ${index + 1}: ${literalMarkdown(item.title)}](#orion-passage-${item.id} "${SAVED_PASSAGE_PREFIX}${encoded}")\n\n` +
+    const summary = item.web?.evidenceType === "cited_summary";
+    const label = summary ? `AI-cited summary ${index + 1} (not a source quotation)` : `Passage ${index + 1}`;
+    return `[${label}: ${literalMarkdown(item.title)}](#orion-passage-${item.id} "${SAVED_PASSAGE_PREFIX}${encoded}")\n\n` +
       item.text.split("\n").map((line) => `> ${literalMarkdown(line)}`).join("\n") +
-      `\n\nOriginal: [${literalMarkdown(item.title)}](${item.kind === "web" ? item.web!.url.replace(/[()]/g, char => char === "(" ? "%28" : "%29") : `orion-${item.kind}://${encodeURIComponent(item.entityId)}`})`;
+      `\n\n${summary ? "Cited website" : "Original"}: [${literalMarkdown(item.title)}](${item.kind === "web" ? item.web!.url.replace(/[()]/g, char => char === "(" ? "%28" : "%29") : `orion-${item.kind}://${encodeURIComponent(item.entityId)}`})`;
   }).join("\n\n");
   if (new TextEncoder().encode(passages).length > MAX_SAVED_PASSAGE_BYTES) throw new Error("The cited passages are too large to keep safely.");
   return `${body}\n\n## Cited passages\n\n${passages}`;

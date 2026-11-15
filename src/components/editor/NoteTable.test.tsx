@@ -88,6 +88,39 @@ describe("Orion editable tables", () => {
     expect(editor.getMarkdown()).not.toContain("orion-table");
   });
 
+  it("preserves literal separators and rich inline content through repeated table saves", () => {
+    const editor = createEditor("");
+    const literal = "A | B and \\| literal &amp; <script>alert(1)</script> **literal**";
+    editor.commands.setContent({ type: "doc", content: [{ type: "table", content: [
+      { type: "tableRow", content: [
+        { type: "tableHeader", content: [{ type: "paragraph", content: [{ type: "text", text: "Header | one" }] }] },
+        { type: "tableHeader", content: [{ type: "paragraph", content: [{ type: "text", text: "Other" }] }] },
+      ] },
+      { type: "tableRow", content: [
+        { type: "tableCell", content: [{ type: "paragraph", content: [
+          { type: "text", text: literal }, { type: "hardBreak" },
+          { type: "text", text: "Bold | comparison", marks: [{ type: "bold" }] },
+          { type: "text", text: "left || right", marks: [{ type: "code" }] },
+        ] }] },
+        { type: "tableCell", content: [{ type: "paragraph" }] },
+      ] },
+    ] }] });
+    const before = table(editor).node.textContent;
+    let markdown = editor.getMarkdown();
+    for (let i = 0; i < 3; i++) {
+      const reopened = createEditor(markdown);
+      const restored = table(reopened).node;
+      expect(TableMap.get(restored)).toMatchObject({ width: 2, height: 2 });
+      expect(restored.textContent).toBe(before);
+      expect(reopened.view.dom.querySelector("script")).toBeNull();
+      expect(reopened.view.dom.querySelector("strong")?.textContent).toBe("Bold | comparison");
+      expect(reopened.view.dom.querySelector("code")?.textContent).toBe("left || right");
+      expect(reopened.view.dom.querySelector("td br")).not.toBeNull();
+      expect(reopened.getMarkdown()).toBe(markdown);
+      markdown = reopened.getMarkdown();
+    }
+  });
+
   it("keeps metadata invisible in the editor and stable through repeated save and reopen cycles", () => {
     const metadata = '<!-- orion-table:v1 {"width":74,"header":false,"banded":false,"columns":[127,220]} -->';
     let saved = `${metadata}\n| | |\n| --- | --- |\n| Author row | Content |\n\nAfter`;

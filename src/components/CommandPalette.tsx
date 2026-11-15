@@ -229,7 +229,7 @@ export function CommandPalette({
     return () => { searchController.current?.abort(); searchController.current = null; };
   }, [open, query, snapshot.workspace.id, snapshot.notes, snapshot.sources, snapshot.concepts,
     snapshot.relationships, snapshot.settings.model, snapshot.settings.reasoningEffort,
-    snapshot.settings.apiKeyConfigured, snapshot.settings.anthropicApiKeyConfigured]);
+    snapshot.settings.apiKeyConfigured, snapshot.settings.chatgptConfigured, snapshot.settings.anthropicApiKeyConfigured]);
 
   useEffect(() => {
     dialogRef.current?.querySelector<HTMLButtonElement>(`[data-search-result="${selected}"]`)?.scrollIntoView?.({ block: "nearest" });

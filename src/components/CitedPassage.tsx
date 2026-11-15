@@ -21,7 +21,9 @@ interface CitedPassageProps {
 
 export function citedPassageStatus(evidence: ChatEvidence, notes: readonly Note[], sources: readonly Source[], savedWith: "reply" | "note" | "answer") {
   if (evidence.kind === "web") return { available: validWebMetadata(evidence.web),
-    description: validWebMetadata(evidence.web) ? `Web search excerpt · Retrieved ${new Date(evidence.web.retrievedAt).toLocaleDateString()}. This retained excerpt may not reflect later page changes.` : "This web reference is unavailable." };
+    description: validWebMetadata(evidence.web) ? evidence.web.evidenceType === "cited_summary"
+      ? `AI-cited summary · Retrieved ${new Date(evidence.web.retrievedAt).toLocaleDateString()}. Generated text linked to this website, not a quotation from the page.`
+      : `Web search excerpt · Retrieved ${new Date(evidence.web.retrievedAt).toLocaleDateString()}. This retained excerpt may not reflect later page changes.` : "This web reference is unavailable." };
   const note = evidence.kind === "note" ? notes.find((item) => item.id === evidence.entityId) : undefined;
   const source = evidence.kind === "source" ? sources.find((item) => item.id === evidence.entityId) : undefined;
   const currentVersion = note ? spaceNoteVersion(note) : source ? sourceEvidenceVersion(source) : undefined;
@@ -69,8 +71,9 @@ export function CitedPassage({ evidence, notes, sources, panelId, savedWith, onC
     <div className="chat-evidence__heading"><strong>{evidence.title}</strong>
       <button type="button" onClick={onClose} aria-label="Close cited passage">Close</button>
     </div>
-    <blockquote>{evidence.text}</blockquote>
-    <p>{status.description}</p>
+    {evidence.web?.evidenceType === "cited_summary" ? <>
+      <p>{status.description}</p><div className="chat-evidence__summary">{evidence.text}</div>
+    </> : <><blockquote>{evidence.text}</blockquote><p>{status.description}</p></>}
     {evidence.kind === "web" && validWebMetadata(evidence.web) && <p>{new URL(evidence.web.url).hostname}{evidence.web.publishedAt ? ` · Published ${evidence.web.publishedAt}` : ""}</p>}
     {openError && <p role="alert">{openError}</p>}
     <button type="button" disabled={!status.available || (evidence.kind === "source" && !onOpenSource)}

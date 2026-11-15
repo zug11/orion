@@ -1,4 +1,6 @@
-import type { OrionVault } from "../types";
+import { isCalendarDismissalList } from "./calendarDismissal";
+import type { ConceptStudioState, ChatThread, StudioMessage, OrionVault } from "../types";
+import { messageChatThreadId } from "./chatThreads";
 
 export type ConflictChoice = "local" | "remote";
 
@@ -37,6 +39,9 @@ export function mergeWindowVault(
 ): OrionVault {
   const conflicts: string[] = [];
   const merge = (before: unknown, ours: unknown, theirs: unknown, path: string): unknown => {
+    // Optional metadata did not exist in older vaults. Two windows may each
+    // create their first independent chat without conflicting on the array.
+    if (before === undefined && (path.endsWith(".studio.threads") || path.endsWith(".dismissedCalendarMentions")) && Array.isArray(ours) && Array.isArray(theirs)) before = [];
     if (same(ours, before)) return theirs;
     if (same(theirs, before) || same(ours, theirs)) return ours;
     const parts = path.split(".");
@@ -53,7 +58,14 @@ export function mergeWindowVault(
       const all = [...before, ...ours, ...theirs];
       if (all.every((item) => typeof item === "string")) {
         const removed = new Set(before.filter((item) => !ours.includes(item) || !theirs.includes(item)));
-        return [...new Set([...theirs, ...ours])].filter((item) => !removed.has(item));
+        const combined = [...new Set([...theirs, ...ours])].filter((item) => !removed.has(item));
+        if (field === "dismissedCalendarMentions" && !isCalendarDismissalList(combined)) {
+          // Preserve both complete versions for conflict resolution; never trim
+          // a dismissal list and silently make old dates visible again.
+          conflicts.push(path);
+          return choice === "remote" ? theirs : ours;
+        }
+        return combined;
       }
       if (all.every((item) => recordId(item) !== undefined)) {
         const index = (items: unknown[]) => new Map(items.map((item) => [recordId(item)!, item]));
@@ -79,7 +91,47 @@ export function mergeWindowVault(
     conflicts.push(path);
     return choice === "remote" ? theirs : ours;
   };
-  const result = merge(base, local, remote, "") as OrionVault;
+  let result = merge(base, local, remote, "") as OrionVault;
+  // Messages intentionally remain flat for compatibility. Reconcile a deleted
+  // thread atomically with its metadata when another writer appended/edited a
+  // reply, rather than returning messages orphaned by independent array merges.
+  type ThreadPart = { metadata?: ChatThread; messages: StudioMessage[] };
+  const indexThreads = (studio: ConceptStudioState | undefined) => {
+    const index = new Map<string, ThreadPart>();
+    for (const thread of studio?.threads ?? []) index.set(thread.id, { metadata: thread, messages: [] });
+    for (const message of studio?.messages ?? []) {
+      const id = messageChatThreadId(message);
+      let part = index.get(id);
+      if (!part) { part = { messages: [] }; index.set(id, part); }
+      part.messages.push(message);
+    }
+    return index;
+  };
+  for (const beforeSpace of base.spaces) {
+    const ours = local.spaces.find(space => space.workspace.id === beforeSpace.workspace.id);
+    const theirs = remote.spaces.find(space => space.workspace.id === beforeSpace.workspace.id);
+    if (!ours || !theirs) continue; // Whole-Space deletion has its own merge guard.
+    // Ordinary note typing never indexes Chat. A deletion/reply race requires
+    // both writers to have changed Studio. Index each changed history once.
+    if (same(beforeSpace.studio, ours.studio) || same(beforeSpace.studio, theirs.studio)) continue;
+    const beforeIndex = indexThreads(beforeSpace.studio), leftIndex = indexThreads(ours.studio), rightIndex = indexThreads(theirs.studio);
+    for (const [id, before] of beforeIndex) {
+      const left = leftIndex.get(id) ?? { messages: [] }, right = rightIndex.get(id) ?? { messages: [] };
+      const leftExists = Boolean(left.metadata || left.messages.length), rightExists = Boolean(right.metadata || right.messages.length);
+      if ((!leftExists && rightExists && !same(before, right)) || (!rightExists && leftExists && !same(before, left))) {
+        conflicts.push(`spaces[${beforeSpace.workspace.name}].studio.threads[${before.metadata?.title || id}]`);
+        if (choice) {
+          const selected = choice === "local" ? left : right;
+          result = { ...result, spaces: result.spaces.map(space => space.workspace.id !== beforeSpace.workspace.id ? space : {
+            ...space, studio: { ...space.studio,
+              messages: [...space.studio.messages.filter(message => messageChatThreadId(message) !== id), ...selected.messages],
+              threads: [...(space.studio.threads ?? []).filter(thread => thread.id !== id), ...(selected.metadata ? [selected.metadata] : [])],
+            },
+          }) };
+        }
+      }
+    }
+  }
   if (conflicts.length && !choice) throw new WindowVaultConflict(conflicts, remote.updatedAt);
   return preserveWindowNavigation(result, local);
 }

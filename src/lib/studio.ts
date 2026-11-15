@@ -4,6 +4,7 @@ import type {
 
 export const EMPTY_STUDIO: Readonly<ConceptStudioState> = {
   messages: [],
+  threads: [],
   cards: [],
   activeConceptId: null,
   selectedCardIds: [],
@@ -17,6 +18,7 @@ export function createEmptyStudio(): ConceptStudioState {
   return {
     ...EMPTY_STUDIO,
     messages: [],
+    threads: [],
     cards: [],
     selectedCardIds: [],
   };

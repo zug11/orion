@@ -1,4 +1,5 @@
 import { LiveVoiceConnection, type VoiceStatus, type VoiceTransportOptions } from "./liveVoice";
+import { ElevenLabsLiveVoiceConnection } from "./elevenLabsLiveVoice";
 import { VoiceDeliveryTiming } from "./voiceDeliveryTiming";
 
 type Transport = Pick<LiveVoiceConnection, "start" | "close" | "dispose" | "mute" | "append">;
@@ -14,7 +15,9 @@ export class VoiceCallLifecycle {
   private readonly delegations = new Set<string>();
   private readonly outputTiming = new VoiceDeliveryTiming();
   private handoffTimer?: ReturnType<typeof setTimeout>;
-  constructor(private readonly create = (options: VoiceTransportOptions): Transport => new LiveVoiceConnection(options)) {}
+  constructor(private readonly create = (options: VoiceTransportOptions): Transport => options.provider === "elevenlabs"
+    ? new ElevenLabsLiveVoiceConnection(options)
+    : new LiveVoiceConnection(options)) {}
 
   get status() { return this.currentStatus; }
   get isActive() { return this.active; }

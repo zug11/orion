@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { createEmptyVault } from "../data/defaults";
 import type { Note, OrionVault } from "../types";
 import { mergeWindowVault, persistWindowVault, preserveWindowNavigation, vaultValuesEqual, WindowVaultConflict } from "./windowVault";
+import { applyChatResult } from "./chat";
+import { createChatThread, deleteChatThread, LEGACY_CHAT_THREAD_ID } from "./chatThreads";
 
 function fixture() {
   const vault = createEmptyVault("Windows", "2026-09-07T00:00:00.000Z");
@@ -15,6 +17,75 @@ function fixture() {
 const copy = (vault: OrionVault) => structuredClone(vault);
 
 describe("shared vault, independent windows", () => {
+  it("merges concurrent first thread creation from a legacy vault", () => {
+    const base = fixture(); delete base.spaces[0].studio.threads;
+    const local = copy(base), remote = copy(base);
+    local.spaces[0] = createChatThread(local.spaces[0], "chat-local", base.updatedAt);
+    remote.spaces[0] = createChatThread(remote.spaces[0], "chat-remote", base.updatedAt);
+    const merged = mergeWindowVault(base, local, remote);
+    expect(merged.spaces[0].studio.threads?.map(thread => thread.id)).toEqual(["chat-remote", "chat-local"]);
+  });
+
+  it.each(["chat-one", LEGACY_CHAT_THREAD_ID])("requires a choice for %s deletion racing a reply, and resolves the complete thread", id => {
+    const base = fixture();
+    let sequence = 0;
+    const append = (space: OrionVault["spaces"][number], target: string, prompt: string) =>
+      applyChatResult(space, prompt, { reply: "Reply" }, base.updatedAt, () => `message-${++sequence}`, undefined, undefined,
+        target === LEGACY_CHAT_THREAD_ID ? undefined : target);
+    base.spaces[0] = append(base.spaces[0], id, "Original conversation");
+    base.spaces[0] = createChatThread(base.spaces[0], "chat-other", base.updatedAt);
+    const local = copy(base), remote = copy(base);
+    local.spaces[0] = deleteChatThread(local.spaces[0], id, base.updatedAt);
+    remote.spaces[0] = append(remote.spaces[0], id, "Concurrent follow-up");
+    // Independent edits survive either resolution.
+    local.spaces[0] = append(local.spaces[0], "chat-other", "An unrelated conversation");
+    expect(() => mergeWindowVault(base, local, remote)).toThrow(WindowVaultConflict);
+    const ours = mergeWindowVault(base, local, remote, "local").spaces[0].studio;
+    expect(ours.messages.map(message => message.threadId ?? LEGACY_CHAT_THREAD_ID)).toEqual(["chat-other", "chat-other"]);
+    expect(ours.threads?.some(thread => thread.id === id)).toBe(false);
+    const theirs = mergeWindowVault(base, local, remote, "remote").spaces[0].studio;
+    expect(theirs.messages.filter(message => (message.threadId ?? LEGACY_CHAT_THREAD_ID) === id)).toHaveLength(4);
+    expect(theirs.messages.filter(message => message.threadId === "chat-other")).toHaveLength(2);
+  });
+
+  it("merges independent thread replies without mixing their identities", () => {
+    const base = fixture();
+    base.spaces[0] = createChatThread(createChatThread(base.spaces[0], "chat-one", base.updatedAt), "chat-two", base.updatedAt);
+    const local = copy(base), remote = copy(base);
+    let sequence = 0;
+    local.spaces[0] = applyChatResult(local.spaces[0], "One", { reply: "First" }, base.updatedAt, () => `local-${++sequence}`, undefined, undefined, "chat-one");
+    remote.spaces[0] = applyChatResult(remote.spaces[0], "Two", { reply: "Second" }, base.updatedAt, () => `remote-${++sequence}`, undefined, undefined, "chat-two");
+    const merged = mergeWindowVault(base, local, remote).spaces[0].studio;
+    expect(merged.messages.map(message => message.threadId)).toEqual(["chat-two", "chat-two", "chat-one", "chat-one"]);
+    expect(merged.threads?.map(thread => thread.title)).toEqual(["One", "Two"]);
+  });
+
+  it("merges concurrent first calendar dismissals as a union without changing either note's time anchor", () => {
+    const base = fixture(), local = copy(base), remote = copy(base);
+    local.spaces[0].notes[0].dismissedCalendarMentions = ["v1:0123456789abcdef:0:1"];
+    remote.spaces[0].notes[0].dismissedCalendarMentions = ["v1:0123456789abcdef:0:2"];
+    const merged = mergeWindowVault(base, local, remote).spaces[0].notes[0];
+    expect(merged).toEqual({ ...base.spaces[0].notes[0], dismissedCalendarMentions: ["v1:0123456789abcdef:0:2", "v1:0123456789abcdef:0:1"] });
+  });
+
+  it("merges dismissal Undo with later prose and another new dismissal", () => {
+    const base = fixture(); base.spaces[0].notes[0].dismissedCalendarMentions = ["v1:0123456789abcdef:0:1"];
+    const local = copy(base), remote = copy(base);
+    local.spaces[0].notes[0].dismissedCalendarMentions = [];
+    remote.spaces[0].notes[0].body = "Later authored prose.";
+    remote.spaces[0].notes[0].dismissedCalendarMentions!.push("v1:0123456789abcdef:0:2");
+    expect(mergeWindowVault(base, local, remote).spaces[0].notes[0]).toMatchObject({ body: "Later authored prose.", dismissedCalendarMentions: ["v1:0123456789abcdef:0:2"] });
+  });
+
+  it("requires an explicit conflict choice if a concurrent dismissal union exceeds its bound", () => {
+    const base = fixture(), local = copy(base), remote = copy(base);
+    local.spaces[0].notes[0].dismissedCalendarMentions = Array.from({ length: 3000 }, (_, i) => `v1:0123456789abcdef:0:${i}`);
+    remote.spaces[0].notes[0].dismissedCalendarMentions = Array.from({ length: 3000 }, (_, i) => `v1:0123456789abcdef:1:${i}`);
+    expect(() => mergeWindowVault(base, local, remote)).toThrow(WindowVaultConflict);
+    expect(mergeWindowVault(base, local, remote, "local").spaces[0].notes[0].dismissedCalendarMentions).toEqual(local.spaces[0].notes[0].dismissedCalendarMentions);
+    expect(mergeWindowVault(base, local, remote, "remote").spaces[0].notes[0].dismissedCalendarMentions).toEqual(remote.spaces[0].notes[0].dismissedCalendarMentions);
+  });
+
   it("merges a removed heading layout with another writer's body edit", () => {
     const base = fixture();
     base.spaces[0].notes[0].title = "";

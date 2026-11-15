@@ -4,6 +4,7 @@ import type { AppSnapshot, ChatPromptSuggestion, Note, Source } from "../types";
 import { chatWithOrion } from "./storage";
 import { generateChatSuggestions, getChatSuggestionContext, getChatSuggestionContextKey } from "./chatSuggestions";
 import { MAX_CHAT_SUGGESTION_CONTEXT_BYTES, parseChatSuggestionContext } from "./chatSuggestionsProtocol";
+import { chatPromptAllowsNoteCreation } from "./chat";
 
 vi.mock("./storage", () => ({ chatWithOrion: vi.fn() }));
 const transport = vi.mocked(chatWithOrion);
@@ -199,11 +200,14 @@ describe("AI prompt suggestion generation", () => {
     await expect(generateChatSuggestions(snapshot, attached)).rejects.toThrow("invalid prompt suggestions");
   });
 
-  it("rejects hidden creation intent and unsupported creation syntax", async () => {
+  it("rejects hidden creation intent and enforces the canonical model-suggestion prefix", async () => {
     const snapshot = fixture(); const context = getChatSuggestionContext(snapshot)!;
     const suggestions = validSuggestions(context.evidence.map(item => item.id));
     transport.mockResolvedValue({ reply: "", suggestions: [{ ...suggestions[1], intent: "discuss" }, suggestions[0]] });
     await expect(generateChatSuggestions(snapshot, context)).rejects.toThrow("invalid prompt suggestions");
+    // Human requests accept this phrasing; generated suggestion JSON retains
+    // its separate exact "Create a note" contract shared with the native host.
+    expect(chatPromptAllowsNoteCreation("Create a new note about memory.")).toBe(true);
     transport.mockResolvedValue({ reply: "", suggestions: [{ ...suggestions[1], prompt: "Create a new note about memory." }, suggestions[0]] });
     await expect(generateChatSuggestions(snapshot, context)).rejects.toThrow("invalid prompt suggestions");
   });
@@ -233,6 +237,22 @@ describe("AI prompt suggestion generation", () => {
     snapshot.settings.apiKeyConfigured = true;
     const controller = new AbortController(); controller.abort();
     await expect(generateChatSuggestions(snapshot, context, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it("uses a connected ChatGPT plan for suggestions without an API key", async () => {
+    const snapshot = fixture(); Object.assign(snapshot.settings, { model: "chatgpt:gpt-6.1-sol", apiKeyConfigured: false, chatgptConfigured: true, chatgptAccountId: "account-a" });
+    const context = getChatSuggestionContext(snapshot)!;
+    const suggestions = validSuggestions(context.evidence.map(item => item.id));
+    transport.mockResolvedValue({ reply: "", suggestions });
+    expect(await generateChatSuggestions(snapshot, context)).toEqual(suggestions);
+    expect(transport.mock.calls[0][0]).toMatchObject({ mode: "chat-suggestions", model: "chatgpt:gpt-6.1-sol", allowNoteActions: false });
+  });
+
+  it("requires the selected ChatGPT connection instead of falling back to a configured API key", async () => {
+    const snapshot = fixture(); Object.assign(snapshot.settings, { model: "chatgpt:gpt-6.1-sol", apiKeyConfigured: true, chatgptConfigured: false });
+    const context = getChatSuggestionContext(snapshot)!;
+    await expect(generateChatSuggestions(snapshot, context)).rejects.toThrow("Connect the selected provider in Settings");
     expect(transport).not.toHaveBeenCalled();
   });
 

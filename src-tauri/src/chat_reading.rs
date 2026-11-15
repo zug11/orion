@@ -119,11 +119,58 @@ pub(super) fn validate_context(text: Option<&str>) -> Result<Value, String> {
         || !value["finalizing"].is_boolean()
         || !value["evidence"].as_array().is_some_and(|items| {
             items.len() <= protocol()["maxReadingEvidence"].as_u64().unwrap() as usize
+                && items.iter().all(|item| {
+                    if item["kind"] == "web" {
+                        valid_web_metadata(&item["web"])
+                    } else {
+                        item.get("web").is_none()
+                    }
+                })
         })
     {
         return Err("Chat received an invalid reading packet.".to_string());
     }
     Ok(value)
+}
+
+// The evidence text may be a retained search excerpt or an exact span of a
+// provider-cited summary. Preserve that distinction before any provider call;
+// an unknown provenance label must never silently become a source quotation.
+fn valid_web_metadata(value: &Value) -> bool {
+    let Some(fields) = value.as_object() else {
+        return false;
+    };
+    if fields
+        .keys()
+        .any(|key| !["url", "retrievedAt", "publishedAt", "evidenceType"].contains(&key.as_str()))
+    {
+        return false;
+    }
+    let Some(url) = value["url"].as_str().filter(|url| {
+        !url.is_empty()
+            && url.encode_utf16().count() <= 2_048
+            && !url.chars().any(|ch| ch.is_control() || ch.is_whitespace())
+    }) else {
+        return false;
+    };
+    let Ok(url) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    matches!(url.scheme(), "https" | "http")
+        && url.host_str().is_some()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && value["retrievedAt"].as_str().is_some_and(|text| {
+            !text.is_empty() && text.len() <= 40 && !text.chars().any(char::is_control)
+        })
+        && value.get("publishedAt").is_none_or(|value| {
+            value.as_str().is_some_and(|text| {
+                text.encode_utf16().count() <= 100 && !text.chars().any(char::is_control)
+            })
+        })
+        && value
+            .get("evidenceType")
+            .is_none_or(|value| matches!(value.as_str(), Some("source_excerpt" | "cited_summary")))
 }
 
 pub(super) fn parse_response(
@@ -501,6 +548,48 @@ mod tests {
         let oversized =
             json!({"finalizing":false,"evidence":[],"text":"😀".repeat(90_000)}).to_string();
         assert!(validate_context(Some(&oversized)).is_err());
+    }
+
+    #[test]
+    fn reading_context_preserves_web_evidence_provenance_and_rejects_unknown_labels() {
+        let packet = json!({"finalizing":false,"evidence":[{"kind":"web","web":{
+            "url":"https://example.org/research","retrievedAt":"2026-11-15T00:00:00Z","evidenceType":"cited_summary"
+        }}]});
+        assert_eq!(validate_context(Some(&packet.to_string())).unwrap(), packet);
+        for label in [json!("source_excerpt"), json!("cited_summary")] {
+            let mut value = packet.clone();
+            value["evidence"][0]["web"]["evidenceType"] = label;
+            assert!(validate_context(Some(&value.to_string())).is_ok());
+        }
+        let mut legacy = packet.clone();
+        legacy["evidence"][0]["web"]
+            .as_object_mut()
+            .unwrap()
+            .remove("evidenceType");
+        assert!(validate_context(Some(&legacy.to_string())).is_ok());
+        for label in [
+            json!("full_page"),
+            json!(""),
+            Value::Null,
+            json!(1),
+            json!({"type":"cited_summary"}),
+        ] {
+            let mut value = packet.clone();
+            value["evidence"][0]["web"]["evidenceType"] = label;
+            assert!(validate_context(Some(&value.to_string())).is_err());
+        }
+        for url in [
+            "javascript:alert(1)",
+            "https://user:secret@example.org/page",
+            "https://example.org/ bad",
+        ] {
+            let mut value = packet.clone();
+            value["evidence"][0]["web"]["url"] = json!(url);
+            assert!(validate_context(Some(&value.to_string())).is_err());
+        }
+        let mut local = packet;
+        local["evidence"][0]["kind"] = json!("note");
+        assert!(validate_context(Some(&local.to_string())).is_err());
     }
 
     #[test]

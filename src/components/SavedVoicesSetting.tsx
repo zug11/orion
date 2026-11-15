@@ -6,15 +6,24 @@ import {
   normalizeElevenLabsVoices,
 } from "../data/defaults";
 import type { Settings } from "../types";
+import type { LibraryVoice } from "../lib/elevenLabsVoices";
 
 type VoiceSettings = Pick<Settings, "elevenLabsVoiceId" | "elevenLabsVoices">;
 
 export function SavedVoicesSetting({
   settings,
   onChange,
+  accountVoices,
+  accountLoading = false,
+  accountMessage,
+  onRefresh,
 }: {
   settings: VoiceSettings;
   onChange: (settings: VoiceSettings) => void;
+  accountVoices?: readonly LibraryVoice[];
+  accountLoading?: boolean;
+  accountMessage?: string;
+  onRefresh?: () => void;
 }) {
   const voices = normalizeElevenLabsVoices(
     settings.elevenLabsVoices,
@@ -22,6 +31,8 @@ export function SavedVoicesSetting({
   );
   const activeId = normalizeElevenLabsVoiceId(settings.elevenLabsVoiceId);
   const selected = voices.find((voice) => voice.voiceId === activeId);
+  const accountById = new Map(accountVoices?.map(voice => [voice.id, voice]));
+  const choices = [...voices, ...(accountVoices ?? []).filter(voice => !voices.some(saved => saved.voiceId === voice.id)).map(voice => ({ voiceId: voice.id, name: voice.name }))];
   const [editor, setEditor] = useState<{ voiceId: string } | null>(null);
   const [name, setName] = useState("");
   const [voiceId, setVoiceId] = useState("");
@@ -75,31 +86,43 @@ export function SavedVoicesSetting({
         <span>
           <strong>ElevenLabs voice</strong>
           <small>
-            Save voices by name, then choose one for Play on every note and
-            narrated deck.
+            Choose the voice for ElevenLabs conversations, note playback and
+            narrated decks. Save your favourites by name.
           </small>
         </span>
         <select
           ref={selector}
           aria-label="ElevenLabs voice"
           value={activeId}
+          disabled={accountLoading}
           onChange={(event) => {
+            const id = event.target.value;
+            const choice = choices.find(voice => voice.voiceId === id);
+            const account = accountById.get(id);
+            if (accountVoices && id && (!account || account.requiresVerification)) return;
+            const saved = [...voices];
+            if (choice && !saved.some(voice => voice.voiceId === id)) {
+              let name = choice.name, suffix = 2;
+              while (saved.some(voice => voice.name.toLowerCase() === name.toLowerCase())) name = `${choice.name.slice(0, MAX_VOICE_NAME_LENGTH - 8)} ${suffix++}`;
+              saved.push({ voiceId: id, name });
+            }
             onChange({
-              elevenLabsVoiceId: event.target.value,
-              elevenLabsVoices: voices,
+              elevenLabsVoiceId: id,
+              elevenLabsVoices: saved,
             });
             closeEditor();
           }}
         >
           <option value="">Orion default</option>
-          {voices.map((voice) => (
-            <option key={voice.voiceId} value={voice.voiceId}>
-              {voice.name}
+          {choices.map((voice) => (
+            <option key={voice.voiceId} value={voice.voiceId} disabled={!!accountVoices && (!accountById.has(voice.voiceId) || accountById.get(voice.voiceId)?.requiresVerification)}>
+              {voice.name}{accountById.get(voice.voiceId)?.requiresVerification ? " · Verification required" : accountVoices && !accountById.has(voice.voiceId) ? " · Unavailable in this account" : ""}
             </option>
           ))}
         </select>
       </label>
       <div className="saved-voice-actions">
+        {onRefresh && <button type="button" className="button ghost small" onClick={onRefresh} disabled={accountLoading}>{accountLoading ? "Loading voices…" : "Refresh voices"}</button>}
         <button
           type="button"
           className="button secondary small"
@@ -144,6 +167,7 @@ export function SavedVoicesSetting({
           </>
         ) : null}
       </div>
+      {accountMessage && <p className="setting-message" role="status">{accountMessage}</p>}
       {editor ? (
         <form
           key={editor.voiceId}

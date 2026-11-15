@@ -102,7 +102,7 @@ export function setTaskChecked(
   return lines.join(newline);
 }
 
-function taskConcept(
+export function taskConcept(
   rawText: string,
   note: Note,
   concepts: readonly Concept[],
@@ -162,7 +162,7 @@ function taskFingerprint(value: string): string {
  * a reliable derivation signal. A compatibility `wiki` note is also derivative
  * by design and must not surface a copied project task as a second Home item.
  */
-function sharesTaskDerivation(left: Note, right: Note): boolean {
+export function sharesTaskDerivation(left: Note, right: Note): boolean {
   if (left.id === right.id) {
     return false;
   }

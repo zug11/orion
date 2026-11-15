@@ -1,8 +1,14 @@
 import { useRef, useState } from "react";
+import type { Settings } from "../types";
+import { resolveWebResearchProvider, webResearchUnavailableReason } from "../lib/webResearchProvider";
 import { Eye, EyeOff, Globe, KeyRound, LoaderCircle, LockKeyhole } from "../lib/icons";
 import { deletePerplexityKey, savePerplexityKey, testPerplexityKey } from "../lib/perplexity";
 
-export function PerplexitySettings({ configured, onConfiguredChange }: { configured: boolean; onConfiguredChange: (configured: boolean) => void }) {
+export function PerplexitySettings({ configured, onConfiguredChange, settings, onProviderChange }: {
+  configured: boolean; onConfiguredChange: (configured: boolean) => void;
+  settings?: Settings; onProviderChange?: (provider: "auto" | "openai" | "perplexity") => void;
+}) {
+  const route = settings ? resolveWebResearchProvider(settings) : configured ? { label: "Perplexity" } : undefined;
   const [key, setKey] = useState("");
   const [reveal, setReveal] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -21,7 +27,7 @@ export function PerplexitySettings({ configured, onConfiguredChange }: { configu
       } else if (action === "remove") {
         await deletePerplexityKey();
         setKey(""); setReveal(false); latestChange.current(false);
-        setMessage("Perplexity key removed. New requests will use Space context only.");
+        setMessage("Perplexity key removed. Web research follows your selected provider.");
       } else setMessage(await testPerplexityKey());
     } catch (error) { setFailed(true); setMessage(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
@@ -29,9 +35,19 @@ export function PerplexitySettings({ configured, onConfiguredChange }: { configu
   return <section className="settings-section" id="web-research" aria-labelledby="web-research-title">
     <div className="settings-section-title"><span className="settings-icon violet"><Globe size={18} /></span>
       <span><h2 id="web-research-title">Web research</h2><p>Bring online sources into your conversation.</p></span></div>
+    {settings && <div className="setting-card">
+      <label className="setting-row"><span><strong>Search provider</strong>
+        <small>Automatic uses Perplexity when configured, otherwise your selected OpenAI connection.</small></span>
+        <select aria-label="Web research provider" value={settings.webResearchProvider ?? "auto"}
+          onChange={event => onProviderChange?.(event.target.value as "auto" | "openai" | "perplexity")}>
+          <option value="auto">Automatic</option><option value="openai">OpenAI</option><option value="perplexity">Perplexity</option>
+        </select></label>
+      <p className="setting-message">{route ? `Web research uses ${route.label}.` : webResearchUnavailableReason(settings)}</p>
+      <p className="saved-voice-hint">OpenAI uses the model selected under Intelligence and its API key or ChatGPT plan. Voice can research when useful; text Chat uses Web only when you turn it on.</p>
+    </div>}
     <div className="setting-card api-key-card">
       <div className="setting-row"><span><strong>Perplexity API key</strong>
-        <small>Automatic when useful in voice. In text Chat, you choose when to use Web.</small></span>
+        <small>Optional when you use OpenAI web search. Keep this connection for Perplexity research.</small></span>
         <span className={configured ? "status-pill success" : "status-pill"}>{configured ? "Key saved" : "Not configured"}</span></div>
       <div className="api-key-input-row"><label><KeyRound size={15} /><input type={reveal ? "text" : "password"}
         aria-label="Perplexity API key" placeholder={configured ? "Replace saved key…" : "pplx-…"} value={key}
@@ -43,7 +59,7 @@ export function PerplexitySettings({ configured, onConfiguredChange }: { configu
       <div className="api-key-actions"><span>Stored in macOS Keychain. Research questions go to Perplexity; API usage applies.</span>
         {configured && <span><button type="button" disabled={busy} onClick={() => void perform("test")}>Test connection</button>
           <button type="button" className="danger-text" disabled={busy} onClick={() => void perform("remove")}>Remove key</button></span>}</div>
-      <p className="setting-message">Your selected OpenAI or Anthropic model still handles the conversation. Perplexity supplies cited web research.</p>
+      <p className="setting-message">Your selected Intelligence model handles the conversation. When chosen above, Perplexity supplies cited web research.</p>
       {message && <p className="setting-message" role={failed ? "alert" : "status"}>{message}</p>}
     </div>
   </section>;

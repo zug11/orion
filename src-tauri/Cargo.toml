@@ -1,6 +1,6 @@
 [package]
 name = "orion"
-version = "0.6.0"
+version = "0.6.1"
 description = "Orion — an AI-organized personal knowledge atlas"
 authors = ["Orion"]
 edition = "2021"
@@ -26,6 +26,10 @@ tauri-build = { version = "2", features = [] }
 quick-xml = { version = "0.38", default-features = false }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 base64 = "0.22"
+getrandom = "0.4"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+jsonwebtoken = { version = "10.3", default-features = false, features = ["rust_crypto"] }
 tauri = { version = "2.12", features = ["macos-private-api"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-deep-link = "2"
@@ -39,7 +43,7 @@ serde_json = "1"
 tempfile = "3"
 zeroize = "1"
 time = { version = "0.3", features = ["formatting", "parsing"] }
-tokio = { version = "1", features = ["macros", "sync"] }
+tokio = { version = "1", features = ["macros", "sync", "net", "io-util", "time"] }
 tauri-plugin-updater = "2.14.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]

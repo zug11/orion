@@ -1,15 +1,19 @@
 {
   "name": "orion",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.6.1",
   "type": "module",
   "scripts": {
+    "postinstall": "node script/patch_elevenlabs_client.mjs",
+    "predev": "node script/patch_elevenlabs_client.mjs",
     "dev": "vite",
+    "prebuild": "node script/patch_elevenlabs_client.mjs",
     "build": "tsc && vite build",
     "build:mcp": "bash ./script/build_mcp_connector.sh",
     "build:codex": "bash ./script/build_codex_plugin.sh",
     "build:native": "bash ./script/build_transcription_sidecar.sh && bash ./script/build_ocr_sidecar.sh",
     "build:desktop": "npm run build:native && npm run build && npm run build:mcp && npm run build:codex -- --use-existing",
+    "pretest": "node script/patch_elevenlabs_client.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "eval:long-import": "node ./script/evaluate_long_import.mjs",
@@ -18,6 +22,8 @@
     "check": "npm run test && npm run build"
   },
   "dependencies": {
+    "@alexanderolsen/libsamplerate-js": "2.1.2",
+    "@elevenlabs/client": "1.36.1",
     "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-deep-link": "^2",
     "@tauri-apps/plugin-opener": "^2",
@@ -32,6 +38,7 @@
     "@tiptap/pm": "^3.31.3",
     "@tiptap/react": "^3.31.3",
     "@tiptap/starter-kit": "^3.31.3",
+    "chrono-node": "2.10.3",
     "clsx": "^2.1.1",
     "docx": "^9.8.1",
     "lucide-react": "^1.27.0",
@@ -43,7 +50,9 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "unified": "^11.0.5"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.4",

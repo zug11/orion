@@ -30,7 +30,7 @@ export function createDocumentWordCounter(count = countWords) {
 }
 
 const blocks = new Set(["P", "DIV", "H1", "H2", "H3", "H4", "H5", "H6", "LI", "BLOCKQUOTE", "PRE", "TR", "TD", "TH"]);
-const excluded = "script,style,svg,[hidden],[aria-hidden='true'],.source-citation-marker,.chat-citation,[data-saved-passage]";
+const excluded = "[data-narration-ignore],script,style,svg,[hidden],[aria-hidden='true'],.source-citation-marker,.chat-citation,[data-saved-passage]";
 
 /** Preserve block boundaries and inline words from the actual reading surface. */
 export function countableText(node: Node): string {

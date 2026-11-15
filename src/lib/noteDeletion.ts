@@ -1,6 +1,8 @@
 import { reconcileConceptVocabulary } from "./concepts";
 import { stripOrionLinksToTargets } from "./markdown";
 import type { AppSnapshot, EntityId } from "../types";
+import { deleteSourceFromSnapshot } from "./sourceDeletion";
+import { proseSourceCitationIds } from "./sourceCitations";
 
 export interface DeleteNoteOptions {
   fallbackNoteId?: EntityId | null;
@@ -64,7 +66,7 @@ export function deleteNoteFromSnapshot(
     ? preferredFallback
     : null;
 
-  return {
+  const result: DeleteNoteResult = {
     deleted: true,
     removedConceptIds,
     snapshot: {
@@ -107,4 +109,15 @@ export function deleteNoteFromSnapshot(
       updatedAt: now,
     },
   };
+  const deletedNote = snapshot.notes.find(note => note.id === noteId)!;
+  const survivingIds = new Set(notes.map(note => note.id));
+  const usedSources = new Set(notes.flatMap(note => [...note.sourceIds, ...proseSourceCitationIds(note.body)]));
+  for (const source of snapshot.sources) {
+    if (source.kind === "audio" && source.id.startsWith("source-dictation-") &&
+      (source.noteIds.includes(noteId) || deletedNote.sourceIds.includes(source.id)) &&
+      !source.noteIds.some(id => survivingIds.has(id)) && !usedSources.has(source.id)) {
+      result.snapshot = deleteSourceFromSnapshot(result.snapshot, source.id, now).snapshot;
+    }
+  }
+  return result;
 }

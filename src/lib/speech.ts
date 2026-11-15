@@ -56,7 +56,9 @@ export class PreparedSpeechCache {
     const existing = this.entries.get(key);
     if (existing) return existing;
     const pending = factory().catch((error: unknown) => {
-      this.entries.delete(key);
+      // A voice/model change can clear the cache while this request is pending.
+      // Its eventual failure must not evict a newer synthesis with the same key.
+      if (this.entries.get(key) === pending) this.entries.delete(key);
       throw error;
     });
     this.entries.set(key, pending);
@@ -69,9 +71,9 @@ export class PreparedSpeechCache {
 }
 
 /**
- * Play uses ElevenLabs whenever that key is configured, unless the user
- * explicitly chose OpenAI. Missing cloud keys no longer silently fall back to
- * system speech: the caller must show the configuration error.
+ * Narration follows the user's selected engine independently of conversation
+ * voice or configured keys. Callers report a missing cloud key without switching
+ * the request to another provider.
  */
 export function resolveSpeechEngine(
   settings: Pick<
@@ -79,17 +81,7 @@ export function resolveSpeechEngine(
     "speechVoice" | "apiKeyConfigured" | "elevenLabsApiKeyConfigured"
   >,
 ): SpeechVoice {
-  const preferred = normalizeSpeechVoice(settings.speechVoice);
-  if (preferred === "openai" && settings.apiKeyConfigured) {
-    return "openai";
-  }
-  if (settings.elevenLabsApiKeyConfigured || preferred === "elevenlabs") {
-    return "elevenlabs";
-  }
-  if (preferred === "openai") {
-    return "openai";
-  }
-  return "system";
+  return normalizeSpeechVoice(settings.speechVoice);
 }
 
 export function resolveElevenLabsVoiceId(

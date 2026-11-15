@@ -4,6 +4,22 @@ Orion includes the following components for its local media, visual and
 connector features. The separately distributed connectors also include
 `MCP_THIRD_PARTY_NOTICES.md` and the associated Markdown parser licenses.
 
+## ElevenLabs conversational audio
+
+- @elevenlabs/client 1.36.1 and @elevenlabs/types 0.29.0:
+  https://github.com/elevenlabs/packages
+- License: MIT (`licenses/elevenlabs-client-LICENSE` and
+  `licenses/elevenlabs-types-LICENSE`). Orion applies a local cancellation and
+  playback-gating patch through `script/patch_elevenlabs_client.mjs`.
+- LiveKit browser client: https://github.com/livekit/client-sdk-js
+- License: Apache-2.0 (`licenses/livekit-client-LICENSE`). Included as a client
+  library dependency; Orion's ElevenLabs conversation uses WebSocket transport.
+- @alexanderolsen/libsamplerate-js 2.1.2:
+  https://github.com/aolsenjazz/libsamplerate-js
+- Licenses: MIT for the JavaScript wrapper and BSD-2-Clause for libsamplerate
+  (`licenses/libsamplerate-js-LICENSE.md`). The audio worklets and WebAssembly
+  sample-rate converter are bundled locally.
+
 ## MCP Markdown parser
 
 - pulldown-cmark 0.13.4: https://github.com/pulldown-cmark/pulldown-cmark

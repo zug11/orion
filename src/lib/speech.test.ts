@@ -21,14 +21,10 @@ import {
 } from "./speech";
 
 describe("resolveSpeechEngine", () => {
-  it("uses ElevenLabs for Play whenever that key is configured", () => {
-    expect(
-      resolveSpeechEngine({
-        ...defaultSettings,
-        speechVoice: "system",
-        elevenLabsApiKeyConfigured: true,
-      }),
-    ).toBe("elevenlabs");
+  it("keeps System narration when an ElevenLabs conversation key is configured", () => {
+    const settings = { ...defaultSettings, speechVoice: "system" as const, liveVoiceProvider: "elevenlabs" as const,
+      apiKeyConfigured: true, elevenLabsApiKeyConfigured: true };
+    expect(resolveSpeechEngine(settings)).toBe("system");
   });
 
   it("keeps an explicit OpenAI choice when that key is present", () => {
@@ -50,6 +46,11 @@ describe("resolveSpeechEngine", () => {
         elevenLabsApiKeyConfigured: false,
       }),
     ).toBe("elevenlabs");
+  });
+
+  it("keeps the requested cloud provider when only the other provider's key is present", () => {
+    expect(resolveSpeechEngine({ ...defaultSettings, speechVoice: "openai", apiKeyConfigured: false, elevenLabsApiKeyConfigured: true })).toBe("openai");
+    expect(resolveSpeechEngine({ ...defaultSettings, speechVoice: "elevenlabs", apiKeyConfigured: true, elevenLabsApiKeyConfigured: false })).toBe("elevenlabs");
   });
 });
 
@@ -84,6 +85,21 @@ describe("chunkSpeechText", () => {
 });
 
 describe("PreparedSpeechCache", () => {
+  it("keeps new voice synthesis when an older cleared request fails", async () => {
+    const cache = new PreparedSpeechCache();
+    let rejectOld!: (error: Error) => void;
+    const old = cache.set("same-note", () => new Promise((_, reject) => { rejectOld = reject; }));
+    const oldFailure = expect(old).rejects.toThrow("old delivery failed");
+    cache.clear();
+    const current = cache.set("same-note", () => Promise.resolve([
+      { mimeType: "audio/mpeg", base64Data: "bmV3" },
+    ]));
+    rejectOld(new Error("old delivery failed"));
+    await oldFailure;
+    expect(cache.get("same-note")).toBe(current);
+    expect(await current).toEqual([{ mimeType: "audio/mpeg", base64Data: "bmV3" }]);
+  });
+
   it("reuses an in-flight synthesize and drops failed keys", async () => {
     const cache = new PreparedSpeechCache();
     let calls = 0;

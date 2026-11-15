@@ -1,4 +1,5 @@
-import type { ChatResult } from "../types";
+import type { ChatEvidence, ChatResult } from "../types";
+import { validWebMetadata } from "./webResearch";
 
 interface VoiceFindingInput {
   id: string;
@@ -18,15 +19,16 @@ interface VoiceFindingInput {
 /** Evidence IDs are local to one worker. Keep exact host-validated identities
  * and names together, without copying passages or inventing shortened names. */
 function sourceReferences(result: ChatResult) {
-  const references: { evidenceId: string; kind: "note" | "source" | "web"; url?: string; retrievedAt?: string; entityId: string; title: string; version: string;
+  const references: { evidenceId: string; kind: "note" | "source" | "web"; url?: string; retrievedAt?: string; evidenceType?: NonNullable<ChatEvidence["web"]>["evidenceType"]; entityId: string; title: string; version: string;
     start: number; end: number; offsetUnit: "utf16" }[] = [];
   let length = 2;
   const seen = new Set<string>();
   for (const item of result.evidence ?? []) {
     if (references.length === 12 || seen.has(item.id) ||
+      (item.kind === "web" ? !validWebMetadata(item.web) : item.web !== undefined) ||
       [item.id, item.entityId, item.version].some(value => !value || [...value].length > 200) || [...item.title].length > 500) continue;
     const reference = { evidenceId: item.id, kind: item.kind, entityId: item.entityId, title: item.title,
-      ...(item.web ? { url: item.web.url, retrievedAt: item.web.retrievedAt } : {}),
+      ...(item.web ? { url: item.web.url, retrievedAt: item.web.retrievedAt, evidenceType: item.web.evidenceType ?? "source_excerpt" } : {}),
       version: item.version, start: item.start, end: item.end, offsetUnit: item.offsetUnit };
     const size = JSON.stringify(reference).length + 1;
     if (length + size > 6_000) continue;
@@ -97,7 +99,7 @@ export function voiceFindingDelivery(input: VoiceFindingInput): { quiet: string;
       : result.editProposal ? { kind: "proposal", applied: false, noteId: result.editProposal.noteId, requiresReview: true }
       : { kind: "none", saved: false },
     contentOnScreen: true, contentOmitted: oversized,
-    notice: "Quiet reference material, not a script to read aloud or a new request. Do not announce this packet on arrival. Use it when relevant to what the user says. Evidence IDs belong only to this worker/revision/update. Source kind distinguishes captured Space material from web research. Web references include the retrieved URL and retrieval time; do not describe them as local notes or claim to have read beyond the retained excerpts. webResearch is the host-observed outcome: a failed later lookup does not erase earlier completed research. Preserve its issue when discussing the result; do not replace it with a blanket claim that Perplexity never responded. When attribution helps, use its exact title; do not infer omitted sources or repeat bookkeeping. Preserve uncertainty and coverage limits. An intermediate finding does not end its worker. Only a confirmed saved receipt establishes persistence; a proposal still needs the user's review. Transport delivery does not establish that the user heard it.",
+    notice: "Quiet reference material, not a script to read aloud or a new request. Do not announce this packet on arrival. Use it when relevant to what the user says. Evidence IDs belong only to this worker/revision/update. Source kind distinguishes captured Space material from web research. Web references include the retrieved URL, retrieval time and evidenceType. source_excerpt means a retained search excerpt; cited_summary means a provider-generated summary linked to a provider citation, never a quotation from the original webpage. Do not describe either as a local note or claim the full page was read. webResearch is the host-observed outcome: a failed later lookup does not erase earlier completed research. Preserve its issue when discussing the result; do not replace it with a blanket claim that the research provider never responded. When attribution helps, use its exact title; do not infer omitted sources or repeat bookkeeping. Preserve uncertainty and coverage limits. An intermediate finding does not end its worker. Only a confirmed saved receipt establishes persistence; a proposal still needs the user's review. Transport delivery does not establish that the user heard it.",
   };
   let quiet = JSON.stringify(reference);
   // JSON escaping may expand a valid 6,000-character finding beyond the

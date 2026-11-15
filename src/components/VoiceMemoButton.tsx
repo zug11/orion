@@ -22,6 +22,7 @@ type VoiceMemoPhase = "idle" | "recording" | "transcribing" | "saving" | "cleani
 
 interface VoiceMemoButtonProps {
   noteId: string;
+  disabled?: boolean;
   onSessionStart?: (sessionId: string) => Promise<void> | void;
   onSessionEnd?: (sessionId: string) => Promise<void> | void;
   onTranscribe: (audio: Blob, sessionId: string) => Promise<string>;
@@ -50,6 +51,7 @@ function formatElapsed(milliseconds: number): string {
 
 export function VoiceMemoButton({
   noteId,
+  disabled = false,
   onSessionStart,
   onSessionEnd,
   onTranscribe,
@@ -171,7 +173,8 @@ export function VoiceMemoButton({
     if (generationRef.current !== generation) return;
 
     const failure = failureRef.current;
-    if (failure) {
+    const transcript = mergeVoiceTranscriptParts(transcriptsRef.current);
+    if (failure && !transcript) {
       endSession();
       setPhase("idle");
       setError(recordingErrorMessage(failure));
@@ -179,7 +182,6 @@ export function VoiceMemoButton({
     }
 
     const sessionId = sessionIdRef.current;
-    const transcript = mergeVoiceTranscriptParts(transcriptsRef.current);
     try {
       if (!sessionId) {
         throw new Error("The dictation session ended before its text was ready.");
@@ -188,6 +190,10 @@ export function VoiceMemoButton({
         throw new Error("Whisper finished without detecting any speech.");
       }
       const controller = new AbortController();
+      // Preserve already-transcribed speech through the ordinary original-source
+      // archive and insertion path. Missing speech could contain a correction or
+      // cancellation, so incomplete recordings must never create AI work items.
+      if (failure) controller.abort(failure);
       completionControllerRef.current = controller;
       await onCompleteRef.current(sessionId, transcript, {
         signal: controller.signal,
@@ -195,6 +201,7 @@ export function VoiceMemoButton({
       });
       if (generationRef.current !== generation) return;
       setPhase("idle");
+      if (failure) setError(`Recording incomplete. The transcribed portion was kept, but some speech could not be recovered. ${recordingErrorMessage(failure)}`);
     } catch (caught) {
       if (generationRef.current !== generation) return;
       setPhase("idle");
@@ -351,7 +358,7 @@ export function VoiceMemoButton({
       requestStop();
       return;
     }
-    if (phase === "idle") void startRecording();
+    if (phase === "idle" && !disabled) void startRecording();
   }
 
   const recordingStatus = `${formatElapsed(elapsedMs)}${
@@ -375,10 +382,10 @@ export function VoiceMemoButton({
         type="button"
         className={phase === "recording" ? "icon-button voice-memo active" : "icon-button voice-memo"}
         aria-label={label}
-        title={phase === "recording" ? "Stop dictation" : phase === "cleaning" ? "Use original dictation without AI cleanup" : "Dictate at cursor"}
+        title={phase === "recording" ? "Stop dictation" : phase === "cleaning" ? "Use original dictation without AI cleanup" : disabled ? "Finish the current writing operation first" : "Dictate at cursor"}
         aria-pressed={phase === "recording"}
         aria-busy={finishing}
-        disabled={finishing && phase !== "cleaning"}
+        disabled={(phase === "idle" && disabled) || (finishing && phase !== "cleaning")}
         onMouseDown={(event) => event.preventDefault()}
         onClick={toggleRecording}
       >

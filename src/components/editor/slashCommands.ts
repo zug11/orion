@@ -1,5 +1,5 @@
 import type { EditorState } from "@tiptap/pm/state";
-export type SlashCommand = "write" | "comment" | "heading" | "block" | "todo" | "bullet" | "numbered" | "divider" | "image" | "code" | "link" | "excerpt" | "table" | "delete-row" | "delete-column" | "delete-table" | `h${1|2|3|4|5|6}`;
+export type SlashCommand = "write" | "comment" | "heading" | "block" | "todo" | "ticket" | "kanban" | "calendar" | "bullet" | "numbered" | "divider" | "image" | "code" | "link" | "excerpt" | "table" | "delete-row" | "delete-column" | "delete-table" | `h${1|2|3|4|5|6}`;
 export interface SlashMatch { from: number; to: number; query: string; inTable: boolean }
 export function getSlashMatch(state: EditorState): SlashMatch | null {
   const { $from, empty } = state.selection;
@@ -17,6 +17,9 @@ export const SLASH_ITEMS: { id: SlashCommand; title: string; description: string
   {id:"comment", title:"Comment", description:"Leave a comment on this passage or note", keywords:"annotate annotation discuss"},
   {id:"heading", title:"Heading", description:"Choose a heading size", keywords:"title h1 h2 h3 h4 h5 h6"},
   {id:"block", title:"Block", description:"Create a movable writing block", keywords:"group movable"},
+  {id:"ticket", title:"Ticket", description:"Create a ticket here", keywords:"task issue"},
+  {id:"calendar", title:"Calendar", description:"Choose a date with the arrow keys", keywords:"date schedule"},
+  {id:"kanban", title:"Kanban", description:"Put a board in this note", keywords:"board tickets"},
   {id:"todo", title:"To-do", description:"A checkbox connected to Home", keywords:"task checkbox"},
   {id:"bullet", title:"Bulleted list", description:"Start a simple list", keywords:"list unordered"},
   {id:"numbered", title:"Numbered list", description:"Put things in order", keywords:"list ordered"},
@@ -36,5 +39,5 @@ export function matchingSlashItems(match: SlashMatch) {
     ].filter(item => item.id.startsWith(match.query));
   }
   if (/^h[1-6]$/.test(match.query)) return [{id:match.query as SlashCommand,title:`Heading ${match.query[1]}`,description:"Apply this heading level"}];
-  return SLASH_ITEMS.filter(item => !(match.inTable && (item.id === "table" || item.id === "block")) && `${item.id} ${item.title} ${item.keywords ?? ""}`.toLowerCase().includes(match.query));
+  return SLASH_ITEMS.filter(item => !(match.inTable && (item.id === "table" || item.id === "block" || item.id === "ticket" || item.id === "kanban")) && `${item.id} ${item.title} ${item.keywords ?? ""}`.toLowerCase().includes(match.query));
 }

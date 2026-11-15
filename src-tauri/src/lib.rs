@@ -1,5 +1,6 @@
 mod chat_edits;
 mod chat_reading;
+mod chatgpt;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chat_reading::{ChatReadRequest, ChatReadingFinding, ChatVoicePresentation};
 use fs2::FileExt;
@@ -39,10 +40,12 @@ mod dictation_cleanup;
 mod editor_actions_protocol;
 #[path = "../shared/editor_context_protocol.rs"]
 mod editor_context_protocol;
+mod elevenlabs_voices;
 mod image_planning;
 mod knowledge_schemas;
 #[path = "../shared/note_version.rs"]
 mod note_version;
+mod openai_web;
 mod perplexity;
 #[path = "../shared/voice_work_orders_protocol.rs"]
 mod voice_work_orders_protocol;
@@ -50,6 +53,7 @@ use knowledge_schemas::{
     anthropic_knowledge_response_schema, anthropic_organizer_schema, knowledge_response_schema,
     organizer_schema, strip_anthropic_unsupported_schema_keywords,
 };
+mod elevenlabs_live;
 mod live_voice;
 mod local_transcription;
 mod media_jobs;
@@ -1034,6 +1038,7 @@ struct GenerateSpeechRequest {
     engine: String,
     text: String,
     voice_id: Option<String>,
+    model_id: Option<String>,
     #[serde(default)]
     track_words: bool,
     request_id: Option<String>,
@@ -2032,6 +2037,10 @@ fn validate_speech_request(engine: &str, text: &str) -> Result<(String, String),
 
 #[tauri::command]
 async fn test_elevenlabs_key(client: State<'_, OpenAiClient>) -> Result<KeyTestResult, String> {
+    run_elevenlabs_key_check(&client.0).await
+}
+
+async fn run_elevenlabs_key_check(client: &Client) -> Result<KeyTestResult, String> {
     let Some(api_key) = stored_elevenlabs_api_key().await? else {
         return Ok(KeyTestResult {
             valid: false,
@@ -2040,7 +2049,6 @@ async fn test_elevenlabs_key(client: State<'_, OpenAiClient>) -> Result<KeyTestR
     };
 
     let response = client
-        .0
         .get(ELEVENLABS_USER_URL)
         .header("xi-api-key", api_key.as_str())
         .header(reqwest::header::ACCEPT, "application/json")
@@ -2054,13 +2062,34 @@ async fn test_elevenlabs_key(client: State<'_, OpenAiClient>) -> Result<KeyTestR
             message: "ElevenLabs accepted the key.".to_string(),
         });
     }
+    let status = response.status().as_u16();
+    let mut response = response;
+    let mut bytes = Vec::new();
+    while let Ok(Some(chunk)) = response.chunk().await {
+        if bytes.len() + chunk.len() > 16 * 1024 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let details = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
     Ok(KeyTestResult {
         valid: false,
-        message: format!(
-            "ElevenLabs rejected the key ({})",
-            response.status().as_u16()
+        message: elevenlabs_key_test_error(
+            status,
+            details.pointer("/detail/status").and_then(Value::as_str),
         ),
     })
+}
+
+fn elevenlabs_key_test_error(status: u16, code: Option<&str>) -> String {
+    if status == 403 || code == Some("missing_permissions") {
+        "ElevenLabs denied the connection check. Enable User → Access for this API key. Speech may still work with its existing permissions.".into()
+    } else if status == 401 {
+        "ElevenLabs did not accept this API key. Check that the complete, active key is saved."
+            .into()
+    } else {
+        format!("ElevenLabs could not complete the connection check (HTTP {status}). Your saved key was kept.")
+    }
 }
 
 #[tauri::command]
@@ -2116,6 +2145,7 @@ async fn generate_speech(
             );
         };
         let voice = validate_elevenlabs_voice_id(voice_id.as_deref())?;
+        let model_id = elevenlabs_voices::validate_model_id(request.model_id.as_deref())?;
         let suffix = if request.track_words {
             "/with-timestamps"
         } else {
@@ -2136,7 +2166,7 @@ async fn generate_speech(
             )
             .json(&json!({
                 "text": text,
-                "model_id": "eleven_multilingual_v2"
+                "model_id": model_id
             }))
             .timeout(Duration::from_secs(120))
             .send()
@@ -3112,7 +3142,7 @@ async fn organize_content(
     let stored_key = if use_anthropic {
         stored_anthropic_api_key().await?
     } else {
-        stored_api_key().await?
+        chatgpt::model_key(&model).await?
     };
     let Some(api_key) = stored_key else {
         return Err(format!(
@@ -3227,32 +3257,36 @@ async fn organize_content(
             .insert("reasoning".to_string(), json!({ "effort": effort }));
     }
 
-    let response = client
-        .0
-        .post(OPENAI_RESPONSES_URL)
-        .bearer_auth(api_key.as_str())
-        .header(reqwest::header::ACCEPT, "application/json")
-        .json(&body)
-        .timeout(request_timeout)
-        .send()
-        .await
-        .map_err(|error| {
-            if error.is_timeout() {
-                format!(
-                    "OpenAI did not respond within {} seconds.",
-                    request_timeout.as_secs()
-                )
-            } else {
-                format!("Orion could not reach OpenAI: {error}")
-            }
-        })?;
+    let response = chatgpt::text_request(
+        client
+            .0
+            .post(OPENAI_RESPONSES_URL)
+            .bearer_auth(api_key.as_str()),
+        body,
+    )
+    .timeout(request_timeout)
+    .send()
+    .await
+    .map_err(|error| {
+        if error.is_timeout() {
+            format!(
+                "OpenAI did not respond within {} seconds.",
+                request_timeout.as_secs()
+            )
+        } else {
+            format!("Orion could not reach OpenAI: {error}")
+        }
+    })?;
 
     if !response.status().is_success() {
-        return Err(openai_error(response, "organize this import").await);
+        return Err(if chatgpt::is_model(&model) {
+            chatgpt::error(response).await
+        } else {
+            openai_error(response, "organize this import").await
+        });
     }
 
-    let response = response
-        .json::<Value>()
+    let response = chatgpt::read_for_model(response, &model)
         .await
         .map_err(|error| format!("Orion could not read OpenAI's response: {error}"))?;
     let output_text = extract_output_text(&response, "organize this material")?;
@@ -3451,7 +3485,7 @@ async fn run_knowledge_assignment(
     let stored_key = if use_anthropic {
         stored_anthropic_api_key().await?
     } else {
-        stored_api_key().await?
+        chatgpt::model_key(&model).await?
     };
     let Some(api_key) = stored_key else {
         return Err(format!(
@@ -3568,13 +3602,14 @@ async fn run_knowledge_assignment(
             .expect("the OpenAI request body is an object")
             .insert("reasoning".to_string(), json!({ "effort": effort }));
     }
-    let send = client
-        .post(OPENAI_RESPONSES_URL)
-        .bearer_auth(api_key.as_str())
-        .header(reqwest::header::ACCEPT, "application/json")
-        .json(&body)
-        .timeout(request_timeout)
-        .send();
+    let send = chatgpt::text_request(
+        client
+            .post(OPENAI_RESPONSES_URL)
+            .bearer_auth(api_key.as_str()),
+        body,
+    )
+    .timeout(request_timeout)
+    .send();
     let response = tokio::select! {
         response = send => response,
         changed = cancelled.changed() => {
@@ -3593,10 +3628,14 @@ async fn run_knowledge_assignment(
         }
     })?;
     if !response.status().is_success() {
-        return Err(openai_error(response, "run this knowledge assignment").await);
+        return Err(if chatgpt::is_model(&model) {
+            chatgpt::error(response).await
+        } else {
+            openai_error(response, "run this knowledge assignment").await
+        });
     }
     let response = tokio::select! {
-        response = response.json::<Value>() => response
+        response = chatgpt::read_for_model(response, &model) => response
             .map_err(|error| format!("Orion could not read OpenAI's response: {error}")),
         changed = cancelled.changed() => {
             let _ = changed;
@@ -3870,7 +3909,7 @@ async fn chat(
     let stored_key = if use_anthropic {
         stored_anthropic_api_key().await?
     } else {
-        stored_api_key().await?
+        chatgpt::model_key(&model).await?
     };
     let Some(api_key) = stored_key else {
         return Err(format!(
@@ -4038,22 +4077,26 @@ async fn chat(
     }
 
     authorize()?;
-    let response = client
-        .0
-        .post(OPENAI_RESPONSES_URL)
-        .bearer_auth(api_key.as_str())
-        .header(reqwest::header::ACCEPT, "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|error| format!("Orion could not reach OpenAI: {error}"))?;
+    let response = chatgpt::text_request(
+        client
+            .0
+            .post(OPENAI_RESPONSES_URL)
+            .bearer_auth(api_key.as_str()),
+        body,
+    )
+    .send()
+    .await
+    .map_err(|error| format!("Orion could not reach OpenAI: {error}"))?;
 
     if !response.status().is_success() {
-        return Err(openai_error(response, operation).await);
+        return Err(if chatgpt::is_model(&model) {
+            chatgpt::error(response).await
+        } else {
+            openai_error(response, operation).await
+        });
     }
 
-    let response = response
-        .json::<Value>()
+    let response = chatgpt::read_for_model(response, &model)
         .await
         .map_err(|error| format!("Orion could not read OpenAI's response: {error}"))?;
     authorize()?;
@@ -4866,17 +4909,24 @@ async fn export_web_page(
     })
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    let http_client = Client::builder()
+fn provider_http_client() -> Result<Client, reqwest::Error> {
+    Client::builder()
         .user_agent(concat!("Orion/", env!("CARGO_PKG_VERSION")))
+        // These are fixed provider API endpoints. In particular, custom credential
+        // headers such as xi-api-key must never follow a provider redirect.
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(240))
         .build()
-        .expect("failed to build Orion's HTTPS client");
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    let http_client = provider_http_client().expect("failed to build Orion's HTTPS client");
 
     let app = tauri::Builder::default()
         .manage(OpenAiClient(http_client))
+        .manage(elevenlabs_voices::Samples::default())
         .manage(KnowledgeCancellation::default())
         .manage(perplexity::RequestGate::default())
         .manage(VaultWriteLock::default())
@@ -4914,6 +4964,7 @@ pub fn run() {
             app_updates::download_app_update,
             app_updates::install_app_update,
             live_voice::create_live_voice_session,
+            elevenlabs_live::create_elevenlabs_live_session,
             load_vault,
             window_glass::set_window_glass,
             ruler_glass::set_ruler_glass,
@@ -4961,6 +5012,12 @@ pub fn run() {
             connector_installation::open_codex_plugin,
             save_api_key,
             api_key_status,
+            chatgpt::chatgpt_status,
+            chatgpt::chatgpt_sign_in,
+            chatgpt::chatgpt_cancel_sign_in,
+            chatgpt::chatgpt_select_account,
+            chatgpt::chatgpt_sign_out,
+            chatgpt::chatgpt_models,
             delete_api_key,
             test_openai_key,
             save_anthropic_api_key,
@@ -4971,6 +5028,14 @@ pub fn run() {
             elevenlabs_api_key_status,
             delete_elevenlabs_api_key,
             test_elevenlabs_key,
+            elevenlabs_voices::elevenlabs_pick_samples,
+            elevenlabs_voices::elevenlabs_clear_samples,
+            elevenlabs_voices::elevenlabs_list_voices,
+            elevenlabs_voices::elevenlabs_get_voice,
+            elevenlabs_voices::elevenlabs_clone_voice,
+            elevenlabs_voices::elevenlabs_save_voice_settings,
+            elevenlabs_voices::elevenlabs_voice_models,
+            elevenlabs_voices::elevenlabs_preview_voice,
             generate_speech,
             narration_export::export_narration,
             organize_content,
@@ -4981,6 +5046,8 @@ pub fn run() {
             perplexity::test_perplexity_key,
             perplexity::research_perplexity,
             perplexity::cancel_perplexity_research,
+            openai_web::research_openai_web,
+            openai_web::cancel_openai_web_research,
             knowledge_reading_cache_get,
             knowledge_reading_cache_put,
             chat,
@@ -5033,6 +5100,9 @@ pub fn run() {
             app_handle
                 .state::<media_jobs::MediaJobs>()
                 .cancel_owner(&label);
+            app_handle
+                .state::<elevenlabs_voices::Samples>()
+                .clear_owner(&label);
             desktop_windows::destroyed(app_handle, &label);
             app_handle
                 .state::<assistant_bridge::AssistantBridge>()
@@ -5059,6 +5129,34 @@ pub fn run() {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn elevenlabs_connection_check_distinguishes_permissions_from_invalid_keys() {
+        assert!(
+            elevenlabs_key_test_error(401, Some("missing_permissions")).contains("User → Access")
+        );
+        assert!(elevenlabs_key_test_error(403, None).contains("Speech may still work"));
+        assert!(elevenlabs_key_test_error(401, Some("invalid_api_key"))
+            .contains("complete, active key"));
+        assert!(elevenlabs_key_test_error(503, None).contains("Your saved key was kept"));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires explicit permission to read the saved ElevenLabs key and make one account check"]
+    async fn live_elevenlabs_key_permission_check() {
+        assert_eq!(
+            std::env::var("ORION_ELEVENLABS_LIVE_QA").as_deref(),
+            Ok("1")
+        );
+        let result = run_elevenlabs_key_check(&provider_http_client().unwrap())
+            .await
+            .unwrap();
+        println!(
+            "elevenlabs_key_check valid={} message={}",
+            result.valid, result.message
+        );
+        assert!(result.valid, "The account permission check did not succeed");
+    }
 
     #[test]
     fn speech_request_accepts_openai_and_elevenlabs_chunks() {

@@ -2,7 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { VoiceAudioEnvelope } from "./voiceAudioActivity";
 
 export type VoiceStatus = "idle" | "connecting" | "listening" | "closing" | "disconnected";
-export interface VoiceEvent { type: string; event_id?: string; client_event_id?: string; delta?: string; start_ms?: number; end_ms?: number; offset_ms?: number; delegation?: { id: string; target?: "client" | "responses"; type?: "delegation" }; usage?: { seconds: number }; context_window?: { usage_ratio: number }; error?: { message?: string; client_event_id?: string }; }
+export interface VoiceEvent { type: string; event_id?: string; item_id?: string; client_event_id?: string; delta?: string; start_ms?: number; end_ms?: number; offset_ms?: number; delegation?: { id: string; target?: "client" | "responses"; type?: "delegation" }; usage?: { seconds: number }; context_window?: { usage_ratio: number }; error?: { message?: string; client_event_id?: string }; }
 /** The provider's actual context snapshot, including audio; never infer it from text length. */
 export function voiceContextUsageRatio(event: VoiceEvent): number | undefined {
   if (event.type !== "session.usage.updated") return undefined;
@@ -17,12 +17,28 @@ export interface VoiceActivity {
   inputMeasured: boolean; outputMeasured: boolean;
   inputMuted: boolean;
 }
+export interface VoiceConnectionRequest { spaceId: string; provider: "openai" | "elevenlabs"; voiceId?: string }
+export type PrepareVoiceConnection = (request: VoiceConnectionRequest, signal: AbortSignal) => Promise<void>;
 export interface VoiceTransportOptions {
   spaceId: string; context: string;
+  /** Explicit conversation provider; narration settings do not select the transport. */
+  provider?: "openai" | "elevenlabs";
+  voiceId?: string;
+  /** App-owned save barrier; native startup still independently validates settings. */
+  prepareConnection?: PrepareVoiceConnection;
   onEvent: (event: VoiceEvent) => void;
   onStatus: (status: VoiceStatus, error?: string) => void;
   onActivity?: (activity: VoiceActivity) => void;
   connect?: (request: { spaceId: string; context: string; sdp: string }) => Promise<{ id: string; sdp: string }>;
+}
+/** Provider-independent call controls; callbacks remain owned by VoiceCallLifecycle. */
+export interface VoiceConnection {
+  start(): Promise<void>;
+  append(kind: "commentary" | "thinking" | "instructions", text: string, delegationId?: string | null): boolean;
+  mute(muted: boolean): void;
+  silence(silent: boolean): void;
+  close(): void;
+  dispose(): void;
 }
 export function voiceAppendChunks(text: string): string[] {
   // Prefer complete sentences, then words. The API allows 500 tokens, but does
@@ -64,7 +80,7 @@ export function voiceAppendChunks(text: string): string[] {
 }
 
 /** One explicit call, no background reconnect and no renderer credential. */
-export class LiveVoiceConnection {
+export class LiveVoiceConnection implements VoiceConnection {
   private peer?: RTCPeerConnection;
   private channel?: RTCDataChannel;
   private stream?: MediaStream;

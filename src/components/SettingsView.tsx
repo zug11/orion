@@ -1,3 +1,6 @@
+import { ElevenLabsVoiceStudio } from "./ElevenLabsVoiceStudio";
+import { ChatGPTConnection } from "./ChatGPTConnection";
+import { isChatGPTModel, manageChatGPTUsage, type ChatGPTModel } from "../lib/chatgpt";
 import { PerplexitySettings } from "./PerplexitySettings";
 import { AppUpdateSettings, AppUpdateSettingsLink } from "./AppUpdate";
 import {
@@ -21,10 +24,12 @@ import {
   ShieldCheck,
   Trash2,
 } from "../lib/icons";
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { ThemePalettePicker } from "./ThemePalettePicker";
 import "./appearanceSettings.css";
 import { SavedVoicesSetting } from "./SavedVoicesSetting";
+import { normalizeLiveVoiceProvider } from "../data/defaults";
+import { loadElevenLabsAccountVoices, type LibraryVoice } from "../lib/elevenLabsVoices";
 import { WindowGlassSetting } from "./WindowGlassSetting";
 import type { WindowGlassStatus } from "../lib/windowGlass";
 import { AssistantConnections } from "./AssistantConnections";
@@ -171,25 +176,25 @@ const models = [
     badge: "Most capable",
   },
   {
-    id: "gpt-5.6-sol",
-    name: "GPT-5.6 Sol",
+    id: "gpt-6.1-sol",
+    name: "GPT-6.1 Sol",
     provider: "OpenAI",
-    description: "Frontier quality for the most nuanced source material.",
-    badge: "Best quality",
+    description: "For complex work across your notes and sources.",
+    badge: "Complex work",
   },
   {
-    id: "gpt-5.6-terra",
-    name: "GPT-5.6 Terra",
+    id: "gpt-6.1-terra",
+    name: "GPT-6.1 Terra",
     provider: "OpenAI",
-    description: "A strong balance of intelligence, speed, and cost.",
-    badge: "Balanced",
+    description: "Natural writing and visual reasoning.",
+    badge: "Writing",
   },
   {
-    id: "gpt-5.6-luna",
-    name: "GPT-5.6 Luna",
+    id: "gpt-6-luna",
+    name: "GPT-6 Luna",
     provider: "OpenAI",
-    description: "Efficient for large, straightforward collections.",
-    badge: "Efficient",
+    description: "For focused, efficient tasks.",
+    badge: "Focused tasks",
   },
   {
     id: "claude-fable-5",
@@ -213,6 +218,14 @@ const models = [
     badge: "Balanced",
   },
 ];
+
+const legacyModels = [
+  ["gpt-5.6-sol", "GPT-5.6 Sol"],
+  ["gpt-5.6-terra", "GPT-5.6 Terra"],
+  ["gpt-5.6-luna", "GPT-5.6 Luna"],
+].map(([id, name]) => ({
+  id, name, provider: "OpenAI", description: "Your saved model selection.", badge: "Saved selection",
+}));
 
 const atmosphereOptions: Array<{
   id: HomeAtmosphere;
@@ -272,6 +285,7 @@ export function SettingsView({
   onOpenDataLocation,
   onEraseVault,
 }: SettingsViewProps) {
+  const [chatgptModels, setChatgptModels] = useState<ChatGPTModel[]>([]);
   const [apiKey, setApiKey] = useState("");
   const [revealKey, setRevealKey] = useState(false);
   const [keyBusy, setKeyBusy] = useState(false);
@@ -288,6 +302,14 @@ export function SettingsView({
   const [elevenLabsKeyMessage, setElevenLabsKeyMessage] = useState<
     string | null
   >(null);
+  const [accountVoices, setAccountVoices] = useState<LibraryVoice[]>();
+  const [accountVoicesLoading, setAccountVoicesLoading] = useState(false);
+  const [accountVoicesMessage, setAccountVoicesMessage] = useState("");
+  const [accountVoicesRevision, setAccountVoicesRevision] = useState(0);
+  const [elevenLabsConnectionRevision, setElevenLabsConnectionRevision] = useState(0);
+  const accountVoicesGeneration = useRef(0);
+  const currentVoiceSettings = useRef({ settings, onChange });
+  currentVoiceSettings.current = { settings, onChange };
   const [setupBusy, setSetupBusy] = useState(false);
   const [setupMessage, setSetupMessage] = useState<string | null>(null);
   const [claudeConnectorBusy, setClaudeConnectorBusy] = useState(false);
@@ -310,6 +332,7 @@ export function SettingsView({
     | "updates"
   >("intelligence");
   const desktopRuntime = isTauriRuntime();
+  const liveVoiceProvider = normalizeLiveVoiceProvider(settings.liveVoiceProvider);
   const prefersLight =
     typeof window.matchMedia === "function" &&
     window.matchMedia("(prefers-color-scheme: light)").matches;
@@ -339,6 +362,39 @@ export function SettingsView({
   useEffect(() => {
     setElevenLabsKeyMessage(null);
   }, [settings.elevenLabsApiKeyConfigured]);
+
+  function invalidateAccountVoices(connectionChanged = false) {
+    accountVoicesGeneration.current++;
+    setAccountVoices(undefined); setAccountVoicesLoading(false); setAccountVoicesMessage("");
+    if (connectionChanged) setElevenLabsConnectionRevision(value => value + 1);
+  }
+
+  useEffect(() => {
+    const generation = ++accountVoicesGeneration.current;
+    const active = () => generation === accountVoicesGeneration.current;
+    setAccountVoices(undefined); setAccountVoicesMessage("");
+    if (!desktopRuntime || !settings.elevenLabsApiKeyConfigured || elevenLabsKeyBusy) {
+      setAccountVoicesLoading(false);
+      return () => { if (active()) accountVoicesGeneration.current++; };
+    }
+    const selectedAtStart = currentVoiceSettings.current.settings.elevenLabsVoiceId;
+    setAccountVoicesLoading(true);
+    void loadElevenLabsAccountVoices(active).then(voices => {
+      if (!active() || !voices) return;
+      setAccountVoices(voices);
+      const latest = currentVoiceSettings.current;
+      // Only a complete catalog can establish absence. An explicit selection
+      // made while loading wins over this automatic fallback.
+      if (selectedAtStart && latest.settings.elevenLabsVoiceId === selectedAtStart &&
+          !voices.some(voice => voice.id === selectedAtStart && !voice.requiresVerification)) {
+        latest.onChange({ ...latest.settings, elevenLabsVoiceId: "" });
+        setAccountVoicesMessage("The previously selected voice is unavailable or needs verification. Using Orion default.");
+      } else if (!voices.length) setAccountVoicesMessage("No voices are available in this ElevenLabs account yet.");
+    }).catch(error => {
+      if (active()) setAccountVoicesMessage(error instanceof Error ? error.message : "Could not load your ElevenLabs voices. Refresh voices to try again.");
+    }).finally(() => { if (active()) setAccountVoicesLoading(false); });
+    return () => { if (active()) accountVoicesGeneration.current++; };
+  }, [desktopRuntime, settings.elevenLabsApiKeyConfigured, elevenLabsKeyBusy, accountVoicesRevision]);
 
   function patch(patchValue: Partial<Settings>) {
     onChange({ ...settings, ...patchValue });
@@ -414,6 +470,7 @@ export function SettingsView({
 
   async function saveElevenLabsKey() {
     if (!elevenLabsApiKey.trim()) return;
+    invalidateAccountVoices(true);
     setElevenLabsKeyBusy(true);
     setElevenLabsKeyMessage(null);
     try {
@@ -434,6 +491,7 @@ export function SettingsView({
   }
 
   async function testElevenLabsKey() {
+    invalidateAccountVoices(true);
     setElevenLabsKeyBusy(true);
     setElevenLabsKeyMessage(null);
     try {
@@ -572,6 +630,7 @@ export function SettingsView({
               </span>
             </div>
 
+            <ChatGPTConnection settings={settings} onChange={onChange} onModels={setChatgptModels} />
             <div className="setting-card api-key-card">
               <div className="setting-row">
                 <span>
@@ -685,8 +744,9 @@ export function SettingsView({
                     Choose the trade-off you prefer. You can change this any time.
                   </small>
                 </span>
+                {isChatGPTModel(settings.model) && <p className="setting-message">Using ChatGPT plan · <button type="button" onClick={() => void manageChatGPTUsage()}>Manage usage</button></p>}
                 <div className="model-options">
-                  {models.map((model) => (
+                  {[...chatgptModels.map(model => ({ ...model, provider: "ChatGPT plan", description: "Uses your ChatGPT allowance or credits.", badge: "Your plan" })), ...models, ...legacyModels.filter(model => model.id === settings.model)].map((model) => (
                     <button
                       key={model.id}
                       type="button"
@@ -807,22 +867,62 @@ export function SettingsView({
               <span>
                 <h2>Voice</h2>
                 <p>
-                  Used only to speak notes and narrated slide decks. Writing,
-                  import, and Chat never use this key.
+                  Choose a conversation voice, create voices, and tune narration.
                 </p>
               </span>
             </div>
 
             <div className="setting-card">
-              <div className="setting-row">
+              <div className="setting-row vertical">
                 <span>
-                  <strong>Who speaks</strong>
+                  <strong>Voice conversations</strong>
                   <small>
-                    Play uses ElevenLabs whenever that key is saved. OpenAI
-                    remains an explicit choice.
+                    Choose who you talk with in Chat. Research continues to use
+                    your Intelligence connection.
                   </small>
                 </span>
+              <div
+                className="segmented-control labelled"
+                role="radiogroup"
+                aria-label="Voice conversation provider"
+              >
+                {([
+                  ["openai", "OpenAI"],
+                  ["elevenlabs", "ElevenLabs"],
+                ] as const).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    role="radio"
+                    aria-checked={liveVoiceProvider === id}
+                    className={liveVoiceProvider === id ? "active" : ""}
+                    onClick={() => patch({ liveVoiceProvider: id })}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
+              </div>
+              <p className="saved-voice-hint">
+                {liveVoiceProvider === "elevenlabs"
+                  ? settings.elevenLabsApiKeyConfigured
+                    ? "Uses the ElevenLabs voice selected below."
+                    : "Add your ElevenLabs API key below to start voice conversations with the voice selected here."
+                  : settings.apiKeyConfigured
+                    ? "Uses your OpenAI API key for live voice."
+                    : "Add an OpenAI API key in Intelligence to start voice conversations. A ChatGPT plan connection does not include live voice."}
+              </p>
+            </div>
+
+            <div className="setting-card">
+              <div className="setting-row vertical">
+                <span>
+                  <strong>Note narration</strong>
+                  <small>
+                    Choose how notes and decks are read aloud. This is separate
+                    from your conversation voice.
+                  </small>
+                </span>
               <div
                 className="segmented-control labelled"
                 role="radiogroup"
@@ -847,9 +947,16 @@ export function SettingsView({
                   </button>
                 ))}
               </div>
+              </div>
             </div>
 
-            <SavedVoicesSetting settings={settings} onChange={patch} />
+            <SavedVoicesSetting settings={settings} onChange={patch} accountVoices={accountVoices}
+              accountLoading={accountVoicesLoading || elevenLabsKeyBusy} accountMessage={accountVoicesMessage}
+              onRefresh={desktopRuntime && settings.elevenLabsApiKeyConfigured ? () => {
+                invalidateAccountVoices(); setAccountVoicesRevision(value => value + 1);
+              } : undefined} />
+            <ElevenLabsVoiceStudio key={elevenLabsConnectionRevision}
+              settings={elevenLabsKeyBusy ? { ...settings, elevenLabsApiKeyConfigured: false } : settings} onChange={patch} />
 
             <div className="setting-card api-key-card">
               <div className="setting-row">
@@ -858,7 +965,7 @@ export function SettingsView({
                   <small>
                     {settings.elevenLabsApiKeyConfigured
                       ? "A key is configured in your OS keychain."
-                      : "Optional. Improves narration when you generate a spoken deck."}
+                      : "Enables ElevenLabs voice conversations, voice creation, previews and narration."}
                   </small>
                 </span>
                 <span
@@ -947,6 +1054,7 @@ export function SettingsView({
                       type="button"
                       className="danger-text"
                       onClick={async () => {
+                        invalidateAccountVoices(true);
                         setElevenLabsKeyBusy(true);
                         setElevenLabsKeyMessage(null);
                         try {
@@ -977,7 +1085,8 @@ export function SettingsView({
             </div>
           </section>
 
-          <PerplexitySettings configured={settings.perplexityApiKeyConfigured === true}
+          <PerplexitySettings configured={settings.perplexityApiKeyConfigured === true} settings={settings}
+            onProviderChange={webResearchProvider => onChange({ ...settings, webResearchProvider })}
             onConfiguredChange={configured => onChange({ ...settings, perplexityApiKeyConfigured: configured })} />
 
           <section className="settings-section" id="claude">

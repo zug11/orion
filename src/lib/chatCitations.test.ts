@@ -156,3 +156,21 @@ it("exports only the retained literal quote and attribution, with local citation
   expect(citation).not.toBeNull();
   expect(page.getElementById(citation!.getAttribute("href")!.slice(1))).not.toBeNull();
 });
+
+it("keeps the summary provenance visible in saved Markdown and exported HTML", () => {
+  const { snapshot, evidence } = fixture("A provider-generated finding.");
+  const summary: ChatEvidence = { ...evidence, kind: "web", entityId: "web-summary", start: 0, end: evidence.text.length,
+    web: { url: "https://example.org/paper", retrievedAt: NOW, evidenceType: "cited_summary" } };
+  const portable = portableChatEvidence("Finding [[e1]].", [summary]);
+  const split = splitSavedChatPassages(portable);
+  expect(split.evidence).toEqual([summary]);
+  expect(mergeSavedChatPassages(split.body, split.footer)).toBe(portable);
+  snapshot.studio.messages = [{ id: "reply", role: "assistant", content: "Finding [[e1]].", evidence: [summary], cardIds: [], contextCardIds: [], createdAt: NOW }];
+  const saved = saveChatReplyAsNote(snapshot, "reply", NOW, "saved");
+  const { html } = buildWebExportDocument(saved, "note", "saved");
+  const page = new DOMParser().parseFromString(html, "text/html");
+  expect(page.body.textContent).toContain("AI-cited summary 1 (not a source quotation)");
+  expect(page.body.textContent).toContain("Cited website:");
+  expect(page.querySelector('a[href="https://example.org/paper"]')).not.toBeNull();
+  expect(html).not.toContain("orion-passage:v1:");
+});

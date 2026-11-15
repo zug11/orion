@@ -13,10 +13,11 @@ import { voiceWorkOrderSummary } from "../lib/voiceWorkOrderAccess";
 import type { VoiceWorkOrderHost } from "../lib/assistant/voiceWorkOrderHost";
 import { explicitVoiceAssignment } from "../lib/voiceWorkOrders";
 import { voiceFindingDelivery } from "../lib/voiceFindingDelivery";
+import { createChatThread, listChatThreads, projectChatThread } from "../lib/chatThreads";
 
 const mock = vi.hoisted(() => ({
   options: undefined as any, engine: undefined as any, connections: [] as any[], jobs: [] as any[],
-  run: vi.fn(), retry: vi.fn(), cancel: vi.fn(), dispose: vi.fn(), keep: vi.fn(), announce: vi.fn(), finding: vi.fn(), route: vi.fn(),
+  run: vi.fn(), saveFindings: vi.fn(), retry: vi.fn(), cancel: vi.fn(), dispose: vi.fn(), keep: vi.fn(), announce: vi.fn(), finding: vi.fn(), route: vi.fn(),
   close: vi.fn(), append: vi.fn(), context: vi.fn(), current: vi.fn(),
   editDriver: vi.fn(), replyRender: vi.fn(), glass: vi.fn((..._args: unknown[]) => false),
   native: false, mailboxes: [] as { host: VoiceWorkOrderHost; dispose: ReturnType<typeof vi.fn> }[],
@@ -49,10 +50,17 @@ vi.mock("../lib/liveVoice", async importOriginal => ({
   close() { mock.close(); this.options.onStatus("idle"); }
   mute = vi.fn(); dispose = vi.fn(); append = (...args: unknown[]) => mock.append(...args);
 } }));
+vi.mock("../lib/elevenLabsLiveVoice", () => ({ ElevenLabsLiveVoiceConnection: class {
+  options: any;
+  constructor(options: unknown) { this.options = options; mock.options = options; mock.connections.push(this); }
+  start() { this.options.onStatus("listening"); return Promise.resolve(); }
+  close() { mock.close(); this.options.onStatus("idle"); }
+  mute = vi.fn(); dispose = vi.fn(); append = (...args: unknown[]) => mock.append(...args);
+} }));
 vi.mock("../lib/voiceResearch", async importOriginal => ({
   ...await importOriginal<typeof import("../lib/voiceResearch")>(), VoiceResearch: class {
     constructor(options: unknown) { mock.engine = options; }
-    run = mock.run; retry = mock.retry; cancel = mock.cancel; dispose = mock.dispose; keep = mock.keep;
+    run = mock.run; saveRequestedFindings = mock.saveFindings; retry = mock.retry; cancel = mock.cancel; dispose = mock.dispose; keep = mock.keep;
     announceResult = mock.announce; announceFinding = mock.finding; context = mock.context;
     getJobs() { return mock.jobs.map(job => ({ ...job })); }
     inventory(taskView: "working" | "history" = "working") { return mock.jobs.map(job => voiceWorkOrderSummary(job, taskView, true)); }
@@ -84,6 +92,7 @@ beforeEach(() => {
     mock.engine.onJobs(mock.jobs.map(job => ({ ...job })));
   });
   mock.keep.mockReset().mockResolvedValue(undefined);
+  mock.saveFindings.mockReset().mockResolvedValue(undefined);
   mock.retry.mockReset().mockResolvedValue(undefined);
   mock.close.mockClear(); mock.dispose.mockClear(); mock.announce.mockClear(); mock.finding.mockClear();
 });
@@ -95,8 +104,8 @@ function setup() {
   return { props, ...render(<SpaceVoice {...props} />) };
 }
 function event(value: unknown, connection = mock.options) { act(() => connection.onEvent(value)); }
-function speak(text: string, start = 0, delegation?: string) {
-  event({ type: "session.input_transcript.delta", event_id: crypto.randomUUID(), delta: text, start_ms: start, end_ms: start + 200 });
+function speak(text: string, start = 0, delegation?: string, itemId?: string) {
+  event({ type: "session.input_transcript.delta", event_id: crypto.randomUUID(), item_id: itemId, delta: text, start_ms: start, end_ms: start + 200 });
   if (delegation) event({ type: "session.delegation.created", delegation: { id: delegation, target: "client" }, offset_ms: start + 200 });
 }
 async function settle(ms = 1_000) { await act(() => vi.advanceTimersByTimeAsync(ms)); }
@@ -112,6 +121,292 @@ function backgroundFinding(job: VoiceWorkOrder, spaceId: string, sequence = 1, d
 const synthesized = () => mock.append.mock.calls.filter(call => call[0] === "thinking" && String(call[1]).includes('"type":"consolidated_worker_finding"'));
 
 describe("Space voice work-order integration", () => {
+  it.each(["openai", "elevenlabs"] as const)("passes the current save preparation callback from ChatDock into the %s transport", provider => {
+    const snapshot = createEmptySnapshot("Voice setup", "2026-11-14", "prepared-voice");
+    snapshot.settings.liveVoiceProvider = provider;
+    snapshot.settings.apiKeyConfigured = true;
+    snapshot.settings.elevenLabsApiKeyConfigured = true;
+    snapshot.settings.elevenLabsVoiceId = "selected-voice";
+    const prepare = vi.fn().mockResolvedValue(undefined), latestPrepare = vi.fn().mockResolvedValue(undefined);
+    const props = { snapshot, fullPage: true, flowActive: false, busy: false,
+      onExpand: vi.fn(), onSend: vi.fn(), onClear: vi.fn(), onOpenNote: vi.fn(),
+      onSaveReply: vi.fn(), onOpenSettings: vi.fn(), onVoiceCommit: vi.fn() };
+    const { rerender } = render(<ChatDock {...props} onPrepareVoiceConnection={prepare}/>);
+    expect(mock.connections).toHaveLength(0);
+    expect(prepare).not.toHaveBeenCalled();
+    rerender(<ChatDock {...props} onPrepareVoiceConnection={latestPrepare}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Talk to Space" }));
+    expect(mock.connections).toHaveLength(1);
+    expect(mock.options).toMatchObject({ provider, spaceId: "prepared-voice" });
+    expect(mock.options.prepareConnection).toBe(latestPrepare);
+    expect(mock.options.voiceId).toBe(provider === "elevenlabs" ? "selected-voice" : undefined);
+    // The transport owns invocation, cancellation and persistence ordering.
+    expect(prepare).not.toHaveBeenCalled();
+    expect(latestPrepare).not.toHaveBeenCalled();
+  });
+
+  it("starts ElevenLabs without an OpenAI key and routes spoken work through the existing Space coordinator", async () => {
+    const snapshot = createEmptySnapshot("Eleven voice", "2026-11-14", "eleven-space");
+    snapshot.settings.liveVoiceProvider = "elevenlabs";
+    snapshot.settings.elevenLabsApiKeyConfigured = true;
+    snapshot.settings.elevenLabsVoiceId = "selected-voice";
+    snapshot.settings.model = "claude-sonnet-5";
+    snapshot.settings.anthropicApiKeyConfigured = true;
+    const onOpenSettings = vi.fn();
+    render(<SpaceVoice snapshot={snapshot} enabled toggleRequest={1} commit={vi.fn()}
+      onProposal={vi.fn()} onOpenNote={vi.fn()} onOpenSettings={onOpenSettings} />);
+    expect(mock.options).toMatchObject({ provider: "elevenlabs", voiceId: "selected-voice", spaceId: "eleven-space" });
+    expect(onOpenSettings).not.toHaveBeenCalled();
+    event({ type: "session.input_audio.started", item_id: "eleven-input" });
+    speak("Research the notes about editing.", 0, "eleven-delegation", "eleven-input");
+    await settle(3_000);
+    expect(mock.run).toHaveBeenCalledWith(expect.any(String), "Research the notes about editing.",
+      expect.any(String), undefined, "eleven-delegation");
+  });
+
+  it("checks the selected conversation provider key rather than allowing a different provider key", () => {
+    const snapshot = createEmptySnapshot("Eleven voice", "2026-11-14", "eleven-space");
+    snapshot.settings.liveVoiceProvider = "elevenlabs";
+    snapshot.settings.apiKeyConfigured = true;
+    const onOpenSettings = vi.fn();
+    render(<SpaceVoice snapshot={snapshot} enabled toggleRequest={1} commit={vi.fn()}
+      onProposal={vi.fn()} onOpenNote={vi.fn()} onOpenSettings={onOpenSettings} />);
+    expect(mock.connections).toHaveLength(0);
+    expect(onOpenSettings).toHaveBeenCalledOnce();
+  });
+
+  it.each([true, false])("stops audio on a provider switch without cancelling research or starting the new microphone (destination key: %s)", async configured => {
+    const { props, rerender } = setup();
+    speak("Research the notes about editing."); await settle(3_000);
+    expect(mock.run).toHaveBeenCalled();
+    mock.cancel.mockClear(); mock.close.mockClear();
+    const next = { ...props, snapshot: { ...props.snapshot, settings: { ...props.snapshot.settings,
+      liveVoiceProvider: "elevenlabs" as const, elevenLabsApiKeyConfigured: configured } } };
+    rerender(<SpaceVoice {...next} />);
+    expect(mock.close).toHaveBeenCalledOnce();
+    expect(mock.cancel).not.toHaveBeenCalled();
+    expect(mock.connections).toHaveLength(1);
+    rerender(<SpaceVoice {...next} toggleRequest={2} />);
+    if (configured) {
+      expect(mock.connections).toHaveLength(2);
+      expect(mock.options.provider).toBe("elevenlabs");
+    } else {
+      expect(mock.connections).toHaveLength(1);
+      expect(props.onOpenSettings).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("does not end an ElevenLabs conversation when an unrelated OpenAI key is removed", () => {
+    const snapshot = createEmptySnapshot("Eleven voice", "2026-11-14", "eleven-space");
+    snapshot.settings.liveVoiceProvider = "elevenlabs";
+    snapshot.settings.apiKeyConfigured = true;
+    snapshot.settings.elevenLabsApiKeyConfigured = true;
+    const props = { snapshot, enabled: true, toggleRequest: 1, commit: vi.fn(), onProposal: vi.fn(),
+      onOpenNote: vi.fn(), onOpenSettings: vi.fn() };
+    const { rerender } = render(<SpaceVoice {...props} />);
+    mock.close.mockClear();
+    rerender(<SpaceVoice {...props} snapshot={{ ...snapshot, settings: { ...snapshot.settings, apiKeyConfigured: false } }} />);
+    expect(mock.close).not.toHaveBeenCalled();
+    rerender(<SpaceVoice {...props} snapshot={{ ...snapshot, settings: { ...snapshot.settings, elevenLabsApiKeyConfigured: false } }} />);
+    expect(mock.close).toHaveBeenCalledOnce();
+  });
+
+  it("binds a finalized ElevenLabs utterance to the note where speech started", async () => {
+    const snapshot = createEmptySnapshot("Eleven voice", "2026-11-14", "eleven-space");
+    snapshot.settings.liveVoiceProvider = "elevenlabs";
+    snapshot.settings.apiKeyConfigured = true;
+    snapshot.settings.elevenLabsApiKeyConfigured = true;
+    const props = { snapshot, enabled: true, toggleRequest: 1, commit: vi.fn(), onProposal: vi.fn(),
+      onOpenNote: vi.fn(), onOpenSettings: vi.fn() };
+    const { rerender } = render(<SpaceVoice {...props} focusNoteId="original-note" />);
+    event({ type: "session.input_audio.started", item_id: "spoken-on-original" });
+    rerender(<SpaceVoice {...props} focusNoteId="later-note" />);
+    // Repeated start notifications cannot retarget the same audio item.
+    event({ type: "session.input_audio.started", item_id: "spoken-on-original" });
+    speak("Research the themes in this note.", 0, "original-delegation", "spoken-on-original");
+    await settle(3_000);
+    expect(mock.run).toHaveBeenCalled();
+    expect(mock.run.mock.calls[0][3]).toBe("original-note");
+  });
+
+  it("does not authorize an ElevenLabs transcript whose original target was not captured", async () => {
+    const snapshot = createEmptySnapshot("Eleven voice", "2026-11-14", "eleven-space");
+    snapshot.settings.liveVoiceProvider = "elevenlabs";
+    snapshot.settings.apiKeyConfigured = true;
+    snapshot.settings.elevenLabsApiKeyConfigured = true;
+    render(<SpaceVoice snapshot={snapshot} enabled toggleRequest={1} commit={vi.fn()}
+      onProposal={vi.fn()} onOpenNote={vi.fn()} onOpenSettings={vi.fn()} />);
+    speak("Create a note about this.", 0, "missing-delegation", "missing-input");
+    await settle(3_000);
+    expect(mock.run).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent("could not be matched to where you started speaking");
+  });
+
+  it("keeps main Chat voice workers silent on screen while preserving orbs, spoken findings and typed chat", async () => {
+    const snapshot = createEmptySnapshot("Quiet voice", "2026-11-13", "quiet-voice"); snapshot.settings.apiKeyConfigured = true;
+    const props = { snapshot, fullPage: true, flowActive: false, busy: false,
+      onExpand: vi.fn(), onSend: vi.fn().mockResolvedValue({ reply: "Typed answer" }), onClear: vi.fn(),
+      onOpenNote: vi.fn(), onSaveReply: vi.fn(), onOpenSettings: vi.fn(), onVoiceCommit: vi.fn() };
+    const { rerender } = render(<ChatDock {...props}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Talk to Space" }));
+    speak("Research climate", 0, "quiet-climate"); await settle();
+    expect(mock.run).toHaveBeenCalledOnce();
+    const job = finished(mock.jobs[0].id);
+    publish([{ ...job, state: "running", result: undefined, updates: [{ sequence: 1, reply: "A preliminary finding", evidence: [],
+      coverage: { availableNotes: 0, availableSources: 0, openedNotes: 0, openedSources: 0, searches: 0, limited: false } }] }]);
+    expect(screen.getByRole("button", { name: "Dismiss orb: Climate" })).toBeVisible();
+    expect(screen.queryByText("A preliminary finding")).toBeNull();
+    publish([job]);
+    act(() => backgroundFinding(job, snapshot.workspace.id)); await settle(2_000);
+    expect(commentary()).toEqual([["commentary", "A combined finding with its caveats.", null]]);
+    expect(screen.queryByText("Climate finding.")).toBeNull();
+    expect(document.querySelector(".voice-conversation-results")).toBeNull();
+    expect(document.querySelector(".chat-view")).toHaveAttribute("data-voice-empty", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    expect(screen.queryByRole("button", { name: "View conversation" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Close voice options" }));
+    const typed = { ...snapshot, studio: { ...snapshot.studio, messages: [
+      { id: "typed", role: "user" as const, content: "A typed question remains visible.", cardIds: [], contextCardIds: [], createdAt: "2026-11-13" },
+    ] } };
+    rerender(<ChatDock {...props} snapshot={typed}/>);
+    expect(screen.getByText("A typed question remains visible.")).toBeVisible();
+    expect(screen.queryByText("Climate finding.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Stop voice" }));
+    expect(screen.queryByText("Climate finding.")).toBeNull();
+    // Returning to the compact note-side flow can explicitly reveal retained
+    // text; suppressing its presentation never destroys the research.
+    rerender(<ChatDock {...props} snapshot={typed} fullPage={false}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    fireEvent.click(screen.getByRole("button", { name: "View conversation" }));
+    await settle(300);
+    expect(screen.getByText("Climate finding.")).toBeVisible();
+    expect(mock.connections).toHaveLength(1);
+    expect(mock.dispose).not.toHaveBeenCalled();
+  });
+
+  it("keeps a disconnected main voice call actionable without exposing worker text", () => {
+    const snapshot = createEmptySnapshot("Quiet errors", "2026-11-13", "quiet-errors"); snapshot.settings.apiKeyConfigured = true;
+    render(<ChatDock snapshot={snapshot} fullPage flowActive={false} busy={false}
+      onExpand={vi.fn()} onSend={vi.fn()} onClear={vi.fn()} onOpenNote={vi.fn()} onSaveReply={vi.fn()} onOpenSettings={vi.fn()} onVoiceCommit={vi.fn()}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Talk to Space" }));
+    publish([finished()]);
+    act(() => mock.options.onStatus("disconnected", "The microphone disconnected."));
+    expect(screen.getByRole("alert")).toHaveTextContent("The microphone disconnected.");
+    expect(screen.getByRole("button", { name: "Reconnect voice" })).toBeEnabled();
+    expect(screen.queryByText("Climate finding.")).toBeNull();
+    expect(document.querySelector(".chat-view")).toHaveAttribute("data-voice-empty", "true");
+  });
+
+  it("can cancel pending note changes from Voice options without showing automatic chat text", async () => {
+    const snapshot = createEmptySnapshot("Quiet edits", "2026-11-13", "quiet-edits"); snapshot.settings.apiKeyConfigured = true;
+    snapshot.notes = [{ id: "draft", title: "An opening", body: "The river was dark.", slug: "opening", summary: "", kind: "article", status: "ready",
+      aliases: [], tags: [], sourceIds: [], conceptIds: [], createdAt: "2026-11-13", updatedAt: "2026-11-13" }];
+    let signal: AbortSignal | undefined;
+    mock.editDriver.mockImplementationOnce((_request, capturedSignal) => { signal = capturedSignal; return new Promise(() => {}); });
+    render(<ChatDock snapshot={snapshot} focusNoteId="draft" fullPage flowActive={false} busy={false}
+      onExpand={vi.fn()} onSend={vi.fn()} onClear={vi.fn()} onOpenNote={vi.fn()} onSaveReply={vi.fn()} onOpenSettings={vi.fn()} onVoiceCommit={vi.fn()}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Talk to Space" }));
+    speak("Rewrite the opening paragraph", 0); await settle();
+    expect(mock.editDriver).toHaveBeenCalledOnce();
+    expect(signal?.aborted).toBe(false);
+    expect(screen.queryByText("Preparing note changes…")).toBeNull();
+    expect(document.querySelector(".chat-view")).toHaveAttribute("data-voice-empty", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel note changes" }));
+    expect(signal?.aborted).toBe(true);
+    expect(screen.queryByRole("button", { name: "Cancel note changes" })).toBeNull();
+    expect(mock.run).not.toHaveBeenCalled();
+  });
+
+  it("keeps the empty legacy chat's draft and voice findings when New chat materializes its identity", () => {
+    const snapshot = createEmptySnapshot("First voice chat", "2026-11-13", "legacy-voice"); snapshot.settings.apiKeyConfigured = true;
+    const callbacks = { onSelect: vi.fn(), onNew: vi.fn(), onRename: vi.fn(), onDelete: vi.fn() };
+    const props = { fullPage: true, flowActive: false, busy: false, onExpand: vi.fn(), onSend: vi.fn(), onClear: vi.fn(),
+      onOpenNote: vi.fn(), onSaveReply: vi.fn(), onOpenSettings: vi.fn(), onVoiceCommit: vi.fn() };
+    const view = (id: string, canonical = snapshot) => <ChatDock {...props} canonicalSnapshot={canonical} snapshot={projectChatThread(canonical, id)}
+      threadNavigation={{ ...callbacks, activeThreadId: id, threads: listChatThreads(canonical.studio) }}/>;
+    const { rerender } = render(view("chat-legacy"));
+    fireEvent.click(screen.getByRole("button", { name: "Talk to Space" }));
+    const originalEngine = mock.engine;
+    publish([finished()]);
+    fireEvent.click(screen.getByRole("button", { name: "Stop voice" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Message Orion" }), { target: { value: "A first unsent thought" } });
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+    expect(callbacks.onNew).toHaveBeenCalledOnce();
+    // The host retains the selected implicit identity before creating the next
+    // chat, even though the original has no persisted text messages yet.
+    const next = createChatThread(createChatThread(snapshot, "chat-legacy", "2026-11-13"), "chat-new", "2026-11-13");
+    rerender(view("chat-new", next));
+    expect(mock.engine).toBe(originalEngine);
+    expect(mock.dispose).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox", { name: "Message Orion" })).toHaveValue("");
+    expect(screen.queryByText("Climate finding.")).not.toBeInTheDocument();
+    rerender(view("chat-legacy", next));
+    expect(screen.getByRole("textbox", { name: "Message Orion" })).toHaveValue("A first unsent thought");
+    expect(screen.queryByText("Climate finding.")).not.toBeInTheDocument();
+    expect(mock.jobs[0].result.reply).toBe("Climate finding.");
+    expect(mock.engine).toBe(originalEngine);
+    expect(mock.dispose).not.toHaveBeenCalled();
+  });
+
+  it("retains stopped voice findings in their originating chat while browsing another thread", async () => {
+    const snapshot = createEmptySnapshot("Threaded research", "2026-11-13", "threaded-voice"); snapshot.settings.apiKeyConfigured = true;
+    snapshot.studio.threads = [
+      { id: "chat-one", title: "Original research", createdAt: "2026-11-13", updatedAt: "2026-11-13" },
+      { id: "chat-two", title: "Another question", createdAt: "2026-11-13", updatedAt: "2026-11-13" },
+    ];
+    snapshot.studio.messages = [{ id: "one", threadId: "chat-one", role: "user", content: "First thread context", cardIds: [], contextCardIds: [], createdAt: "2026-11-13" },
+      { id: "two", threadId: "chat-two", role: "user", content: "Second thread context", cardIds: [], contextCardIds: [], createdAt: "2026-11-13" }];
+    const callbacks = { onSelect: vi.fn(), onNew: vi.fn(), onRename: vi.fn(), onDelete: vi.fn() };
+    const props = { fullPage: true, flowActive: false, busy: false, onExpand: vi.fn(), onSend: vi.fn(), onClear: vi.fn(),
+      onOpenNote: vi.fn(), onSaveReply: vi.fn(), onOpenSettings: vi.fn(), onVoiceCommit: vi.fn() };
+    const view = (id: string, canonical = snapshot) => <ChatDock {...props} canonicalSnapshot={canonical} snapshot={projectChatThread(canonical, id)}
+      threadNavigation={{ ...callbacks, activeThreadId: id, threads: listChatThreads(canonical.studio) }}/>;
+    const { rerender } = render(view("chat-one"));
+    fireEvent.click(screen.getByRole("button", { name: "Show chat threads" }));
+    fireEvent.click(screen.getByRole("button", { name: "Talk to Space" }));
+    const originalEngine = mock.engine;
+    expect(screen.getByRole("button", { name: "New chat" })).toBeDisabled();
+    expect(screen.getByText("End the voice call before switching chats.")).toBeVisible();
+    publish([finished()]);
+    fireEvent.click(screen.getByRole("button", { name: "Stop voice" }));
+    rerender(view("chat-two"));
+    expect(mock.engine).toBe(originalEngine);
+    expect(mock.dispose).not.toHaveBeenCalled();
+    expect(screen.queryByText("Climate finding.")).not.toBeInTheDocument();
+    expect(mock.engine.snapshot().studio.messages.map((message: any) => message.content)).toEqual(["First thread context"]);
+    await act(async () => { await mock.engine.commit({ id: "save", spaceId: snapshot.workspace.id, version: "version", prompt: "Save", result: { reply: "Finding" } }); });
+    expect(props.onVoiceCommit).toHaveBeenCalledWith(expect.objectContaining({ threadId: "chat-one" }));
+    fireEvent.click(screen.getByRole("button", { name: "Resume voice in Original research" }));
+    expect(callbacks.onSelect).toHaveBeenCalledWith("chat-one");
+    rerender(view("chat-one"));
+    expect(screen.queryByText("Climate finding.")).not.toBeInTheDocument();
+    expect(mock.jobs[0].result.reply).toBe("Climate finding.");
+    expect(mock.engine).toBe(originalEngine);
+  });
+
+  it("revokes a deleted voice origin without automatically starting a call in another chat", () => {
+    const snapshot = createEmptySnapshot("Thread deletion", "2026-11-13", "voice-deletion"); snapshot.settings.apiKeyConfigured = true;
+    snapshot.studio.threads = [
+      { id: "chat-one", title: "Original", createdAt: "2026-11-13", updatedAt: "2026-11-13" },
+      { id: "chat-two", title: "Remaining", createdAt: "2026-11-13", updatedAt: "2026-11-13" },
+    ];
+    const props = { fullPage: true, flowActive: false, busy: false, onExpand: vi.fn(), onSend: vi.fn(), onClear: vi.fn(),
+      onOpenNote: vi.fn(), onSaveReply: vi.fn(), onOpenSettings: vi.fn(), onVoiceCommit: vi.fn() };
+    const view = (id: string, canonical = snapshot) => <ChatDock {...props} canonicalSnapshot={canonical} snapshot={projectChatThread(canonical, id)}
+      threadNavigation={{ activeThreadId: id, threads: listChatThreads(canonical.studio), onSelect: vi.fn(), onNew: vi.fn(), onRename: vi.fn(), onDelete: vi.fn() }}/>;
+    const { rerender } = render(view("chat-one"));
+    fireEvent.click(screen.getByRole("button", { name: "Talk to Space" }));
+    publish([finished()]);
+    const connections = mock.connections.length;
+    const remaining = { ...snapshot, studio: { ...snapshot.studio, threads: snapshot.studio.threads.slice(1) } };
+    rerender(view("chat-two", remaining));
+    expect(mock.dispose).toHaveBeenCalled();
+    expect(mock.connections).toHaveLength(connections);
+    expect(screen.queryByText("Climate finding.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Talk to Space" })).toBeEnabled();
+  });
+
   it("does not rerender retained Markdown on microphone or playback animation frames", () => {
     setup(); publish([finished()]);
     mock.replyRender.mockClear();
@@ -528,6 +823,84 @@ describe("Space voice work-order integration", () => {
     expect(mock.jobs.find(job => job.id === "climate")).toMatchObject({ revision: 3 });
     expect(mock.jobs.find(job => job.id === "astronomy")).toMatchObject({ state: "completed", revision: 1 });
   });
+  it.each(["Turn this into a note", "Please save your findings as a new note", "Create a new note from your findings", "Write a note from this research"])("saves the captured finished worker for %s without rerunning its reader", async prompt => {
+    const { props, rerender } = setup(); rerender(<SpaceVoice {...props} floating />);
+    publish([{ ...finished(), assignment: { subject: "Climate", focus: "Read climate." } }, finished("astronomy", "Astronomy")]);
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Discuss by voice" })[0]);
+    speak(prompt, 0); await settle();
+    expect(mock.saveFindings).toHaveBeenCalledExactlyOnceWith(prompt, [{ id: "climate", revision: 1 }]);
+    expect(mock.run).not.toHaveBeenCalled();
+    event({ type: "session.delegation.created", delegation: { id: "late-save" }, offset_ms: 200 }); await settle();
+    expect(mock.saveFindings).toHaveBeenCalledTimes(1); expect(mock.run).not.toHaveBeenCalled();
+  });
+
+  it("starts a fresh authorized writing worker for another topic instead of saving the focused finding", async () => {
+    const { props, rerender } = setup(); rerender(<SpaceVoice {...props} floating />);
+    publish([{ ...finished(), assignment: { subject: "Climate", focus: "Read climate." } }]);
+    fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discuss by voice" }));
+    speak("Create a new note about astronomy"); await settle();
+    expect(mock.saveFindings).not.toHaveBeenCalled(); expect(mock.run).toHaveBeenCalledTimes(1);
+    expect(mock.run.mock.calls[0][0]).not.toBe("climate"); expect(mock.run.mock.calls[0][7]).toBeUndefined();
+    expect(mock.jobs.find(job => job.id === "climate")).toMatchObject({ revision: 1, state: "completed" });
+  });
+
+  it("admits every assigned reader before authorizing background saves from the exact request", async () => {
+    setup(); const prompt = "Have two workers research the Space and write two new notes";
+    const assignments = [{ subject: "Climate", focus: "Research climate." }, { subject: "Astronomy", focus: "Research astronomy." }];
+    mock.route.mockResolvedValueOnce({ action: "batch", prompt, assignments });
+    let finish!: () => void;
+    mock.saveFindings.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+    speak(prompt); await settle();
+    expect(mock.run).toHaveBeenCalledTimes(2);
+    const targets = mock.run.mock.calls.map(call => ({ id: call[0], revision: 1 }));
+    expect(mock.saveFindings).toHaveBeenCalledExactlyOnceWith(prompt, targets);
+    expect(mock.run.mock.invocationCallOrder.every(order => order < mock.saveFindings.mock.invocationCallOrder[0])).toBe(true);
+    speak("Research the next question", 2_500); await settle();
+    expect(mock.run).toHaveBeenCalledTimes(3);
+    finish(); await settle(); expect(mock.close).not.toHaveBeenCalled();
+  });
+
+  it("retains original spoken creation authority after a validated reference-only clarification", async () => {
+    setup(); const prompt = "Have two workers research and write two new notes";
+    mock.route.mockResolvedValueOnce({ action: "clarify", question: "What should the workers read?", workerCount: 2 });
+    speak(prompt); await settle(); expect(mock.run).not.toHaveBeenCalled();
+    mock.route.mockResolvedValueOnce({ action: "batch", prompt: "This note", assignments: [{ subject: "Climate", focus: "Research this note's climate." }, { subject: "History", focus: "Research this note's history." }] });
+    speak("This note", 2_500); await settle();
+    expect(mock.run).toHaveBeenCalledTimes(2);
+    expect(mock.run.mock.calls.every(call => call[1] === prompt)).toBe(true);
+    expect(mock.saveFindings).toHaveBeenCalledExactlyOnceWith(prompt, mock.run.mock.calls.map(call => ({ id: call[0], revision: 1 })));
+  });
+
+  it("does not revive original save authority from a negative instruction inside a topic clarification", async () => {
+    setup(); const prompt = "Have two workers research and write two new notes";
+    mock.route.mockResolvedValueOnce({ action: "clarify", question: "Which topics?", workerCount: 2 });
+    speak(prompt); await settle();
+    const answer = "Climate, but do not save notes";
+    mock.route.mockResolvedValueOnce({ action: "batch", prompt: answer, assignments: [{ subject: "Climate", focus: "Research climate." }, { subject: "History", focus: "Research history." }] });
+    speak(answer, 2_500); await settle();
+    expect(mock.saveFindings).not.toHaveBeenCalled();
+    expect(mock.run.mock.calls.every(call => call[1] !== prompt)).toBe(true);
+  });
+
+  it("does not authorize batch saves from scope instructions without a human creation request", async () => {
+    setup(); const prompt = "Have two workers research the Space";
+    mock.route.mockResolvedValueOnce({ action: "batch", prompt, assignments: [{ subject: "Save a note", focus: "Create a new note." }, { subject: "Other", focus: "Save findings." }] });
+    speak(prompt); await settle(); expect(mock.run).toHaveBeenCalledTimes(2); expect(mock.saveFindings).not.toHaveBeenCalled();
+  });
+
+  it("keeps the call and completed finding available when a focused save fails", async () => {
+    const { props, rerender } = setup(); rerender(<SpaceVoice {...props} floating />);
+    publish([finished()]); fireEvent.click(screen.getByRole("button", { name: "Voice options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discuss by voice" }));
+    mock.close.mockClear();
+    mock.saveFindings.mockRejectedValueOnce(new Error("No new save was confirmed. Disk unavailable."));
+    speak("Save this as a note"); await settle();
+    expect(screen.getAllByText("No new save was confirmed. Disk unavailable.").length).toBeGreaterThan(0);
+    expect(mock.jobs[0]).toMatchObject({ state: "completed" }); expect(mock.close).not.toHaveBeenCalled();
+  });
+
   it("keeps a fuller pending utterance on its own reserved ID without exposing that reservation as a correction target", async () => {
     const { props, rerender } = setup(), presence = createVoicePresence();
     rerender(<SpaceVoice {...props} presence={presence} />);

@@ -1,3 +1,4 @@
+import { resolveWebResearchProvider } from "./webResearchProvider";
 import type { AppSnapshot } from "../types";
 import { buildChatRequest } from "./chat";
 import { spaceNoteVersion } from "./spaceKnowledge";
@@ -102,10 +103,14 @@ function pluralAssignment(prompt: string): boolean {
 function deicticTopicReply(prompt: string): boolean {
   return /^(?:(?:this|that|the|my) (?:(?:current|open|selected|highlighted) )?(?:note|draft|passage|selection|sentence|paragraph|text)|what i(?:'ve| have)? (?:just )?(?:selected|highlighted))(?: please)?$/.test(command(prompt));
 }
-function workerClarificationAnswer(input: LocalInput): boolean {
+export function workerClarificationAnswer(input: LocalInput): boolean {
   const previous = input.clarification;
   if (!previous || previous.prompt.length > MAX_PROMPT || !pluralAssignment(previous.prompt) || input.prompt.length > MAX_PROMPT || speculative(input.prompt) || voiceControlAction(input.prompt)) return false;
   const text = command(input.prompt);
+  // A topic clarification cannot revive a cancelled write request or absorb a
+  // second instruction. This guard is also used before retaining save authority.
+  if (/\b(?:do not|don't|don’t|never|instead|rather than)\b/.test(text) ||
+      /\b(?:and|but|then)\s+(?:please\s+)?(?:write|make|draft|capture|keep|store|turn|convert|save|create|edit|rewrite|add|stop|cancel)\b/.test(text)) return false;
   // These are short answers to the outstanding topic question. Resolve their
   // meaning through the host's captured note/selection, never whichever note
   // happens to be open by the time research starts. Keep the whole phrase
@@ -114,7 +119,7 @@ function workerClarificationAnswer(input: LocalInput): boolean {
   // A short nominal answer completes a question about topics. A fresh idea,
   // unrelated full sentence, control or another imperative remains its own turn.
   return !!text && text.split(" ").length <= 60 &&
-    !/^(?:thanks?|thank you|yes|yeah|yep|no|okay|ok|hello|hi|right|exactly|agreed|great|i|we|you|it|that|this|can|could|would|will|what|why|how|maybe|research|look|check|save|create|edit|rewrite|add|spawn|start|stop|cancel)\b/.test(text) &&
+    !/^(?:thanks?|thank you|yes|yeah|yep|no|okay|ok|hello|hi|right|exactly|agreed|great|i|we|you|it|that|this|can|could|would|will|what|why|how|maybe|research|look|check|save|create|write|make|draft|capture|keep|store|turn|convert|edit|rewrite|add|spawn|start|stop|cancel)\b/.test(text) &&
     !/\b(?:is|are|was|were|should|could|would|will|think|feel|seems|because)\b/.test(text);
 }
 function batchCount(input: LocalInput): number | undefined {
@@ -484,7 +489,7 @@ export async function routeVoiceTurn(input: VoiceTurnInput): Promise<VoiceTurnDe
       referenceOnly: true } } : {}),
     ...(workerClarificationAnswer(captured) ? { clarification: { prompt: captured.clarification!.prompt.slice(0, MAX_PROMPT),
       question: captured.clarification!.question.slice(0, 240), workerCount: batchCount(captured) } } : {}),
-    webResearchAvailable: input.snapshot.settings.perplexityApiKeyConfigured === true,
+    webResearchAvailable: !!resolveWebResearchProvider(input.snapshot.settings),
     totalKnownJobs: jobs.length,
     jobsTruncated: contextJobs.length < jobs.length,
     jobs: contextJobs.map(job => ({ id: job.id, revision: job.revision, subject: job.subject.slice(0, 160),

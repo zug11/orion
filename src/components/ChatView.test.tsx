@@ -7,6 +7,7 @@ import { ChatView } from "./ChatView";
 import { generateChatSuggestions } from "../lib/chatSuggestions";
 import { CHAT_SUGGESTION_DELAY_MS } from "./useChatSuggestions";
 import type { ChatPromptSuggestion, Note } from "../types";
+import type { ChatThreadNavigation } from "./ChatThreads";
 
 vi.mock("../lib/chatSuggestions", async importOriginal => ({
   ...await importOriginal<typeof import("../lib/chatSuggestions")>(),
@@ -16,6 +17,10 @@ const NOW = "2026-07-28T08:00:00.000Z";
 let sequence = 0;
 const note = (id: string, title: string, body: string): Note => ({ id, title, body, slug: id, summary: "", aliases: [], tags: [], kind: "article", status: "ready", conceptIds: [], sourceIds: [], createdAt: NOW, updatedAt: NOW });
 const handlers = () => ({ onSend: vi.fn().mockResolvedValue({ reply: "Done" }), onClear: vi.fn(), onOpenNote: vi.fn(), onSaveReply: vi.fn(), onOpenSettings: vi.fn() });
+const threadNavigation = (): ChatThreadNavigation => ({
+  threads: [{ id: "chat-one", title: "A working idea", updatedAt: NOW, messageCount: 2 }], activeThreadId: "chat-one",
+  onSelect: vi.fn(), onNew: vi.fn(), onRename: vi.fn(), onDelete: vi.fn(),
+});
 const generated = (prefix = "Wetland"): ChatPromptSuggestion[] => [
   { prompt: `How could ${prefix} reed beds affect the two sampling sites differently?`, intent: "discuss", evidenceIds: ["s1"] },
   { prompt: `Compare ${prefix} recovery with the sediment measurements.`, intent: "discuss", evidenceIds: ["s1"] },
@@ -36,6 +41,78 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("ChatView", () => {
+  it("collapses the full-page thread rail without remounting the voice scene or clearing a draft", () => {
+    const callbacks = handlers(), navigation = threadNavigation();
+    const { container, rerender } = render(<ChatView {...callbacks} snapshot={fixture()} busy={false} threadNavigation={navigation}/>);
+    const scene = container.querySelector(".chat-view__voice-scene");
+    fireEvent.click(screen.getByRole("button", { name: "Show chat threads" }));
+    const toggle = screen.getByRole("button", { name: "Hide chat threads" });
+    fireEvent.change(screen.getByRole("textbox", { name: "Message Orion" }), { target: { value: "Keep this thought" } });
+    expect(screen.getByRole("complementary", { name: /Chats in/ })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Hide chat threads" }));
+    expect(screen.queryByRole("complementary")).toBeNull();
+    expect(screen.getByRole("button", { name: "Show chat threads" })).toBe(toggle);
+    expect(container.querySelector(".chat-view__voice-scene")).toBe(scene);
+    expect(screen.getByRole("textbox", { name: "Message Orion" })).toHaveValue("Keep this thought");
+    fireEvent.click(screen.getByRole("button", { name: "Show chat threads" }));
+    expect(screen.getByRole("complementary", { name: /Chats in/ })).toBeVisible();
+    expect(container.querySelector(".chat-view__voice-scene")).toBe(scene);
+    rerender(<ChatView {...callbacks} snapshot={fixture()} busy={false} threadNavigation={navigation} compact/>);
+    expect(screen.queryByRole("complementary")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Hide chat threads" })).toBeNull();
+  });
+
+  it("uses a controlled thread draft and creates New chat without clearing the originating draft", async () => {
+    const callbacks = handlers(), navigation = threadNavigation(), onChange = vi.fn();
+    const { rerender } = render(<ChatView {...callbacks} snapshot={fixture()} busy={false} threadNavigation={navigation}
+      composerDraft={{ value: "Unsent in this thread", onChange }}/>);
+    expect(screen.getByRole("textbox", { name: "Message Orion" })).toHaveValue("Unsent in this thread");
+    fireEvent.change(screen.getByRole("textbox", { name: "Message Orion" }), { target: { value: "Another thought" } });
+    expect(onChange).toHaveBeenLastCalledWith("Another thought");
+    onChange.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+    expect(navigation.onNew).toHaveBeenCalledOnce();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(callbacks.onClear).not.toHaveBeenCalled();
+    rerender(<ChatView {...callbacks} snapshot={fixture()} busy={false} threadNavigation={navigation}
+      composerDraft={{ value: "Restored draft", onChange }}/>);
+    fireEvent.submit(screen.getByRole("textbox", { name: "Message Orion" }).closest("form")!);
+    await waitFor(() => expect(callbacks.onSend).toHaveBeenCalledWith("Restored draft"));
+    expect(onChange).toHaveBeenCalledWith("");
+  });
+
+  it("turns the thread list into a dismissible overlay at narrow full-page widths", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(650);
+    const { container } = render(<ChatView {...handlers()} snapshot={fixture()} busy={false} threadNavigation={threadNavigation()}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Show chat threads" }));
+    const dialog = screen.getByRole("dialog", { name: /Chats in/ });
+    expect(container.querySelector(".chat-view__stage")).toHaveAttribute("inert");
+    expect(container.querySelector(".chat-view__header")).toHaveAttribute("inert");
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(container.querySelector(".chat-view__stage")).not.toHaveAttribute("inert");
+    expect(container.querySelector(".chat-view__header")).not.toHaveAttribute("inert");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Show chat threads" })).toHaveFocus());
+  });
+
+  it("restores a controlled suggestion target after a thread remount instead of retargeting its draft", async () => {
+    const snapshot = fixture(), callbacks = handlers(), onChange = vi.fn(), onContextChange = vi.fn();
+    snapshot.notes.push(note("b", "Another note", "Different text."));
+    const composerDraft = { value: "Rewrite the opening I selected", onChange, onContextChange,
+      context: { spaceId: snapshot.workspace.id, noteId: "a", title: "Wetland recovery", editing: true } };
+    const { rerender } = render(<ChatView key="first" {...callbacks} snapshot={snapshot} busy={false} focusNoteId="a" composerDraft={composerDraft}/>);
+    rerender(<ChatView key="second" {...callbacks} snapshot={snapshot} busy={false} focusNoteId="b" composerDraft={composerDraft}/>);
+    expect(screen.getByRole("button", { name: "Wetland recovery" })).toBeVisible();
+    fireEvent.submit(screen.getByRole("textbox", { name: "Message Orion" }).closest("form")!);
+    await waitFor(() => expect(callbacks.onSend).toHaveBeenCalledWith(composerDraft.value, "a"));
+    expect(onContextChange).toHaveBeenCalledWith(undefined);
+    const other = { ...snapshot, workspace: { ...snapshot.workspace, id: "different-space" } };
+    rerender(<ChatView key="third" {...callbacks} snapshot={other} busy={false} focusNoteId="a" composerDraft={composerDraft}/>);
+    fireEvent.submit(screen.getByRole("textbox", { name: "Message Orion" }).closest("form")!);
+    expect(callbacks.onSend).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("alert")).toHaveTextContent("no longer available");
+  });
+
   it("keeps Web opt-in for typed messages during voice and resets it across Spaces", async () => {
     const state = fixture(), callbacks = handlers(); state.settings.perplexityApiKeyConfigured = true;
     const props = { ...callbacks, snapshot: state, busy: false, voiceControl: { active: true, toggle: vi.fn() } };
@@ -57,12 +134,40 @@ describe("ChatView", () => {
     expect(screen.getByRole("button", { name: "Web" })).toHaveAttribute("aria-pressed", "false");
   });
   it("opens Settings from Web when the key is missing, without enabling research", () => {
-    const callbacks = handlers(); render(<ChatView {...callbacks} snapshot={fixture()} busy={false} />);
+    const callbacks = handlers(), snapshot = fixture(); snapshot.settings.webResearchProvider = "perplexity";
+    render(<ChatView {...callbacks} snapshot={snapshot} busy={false} />);
     fireEvent.click(screen.getByRole("button", { name: "Web" }));
     expect(callbacks.onOpenSettings).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "Web" })).toHaveAttribute("aria-pressed", "false");
     expect(callbacks.onSend).not.toHaveBeenCalled();
   });
+  it.each(["gpt-6.1-sol", "chatgpt:gpt-6.1-sol"])("enables opt-in Web with the selected %s connection and no Perplexity key", async model => {
+    const snapshot = fixture(), callbacks = handlers();
+    Object.assign(snapshot.settings, { model, apiKeyConfigured: !model.startsWith("chatgpt:"), chatgptConfigured: model.startsWith("chatgpt:"), chatgptAccountId: "account-a" });
+    const { rerender } = render(<ChatView {...callbacks} snapshot={snapshot} busy={false}/>);
+    const web = screen.getByRole("button", { name: "Web" });
+    expect(web).toHaveAttribute("aria-pressed", "false"); expect(web).toHaveAttribute("title", expect.stringContaining(model.startsWith("chatgpt:") ? "ChatGPT plan" : "OpenAI API"));
+    fireEvent.click(web); expect(web).toHaveAttribute("aria-pressed", "true");
+    fireEvent.change(screen.getByRole("textbox", { name: "Message Orion" }), { target: { value: "Research online" } });
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Message Orion" }), { key: "Enter" });
+    await waitFor(() => expect(callbacks.onSend).toHaveBeenCalledWith("Research online", undefined, undefined, true));
+    rerender(<ChatView {...callbacks} snapshot={{ ...snapshot, settings: { ...snapshot.settings, apiKeyConfigured: false, chatgptConfigured: false } }} busy={false}/>);
+    expect(web).toHaveAttribute("aria-pressed", "false"); expect(callbacks.onOpenSettings).not.toHaveBeenCalled();
+  });
+
+  it("requires a fresh Web opt-in after an account or resolved-provider change", () => {
+    const snapshot = fixture(), callbacks = handlers();
+    Object.assign(snapshot.settings, { model: "chatgpt:gpt-6.1-sol", chatgptConfigured: true, chatgptAccountId: "account-a" });
+    const { rerender } = render(<ChatView {...callbacks} snapshot={snapshot} busy={false}/>);
+    const web = screen.getByRole("button", { name: "Web" }); fireEvent.click(web);
+    expect(web).toHaveAttribute("aria-pressed", "true");
+    const otherAccount = { ...snapshot, settings: { ...snapshot.settings, chatgptAccountId: "account-b" } };
+    rerender(<ChatView {...callbacks} snapshot={otherAccount} busy={false}/>);
+    expect(web).toHaveAttribute("aria-pressed", "false"); fireEvent.click(web);
+    rerender(<ChatView {...callbacks} snapshot={{ ...otherAccount, settings: { ...otherAccount.settings, perplexityApiKeyConfigured: true } }} busy={false}/>);
+    expect(web).toHaveAttribute("aria-pressed", "false"); expect(web).toHaveAttribute("title", expect.stringContaining("Perplexity"));
+  });
+
   it.each([false, true])("shows a decorative idle orb without starting voice (compact=%s)", compact => {
     const callbacks = handlers(), toggle = vi.fn();
     const { container } = render(<ChatView {...callbacks} snapshot={fixture()} busy={false} compact={compact}
@@ -445,14 +550,17 @@ it("captures highlighted text with the typed request and offers passage comments
 
 it("uses the same passage conversation in Chat while preserving the ordinary composer", async () => {
   const snapshot = fixture(), callbacks = handlers();
+  const navigation = threadNavigation();
   snapshot.studio.messages = [{ id: "ordinary", role: "assistant", content: "Ordinary Space answer", createdAt: NOW, cardIds: [], contextCardIds: [] }];
   const thread = { id: "thread", state: "open" as const, anchor: { quote: snapshot.notes[0].body, text: snapshot.notes[0].body }, createdAt: NOW, updatedAt: NOW,
     messages: [{ id: "comment", role: "assistant" as const, content: "An anchored observation", createdAt: NOW }] };
   const onAction = vi.fn().mockResolvedValue(undefined), onReturn = vi.fn(), onLeave = vi.fn();
-  const { rerender } = render(<ChatView {...callbacks} snapshot={snapshot} busy={false} />);
+  const { rerender } = render(<ChatView {...callbacks} snapshot={snapshot} busy={false} threadNavigation={navigation}/>);
+  fireEvent.click(screen.getByRole("button", { name: "Show chat threads" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Message Orion" }), { target: { value: "My separate Space draft" } });
   const passageChat = { key: "open-thread", note: snapshot.notes[0], thread, draft: "Follow this comment", onAction, onReturn, onLeave };
-  rerender(<ChatView {...callbacks} snapshot={snapshot} busy={false} passageChat={passageChat} />);
+  rerender(<ChatView {...callbacks} snapshot={snapshot} busy={false} passageChat={passageChat} threadNavigation={navigation}/>);
+  expect(screen.queryByRole("complementary")).toBeNull();
   expect(screen.queryByText("Ordinary Space answer")).toBeNull();
   expect(screen.getByRole("textbox", { name: "Discuss this passage" })).toHaveValue("Follow this comment");
   expect(screen.queryByRole("button", { name: "Comment on passage" })).toBeNull();
@@ -463,6 +571,7 @@ it("uses the same passage conversation in Chat while preserving the ordinary com
   fireEvent.click(screen.getByRole("button", { name: "Back to Wetland recovery" })); expect(onReturn).toHaveBeenCalledOnce();
   fireEvent.click(screen.getByRole("button", { name: "Space chat" })); expect(onLeave).toHaveBeenCalledOnce();
   expect(callbacks.onClear).not.toHaveBeenCalled();
-  rerender(<ChatView {...callbacks} snapshot={snapshot} busy={false} />);
+  rerender(<ChatView {...callbacks} snapshot={snapshot} busy={false} threadNavigation={navigation}/>);
+  expect(screen.getByRole("complementary", { name: /Chats in/ })).toBeVisible();
   expect(screen.getByRole("textbox", { name: "Message Orion" })).toHaveValue("My separate Space draft");
 });

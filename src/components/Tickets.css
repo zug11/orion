@@ -1,0 +1,159 @@
+.home-work { color:var(--text); }
+.home-tickets { margin-top:28px; color:var(--text); }
+.home-tickets>header,.work-item-composer header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.home-tickets h2 { margin:0; font-size:18px; font-weight:500; }
+.home-tickets h2>span { margin-left:8px; color:var(--muted); font-size:12px; font-weight:400; }
+.ticket-toolbar,.ticket-create-actions,.ticket-view-switch { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.ticket-view-switch { gap:2px; }
+.ticket-view-switch button,.ticket-open,.ticket-add-button,.ticket-board-strip button,.ticket-assignment,.ticket-completed-toggle,.kanban-add,.ticket-board-choices button { border:0; background:none; color:inherit; font:inherit; text-align:left; cursor:pointer; }
+.ticket-view-switch button,.ticket-add-button { display:inline-flex; align-items:center; gap:6px; padding:7px 9px; border-radius:7px; font-size:12px; }
+.ticket-view-switch button[aria-pressed=true],.ticket-view-switch button:hover,.ticket-add-button:hover { background:var(--periwinkle-wash); }
+.ticket-create-actions>.text-button { font-size:12px; color:var(--muted); padding:6px; }
+.ticket-list { margin-top:12px; max-height:390px; overflow:auto; scrollbar-gutter:stable; }
+.ticket-row { display:flex; align-items:center; gap:12px; border-top:1px solid var(--line); padding:13px 2px; position:relative; touch-action:none; }
+.ticket-row-copy { min-width:0; flex:1; }
+.home-work-check { width:16px; height:16px; margin:0; flex:none; accent-color:var(--periwinkle); cursor:pointer; }
+.ticket-open { padding:0; font-size:14px; line-height:1.45; overflow-wrap:anywhere; }
+.ticket-open:hover { text-decoration:underline; }
+.ticket-open:disabled { cursor:default; opacity:1; }
+.ticket-row.is-complete .ticket-open { color:var(--muted); text-decoration:line-through; }
+.ticket-row small,.kanban-ticket small { display:block; margin-top:4px; color:var(--muted); font-size:11px; line-height:1.4; }
+.ticket-concept { padding:0; font:inherit; color:inherit; border:0; background:none; cursor:pointer; }
+.ticket-concept:hover { color:var(--text); text-decoration:underline; }
+.ticket-assignment { padding:5px 8px; color:var(--muted); font-size:11px; border:1px solid var(--line); border-radius:6px; max-width:140px; overflow-wrap:anywhere; }
+.ticket-assignment:hover { color:var(--text); background:var(--surface-1); }
+.ticket-completed-toggle { display:flex; align-items:center; gap:7px; color:var(--muted); font-size:12px; padding:12px 0 6px; }
+.ticket-completed-toggle[aria-expanded=true]>svg { transform:rotate(90deg); }
+.ticket-completed-toggle span { color:var(--faint); }
+.ticket-board-strip { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:16px; }
+.ticket-board-strip button,.ticket-board-target { padding:6px 10px; border:1px solid var(--line); border-radius:6px; font-size:12px; color:var(--text-soft); }
+.ticket-board-strip button[aria-pressed=true] { border-color:var(--periwinkle); background:var(--periwinkle-wash); color:var(--text); }
+.ticket-drag-hint { margin-left:auto; color:var(--faint); font-size:11px; }
+.ticket-board-source { color:var(--muted); font-size:11px; }
+.kanban-tools { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-top:14px; }
+.ticket-infer-button { margin-left:auto; }
+.kanban-tools .text-button { font-size:12px; color:var(--muted); }
+.kanban-tools button:disabled { opacity:.55; cursor:default; }
+.orion-kanban { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; margin:14px 0 20px; font-family:var(--ui-font); font-size:13px; line-height:1.5; }
+.kanban-column { min-width:0; min-height:140px; border-radius:8px; padding:0 2px 8px; }
+.kanban-column h4 { display:flex; justify-content:space-between; gap:8px; border-bottom:1px solid var(--line); padding:0 0 9px; margin:0 0 10px; font-family:var(--ui-font); font-size:12px; font-weight:500; }
+.kanban-column h4 span { color:var(--muted); }
+.kanban-ticket { position:relative; margin-bottom:8px; padding:12px; background:var(--surface-1); border:1px solid var(--line); border-radius:8px; cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none; }
+.kanban-ticket .ticket-open { cursor:inherit; }
+.kanban-ticket small { padding-right:28px; }
+.kanban-card-footer { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:end; gap:8px; margin-top:12px; }
+.kanban-card-options { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:4px 8px; min-width:0; }
+.kanban-add { display:flex; align-items:center; justify-content:center; gap:6px; width:100%; padding:9px; border-radius:6px; font-size:12px; color:var(--muted); }
+.kanban-add:hover { background:var(--surface-1); color:var(--text); }
+.kanban-create { padding:10px; background:var(--surface-1); border:1px solid var(--line-strong); border-radius:8px; }
+.kanban-create input { width:100%; min-width:0; padding:4px 0 8px; font:13px var(--ui-font); color:var(--text); background:none; border:0; outline:none; }
+.kanban-create:focus-within { border-color:var(--periwinkle); }
+.kanban-create>div { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.kanban-create .text-button { font-size:12px; }
+.kanban-empty { color:var(--muted); font-size:13px; line-height:1.6; margin:16px 0; }
+[data-drag-over=true] { outline:1px dashed var(--periwinkle); outline-offset:3px; background:var(--periwinkle-wash); }
+[data-ticket-dragging=true] { opacity:.35; }
+[data-ticket-drag-active=true],[data-ticket-drag-active=true] * { user-select:none !important; -webkit-user-select:none !important; }
+.ticket-drag-ghost { position:fixed; pointer-events:none; z-index:100000; width:min(230px,60vw); padding:13px; border:1px solid var(--periwinkle); border-radius:8px; background:var(--surface-raised); color:var(--text); font:14px/1.4 var(--ui-font); box-shadow:0 10px 35px #0004; transform:rotate(1deg); overflow-wrap:anywhere; }
+.note-kanban { margin:24px 0; clear:both; }
+.note-kanban>header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.note-kanban-title { color:var(--text); font:500 16px var(--ui-font); border:0; background:none; padding:3px 0; width:100%; }
+.note-kanban h3 { font:500 16px var(--ui-font); margin:0; }
+.work-item-composer { width:min(430px,calc(100vw - 32px)); max-height:calc(100vh - 48px); overflow:auto; padding:24px; border:1px solid var(--line); border-radius:14px; background:var(--surface-raised); color:var(--text); box-shadow:0 18px 70px #0004; }
+.work-item-composer::backdrop { background:#0003; -webkit-backdrop-filter:blur(18px); backdrop-filter:blur(18px); }
+.work-item-composer h2 { font:500 18px var(--ui-font); margin:0; }
+.work-item-composer label { display:block; font-size:12px; color:var(--text-soft); margin-top:18px; }
+.work-item-composer input,.work-item-composer select { display:block; width:100%; padding:10px; margin-top:6px; font:14px var(--ui-font); background:var(--surface-1); color:var(--text); border:1px solid var(--line); border-radius:7px; }
+.work-item-composer footer { margin-top:22px; display:flex; gap:12px; align-items:center; justify-content:space-between; }
+.work-item-composer footer span { font-size:11px; color:var(--muted); }
+.ticket-error { color:var(--danger); font-size:12px; }
+.ticket-board-choices { display:grid; gap:6px; }
+.ticket-board-choices button { padding:10px; border-radius:6px; border:1px solid var(--line); }
+.ticket-board-choices button:hover,.ticket-board-choices button[aria-pressed=true] { background:var(--periwinkle-wash); border-color:var(--periwinkle); }
+.ticket-inference { width:min(550px,calc(100vw - 32px)); }
+.ticket-inference-intro,.ticket-inference-busy { font-size:13px; color:var(--text-soft); line-height:1.5; }
+.ticket-inference-busy { display:flex; align-items:center; gap:8px; }
+.ticket-suggestions { max-height:48vh; overflow:auto; }
+.ticket-suggestion { border-top:1px solid var(--line); padding:12px 0; }
+.ticket-suggestion .ticket-suggestion-choice { display:flex; align-items:center; gap:10px; margin:0; }
+.ticket-suggestion-choice input[type=checkbox] { width:16px; height:16px; flex:none; margin:0; accent-color:var(--periwinkle); }
+.ticket-suggestion-choice input[type=text] { min-width:0; margin:0; }
+.ticket-suggestion blockquote { margin:9px 0 0 26px; padding:0 0 0 10px; border-left:2px solid var(--line); font-size:12px; color:var(--text-soft); line-height:1.5; }
+.home-lower-grid.home-overview-row { grid-template-columns:minmax(0,1fr); }
+.home-explore .home-note-strip { display:flex; overflow-x:auto; gap:12px; padding:4px 3px 14px; scroll-snap-type:x proximity; overscroll-behavior-x:contain; }
+.home-note-strip .recent-note-card { flex:0 0 min(280px,82%); min-height:178px; scroll-snap-align:start; content-visibility:auto; contain-intrinsic-size:auto 280px auto 178px; }
+.home-note-strip:focus-visible { outline:2px solid var(--periwinkle); outline-offset:5px; border-radius:8px; }
+.home-view .home-hero.home-hero-compact { min-height:210px; }
+.home-hero-compact .home-hero-content { padding:30px 32px 78px; width:100%; }
+.home-hero-compact .home-hero-content h1 { font-size:clamp(28px,3.6vw,40px); margin-bottom:0; text-wrap:wrap; overflow-wrap:anywhere; }
+.home-hero-compact .hero-actions { margin-top:20px; flex-wrap:wrap; }
+.home-hero-compact .hero-stat-row { right:22px; bottom:16px; }
+.home-work button:focus-visible,.home-work input:focus-visible,.kanban-workspace button:focus-visible,.kanban-ticket:focus-visible,.work-item-composer button:focus-visible { outline:2px solid var(--periwinkle); outline-offset:3px; }
+/* Leave the word-count's reserved space intact while board controls are in use. */
+.note-view:has(.note-kanban:hover,.note-kanban:focus-within) .note-word-count { visibility:hidden; }
+@media(max-width:760px) {
+  .orion-kanban { grid-template-columns:1fr; gap:18px; }
+  .kanban-column { min-height:90px; }
+  .home-tickets>header { flex-wrap:wrap; }
+  .ticket-toolbar { width:100%; justify-content:space-between; }
+  .ticket-row { gap:9px; }
+  .ticket-assignment { max-width:95px; }
+  .ticket-drag-hint { width:100%; margin-top:5px; }
+  .home-hero-compact .home-hero-content { padding:24px 24px 92px; }
+}
+@media(prefers-reduced-transparency:reduce),(prefers-contrast:more) { .work-item-composer::backdrop { background:#17191de6; backdrop-filter:none; -webkit-backdrop-filter:none; } }
+
+/* The task card and Space overview share the original two-column reading layout. */
+.home-work-context > .home-todos { min-width:0; }
+.home-work-context .task-panel { height:460px; }
+.home-work-context .task-panel .ticket-list { flex:1; min-height:0; max-height:none; overscroll-behavior:contain; }
+.home-work-context .task-panel .ticket-row { border:0; align-items:flex-start; gap:14px; padding:9px 2px 16px; }
+.home-work-context .task-panel .home-work-check { width:17px; height:17px; margin-top:2px; }
+.home-work-context .task-panel .ticket-open { color:var(--text-soft); font:520 16px/1.35 var(--body-font); }
+.home-work-context .task-panel .ticket-open:hover { color:var(--text); }
+.home-work-context .task-panel .ticket-row small { font:12px/1.4 var(--ui-font); margin-top:6px; }
+.ticket-concept::before { content:' · '; }
+.home-work-context .task-panel .ticket-concept { display:block; margin-top:10px; color:var(--mint); }
+.home-work-context .task-panel .ticket-concept::before { content:none; }
+.home-work-create { display:flex; justify-content:flex-end; margin-top:20px; }
+.home-work-create + .home-work-context { margin-top:12px; }
+.work-item-composer .ticket-suggestion blockquote { color:var(--text-soft); background:var(--surface-1); }
+
+.note-prose li.note-ticket-card,.editor-prose li.note-ticket-card { display:block; border:0; border-radius:12px; padding:14px 16px; margin:10px 0; background:var(--surface-raised); list-style:none; }
+.note-prose li.note-ticket-card::before,.note-prose li.note-ticket-card::marker { display:none; content:''; }
+.note-ticket-card .note-ticket-prose { min-width:0; }
+.note-ticket-card .note-ticket-prose p { margin:0; }
+.note-prose .note-ticket-controls,.editor-prose .note-ticket-controls { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:end; gap:8px; margin-top:12px; font:10px var(--ui-font); }
+.note-ticket-options { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:8px; min-width:0; }
+.note-ticket-controls > .ticket-error { grid-column:1 / -1; }
+.note-ticket-status { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:3px; }
+.note-ticket-status button { border:0; border-radius:5px; padding:4px 7px; color:var(--text-soft); background:transparent; font:inherit; cursor:pointer; }
+.note-ticket-status button[aria-pressed=true] { background:var(--periwinkle-wash); color:var(--text); }
+.note-ticket-status button:hover { color:var(--text); }
+.ticket-urgency-field { display:inline-flex; flex-direction:column; align-items:flex-end; gap:4px; max-width:100%; }
+.ticket-priority-control { position:relative; display:inline-flex; max-width:100%; }
+.ticket-urgency { -webkit-appearance:none; appearance:none; width:82px; max-width:100%; min-height:24px; padding:4px 18px; border:0; border-radius:5px; background:transparent; box-shadow:none; color:var(--text-soft); font:11px/16px var(--ui-font); cursor:pointer; }
+.ticket-urgency.is-empty { padding-left:6px; }
+.ticket-priority-dot,.ticket-priority-chevron { position:absolute; top:50%; transform:translateY(-50%); pointer-events:none; }
+.ticket-priority-dot { left:6px; width:5px; height:5px; border-radius:50%; background:var(--text-soft); }
+.ticket-urgency.is-empty ~ .ticket-priority-dot { display:none; }
+.ticket-priority-chevron { right:4px; color:var(--text-soft); }
+.ticket-urgency:hover { background:var(--periwinkle-wash); color:var(--text); }
+.ticket-urgency:focus-visible { outline:2px solid var(--periwinkle); outline-offset:2px; }
+.ticket-urgency option { color:var(--text); background:var(--surface-raised); }
+.ticket-urgency.is-urgent ~ .ticket-priority-dot { background:#c44843; }
+.ticket-urgency.is-high ~ .ticket-priority-dot { background:#ca8d50; }
+.ticket-urgency.is-medium ~ .ticket-priority-dot { background:var(--periwinkle); }
+.kanban-ticket:focus-visible { outline:2px solid var(--periwinkle); outline-offset:3px; }
+.editor-prose .tiptap li[data-type="taskItem"].note-ticket-card { display:block; padding:14px 16px; margin:10px 0; }
+.editor-prose .tiptap li[data-type="taskItem"].note-ticket-card > [contenteditable="false"] { text-decoration:none; color:var(--text); }
+.kanban-ticket,.note-prose li.note-ticket-card,.editor-prose li.note-ticket-card { border:0; background:var(--surface-raised); box-shadow:0 2px 4px #0000000a,0 7px 20px #00000012; }
+.kanban-ticket > .ticket-open { display:block; width:100%; }
+.note-ticket-card { position:relative; }
+.kanban-ticket:has(.ticket-delete) > .ticket-open,.note-ticket-card:has(.ticket-delete) > .note-ticket-prose { padding-right:28px; }
+.ticket-delete { position:absolute; top:8px; right:8px; display:grid; place-items:center; width:24px; height:24px; padding:0; border:0; border-radius:5px; background:transparent; color:var(--text-soft); cursor:pointer; opacity:0; pointer-events:none; }
+.kanban-ticket:hover > .ticket-delete,.kanban-ticket:focus-within > .ticket-delete,.note-ticket-card:hover .ticket-delete,.note-ticket-card:focus-within .ticket-delete { opacity:1; pointer-events:auto; }
+.ticket-delete:hover { color:var(--danger); background:var(--periwinkle-wash); }
+.ticket-delete:focus-visible { opacity:1; pointer-events:auto; outline:2px solid var(--periwinkle); outline-offset:2px; }
+.ticket-delete-error { display:block; padding-right:28px; margin-bottom:8px; font:12px/1.4 var(--ui-font); }
+@media(hover:none) { .ticket-delete { opacity:1; pointer-events:auto; } }

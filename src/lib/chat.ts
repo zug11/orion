@@ -10,6 +10,7 @@ import type {
 import { slugifyTitle } from "../data/defaults";
 import { reconcileConceptVocabulary } from "./concepts";
 import { normalizeStudio } from "./studio";
+import { touchChatThread } from "./chatThreads";
 import { truncateUnicode } from "./text";
 import { portableChatEvidence } from "./chatCitations";
 import { normalizeSourceEvidenceVersions } from "./evidenceVersions";
@@ -23,14 +24,30 @@ export const MAX_CHAT_NOTE_ACTION_CONTENT_CHARS = 24_000;
 const MAX_CHAT_NOTE_LABELS = 8;
 const MAX_CHAT_NOTE_LABEL_CHARS = 120;
 
+const NOTE_QUANTITY = "(?:an?|some|a few|a couple of|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|[1-9]\\d*)";
+const NEW_NOTE_OBJECT = `(?:${NOTE_QUANTITY}\\s+)?(?:(?:new|another|separate|additional)\\s+)?notes?\\b`;
+const NOTE_REFERENCE = "(?:(?:this|that)(?:\\s+(?:reply|answer|research|findings?|results?))?|it|(?:your|the)\\s+(?:reply|answer|research|findings?|results?))";
 const NOTE_CREATION_PATTERNS = [
-  /\b(?:create|make|draft|add|spawn)\s+(?:me\s+)?(?:an?\s+|some\s+|\d+\s+)?notes?\b/iu,
-  /\bwrite\s+(?:me\s+)?(?:an?\s+|some\s+|\d+\s+)notes?\b/iu,
-  /\b(?:save|capture|keep)\s+(?:(?:this|that)(?:\s+(?:reply|answer))?|it|your\s+(?:reply|answer)|the\s+(?:reply|answer))\s+as\s+(?:an?\s+)?note\b/iu,
-  /\b(?:turn|convert)\s+(?:(?:this|that)(?:\s+(?:reply|answer))?|it|your\s+(?:reply|answer)|the\s+(?:reply|answer))\s+into\s+(?:an?\s+)?note\b/iu,
-  /\b(?:put|store)\s+(?:(?:this|that)(?:\s+(?:reply|answer))?|it|your\s+(?:reply|answer)|the\s+(?:reply|answer))\s+(?:in|into|as)\s+(?:an?\s+)?note\b/iu,
-  /\btake\s+(?:an?\s+)?note\s+(?:of|on|about)\b/iu,
-] as const;
+  new RegExp(`^(?:create|make|draft|add|spawn|write|save)\\s+(?:me\\s+)?${NEW_NOTE_OBJECT}`, "iu"),
+  new RegExp(`^(?:save|capture|keep)\\s+${NOTE_REFERENCE}\\s+as\\s+${NEW_NOTE_OBJECT}`, "iu"),
+  new RegExp(`^(?:turn|convert)\\s+${NOTE_REFERENCE}\\s+into\\s+${NEW_NOTE_OBJECT}`, "iu"),
+  new RegExp(`^(?:put|store)\\s+${NOTE_REFERENCE}\\s+(?:in|into|as)\\s+${NEW_NOTE_OBJECT}`, "iu"),
+  /^take\s+(?:an?\s+)?note\s+(?:of|on|about)\b/iu,
+];
+const NOTE_WORKER_SUBJECT = `(?:(?:the|my|our|these|those|each|${NOTE_QUANTITY})\\s+)?(?:research\\s+)?(?:workers?|orbs?|agents?)\\s+(?:each\\s+)?(?:to\\s+)?`;
+const NOTE_WORKER_REQUEST = new RegExp(`^(?:have|get|ask|tell|instruct|use|send|spawn|start|dispatch|launch|assign)\\s+${NOTE_WORKER_SUBJECT}`, "iu");
+
+function noteCreationCommand(clause: string): string {
+  let text = clause.trim();
+  for (let pass = 0; pass < 3; pass++) {
+    text = text.replace(/^(?:(?:please|okay|ok|hey|actually|well|so|also|and|now|then|next|separately)[,\s]+)+/iu, "")
+      .replace(/^(?:can|could|would|will) you\s+/iu, "");
+    const desire = /^(?:i (?:want|need|would like)|i'd like)\s+(?:(?:you to|to)\s+)?/iu;
+    if (desire.test(text)) text = text.replace(desire, "").replace(new RegExp(`^${NOTE_WORKER_SUBJECT}`, "iu"), "");
+    text = text.replace(NOTE_WORKER_REQUEST, "");
+  }
+  return text;
+}
 
 export interface ChatRequestToken {
   id: string;
@@ -62,6 +79,13 @@ export class ChatRequestRegistry {
     );
   }
 
+  /** Release a cancelled conversation immediately, without allowing its late
+   * completion to clear a replacement request in the same Space. */
+  cancel(spaceId: string): void {
+    this.invalidate(spaceId);
+    this.pending.delete(spaceId);
+  }
+
   isCurrent(token: ChatRequestToken): boolean {
     const current = this.pending.get(token.spaceId);
     return (
@@ -72,7 +96,8 @@ export class ChatRequestRegistry {
   }
 
   finish(token: ChatRequestToken): boolean {
-    if (this.pending.get(token.spaceId)?.id !== token.id) {
+    const current = this.pending.get(token.spaceId);
+    if (current?.id !== token.id || current.generation !== token.generation) {
       return false;
     }
     this.pending.delete(token.spaceId);
@@ -114,8 +139,10 @@ export function applyChatResult(
   messageIdFactory: () => string,
   noteIdFactory: () => string = messageIdFactory,
   passage?: StudioMessage["passage"],
+  threadId?: string,
 ): AppSnapshot {
-  const studio = normalizeStudio(snapshot.studio);
+  const normalized = normalizeStudio(snapshot.studio);
+  const studio = threadId ? touchChatThread(normalized, threadId, prompt, now) : normalized;
   const evidence = normalizeSourceEvidenceVersions((result.evidence ?? []).filter(isChatEvidence).filter((item) =>
     item.kind === "web" || (item.kind === "note" ? snapshot.notes : snapshot.sources).some((entity) => entity.id === item.entityId),
   ).slice(0, MAX_CHAT_EVIDENCE), snapshot.sources);
@@ -131,6 +158,7 @@ export function applyChatResult(
     {
       id: messageIdFactory(),
       role: "user",
+      ...(threadId ? { threadId } : {}),
       content: prompt.trim(),
       cardIds: [],
       contextCardIds: [],
@@ -139,6 +167,7 @@ export function applyChatResult(
     {
       id: messageIdFactory(),
       role: "assistant",
+      ...(threadId ? { threadId } : {}),
       ...(passage ? { passage } : {}),
       content: result.reply.trim(),
       cardIds: [],
@@ -257,6 +286,13 @@ export function normalizeChatNoteActions(
 
 export function chatPromptAllowsNoteCreation(prompt: string): boolean {
   const normalized = prompt
+    // Authored examples and quoted reference text cannot authorize a write.
+    // Keep surrounding commands, including a quoted title after "create a note".
+    .replace(/```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)/gu, " ")
+    .replace(/`[^`\n]*(?:`|$)/gmu, " ")
+    .replace(/^\s*>[^\n]*/gmu, " ")
+    .replace(/"[^"]*(?:"|$)|“[^”]*(?:”|$)/gu, " ")
+    .replace(/(^|[\s([{])['‘][\s\S]*?['’](?=$|[\s)\]},.!?])/gu, "$1 ")
     .replace(/[’‘]/g, "'")
     .replace(/\bdon't\b/giu, "do not")
     .replace(/\bdont\b/giu, "do not")
@@ -265,14 +301,19 @@ export function chatPromptAllowsNoteCreation(prompt: string): boolean {
   if (
     /\b(?:do\s+not|don't|never)\s+(?:[^.!?]{0,40}\s)?(?:create|make|draft|add|spawn|write|save|capture|keep|turn|convert|put|store)\b/iu.test(
       normalized,
-    ) ||
-    /\b(?:should|why|how|when|whether)\b[^.!?]{0,100}\b(?:create|make|save|capture|keep|write)\b/iu.test(
-      normalized,
     )
   ) {
     return false;
   }
-  return NOTE_CREATION_PATTERNS.some((pattern) => pattern.test(normalized));
+  return normalized.split(/[.!?;]+/u).some(clause => {
+    const command = noteCreationCommand(clause);
+    if (NOTE_CREATION_PATTERNS.some(pattern => pattern.test(command))) return true;
+    // Preserve a compound imperative such as "research the contract and create
+    // a note", without granting writes to "explain how to create a note".
+    if (!/^(?:research|read|review|investigate|find|compare|analy[sz]e|summari[sz]e|look\s+(?:up|into))\b/iu.test(command)) return false;
+    return command.split(/\s+(?:and(?:\s+then)?|then)\s+/iu).slice(1)
+      .some(part => NOTE_CREATION_PATTERNS.some(pattern => pattern.test(noteCreationCommand(part))));
+  });
 }
 
 function isChatNoteAction(value: unknown): value is ChatNoteAction {

@@ -7,6 +7,7 @@ import {
   normalizeElevenLabsVoiceId,
   normalizeElevenLabsVoices,
   normalizeSpeechVoice,
+  normalizeLiveVoiceProvider,
   normalizeThemeAccent,
   normalizeThemeCanvasTone,
   normalizeThemeColor,
@@ -67,6 +68,18 @@ describe("home atmosphere tuning defaults", () => {
 });
 
 describe("speech voice defaults", () => {
+  it("defaults live conversations to OpenAI independently of narration", () => {
+    expect(defaultSettings.liveVoiceProvider).toBe("openai");
+    expect(defaultSettings.speechVoice).toBe("system");
+    expect(normalizeLiveVoiceProvider("openai")).toBe("openai");
+    expect(normalizeLiveVoiceProvider("elevenlabs")).toBe("elevenlabs");
+  });
+
+  it.each([undefined, null, "system", "ElevenLabs", "", "openai ", {}, false])(
+    "preserves the OpenAI conversation default for older or invalid preferences (%j)",
+    value => expect(normalizeLiveVoiceProvider(value)).toBe("openai"),
+  );
+
   it("preserves a legacy voice and makes migration repeatable", () => {
     const voiceId = "21m00Tcm4TlvDq8ikWAM";
     const migrated = normalizeElevenLabsVoices(undefined, voiceId);

@@ -1,3 +1,9 @@
+import { CalendarPicker } from './CalendarPicker';
+import { insertCalendarDate } from './editor/NoteCalendar';
+import { EMPTY_WORK, TicketContext, WorkItemComposer, type TicketWorkspace } from "./Tickets";
+import { applyInferredTickets, type TicketInference } from "../lib/ticketInference";
+import { collectWork, type Ticket, type TicketPatch } from "../lib/tickets";
+import { NoteKanban, containsNoteBoard, insertWorkItem, insertBoardTickets, patchEditorTicket, deleteEditorTicket } from "./editor/NoteKanban";
 import { captureCommentCursor, type CommentCursor } from "../lib/commentCursor";
 import type { ChatEditorChange } from "../lib/chatEdits";
 import { prepareChatEditorChange, applyPreparedChatChange, type PreparedChatChange } from "./editor/chatEditTransaction";
@@ -91,7 +97,7 @@ import {
   type ConceptLinkSelection,
 } from "./editor/conceptLinkSelection";
 import { FindInNote, findInNotePluginKey } from "./editor/FindInNote";
-import { insertVoiceTranscriptAt, insertCleanedVoiceTranscriptAt } from "./editor/voiceDictation";
+import { insertVoiceTranscriptAt, insertCleanedVoiceTranscriptAt, insertStructuredVoiceTranscriptAt, restoreOriginalDictation } from "./editor/voiceDictation";
 import type { PrepareDictation, DictationCompletionOptions, PreparedDictation } from "../lib/dictationCleanup";
 import { AIWritingPreview } from "./editor/AIWritingPreview";
 import { FlowWriting, finishInlineFlow, FLOW_INTERNAL, getInlineFlow } from "./editor/FlowWriting";
@@ -121,6 +127,15 @@ export interface AIImageGenerationCallbacks {
 }
 export interface RichEditorContextState extends EditorCaptureState { markdown: string; authored: boolean }
 
+interface AppliedDictation {
+  editor: Editor;
+  before: ProseMirrorNode;
+  after: ProseMirrorNode;
+  position: number;
+  original: string;
+  track: (event: EditorEvents["transaction"]) => void;
+}
+
 interface RichNoteEditorProps {
   documentHeading?: ReactNode;
   onBodyStartKey?: (key: "ArrowUp" | "Backspace" | "Enter") => boolean;
@@ -144,6 +159,9 @@ interface RichNoteEditorProps {
   sources: readonly Source[];
   attachedSourceIds: readonly EntityId[];
   onChange: (markdown: string) => void;
+  onPatchTicket?: (ticket: Ticket, patch: TicketPatch) => boolean;
+  onDeleteTicket?: (ticket: Ticket) => boolean;
+  ticketInference?: TicketWorkspace["inference"];
   onAttachSource: (sourceId: EntityId) => void;
   onOpenSource?: (sourceId: EntityId) => void;
   onOpenNote?: (noteId: EntityId) => void;
@@ -276,6 +294,9 @@ export function RichNoteEditor({
   sources,
   attachedSourceIds,
   onChange,
+  onPatchTicket,
+  onDeleteTicket,
+  ticketInference,
   onAttachSource,
   onOpenSource,
   onOpenNote,
@@ -333,6 +354,8 @@ export function RichNoteEditor({
     cancelCleanup?: () => void;
     track: (event: EditorEvents["transaction"]) => void;
   } | null>(null);
+  const appliedDictation = useRef<AppliedDictation | null>(null);
+  const [dictationOriginalAvailable, setDictationOriginalAvailable] = useState(false);
   const externalActionRef = useRef<ExternalEditorOperation | null>(null);
   const actionDocumentVersion = useRef(`editor-doc_${nanoid(16)}`);
   const actionSelectionVersion = useRef(`editor-selection_${nanoid(16)}`);
@@ -349,6 +372,9 @@ export function RichNoteEditor({
   const aiSelectionRef = useRef({ from: 0, to: 0, empty: true });
   const slashImageInputRef = useRef<HTMLInputElement>(null);
   const [pendingInsert, setPendingInsert] = useState<{kind:"table"|"excerpt"|"link"|"image";range:{from:number;to:number};document:ProseMirrorNode;block?:boolean}|null>(null);
+  const [calendarInsert, setCalendarInsert] = useState<{ range: { from: number; to: number }; document: ProseMirrorNode } | null>(null);
+  const [workInsert, setWorkInsert] = useState<{kind:"ticket"|"kanban";range:{from:number;to:number};document:ProseMirrorNode}|null>(null);
+  const inferredTickets = useRef<{ result: TicketInference; document: ProseMirrorNode } | null>(null);
   const [linkDraft, setLinkDraft] = useState<LinkDraft | null>(null);
   const [linkTitleBusy, setLinkTitleBusy] = useState(false);
   const [citationDraft, setCitationDraft] = useState<CitationDraft | null>(null);
@@ -399,7 +425,7 @@ export function RichNoteEditor({
           autolink: true,
           openOnClick: false,
           enableClickSelection: false,
-          protocols: ["orion-note", "orion-concept", "orion-source"],
+          protocols: ["orion-note", "orion-concept", "orion-source", "orion-date"],
           HTMLAttributes: {
             target: null,
             rel: null,
@@ -410,6 +436,7 @@ export function RichNoteEditor({
       TableKit.configure({ table: false }),
       NoteTable,
       NoteBlockFrame,
+      NoteKanban,
       NoteExcerpt,
       TaskList,
       NoteTaskItem.configure({ nested: true }),
@@ -550,6 +577,7 @@ export function RichNoteEditor({
   const flowActive = useEditorState({ editor, selector: ({ editor: current }) => Boolean(current && getInlineFlow(current)) }) ?? false;
   useEffect(() => { onFlowActiveChange?.(flowActive); }, [flowActive, onFlowActiveChange]);
   useEffect(() => () => onFlowActiveChange?.(false), [onFlowActiveChange]);
+  const hasBoard = useEditorState({ editor, selector: ({ editor: current }) => Boolean(current && containsNoteBoard(current.state.doc)) }) ?? false;
   const blockSelected = useEditorState({ editor, selector: ({ editor: current }) => current?.isActive("noteBlock") ?? false }) ?? false;
 
   useEffect(() => {
@@ -559,7 +587,7 @@ export function RichNoteEditor({
     return ()=>input?.removeEventListener("cancel",cancel);
   },[editor]);
 
-  useEffect(() => () => clearVoiceMemoInsertion(), [noteId]);
+  useEffect(() => () => { clearVoiceMemoInsertion(); clearDictationRecovery(); }, [noteId]);
 
   useEffect(() => {
     if (!editor) {
@@ -605,6 +633,7 @@ export function RichNoteEditor({
       clearVoiceMemoInsertion();
       setAnnouncement("Dictation insertion cancelled because this note changed elsewhere. A completed original remains in Sources.");
     }
+    clearDictationRecovery();
     actionDocumentVersion.current = `editor-doc_${nanoid(16)}`;
     if (externalActionRef.current && !externalActionRef.current.options) externalActionRef.current.invalidated = true;
     if (chatReviewRef.current) {
@@ -660,7 +689,7 @@ export function RichNoteEditor({
   const reviewReadyRef = useRef<() => boolean>(() => false);
   reviewReadyRef.current = () => Boolean(editor && editor.isInitialized && !editor.isDestroyed && editor.isEditable &&
     !chatReviewRef.current && !chatChangeRef.current && !getInlineFlow(editor) && !aiOperationRef.current &&
-    !voiceMemoInsertionRef.current && !imageUploadActiveRef.current && !pendingInsert && !linkDraft &&
+    !voiceMemoInsertionRef.current && !imageUploadActiveRef.current && !pendingInsert && !calendarInsert && !workInsert && !linkDraft &&
     !citationDraft && !linkTitleBusy && !imageBusy && !imageDragActive && !writeComposerOpen && !aiComposerActiveRef.current);
   useEffect(() => {
     onReviewReadinessChange?.(() => reviewReadyRef.current());
@@ -725,7 +754,7 @@ export function RichNoteEditor({
   }, [editor]);
   useEffect(() => {
     if (!reviewReadyRef.current() && externalActionRef.current && !externalActionRef.current.options) externalActionRef.current.invalidated = true;
-  }, [pendingInsert, linkDraft, citationDraft, linkTitleBusy, imageBusy, imageDragActive, writeComposerOpen, flowActive, chatEdit, chatReview, aiOperation]);
+  }, [pendingInsert, calendarInsert, workInsert, linkDraft, citationDraft, linkTitleBusy, imageBusy, imageDragActive, writeComposerOpen, flowActive, chatEdit, chatReview, aiOperation]);
 
   const finishChatReview = useCallback((accepted: boolean) => {
     const review = chatReviewRef.current;
@@ -773,7 +802,7 @@ export function RichNoteEditor({
         if (markdown.trimEnd() !== chatEdit.baseMarkdown.trimEnd() || lastEmittedMarkdownRef.current.trimEnd() !== chatEdit.baseMarkdown.trimEnd()) {
           throw new Error("This note has changed. Ask Chat to regenerate the edits.");
         }
-        if (getInlineFlow(editor) || aiOperationRef.current || voiceMemoInsertionRef.current || imageUploadActiveRef.current || pendingInsert || linkDraft || citationDraft || linkTitleBusy || imageBusy || writeComposerOpen) {
+        if (getInlineFlow(editor) || aiOperationRef.current || voiceMemoInsertionRef.current || imageUploadActiveRef.current || pendingInsert || calendarInsert || workInsert || linkDraft || citationDraft || linkTitleBusy || imageBusy || writeComposerOpen) {
           throw new Error("Finish the current writing operation before reviewing these changes.");
         }
         const editorBody = (value: string) => splitSavedChatPassages(
@@ -792,7 +821,7 @@ export function RichNoteEditor({
     if (editor.isInitialized) preview();
     else editor.on("create", preview);
     return () => { editor.off("create", preview); };
-  }, [chatEdit, editor, markdown, pendingInsert, linkDraft, citationDraft, linkTitleBusy, imageBusy, writeComposerOpen]);
+  }, [chatEdit, editor, markdown, pendingInsert, calendarInsert, workInsert, linkDraft, citationDraft, linkTitleBusy, imageBusy, writeComposerOpen]);
 
   useEffect(() => {
     if (!editor) return;
@@ -1028,6 +1057,10 @@ export function RichNoteEditor({
 
   function insertBlock(command: BlockInsertCommand, position: number) {
     if (!editor?.isEditable) return;
+    if (command === "ticket" || command === "kanban") {
+      setWorkInsert({ kind: command, range: { from: position, to: position }, document: editor.state.doc });
+      return;
+    }
     if (["table", "excerpt", "link", "image"].includes(command)) {
       beginInsert(command as "table" | "excerpt" | "link" | "image", { from: position, to: position }, true);
       return;
@@ -1049,6 +1082,8 @@ export function RichNoteEditor({
 
   function runSlashCommand(command:SlashCommand, range:{from:number;to:number}) {
     if (!editor?.isEditable) return;
+    if (command === "calendar") { setCalendarInsert({ range, document: editor.state.doc }); return; }
+    if (command === "ticket" || command === "kanban") { setWorkInsert({kind:command,range,document:editor.state.doc});return; }
     if (command === "comment") {
       if (!onAddComment) return;
       const target = selectSlashCommentPassage(editor, range);
@@ -1275,6 +1310,10 @@ export function RichNoteEditor({
     if (!currentEditor || currentEditor.isDestroyed) {
       return Promise.reject(new Error("This note is no longer editable."));
     }
+    clearDictationRecovery();
+    if (aiOperationRef.current || chatReviewRef.current || getInlineFlow(currentEditor) || !currentEditor.isEditable) {
+      return Promise.reject(new Error("Finish the current writing operation before starting dictation."));
+    }
     clearVoiceMemoInsertion();
     const insertion = {
       sessionId,
@@ -1313,6 +1352,29 @@ export function RichNoteEditor({
     await onFinishVoiceMemoSession?.(sessionId);
   }
 
+  function clearDictationRecovery() {
+    const capture = appliedDictation.current;
+    appliedDictation.current = null;
+    if (capture && !capture.editor.isDestroyed) capture.editor.off("transaction", capture.track);
+    setDictationOriginalAvailable(false);
+  }
+
+  function useOriginalDictation() {
+    const capture = appliedDictation.current;
+    if (!capture) return;
+    clearDictationRecovery();
+    const restored = editorRef.current === capture.editor && restoreOriginalDictation(capture.editor,
+      capture.before, capture.after, capture.position, capture.original);
+    setAnnouncement(restored ? "Original dictation restored. Undo is available."
+      : "The note changed. Your original dictation remains in Sources.");
+  }
+
+  function currentDictationBoards() {
+    // The originating note may have a newer live body than its autosave echo.
+    return collectWork(notesRef.current.map(note => note.id === noteId && note.body !== lastEmittedMarkdownRef.current
+      ? { ...note, body: lastEmittedMarkdownRef.current } : note)).boards;
+  }
+
   async function insertCompletedVoiceMemo(
     sessionId: string,
     transcript: string,
@@ -1338,15 +1400,30 @@ export function RichNoteEditor({
           ? "This note changed, so dictation was not inserted. Its original is saved in Sources."
           : "This note changed before dictation could be inserted.");
       }
-      const inserted = prepared?.blocks
-        ? insertCleanedVoiceTranscriptAt(currentEditor, insertion.position, prepared.blocks)
-        : insertVoiceTranscriptAt(currentEditor, insertion.position, transcript);
-      if (
-        !inserted && !insertVoiceTranscriptAt(currentEditor, insertion.position, transcript)
-      ) {
-        throw new Error(
-          "Orion could not insert the dictation at this cursor position.",
-        );
+      const position = insertion.position;
+      const before = currentEditor.state.doc;
+      const original = prepared?.original ?? transcript;
+      let inserted = false;
+      const canClean = !controller.signal.aborted;
+      if (canClean && prepared?.proposal) {
+        inserted = insertStructuredVoiceTranscriptAt(currentEditor, position, prepared.proposal, original,
+          currentDictationBoards(), before);
+      }
+      if (!inserted && canClean && prepared?.blocks) {
+        inserted = insertCleanedVoiceTranscriptAt(currentEditor, position, prepared.blocks);
+      }
+      if (!inserted && !insertVoiceTranscriptAt(currentEditor, position, original)) {
+        throw new Error("Orion could not insert the dictation at this cursor position.");
+      }
+      if (inserted) {
+        const capture: AppliedDictation = { editor: currentEditor, before, after: currentEditor.state.doc,
+          position, original, track: () => {} };
+        capture.track = ({ transaction }) => {
+          if (transaction.docChanged && !currentEditor.state.doc.eq(capture.after)) clearDictationRecovery();
+        };
+        appliedDictation.current = capture;
+        currentEditor.on("transaction", capture.track);
+        setDictationOriginalAvailable(true);
       }
       setAnnouncement("Dictation inserted at the cursor. Undo is available.");
       return inserted ? prepared?.notice : "Original dictation inserted.";
@@ -1357,7 +1434,7 @@ export function RichNoteEditor({
   }
 
   function openWriteComposer() {
-    if (!editor.isEditable || aiOperationRef.current || getInlineFlow(editor)) return;
+    if (!editor.isEditable || aiOperationRef.current || voiceMemoInsertionRef.current || getInlineFlow(editor)) return;
     const position = editor.state.selection.to;
     writeCursorRef.current = { position, document: editor.state.doc };
     setLinkDraft(null);
@@ -1382,7 +1459,7 @@ export function RichNoteEditor({
     length: AIWritingLength,
     instruction: string,
   ) {
-    if (aiOperationRef.current) return;
+    if (aiOperationRef.current || voiceMemoInsertionRef.current) return;
     if (!aiArticleWritingEnabled || !onGenerateAIWriting) {
       setAnnouncement(aiWritingUnavailableReason ?? `Add an ${aiProviderName ?? "AI provider"} key in Settings to write with AI.`);
       return;
@@ -1502,7 +1579,7 @@ export function RichNoteEditor({
   }
 
   function requestAIImage(instruction: string, options?: { quality: AIImageQuality; contextMode: AIImageContextMode }) {
-    if (aiOperationRef.current || !onGenerateAIImage || !aiImageGenerationEnabled) return;
+    if (aiOperationRef.current || voiceMemoInsertionRef.current || !onGenerateAIImage || !aiImageGenerationEnabled) return;
     let capture: AIWritingCapture;
     try {
       capture = captureAIWritingSelection(editor, "paragraph");
@@ -1818,7 +1895,7 @@ export function RichNoteEditor({
   }
 
   function openLinkComposer() {
-    if (!editor.isEditable || aiOperationRef.current || getInlineFlow(editor)) return;
+    if (!editor.isEditable || aiOperationRef.current || voiceMemoInsertionRef.current || getInlineFlow(editor)) return;
     closeWriteComposer(false);
     const initialHref = String(editor.getAttributes("link").href ?? "");
     if (editor.state.selection.empty && initialHref) editor.commands.extendMarkRange("link");
@@ -2069,7 +2146,8 @@ export function RichNoteEditor({
       </div> : <NativeFormattingDock>
       <div className="editor-toolbar-shell">
         <EditorToolbar
-          writingSessionDisabled={Boolean(pendingInsert || linkDraft || citationDraft || linkTitleBusy || writeComposerOpen || aiOperation || imageBusy || voiceMemoInsertionRef.current)}
+          writingSessionDisabled={Boolean(pendingInsert || calendarInsert || workInsert || linkDraft || citationDraft || linkTitleBusy || writeComposerOpen || aiOperation || imageBusy || voiceMemoInsertionRef.current)}
+          onUseOriginalDictation={dictationOriginalAvailable ? useOriginalDictation : undefined}
           marginsVisible={marginsVisible}
           onToggleMargins={toggleMargins}
           blockControls={blockSelected}
@@ -2116,7 +2194,7 @@ export function RichNoteEditor({
       {marginsVisible && <MarginsControl editor={editor} disabled={Boolean(aiOperation) || imageBusy || linkTitleBusy} onClose={closeMargins}/>}
       </NativeFormattingDock>}
       {documentHeading}
-      <SlashMenu editor={editor} canComment={Boolean(onAddComment)} suspended={Boolean(chatReview || pendingInsert || linkDraft || citationDraft || writeComposerOpen || aiOperation || imageBusy || flowActive || commentComposerActive)} onCommand={runSlashCommand}/>
+      <SlashMenu editor={editor} canComment={Boolean(onAddComment)} suspended={Boolean(calendarInsert || workInsert || chatReview || pendingInsert || linkDraft || citationDraft || writeComposerOpen || aiOperation || imageBusy || flowActive || commentComposerActive)} onCommand={runSlashCommand}/>
       <input ref={slashImageInputRef} type="file" className="sr-only" accept={NOTE_IMAGE_ACCEPT} multiple tabIndex={-1} aria-hidden="true"
         onChange={(event) => {
           const files=Array.from(event.currentTarget.files??[]);event.currentTarget.value="";
@@ -2125,6 +2203,33 @@ export function RichNoteEditor({
           const block = pendingInsert.block;
           setPendingInsert(null);void insertNoteImages(files, undefined, range, block);
         }}/>
+      {calendarInsert && <CalendarPicker title="Insert date" onChoose={date => insertCalendarDate(editor, date, calendarInsert.range, calendarInsert.document)} onClose={() => { setCalendarInsert(null); if (!editor.isDestroyed) editor.view.focus(); }}/>}
+      {workInsert && <WorkItemComposer kind={workInsert.kind} boards={collectWork(notes).boards} onClose={() => {setWorkInsert(null);editor.view.focus();}} onCreate={(title,_noteId,boardId,dueDate) =>
+        editor.state.doc.eq(workInsert.document) && (!boardId || collectWork(notes).boards.some(board => board.id === boardId)) &&
+        insertWorkItem(editor,workInsert.kind,title,workInsert.range,boardId,dueDate)}/> }
+      <TicketContext.Provider value={{work:hasBoard ? collectWork(notes) : EMPTY_WORK,onOpenNote,
+        onPatch:(ticket,patch) => ticket.noteId === noteId ? patchEditorTicket(editor,ticket,patch) : onPatchTicket?.(ticket,patch) ?? false,
+        onDelete:ticket => reviewReadyRef.current() && (ticket.noteId === noteId ? deleteEditorTicket(editor,ticket) : onDeleteTicket?.(ticket) ?? false),
+        onCreateTicket:(board,title,status,dueDate) => reviewReadyRef.current() && insertBoardTickets(editor,board.id,[title],status,false,dueDate),
+        inference:ticketInference ? {
+          unavailableReason:ticketInference.unavailableReason,
+          generate:async (board,signal,onProgress) => {
+            const document=editor.state.doc;
+            const result=await ticketInference.generate(board,signal,onProgress);
+            if (editor.isDestroyed || !editor.state.doc.eq(document)) throw new Error('The note changed. Infer again to use its current text.');
+            inferredTickets.current={result,document};return result;
+          },
+          apply:(board,result,titles,taskIds) => {
+            const captured=inferredTickets.current;
+            if (!captured || captured.result!==result || !editor.state.doc.eq(captured.document) || !reviewReadyRef.current() || result.boardId!==board.id || result.noteId!==noteId) return false;
+            const note = notes.find(n => n.id === noteId);
+            if (!note) return false;
+            const body = applyInferredTickets(note, board, result, titles, taskIds);
+            if (body === null) return false;
+            try { applyPreparedChatChange(editor, prepareChatEditorChange(editor, result.baseBody, body)); inferredTickets.current=null; return true; }
+            catch { return false; }
+          },
+        } : undefined}}>
       <EditorContent
         editor={editor}
         data-voice-note-body="editor"
@@ -2148,8 +2253,10 @@ export function RichNoteEditor({
         }}
         onDrop={() => setImageDragActive(false)}
       />
+      </TicketContext.Provider>
+
       <NoteBlockControls editor={editor}
-        suspended={Boolean(chatReview || pendingInsert || linkDraft || citationDraft || writeComposerOpen || aiOperation || imageBusy || flowActive)}
+        suspended={Boolean(calendarInsert || workInsert || chatReview || pendingInsert || linkDraft || citationDraft || writeComposerOpen || aiOperation || imageBusy || flowActive)}
         onInsert={insertBlock} onAnnounce={setAnnouncement}/>
       {savedPassages.length > 0 && <section className="source-references" aria-label="Cited passages">
         <h2>Cited passages</h2>
@@ -2172,7 +2279,7 @@ export function RichNoteEditor({
         onOpenLink={openLinkComposer}
         writingUnavailableReason={aiWritingUnavailableReason ?? `Add an ${aiProviderName ?? "AI provider"} key in Settings to write and rewrite.`}
         imageUnavailableReason={aiImageUnavailableReason}
-        suspended={Boolean(commentComposerActive || chatReview || flowActive || pendingInsert || linkDraft || citationDraft || linkTitleBusy || editor.isActive("image") || (editor.isActive("table") && editor.state.selection.empty))}
+        suspended={Boolean(commentComposerActive || chatReview || flowActive || pendingInsert || calendarInsert || workInsert || linkDraft || citationDraft || linkTitleBusy || editor.isActive("image") || (editor.isActive("table") && editor.state.selection.empty))}
         phase={aiOperation?.phase ?? "idle"}
         hasSelection={!aiSelectionEmpty}
         selectionPosition={aiSelectionPosition}

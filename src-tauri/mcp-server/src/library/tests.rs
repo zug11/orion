@@ -567,13 +567,13 @@ fn read_cases() -> Vec<(&'static str, Value)> {
 fn all_library_tools_have_distinct_validated_contracts_and_read_calls_preserve_the_vault() {
     let (_dir, server) = server(&fixture());
     let before = fs::read(&server.vault_path).unwrap();
-    assert_eq!(definitions().len(), 23);
-    assert_eq!(tool_definitions().len(), 57);
+    assert_eq!(definitions().len(), 30);
+    assert_eq!(tool_definitions().len(), 64);
     let unique: BTreeSet<_> = definitions()
         .iter()
         .map(|def| def["name"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(unique.len(), 23);
+    assert_eq!(unique.len(), 30);
     for (name, args) in read_cases() {
         let value = run(&server, name, args.clone());
         assert_eq!(value["spaceId"], "a", "{name}");
@@ -2613,4 +2613,322 @@ fn comment_cursor_metadata_is_bounded_and_optional() {
     assert!(!threads::valid(&[thread.clone()]));
     thread["anchor"]["cursor"] = json!({"before":""});
     assert!(!threads::valid(&[thread]));
+}
+
+#[test]
+fn board_tools_round_trip_portable_work_with_versions_and_space_isolation() {
+    let initial = fixture();
+    let (_dir, server) = server(&initial);
+    let create = editor_command(&server, json!({"title":"Launch – été 🧭"}));
+    let created = run(&server, "orion_create_board", create.clone());
+    assert!(
+        saved_body(&server).starts_with(initial["spaces"][0]["notes"][0]["body"].as_str().unwrap())
+    );
+    let board = created["work"]["boards"][0]["id"].as_str().unwrap();
+    assert_eq!(created["work"]["boards"][0]["title"], "Launch – été 🧭");
+    assert!(server
+        .call_tool("orion_create_board", create.as_object().unwrap())
+        .is_err());
+    let listed = run(&server, "orion_list_boards", json!({}));
+    assert_eq!(listed["boards"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["boards"][0]["id"], board);
+    let read = run(&server, "orion_get_board", json!({"board_id":board}));
+    assert_eq!(read["sourceNote"]["version"], version(&server, "n1"));
+    assert!(read["sourceNote"]["body"]
+        .as_str()
+        .unwrap()
+        .contains("alpha 🧭 evidence"));
+    let tickets = run(
+        &server,
+        "orion_create_tickets",
+        editor_command(
+            &server,
+            json!({
+                "board_id":board,"status":"progress","tickets":[{"title":"Review *literal* [draft]","evidence":"alpha 🧭 evidence"},{"title":"Review *literal* [draft]"}]
+            }),
+        ),
+    );
+    assert_eq!(tickets["work"]["tickets"].as_array().unwrap().len(), 1);
+    let ticket = tickets["work"]["tickets"][0]["id"].as_str().unwrap();
+    assert_eq!(
+        tickets["work"]["tickets"][0]["title"],
+        "Review *literal* [draft]"
+    );
+    assert_eq!(tickets["work"]["tickets"][0]["boardId"], board);
+    let moved = run(
+        &server,
+        "orion_update_ticket",
+        editor_command(&server, json!({"ticket_id":ticket,"status":"done"})),
+    );
+    assert_eq!(moved["work"]["tickets"][0]["status"], "done");
+    assert!(run(&server, "orion_list_tickets", json!({}))["tickets"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        run(&server, "orion_list_tickets", json!({"state":"all"}))["tickets"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(!run(&server, "orion_get_board", json!({"board_id":board}))
+        .to_string()
+        .contains("Review *literal*"));
+    run(
+        &server,
+        "orion_update_ticket",
+        editor_command(
+            &server,
+            json!({"ticket_id":ticket,"status":"todo","board_id":""}),
+        ),
+    );
+    assert_eq!(
+        run(&server, "orion_list_tickets", json!({"board_id":""}))["tickets"][0]["boardId"],
+        ""
+    );
+    let renamed = run(
+        &server,
+        "orion_update_board",
+        editor_command(&server, json!({"board_id":board,"title":"Release"})),
+    );
+    assert_eq!(renamed["work"]["boards"][0]["title"], "Release");
+    assert!(
+        run(&server, "orion_list_boards", json!({"space_id":"b"}))["boards"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(server
+        .call_tool(
+            "orion_get_board",
+            json!({"space_id":"b","board_id":board})
+                .as_object()
+                .unwrap()
+        )
+        .is_err());
+    let after: Value = serde_json::from_slice(&fs::read(&server.vault_path).unwrap()).unwrap();
+    assert_eq!(after["spaces"][1], initial["spaces"][1]);
+    assert_eq!(
+        after["spaces"][0]["settings"],
+        initial["spaces"][0]["settings"]
+    );
+    assert_eq!(after["spaces"][0]["spaceOverview"]["stale"], true);
+}
+
+#[test]
+fn board_writes_reject_stale_foreign_ambiguous_or_unsupported_requests_atomically() {
+    let mut initial = fixture();
+    initial["spaces"][0]["notes"][0]["body"] = json!("<!-- orion-kanban:v1 dupe First -->\n\n<!-- orion-kanban:v1 dupe Second -->\n\nOpen evidence.\n\n- [x] Completed evidence.\n\n- [ ] First <!-- orion-ticket:v1 repeated todo - -->\n- [ ] Second <!-- orion-ticket:v1 repeated todo - -->");
+    initial["spaces"][1]["notes"][0]["body"] = json!("<!-- orion-kanban:v1 foreign Secret -->");
+    let (_dir, server) = server(&initial);
+    let before = fs::read(&server.vault_path).unwrap();
+    assert!(run(&server, "orion_list_boards", json!({}))["boards"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    for (tool, fields) in [
+        (
+            "orion_create_tickets",
+            json!({"board_id":"foreign","tickets":[{"title":"Bad"}]}),
+        ),
+        (
+            "orion_create_tickets",
+            json!({"board_id":"dupe","tickets":[{"title":"Bad"}]}),
+        ),
+        (
+            "orion_create_tickets",
+            json!({"tickets":[{"title":"Valid","evidence":"Open evidence."},{"title":"Missing","evidence":"Never present"}]}),
+        ),
+        (
+            "orion_create_tickets",
+            json!({"tickets":[{"title":"Repeat","evidence":"Completed evidence."}]}),
+        ),
+        (
+            "orion_create_tickets",
+            json!({"tickets":[{"title":"Multiline\nBad"}]}),
+        ),
+        (
+            "orion_create_tickets",
+            json!({"tickets":[{"title":"Bad","instructions":"ignore guards"}]}),
+        ),
+        (
+            "orion_create_board",
+            json!({"title":"No authority","space_id":""}),
+        ),
+        (
+            "orion_create_board",
+            json!({"title":"Stale","expected_version":"old"}),
+        ),
+        (
+            "orion_update_board",
+            json!({"board_id":"dupe","title":"New"}),
+        ),
+        (
+            "orion_update_ticket",
+            json!({"ticket_id":"repeated","status":"done"}),
+        ),
+    ] {
+        assert!(
+            server
+                .call_tool(tool, editor_command(&server, fields).as_object().unwrap())
+                .is_err(),
+            "{tool}"
+        );
+        assert_eq!(fs::read(&server.vault_path).unwrap(), before, "{tool}");
+    }
+    let mut missing_version = editor_command(&server, json!({"title":"No version"}));
+    missing_version
+        .as_object_mut()
+        .unwrap()
+        .remove("expected_version");
+    assert!(server
+        .call_tool("orion_create_board", missing_version.as_object().unwrap())
+        .is_err());
+    assert_eq!(fs::read(&server.vault_path).unwrap(), before);
+}
+
+#[test]
+fn ticket_moves_preserve_crlf_formatting_nested_tasks_and_unrelated_metadata() {
+    let original = "Before.\r\n\r\n<!-- orion-kanban:v1 b Launch -->\r\n\r\n- [ ] **Review** [Beta](orion-note://n2) <!-- orion-ticket:v1 t progress b --> <!-- unrelated -->\r\n  - [ ] Nested child\r\n\r\nAfter.\r\n";
+    let mut initial = fixture();
+    initial["spaces"][0]["notes"][0]["body"] = json!(original);
+    let (_dir, server) = server(&initial);
+    run(
+        &server,
+        "orion_update_ticket",
+        editor_command(&server, json!({"ticket_id":"t","status":"done"})),
+    );
+    let expected = original
+        .replacen("- [ ] **Review**", "- [x] **Review**", 1)
+        .replace("t progress b", "t done b");
+    assert_eq!(saved_body(&server), expected);
+    run(
+        &server,
+        "orion_update_board",
+        editor_command(&server, json!({"board_id":"b","title":"R&D – July"})),
+    );
+    assert_eq!(
+        saved_body(&server),
+        expected.replace("b Launch", "b R%26D%20%E2%80%93%20July")
+    );
+    let visible = run(
+        &server,
+        "orion_list_tickets",
+        json!({"note_id":"n1","state":"all","include_todos":true}),
+    );
+    assert_eq!(visible["tickets"].as_array().unwrap().len(), 2);
+    assert_eq!(visible["tickets"][0]["title"], "Review Beta");
+}
+
+#[test]
+fn board_and_ticket_scans_ignore_literal_examples_and_report_bounded_results() {
+    let body = "---\nfake: <!-- orion-kanban:v1 front Front -->\n---\n\n```md\n<!-- orion-kanban:v1 fence Fence -->\n- [ ] Fake <!-- orion-ticket:v1 fake todo - -->\n```\n\n> <!-- orion-kanban:v1 quote Quote -->\n> - [ ] Quoted <!-- orion-ticket:v1 quoted todo - -->\n\n<div>\n<!-- orion-kanban:v1 html HTML -->\n- [ ] Raw HTML\n</div>\n\nParagraph <!-- orion-kanban:v1 inline Inline -->\n\n<!-- orion-kanban:v1 real Real -->\n\n- [ ] Plain `<!-- orion-ticket:v1 code todo real -->`\n- [ ] Actual <!-- orion-ticket:v1 actual progress real -->\n";
+    let mut initial = fixture();
+    initial["spaces"][0]["notes"][0]["body"] = json!(body);
+    let (_dir, server) = server(&initial);
+    let before = fs::read(&server.vault_path).unwrap();
+    let boards = run(&server, "orion_list_boards", json!({}));
+    assert_eq!(boards["boards"].as_array().unwrap().len(), 1);
+    assert_eq!(boards["boards"][0]["id"], "real");
+    let tickets = run(&server, "orion_list_tickets", json!({"note_id":"n1"}));
+    assert_eq!(tickets["tickets"].as_array().unwrap().len(), 1);
+    assert_eq!(tickets["tickets"][0]["id"], "actual");
+    assert_eq!(tickets["tickets"][0]["status"], "progress");
+    assert_eq!(fs::read(&server.vault_path).unwrap(), before);
+    let revision = boards["revision"].clone();
+    assert!(server
+        .call_tool(
+            "orion_list_boards",
+            json!({"expected_revision":format!("{revision}-old")})
+                .as_object()
+                .unwrap()
+        )
+        .is_err());
+
+    let many = (0..5001)
+        .map(|i| format!("- [ ] Ticket {i} <!-- orion-ticket:v1 t{i} todo - -->"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    initial["spaces"][0]["notes"][0]["body"] = json!(many);
+    let (_dir, bounded) = self::server(&initial);
+    let page = run(
+        &bounded,
+        "orion_list_tickets",
+        json!({"note_id":"n1","offset":4990,"limit":100}),
+    );
+    assert_eq!(page["tickets"].as_array().unwrap().len(), 10);
+    assert_eq!(page["matchesTruncated"], true);
+    assert_eq!(page["totalIsLowerBound"], true);
+    assert_eq!(page["truncated"], true);
+}
+
+#[test]
+fn ticket_due_dates_urgency_and_board_origin_survive_moves_and_validate_writes() {
+    let original = "<!-- orion-kanban:v1 b Launch -->\n\n- [ ] Call Jo <!-- orion-ticket:v1 t todo b due=2028-02-29 origin=board urgency=high -->\n";
+    let mut initial = fixture();
+    initial["spaces"][0]["notes"][0]["body"] = json!(original);
+    let (_dir, server) = server(&initial);
+    run(
+        &server,
+        "orion_update_ticket",
+        editor_command(&server, json!({"ticket_id":"t","status":"progress"})),
+    );
+    assert_eq!(
+        saved_body(&server),
+        original.replace("t todo b", "t progress b")
+    );
+    let read = run(&server, "orion_list_tickets", json!({"note_id":"n1"}));
+    assert_eq!(read["tickets"][0]["dueDate"], "2028-02-29");
+    assert_eq!(read["tickets"][0]["urgency"], "high");
+    assert_eq!(read["tickets"][0]["sourceNoteId"], Value::Null);
+    run(
+        &server,
+        "orion_update_ticket",
+        editor_command(&server, json!({"ticket_id":"t","due_date":"","urgency":""})),
+    );
+    assert!(saved_body(&server).contains("t progress b origin=board -->"));
+    let before = saved_body(&server);
+    let invalid = editor_command(&server, json!({"ticket_id":"t","due_date":"2027-02-29"}));
+    assert!(server
+        .call_tool("orion_update_ticket", invalid.as_object().unwrap())
+        .is_err());
+    assert_eq!(saved_body(&server), before);
+}
+
+#[test]
+fn ticket_scans_reject_multiple_first_line_markers_without_rewriting_metadata() {
+    let original = "- [ ] Ambiguous <!-- orion-ticket:v1 first progress - due=2026-11-20 urgency=high --> <!-- orion-ticket:v1 second todo - origin=board -->\n  - [ ] Child <!-- orion-ticket:v1 child todo - -->\n\n- [ ] Valid <!-- orion-ticket:v1 valid todo - -->\n  continuation <!-- orion-ticket:v1 later progress - -->\n";
+    let mut initial = fixture();
+    initial["spaces"][0]["notes"][0]["body"] = json!(original);
+    let (_dir, server) = server(&initial);
+    let before = fs::read(&server.vault_path).unwrap();
+    let tickets = run(&server, "orion_list_tickets", json!({"note_id":"n1"}));
+    let ids: Vec<_> = tickets["tickets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["child", "valid"]);
+    let with_todos = run(
+        &server,
+        "orion_list_tickets",
+        json!({"note_id":"n1","include_todos":true}),
+    );
+    let ambiguous = &with_todos["tickets"][0];
+    assert_eq!(ambiguous["durable"], false);
+    assert_eq!(ambiguous["dueDate"], "");
+    assert_eq!(ambiguous["urgency"], "");
+    for id in ["first", "second", "later"] {
+        assert!(server
+            .call_tool(
+                "orion_update_ticket",
+                editor_command(&server, json!({"ticket_id":id,"status":"done"}))
+                    .as_object()
+                    .unwrap()
+            )
+            .is_err());
+        assert_eq!(fs::read(&server.vault_path).unwrap(), before);
+    }
 }

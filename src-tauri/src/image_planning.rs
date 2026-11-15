@@ -237,7 +237,7 @@ async fn run(
     let key = if anthropic {
         stored_anthropic_api_key().await?
     } else {
-        stored_api_key().await?
+        chatgpt::model_key(&model).await?
     };
     let Some(key) = key else {
         return Err(format!(
@@ -252,13 +252,16 @@ async fn run(
             .post(ANTHROPIC_MESSAGES_URL)
             .header("x-api-key", key.as_str())
             .header("anthropic-version", "2023-06-01")
+            .header(reqwest::header::ACCEPT, "application/json")
+            .json(&body)
     } else {
-        client.post(OPENAI_RESPONSES_URL).bearer_auth(key.as_str())
+        chatgpt::text_request(
+            client.post(OPENAI_RESPONSES_URL).bearer_auth(key.as_str()),
+            body,
+        )
     };
     authorize()?;
     let mut response = call
-        .header(reqwest::header::ACCEPT, "application/json")
-        .json(&body)
         .timeout(Duration::from_millis(deadline))
         .send()
         .await
@@ -271,21 +274,26 @@ async fn run(
             openai_error(response, &format!("finish {}", label.to_lowercase())).await
         });
     }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|error| {
-        if error.is_timeout() {
-            timeout_message(&request.stage, deadline)
-        } else {
-            format!("{label} response was interrupted. Retry to resume from completed work.")
+    let response = if chatgpt::is_model(&model) {
+        chatgpt::read_with_limit(response, 2 * 1024 * 1024).await?
+    } else {
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|error| {
+            if error.is_timeout() {
+                timeout_message(&request.stage, deadline)
+            } else {
+                format!("{label} response was interrupted. Retry to resume from completed work.")
+            }
+        })? {
+            if bytes.len() + chunk.len() > 2 * 1024 * 1024 {
+                return Err(format!("{label} response exceeded its limit."));
+            }
+            bytes.extend_from_slice(&chunk);
         }
-    })? {
-        if bytes.len() + chunk.len() > 2 * 1024 * 1024 {
-            return Err(format!("{label} response exceeded its limit."));
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    let response: Value =
-        serde_json::from_slice(&bytes).map_err(|_| format!("{label} returned invalid data."))?;
+        let response: Value = serde_json::from_slice(&bytes)
+            .map_err(|_| format!("{label} returned invalid data."))?;
+        response
+    };
     let text = if anthropic {
         extract_anthropic_output_text(&response, "plan this illustration")
     } else {

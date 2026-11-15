@@ -80,6 +80,18 @@ describe("evidence-driven web continuation", () => {
     expect(finished.evidence).toHaveLength(1);
   });
 
+  it("does not treat reworded cited summaries of the same webpage as new evidence", async () => {
+    let calls = 0, turns = 0;
+    const research = vi.fn(async () => ({ ...result(1), responseId: `response_${++calls}`,
+      sources: result(1).sources.map(source => ({ ...source, snippet: `A different generated wording ${calls}.`, evidenceType: "cited_summary" as const })) }));
+    const finished = await runChatReading(snapshot(), "Resolve this uncertainty", async request => {
+      const packet = JSON.parse(request.readingContext!);
+      return packet.finalizing ? answer(request) : { reply: "", readRequests: [read(`Another approach ${++turns}`)] };
+    }, { webResearch: research });
+    expect(calls).toBe(3);
+    expect(finished.coverage?.limited).toBe(true);
+  });
+
   it("suppresses duplicate failed requests in one run but permits an explicit resumed retry", async () => {
     let turns = 0, checkpoint: ChatReadingCheckpoint | undefined;
     const research = vi.fn().mockRejectedValueOnce(new Error("The lookup timed out.")).mockResolvedValueOnce(result(1));

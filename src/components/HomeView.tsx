@@ -1,19 +1,16 @@
+import { HomeTickets, type HomeWorkPreferences } from "./HomeTickets";
+import type { TicketWorkspace, CreateWorkItem } from "./Tickets";
+import { collectWork } from "../lib/tickets";
 import {
   ArrowRight,
   BookOpen,
-  Check,
   Clock3,
   FilePlus2,
   Link2,
-  ListTodo,
   LoaderCircle,
   Plus,
   RefreshCw,
 } from "../lib/icons";
-import {
-  collectNoteTasks,
-  type NoteTask,
-} from "../lib/tasks";
 import { buildLocalSpaceOverview } from "../lib/spaceOverview";
 import {
   isSelectedAIConfigured,
@@ -31,7 +28,7 @@ import { displayNoteTitle, editableNoteSubtitle } from "../lib/noteMetadata";
 import BorderGlow from "./BorderGlow";
 import HomeAtmosphere from "./HomeAtmosphere";
 import { resolveAtmosphereTheme } from "../lib/homeAtmosphere";
-import type { CSSProperties } from "react";
+import { useMemo, type CSSProperties } from "react";
 
 interface HomeViewProps {
   snapshot: AppSnapshot;
@@ -40,7 +37,12 @@ interface HomeViewProps {
   onNewNote: () => void;
   onImport: () => void;
   onOpenNotes: () => void;
-  onToggleTask: (task: NoteTask, checked: boolean) => void;
+  onPatchTicket?: TicketWorkspace["onPatch"];
+  onDeleteTicket?: TicketWorkspace["onDelete"];
+  onDismissCalendarMention?: import('../lib/calendarDismissal').DismissCalendarMention;
+  onCreateWork?: CreateWorkItem;
+  workPreferences?: Map<string, HomeWorkPreferences>;
+  ticketInference?: TicketWorkspace["inference"];
   overviewBusy?: boolean;
   overviewError?: string | null;
   onRefreshOverview: () => void;
@@ -70,6 +72,7 @@ function NoteCard({
       as="button"
       className="recent-note-card"
       type="button"
+      aria-label={displayNoteTitle(note)}
       glowColor={note.color ?? "#a8b3ff"}
       onClick={() => onOpen(note.id)}
     >
@@ -96,20 +99,22 @@ export function HomeView({
   onNewNote,
   onImport,
   onOpenNotes,
-  onToggleTask,
+  onPatchTicket,
+  onDeleteTicket,
+  onDismissCalendarMention,
+  onCreateWork,
+  workPreferences,
+  ticketInference,
   overviewBusy = false,
   overviewError,
   onRefreshOverview,
   themePalette,
 }: HomeViewProps) {
-  const recent = [...snapshot.notes]
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .slice(0, 3);
+  const exploringNotes = useMemo(() => [...snapshot.notes]
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), [snapshot.notes]);
   const isEmpty = snapshot.notes.length === 0;
-  const openTasks = collectNoteTasks(
-    snapshot.notes,
-    snapshot.concepts,
-  ).filter((task) => !task.checked);
+  const work = useMemo(() => collectWork(snapshot.notes), [snapshot.notes]);
+  const hasWork = Boolean(work.tickets.length || work.boards.length);
   const localOverview = buildLocalSpaceOverview(snapshot);
   const aiConfigured = isSelectedAIConfigured(snapshot.settings);
   const usingLocalOverview = !snapshot.spaceOverview;
@@ -133,9 +138,89 @@ export function HomeView({
 
   const atmosphereTheme = resolveAtmosphereTheme(snapshot.settings, activeThemePalette);
 
+  const overviewPanel = (
+            <BorderGlow
+              className="space-overview-panel"
+              glowColor="#8f9cff"
+              secondaryColor="#70b7d9"
+            >
+              <div className="section-heading compact">
+                <div>
+                  <span className="eyebrow neutral">Across this Space</span>
+                  <h2>{overview.title}</h2>
+                </div>
+                <button
+                  type="button"
+                  className="space-overview-refresh"
+                  onClick={onRefreshOverview}
+                  disabled={overviewBusy}
+                  aria-label="Refresh Space overview"
+                  title="Refresh Space overview"
+                >
+                  {overviewBusy ? (
+                    <LoaderCircle className="spin" size={15} />
+                  ) : (
+                    <RefreshCw size={14} />
+                  )}
+                </button>
+              </div>
+              <div className="space-overview-body">
+                {overview.body
+                  .split(/\n\s*\n/)
+                  .filter(Boolean)
+                  .map((paragraph, paragraphIndex) => (
+                    <p key={`${paragraph.slice(0, 24)}-${paragraphIndex}`}>
+                      {decorateAutoLinks(paragraph, overviewConcepts).map(
+                        (segment, segmentIndex) =>
+                          segment.type === "text" ? (
+                            segment.text
+                          ) : (
+                            <button
+                              type="button"
+                              className="wiki-link"
+                              key={`${segment.conceptId}-${segmentIndex}`}
+                              onClick={() =>
+                                onOpenConcept(segment.conceptId)
+                              }
+                            >
+                              {segment.text}
+                            </button>
+                          ),
+                      )}
+                    </p>
+                  ))}
+              </div>
+              <footer
+                className="space-overview-footer"
+                role="status"
+                aria-live="polite"
+              >
+                <span>
+                  {overviewBusy
+                    ? "Revising with the latest context…"
+                    : overviewError
+                      ? overviewError
+                      : usingLocalOverview
+                        ? localOverview.relatedNoteIds.length
+                          ? "Based on your notes · Updated locally"
+                          : "Add text to a note to begin your Space summary"
+                        : snapshot.spaceOverview?.stale
+                          ? aiConfigured
+                            ? "New context is waiting to be integrated"
+                            : `New context awaits an ${selectedAIProviderName(snapshot.settings)} key`
+                          : snapshot.spaceOverview
+                            ? formatOverviewDate(
+                                snapshot.spaceOverview.generatedAt,
+                              )
+                            : "A local orientation while Orion prepares the living overview"}
+                </span>
+              </footer>
+            </BorderGlow>
+  );
+
   return (
-    <div className="view home-view">
-      <section className="home-hero" data-atmosphere-mode={atmosphereTheme.mode}
+    <div className={`view home-view${hasWork ? " has-work" : ""}`}>
+      <section className={`home-hero${hasWork ? " home-hero-compact" : ""}`} data-atmosphere-mode={atmosphereTheme.mode}
         style={themePaletteCssVariables(atmosphereTheme) as CSSProperties}>
         <HomeAtmosphere
           atmosphere={snapshot.settings.homeAtmosphere}
@@ -147,15 +232,15 @@ export function HomeView({
         />
         <div className="home-hero-shade" />
         <div className="home-hero-content">
-          <h1 aria-label="Everything you care about, in context.">
+          {hasWork ? <h1>{snapshot.workspace.name}</h1> : <h1 aria-label="Everything you care about, in context.">
             Everything you care about,
             <br />
             in context.
-          </h1>
-          <p>
+          </h1>}
+          {!hasWork && <p>
             Bring scattered material into one calm, connected wiki. Orion finds
             the concepts, preserves the sources, and leaves the final say to you.
-          </p>
+          </p>}
           <div className="hero-actions">
             <button className="button primary" type="button" onClick={onImport}>
               <FilePlus2 size={16} />
@@ -258,161 +343,23 @@ export function HomeView({
         </section>
       ) : (
         <>
-          <section className="home-section">
+          <HomeTickets key={snapshot.workspace.id} spaceId={snapshot.workspace.id} preferences={workPreferences} notes={snapshot.notes} work={work} concepts={snapshot.concepts} onOpenConcept={onOpenConcept} onOpenNote={onOpenNote} onPatch={onPatchTicket} onDelete={onDeleteTicket} onCreate={onCreateWork} inference={ticketInference} overview={overviewPanel} onDismissCalendarMention={onDismissCalendarMention}/>
+          <section className="home-section home-explore" aria-label="Continue exploring">
             <div className="section-heading">
               <div>
                 <span className="eyebrow neutral">Continue exploring</span>
-                <h2>Recent notes</h2>
               </div>
               <button className="text-button" type="button" onClick={onOpenNotes}>
                 Browse all notes <ArrowRight size={14} />
               </button>
             </div>
-            <div className="recent-grid">
-              {recent.map((note) => (
+            <div className="recent-grid home-note-strip" tabIndex={0} aria-label="All notes, scroll horizontally">
+              {exploringNotes.map((note) => (
                 <NoteCard key={note.id} note={note} onOpen={onOpenNote} />
               ))}
             </div>
           </section>
 
-          <section className="home-lower-grid">
-            <BorderGlow
-              className="task-panel"
-              glowColor="#7bc9b0"
-              secondaryColor="#a8b3ff"
-            >
-              <div className="section-heading compact">
-                <div>
-                  <span className="eyebrow neutral">Across this Space</span>
-                  <h2>To do</h2>
-                </div>
-                <span className="task-panel-count">
-                  {openTasks.length}
-                  <ListTodo size={15} />
-                </span>
-              </div>
-              <div className="home-task-list" aria-label="Open tasks">
-                {openTasks.length === 0 ? (
-                  <div className="home-task-empty">
-                    <span><Check size={15} /></span>
-                    <strong>Nothing waiting</strong>
-                    <p>
-                      Add a to-do list inside any note and its open items will
-                      gather here.
-                    </p>
-                  </div>
-                ) : (
-                  openTasks.map((task) => (
-                    <div className="home-task-row" key={task.id}>
-                      <input
-                        type="checkbox"
-                        checked={false}
-                        aria-label={`Complete ${task.text}`}
-                        onChange={() => onToggleTask(task, true)}
-                      />
-                      <button
-                        type="button"
-                        className="home-task-copy"
-                        onClick={() => onOpenNote(task.noteId)}
-                      >
-                        <strong>{task.text}</strong>
-                        <small>
-                          <span>{task.noteTitle}</span>
-                        </small>
-                      </button>
-                      {task.conceptId && task.conceptLabel && (
-                        <button
-                          type="button"
-                          className="home-task-concept"
-                          onClick={() => onOpenConcept(task.conceptId!)}
-                        >
-                          {task.conceptLabel}
-                        </button>
-                      )}
-                    </div>
-                  ))
-                )}
-              </div>
-            </BorderGlow>
-
-            <BorderGlow
-              className="space-overview-panel"
-              glowColor="#8f9cff"
-              secondaryColor="#70b7d9"
-            >
-              <div className="section-heading compact">
-                <div>
-                  <span className="eyebrow neutral">Across this Space</span>
-                  <h2>{overview.title}</h2>
-                </div>
-                <button
-                  type="button"
-                  className="space-overview-refresh"
-                  onClick={onRefreshOverview}
-                  disabled={overviewBusy}
-                  aria-label="Refresh Space overview"
-                  title="Refresh Space overview"
-                >
-                  {overviewBusy ? (
-                    <LoaderCircle className="spin" size={15} />
-                  ) : (
-                    <RefreshCw size={14} />
-                  )}
-                </button>
-              </div>
-              <div className="space-overview-body">
-                {overview.body
-                  .split(/\n\s*\n/)
-                  .filter(Boolean)
-                  .map((paragraph, paragraphIndex) => (
-                    <p key={`${paragraph.slice(0, 24)}-${paragraphIndex}`}>
-                      {decorateAutoLinks(paragraph, overviewConcepts).map(
-                        (segment, segmentIndex) =>
-                          segment.type === "text" ? (
-                            segment.text
-                          ) : (
-                            <button
-                              type="button"
-                              className="wiki-link"
-                              key={`${segment.conceptId}-${segmentIndex}`}
-                              onClick={() =>
-                                onOpenConcept(segment.conceptId)
-                              }
-                            >
-                              {segment.text}
-                            </button>
-                          ),
-                      )}
-                    </p>
-                  ))}
-              </div>
-              <footer
-                className="space-overview-footer"
-                role="status"
-                aria-live="polite"
-              >
-                <span>
-                  {overviewBusy
-                    ? "Revising with the latest context…"
-                    : overviewError
-                      ? overviewError
-                      : usingLocalOverview
-                        ? localOverview.relatedNoteIds.length
-                          ? "Based on your notes · Updated locally"
-                          : "Add text to a note to begin your Space summary"
-                        : snapshot.spaceOverview?.stale
-                          ? aiConfigured
-                            ? "New context is waiting to be integrated"
-                            : `New context awaits an ${selectedAIProviderName(snapshot.settings)} key`
-                          : snapshot.spaceOverview
-                            ? formatOverviewDate(
-                                snapshot.spaceOverview.generatedAt,
-                              )
-                            : "A local orientation while Orion prepares the living overview"}
-                </span>
-              </footer>
-            </BorderGlow>
-          </section>
         </>
       )}
     </div>

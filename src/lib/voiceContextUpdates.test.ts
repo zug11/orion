@@ -26,6 +26,25 @@ describe("incremental voice context", () => {
     input.snapshot.settings.perplexityApiKeyConfigured = false;
     expect(updates.update(input, send)).toBe(1);
   });
+  it("updates Web capability quietly for selected OpenAI routes and explicit provider preferences", () => {
+    const input = fixture(), updates = new VoiceContextUpdates(); updates.reset(input);
+    const send = vi.fn((_text: string) => true);
+    input.snapshot.settings.apiKeyConfigured = true;
+    expect(updates.update(input, send)).toBe(1);
+    expect(packets(send).slice(-1)[0]).toMatchObject({ type: "capability_update", webResearchAvailable: true });
+    input.snapshot.settings.webResearchProvider = "perplexity";
+    expect(updates.update(input, send)).toBe(1);
+    expect(packets(send).slice(-1)[0]).toMatchObject({ webResearchAvailable: false });
+    Object.assign(input.snapshot.settings, { webResearchProvider: "openai", model: "chatgpt:gpt-6.1-sol", apiKeyConfigured: false, chatgptConfigured: true });
+    expect(updates.update(input, send)).toBe(1);
+    expect(packets(send).slice(-1)[0]).toMatchObject({ webResearchAvailable: true });
+    input.snapshot.settings.model = "claude-sonnet-5";
+    expect(updates.update(input, send)).toBe(1);
+    expect(packets(send).slice(-1)[0]).toMatchObject({ webResearchAvailable: false });
+    expect(packets(send).every(packet => packet.type === "capability_update" && packet.referenceOnly)).toBe(true);
+    expect(JSON.stringify(packets(send))).not.toContain("Exact one passage");
+  });
+
   it("does not repeat initial context for body edits, renamed notes, directory or conversation changes", () => {
     const input = fixture(); input.jobs = [job()];
     const updates = new VoiceContextUpdates(); updates.reset(input);

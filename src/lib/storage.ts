@@ -1,5 +1,8 @@
+import { isCalendarDismissalList } from "./calendarDismissal";
 import { isPassageAnchor, isPassageThreads } from "./passageThreads";
-import { parseDictationCleanup, type DictationBlock } from "./dictationCleanup";
+import { LEGACY_CHAT_THREAD_ID, MAX_CHAT_THREAD_TITLE_CHARS, validChatThreadId } from "./chatThreads";
+import { parseDictationResult, type DictationCleanupResult } from "./dictationCleanup";
+import { validCalendarDate } from "./calendarDate";
 import { parseVoiceSynthesisContext, parseVoiceSynthesisResult, VOICE_SYNTHESIS_INSTRUCTIONS, VOICE_SYNTHESIS_SCHEMA } from "./voiceSynthesisProtocol";
 import { CHAT_EDIT_INSTRUCTIONS, CHAT_EDIT_SCHEMA, CHAT_EDIT_INTENT_SCHEMA, parseChatEditIntent, CHAT_REWRITE_SCHEMA, chatRequestAllowsEdits, parseChatNoteEdits, parseChatRewrite } from "./chatEdits";
 import type {
@@ -323,18 +326,20 @@ export async function cleanUpDictation(
   transcript: string,
   settings: Pick<Settings, "model" | "reasoningEffort">,
   signal: AbortSignal,
-): Promise<DictationBlock[]> {
+  referenceDate?: string,
+): Promise<DictationCleanupResult> {
   signal.throwIfAborted();
+  if (referenceDate !== undefined && !validCalendarDate(referenceDate)) throw new Error("The dictation date is invalid.");
   if (!isTauriRuntime()) throw new Error("Dictation cleanup is available in the installed Orion app.");
   const requestId = `dictation:${crypto.randomUUID()}`;
   const result = await invokeTauri<unknown>("cleanup_dictation", {
-    request: { requestId, transcript, model: settings.model, effort: settings.reasoningEffort },
+    request: { requestId, transcript, model: settings.model, effort: settings.reasoningEffort, ...(referenceDate ? { referenceDate } : {}) },
   }, {
     queueKey: "dictation-cleanup", signal,
     cancelActive: () => { void invokeTauri("cancel_knowledge_assignment", { requestId }).catch(() => undefined); },
   });
   signal.throwIfAborted();
-  return parseDictationCleanup(result, transcript);
+  return parseDictationResult(result, transcript);
 }
 
 export async function transcribeYouTube(
@@ -871,7 +876,7 @@ export async function generateSpeech(
   engine: "openai" | "elevenlabs",
   text: string,
   voiceId?: string,
-  options: { trackWords?: boolean; signal?: AbortSignal } = {},
+  options: { trackWords?: boolean; signal?: AbortSignal; modelId?: string } = {},
 ): Promise<GeneratedSpeech> {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -887,6 +892,7 @@ export async function generateSpeech(
         engine,
         text: normalized,
         voiceId: voiceId?.trim() || undefined,
+        modelId: options.modelId,
         trackWords: options.trackWords === true && (!tracksLocalAudio || !options.signal?.aborted),
         ...(requestId ? { requestId } : {}),
     };
@@ -911,7 +917,7 @@ export async function generateSpeech(
     );
   }
   return providerCallScheduler.run(
-    () => generateSpeechInBrowserWithElevenLabs(normalized, voiceId, options.trackWords === true),
+    () => generateSpeechInBrowserWithElevenLabs(normalized, voiceId, options.trackWords === true, options.modelId),
     { queueKey: "speech" },
   );
 }
@@ -2238,9 +2244,18 @@ function isOptionalStudio(value: unknown): boolean {
   if (value === undefined) {
     return true;
   }
+  if (!isRecord(value) || !isArrayOf(value.messages, isStudioMessage)) return false;
+  const threads = value.threads;
+  if (threads !== undefined && (!Array.isArray(threads) || !threads.every(isChatThreadMetadata))) return false;
+  const threadIds = new Set((threads ?? []).map(thread => thread.id));
+  if (threadIds.size !== (threads?.length ?? 0)) return false;
   return (
-    isRecord(value) &&
-    isArrayOf(value.messages, isStudioMessage) &&
+    // Untagged legacy messages remain valid. New explicit references must not
+    // silently disappear because their thread directory is missing. Index the
+    // validated IDs once so growing history remains linear to validate.
+    (value.messages as Array<Record<string, unknown>>).every(message => message.threadId === undefined ||
+      message.threadId === LEGACY_CHAT_THREAD_ID ||
+      threadIds.has(message.threadId as string)) &&
     isArrayOf(value.cards, isStudioCard) &&
     isNullableString(value.activeConceptId) &&
     isStringArray(value.selectedCardIds) &&
@@ -2254,6 +2269,7 @@ function isOptionalStudio(value: unknown): boolean {
 function isStudioMessage(value: unknown): boolean {
   return (
     isRecord(value) &&
+    (value.threadId === undefined || validChatThreadId(value.threadId)) &&
     (value.passage === undefined || isRecord(value.passage) && typeof value.passage.noteId === "string" && isPassageAnchor(value.passage.anchor)) &&
     typeof value.id === "string" &&
     isOneOf(value.role, ["user", "assistant"]) &&
@@ -2268,6 +2284,12 @@ function isStudioMessage(value: unknown): boolean {
     (value.coverage === undefined || isChatCoverage(value.coverage)) &&
     typeof value.createdAt === "string"
   );
+}
+
+function isChatThreadMetadata(value: unknown): value is import("../types").ChatThread {
+  return isRecord(value) && validChatThreadId(value.id) && typeof value.title === "string" &&
+    Array.from(value.title).length <= MAX_CHAT_THREAD_TITLE_CHARS && !/[\u0000-\u001f\u007f-\u009f]/u.test(value.title) &&
+    isRfc3339DateString(value.createdAt) && isRfc3339DateString(value.updatedAt);
 }
 
 function isStudioCard(value: unknown): boolean {
@@ -2376,6 +2398,7 @@ function isNote(value: unknown): boolean {
     typeof value.slug === "string" &&
     typeof value.summary === "string" &&
     (value.headingLayout === undefined || isOneOf(value.headingLayout, ["both", "title", "subtitle", "none"])) &&
+    (value.dismissedCalendarMentions === undefined || isCalendarDismissalList(value.dismissedCalendarMentions)) &&
     typeof value.body === "string" &&
     isStringArray(value.aliases) &&
     isStringArray(value.tags) &&
@@ -2520,13 +2543,18 @@ function isSettings(value: unknown): boolean {
       "max",
     ]) &&
     typeof value.apiKeyConfigured === "boolean" &&
+    (value.chatgptConfigured === undefined || typeof value.chatgptConfigured === "boolean") &&
+    (value.chatgptAccountId === undefined || typeof value.chatgptAccountId === "string") &&
     (value.anthropicApiKeyConfigured === undefined ||
       typeof value.anthropicApiKeyConfigured === "boolean") &&
     (value.perplexityApiKeyConfigured === undefined || typeof value.perplexityApiKeyConfigured === "boolean") &&
+    (value.webResearchProvider === undefined || isOneOf(value.webResearchProvider, ["auto", "openai", "perplexity"])) &&
     (value.elevenLabsApiKeyConfigured === undefined ||
       typeof value.elevenLabsApiKeyConfigured === "boolean") &&
     (value.elevenLabsVoiceId === undefined ||
       typeof value.elevenLabsVoiceId === "string") &&
+    (value.elevenLabsModelId === undefined || (typeof value.elevenLabsModelId === "string" && /^eleven_[a-zA-Z0-9_-]{1,93}$/.test(value.elevenLabsModelId))) &&
+    (value.elevenLabsVoiceRevision === undefined || (typeof value.elevenLabsVoiceRevision === "number" && Number.isFinite(value.elevenLabsVoiceRevision) && value.elevenLabsVoiceRevision >= 0)) &&
     (value.elevenLabsVoices === undefined ||
       (Array.isArray(value.elevenLabsVoices) &&
         value.elevenLabsVoices.every(isSavedElevenLabsVoice))) &&
@@ -2534,6 +2562,9 @@ function isSettings(value: unknown): boolean {
       value.speechVoice === "system" ||
       value.speechVoice === "openai" ||
       value.speechVoice === "elevenlabs") &&
+    (value.liveVoiceProvider === undefined ||
+      value.liveVoiceProvider === "openai" ||
+      value.liveVoiceProvider === "elevenlabs") &&
     (value.sidebarCollapsed === undefined ||
       typeof value.sidebarCollapsed === "boolean") &&
     (value.providerFailoverEnabled === undefined ||
@@ -2885,6 +2916,7 @@ async function generateSpeechInBrowserWithElevenLabs(
   text: string,
   voiceId?: string,
   trackWords = false,
+  modelId = "eleven_multilingual_v2",
 ): Promise<GeneratedSpeech> {
   const apiKey = requireBrowserElevenLabsApiKey();
   const { resolveElevenLabsVoiceId, speechWordsFromCharacterAlignment } = await import("./speech");
@@ -2902,7 +2934,7 @@ async function generateSpeechInBrowserWithElevenLabs(
       },
       body: JSON.stringify({
         text,
-        model_id: "eleven_multilingual_v2",
+        model_id: modelId,
       }),
     },
   );

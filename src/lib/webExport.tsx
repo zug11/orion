@@ -1,3 +1,5 @@
+import { calendarDateFromUrl } from './calendarDate';
+import { collectWork, remarkNoteBoards, TICKET_STATUSES } from './tickets';
 import { noteTableHeaderInfo, noteTableLayoutAtLine, remarkNoteTableMetadata } from "./noteTables";
 import { remarkNoteBlocks } from "./noteBlocks";
 import { remarkNoteTextAlignment } from "./noteTextAlignment";
@@ -597,6 +599,17 @@ function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
   }
 
   const components: Components = {
+    section: ({ children, node }) => {
+      const work = collectWork(includedNotes);
+      const board = work.boards.find(board => board.id === node?.properties?.['data-orion-board'] && board.noteId === note.id);
+      if (!board) return <section>{children}</section>;
+      return <section className="export-kanban"><h3>{board.title}</h3>
+        <table><thead><tr>{TICKET_STATUSES.map(([status, label]) => <th key={status}>{label}</th>)}</tr></thead>
+          <tbody><tr>{TICKET_STATUSES.map(([status]) => <td key={status}><ul>{work.tickets.filter(ticket => ticket.boardId === board.id && ticket.status === status).map(ticket =>
+            <li key={`${ticket.noteId}:${ticket.id}:${ticket.lineIndex}`}>{ticket.title} <small>({ticket.noteTitle})</small></li>)}</ul></td>)}</tr></tbody>
+        </table>
+      </section>;
+    },
     table: ({ children, node }) => {
       const layout = noteTableLayoutAtLine(citations.body, node?.position?.start.line ?? 0);
       const header = noteTableHeaderInfo(node);
@@ -644,6 +657,8 @@ function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
       return <h6 {...props} style={exportParagraphMargins(node?.properties)} id={heading ? `${noteAnchor(note)}--${heading.id}` : undefined}>{renderLinkedChildren(children)}</h6>;
     },
     a: ({ href, title, children }) => {
+      const date = calendarDateFromUrl(href);
+      if (date) return <time dateTime={date}>{children}</time>;
       if (href?.startsWith("#orion-passage-")) {
         const passage = retainedPassages.find((item) => href === `#orion-passage-${item.id}`);
         if (!passage) return <span>{children}</span>;
@@ -755,7 +770,7 @@ function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
           <div className="export-prose" data-orion-margin-left={margins.left} data-orion-margin-right={margins.right} style={noteMarginsStyle(margins)}>
             {citations.body.trim() ? (
               <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkNoteTableMetadata, remarkNoteBlocks, remarkNoteMargins, remarkNoteTextAlignment]}
+                remarkPlugins={[remarkGfm, remarkNoteBoards, remarkNoteTableMetadata, remarkNoteBlocks, remarkNoteMargins, remarkNoteTextAlignment]}
                 components={components}
                 skipHtml
                 urlTransform={(url) => url}

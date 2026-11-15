@@ -1,3 +1,4 @@
+import { isChatGPTModel } from "./chatgpt";
 import type { Settings } from "../types";
 
 export type AIProvider = "anthropic" | "openai";
@@ -21,12 +22,14 @@ export function defaultModelForProvider(provider: AIProvider): string {
 }
 
 export function isSelectedAIConfigured(settings: Settings): boolean {
+  if (isChatGPTModel(settings.model)) return settings.chatgptConfigured === true;
   return aiProviderForModel(settings.model) === "anthropic"
     ? settings.anthropicApiKeyConfigured
     : settings.apiKeyConfigured;
 }
 
 export function selectedAIProviderName(settings: Settings): string {
+  if (isChatGPTModel(settings.model)) return "ChatGPT";
   return aiProviderForModel(settings.model) === "anthropic"
     ? "Anthropic"
     : "OpenAI";

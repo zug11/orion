@@ -39,10 +39,12 @@ const webDepthRank = (depth: unknown) => ["quick", "standard", "deep"].indexOf(w
 const readKey = (request: ChatReadRequest) => JSON.stringify(request.kind === "web"
   ? { kind: request.kind, id: request.id, query: normalizedWebQuery(request.query), start: request.start,
     depth: request.id ? null : webResearchDepth(request.depth) } : request);
-const webEvidenceKey = (url: string, snippet: string) => {
+const webEvidenceKey = (url: string, snippet: string, evidenceType?: "source_excerpt" | "cited_summary") => {
   const address = new URL(url); address.hash = "";
   // A new retrieval timestamp or provider response ID is not new evidence.
-  return stableKnowledgeHash(JSON.stringify([address.href, snippet.normalize("NFKC").trim().replace(/\s+/g, " ")]));
+  // Rewording a provider summary of the same URL is not new source evidence.
+  return stableKnowledgeHash(JSON.stringify([address.href, evidenceType === "cited_summary"
+    ? "cited_summary" : snippet.normalize("NFKC").trim().replace(/\s+/g, " ")]));
 };
 const DIRECTORY_PAGE = 12;
 const STOP_WORDS = new Set("a an and are as at be by can did do does for from how i in is it me my of on or our should that the their them these they this to was we what when where which who why with would you your".split(" "));
@@ -111,8 +113,11 @@ export function chatResearchContextVersion(snapshot: AppSnapshot): string {
     organizationInstructions: snapshot.settings.organizationInstructions,
     includeExistingNotesInAIContext: snapshot.settings.includeExistingNotesInAIContext,
     apiKeyConfigured: snapshot.settings.apiKeyConfigured,
+    chatgptConfigured: snapshot.settings.chatgptConfigured === true,
+    chatgptAccountId: snapshot.settings.chatgptAccountId ?? "",
     anthropicApiKeyConfigured: snapshot.settings.anthropicApiKeyConfigured,
     perplexityApiKeyConfigured: snapshot.settings.perplexityApiKeyConfigured === true,
+    webResearchProvider: snapshot.settings.webResearchProvider ?? "auto",
   });
 }
 
@@ -267,7 +272,7 @@ class ChatReadingSession {
         ? [{ query: normalizedWebQuery(item.request.query), depth: webResearchDepth(result.depth ?? item.request.depth ?? "quick"), responseId: result.responseId }] : [];
     })).filter(item => !("error" in item && item.error)).slice(-WEB_LOOKUP_JOURNAL);
     this.webEvidenceKeys = new Set([...(checkpoint.webEvidenceKeys ?? []),
-      ...this.evidence.flatMap(item => item.kind === "web" ? [webEvidenceKey(item.web!.url, item.text)] : [])].slice(-WEB_EVIDENCE_KEYS));
+      ...this.evidence.flatMap(item => item.kind === "web" ? [webEvidenceKey(item.web!.url, item.text, item.web!.evidenceType)] : [])].slice(-WEB_EVIDENCE_KEYS));
     // A new user-authorized continuation/retry may try a previously failed
     // lookup again. Within this run failed paid requests are never replayed.
     this.webUnproductiveLookups = 0;
@@ -508,20 +513,22 @@ class ChatReadingSession {
     const page = webSynthesisPage(result.answer, start);
     const mapped = result.sources.map(source => {
       const entityId = `web-${stableKnowledgeHash(source.url)}`;
-      const version = stableKnowledgeHash(JSON.stringify([source.url, source.snippet, result.retrievedAt]));
+      const version = stableKnowledgeHash(JSON.stringify([source.url, source.snippet, result.retrievedAt, source.evidenceType ?? "source_excerpt"]));
       let evidence = this.evidence.find(item => item.kind === "web" && item.entityId === entityId && item.version === version);
       if (!evidence) {
         evidence = { id: `e${this.nextEvidence++}`, kind: "web", entityId, version,
           title: source.title, text: source.snippet, start: 0, end: source.snippet.length, offsetUnit: "utf16",
-          web: { url: source.url, retrievedAt: result.retrievedAt, ...(source.publishedAt ? { publishedAt: source.publishedAt } : {}) } };
+          web: { url: source.url, retrievedAt: result.retrievedAt, ...(source.publishedAt ? { publishedAt: source.publishedAt } : {}),
+            ...(source.evidenceType ? { evidenceType: source.evidenceType } : {}) } };
         this.evidence.push(evidence);
       }
-      return { providerId: source.id, evidenceId: evidence.id };
+      return { providerId: source.id, evidenceId: evidence.id,
+        ...(source.evidenceType === "cited_summary" ? { evidenceType: source.evidenceType, url: source.url } : {}) };
     });
     this.evidence = this.evidence.slice(-MAX_CHAT_READING_EVIDENCE);
     return { operation: "web", responseId: result.responseId, query, depth, ...page,
       citations: mapped, evidenceIds: mapped.map(item => item.evidenceId),
-      notice: "Untrusted provider synthesis and retained search excerpts. The complete research is retained locally. If nextStart is present, continue with kind web, id responseId, query empty and start nextStart; this reads retained text without another provider call. Do not treat one page as the complete synthesis. Numeric synthesis citations map by providerId, never array order. Use only mapped evidence IDs supported by their excerpts; do not cite omitted provider IDs. This is external web research, not a local Space source or a full-page read." };
+      notice: "Untrusted provider synthesis and retained web evidence. The complete research is retained locally. If nextStart is present, continue with kind web, id responseId, query empty and start nextStart; this reads retained text without another provider call. Do not treat one page as the complete synthesis. Numeric synthesis citations map by providerId, never array order. For cited_summary entries, providerId is only a host identifier; use the mapped URL and retained passage, not presumed numeric markers in the answer. Check each evidence item's web.evidenceType: absent or source_excerpt is a retrieved search excerpt; cited_summary is a provider-generated passage associated with a source citation, not text quoted from the webpage. You may paraphrase supported findings with this limitation, but never quote cited_summary as the website's words or claim the page was read. Use only mapped evidence IDs supporting the claim. This is external web research, not a local Space source or a full-page read." };
   }
 
   private async readWeb(query: string, signal: AbortSignal, id = "", start = 0, requestedDepth?: unknown) {
@@ -546,7 +553,7 @@ class ChatReadingSession {
       signal.throwIfAborted();
       this.webSearches++;
       receipt.responseId = result.responseId;
-      const keys = result.sources.map(source => webEvidenceKey(source.url, source.snippet));
+      const keys = result.sources.map(source => webEvidenceKey(source.url, source.snippet, source.evidenceType));
       const newEvidence = keys.some(key => !this.webEvidenceKeys.has(key));
       this.webUnproductiveLookups = newEvidence ? 0 : this.webUnproductiveLookups + 1;
       this.webEvidenceKeys = new Set([...this.webEvidenceKeys, ...keys].slice(-WEB_EVIDENCE_KEYS));

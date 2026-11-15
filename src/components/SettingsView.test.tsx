@@ -2,6 +2,7 @@
 
 import {
   fireEvent,
+  act,
   render,
   screen,
   waitFor,
@@ -14,12 +15,237 @@ import { resolveThemePalette } from "../lib/theme";
 import { SettingsView } from "./SettingsView";
 
 const invokeTauriMock = vi.hoisted(() => vi.fn());
+const isTauriMock = vi.hoisted(() => vi.fn(() => false));
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeTauriMock, isTauri: () => false }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeTauriMock, isTauri: isTauriMock }));
 
 afterEach(() => {
   invokeTauriMock.mockReset();
+  isTauriMock.mockReturnValue(false);
   Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+});
+
+describe("SettingsView web research provider", () => {
+  it("persists an explicit OpenAI preference without changing the Intelligence model or deleting either connection", () => {
+    const props = voiceSettingsProps();
+    const settings = { ...defaultSettings, model: "gpt-6.1-sol", apiKeyConfigured: true, perplexityApiKeyConfigured: true };
+    render(<SettingsView {...props} settings={settings}/>);
+    fireEvent.change(screen.getByRole("combobox", { name: "Web research provider" }), { target: { value: "openai" } });
+    expect(props.onChange).toHaveBeenCalledExactlyOnceWith({ ...settings, webResearchProvider: "openai" });
+    expect(invokeTauriMock).not.toHaveBeenCalledWith("delete_perplexity_api_key", expect.anything());
+  });
+});
+
+describe("SettingsView ElevenLabs account voices", () => {
+  const accountVoice = (id: string, name: string, requiresVerification = false) => ({ id, name, requiresVerification });
+  function desktop() {
+    isTauriMock.mockReturnValue(true);
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
+  }
+  function keyCard() { return within(screen.getByLabelText("ElevenLabs API key").closest(".setting-card") as HTMLElement); }
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>(yes => { resolve = yes; });
+    return { promise, resolve };
+  }
+  it("loads account voices after saving a key without opening Studio, preserving labels and narration", async () => {
+    desktop();
+    const first = accountVoice("abcdefgh12345678", "Provider name"), second = accountVoice("ijklmnop12345678", "Another voice");
+    invokeTauriMock.mockImplementation(async (command, args) => command === "elevenlabs_list_voices"
+      ? args.nextPage ? { voices: [first, second], nextPage: null } : { voices: [first], nextPage: "next" } : undefined);
+    const props = voiceSettingsProps();
+    const settings = { ...defaultSettings, liveVoiceProvider: "elevenlabs" as const, speechVoice: "system" as const,
+      elevenLabsVoiceId: first.id, elevenLabsVoices: [{ voiceId: first.id, name: "My reading voice" }] };
+    const view = render(<SettingsView {...props} settings={settings}/>);
+    expect(invokeTauriMock.mock.calls.filter(([command]) => command === "elevenlabs_list_voices")).toHaveLength(0);
+    fireEvent.change(screen.getByLabelText("ElevenLabs API key"), { target: { value: "test-key" } });
+    fireEvent.click(keyCard().getByRole("button", { name: "Save key" }));
+    await waitFor(() => expect(props.onSaveElevenLabsApiKey).toHaveBeenCalledWith("test-key"));
+    const connected = { ...settings, elevenLabsApiKeyConfigured: true };
+    view.rerender(<SettingsView {...props} settings={connected}/>);
+    const picker = screen.getByRole("combobox", { name: "ElevenLabs voice" });
+    await waitFor(() => expect(picker).toBeEnabled());
+    expect(within(picker).getAllByRole("option", { name: "My reading voice" })).toHaveLength(1);
+    expect(within(picker).queryByRole("option", { name: "Provider name" })).not.toBeInTheDocument();
+    expect(within(picker).getByRole("option", { name: "Another voice" })).toBeInTheDocument();
+    expect(props.onChange).not.toHaveBeenCalled();
+    fireEvent.change(picker, { target: { value: second.id } });
+    expect(props.onChange).toHaveBeenLastCalledWith({ ...connected, elevenLabsVoiceId: second.id,
+      elevenLabsVoices: [...settings.elevenLabsVoices, { voiceId: second.id, name: second.name }] });
+    expect(screen.getByRole("button", { name: "Open voice studio" })).toBeInTheDocument();
+  });
+
+  it("invalidates an old account load before replacing its key and explicitly resets an unavailable choice", async () => {
+    desktop();
+    const old = deferred<unknown>(), saved = deferred<void>(); let count = 0;
+    invokeTauriMock.mockImplementation(async command => command === "elevenlabs_list_voices"
+      ? ++count === 1 ? old.promise : { voices: [accountVoice("newvoice12345678", "New account voice")], nextPage: null } : undefined);
+    const props = { ...voiceSettingsProps(), onSaveElevenLabsApiKey: vi.fn(() => saved.promise) };
+    const settings = { ...defaultSettings, elevenLabsApiKeyConfigured: true, elevenLabsVoiceId: "oldvoice12345678",
+      elevenLabsVoices: [{ voiceId: "oldvoice12345678", name: "My custom label" }] };
+    render(<SettingsView {...props} settings={settings}/>);
+    await waitFor(() => expect(count).toBe(1));
+    fireEvent.change(screen.getByLabelText("ElevenLabs API key"), { target: { value: "replacement-test-key" } });
+    fireEvent.click(keyCard().getByRole("button", { name: "Save key" }));
+    await act(async () => old.resolve({ voices: [accountVoice("oldvoice12345678", "Wrong old account")], nextPage: null }));
+    expect(props.onChange).not.toHaveBeenCalled();
+    await act(async () => saved.resolve());
+    await screen.findByRole("option", { name: "New account voice" });
+    expect(screen.queryByRole("option", { name: "Wrong old account" })).not.toBeInTheDocument();
+    expect(props.onChange).toHaveBeenCalledExactlyOnceWith({ ...settings, elevenLabsVoiceId: "" });
+    expect(screen.getByText(/Using Orion default/)).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /My custom label/ })).toBeDisabled();
+  });
+
+  it("keeps saved choices on load failure, supports refresh and validation refresh, and disables unverified voices", async () => {
+    desktop(); let fail = true;
+    invokeTauriMock.mockImplementation(async command => {
+      if (command !== "elevenlabs_list_voices") return;
+      if (fail) throw new Error("Voice library access denied");
+      return { voices: [accountVoice("savedvoice123456", "Available"), accountVoice("pendingvoice1234", "Pending clone", true)], nextPage: null };
+    });
+    const props = voiceSettingsProps(), settings = { ...defaultSettings, elevenLabsApiKeyConfigured: true, elevenLabsVoiceId: "savedvoice123456" };
+    render(<SettingsView {...props} settings={settings}/>);
+    await screen.findByText("Voice library access denied");
+    expect(props.onChange).not.toHaveBeenCalled();
+    fail = false; fireEvent.click(screen.getByRole("button", { name: "Refresh voices" }));
+    expect(await screen.findByRole("option", { name: "Pending clone · Verification required" })).toBeDisabled();
+    expect(props.onChange).not.toHaveBeenCalled();
+    const calls = invokeTauriMock.mock.calls.filter(([command]) => command === "elevenlabs_list_voices").length;
+    fireEvent.click(keyCard().getByRole("button", { name: "Test connection" }));
+    await waitFor(() => expect(invokeTauriMock.mock.calls.filter(([command]) => command === "elevenlabs_list_voices")).toHaveLength(calls + 1));
+  });
+
+  it("ignores catalog completion after key removal or unmount", async () => {
+    desktop(); const pending = deferred<unknown>();
+    invokeTauriMock.mockImplementation(async command => command === "elevenlabs_list_voices" ? pending.promise : undefined);
+    const props = voiceSettingsProps(), settings = { ...defaultSettings, elevenLabsApiKeyConfigured: true, elevenLabsVoiceId: "oldvoice12345678" };
+    const view = render(<SettingsView {...props} settings={settings}/>);
+    view.rerender(<SettingsView {...props} settings={{ ...settings, elevenLabsApiKeyConfigured: false }}/>);
+    await act(async () => pending.resolve({ voices: [], nextPage: null }));
+    expect(props.onChange).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Refresh voices" })).not.toBeInTheDocument();
+    const late = deferred<unknown>(); invokeTauriMock.mockImplementation(async command => command === "elevenlabs_list_voices" ? late.promise : undefined);
+    view.rerender(<SettingsView {...props} settings={settings}/>); view.unmount();
+    await act(async () => late.resolve({ voices: [], nextPage: null }));
+    expect(props.onChange).not.toHaveBeenCalled();
+  });
+
+  it("preserves a newer explicit voice selection while a previous catalog request finishes", async () => {
+    desktop(); const pending = deferred<unknown>();
+    invokeTauriMock.mockImplementation(async command => command === "elevenlabs_list_voices" ? pending.promise : undefined);
+    const props = voiceSettingsProps(), settings = { ...defaultSettings, elevenLabsApiKeyConfigured: true, elevenLabsVoiceId: "oldvoice12345678" };
+    const view = render(<SettingsView {...props} settings={settings}/>);
+    view.rerender(<SettingsView {...props} settings={{ ...settings, elevenLabsVoiceId: "newvoice12345678" }}/>);
+    await act(async () => pending.resolve({ voices: [], nextPage: null }));
+    expect(props.onChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("combobox", { name: "ElevenLabs voice" })).toHaveValue("newvoice12345678");
+  });
+
+  it("closes Studio and invalidates its pending account requests during a key replacement", async () => {
+    desktop(); const models = deferred<unknown>(), save = deferred<void>();
+    invokeTauriMock.mockImplementation(async command => command === "elevenlabs_list_voices" ? { voices: [], nextPage: null }
+      : command === "elevenlabs_voice_models" ? models.promise : undefined);
+    const props = { ...voiceSettingsProps(), onSaveElevenLabsApiKey: vi.fn(() => save.promise) };
+    render(<SettingsView {...props} settings={{ ...defaultSettings, elevenLabsApiKeyConfigured: true }}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Open voice studio" }));
+    expect(screen.getByRole("button", { name: "Close voice studio" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("ElevenLabs API key"), { target: { value: "replacement-test-key" } });
+    fireEvent.click(keyCard().getByRole("button", { name: "Save key" }));
+    expect(screen.getByRole("button", { name: "Open voice studio" })).toBeDisabled();
+    await act(async () => models.resolve([]));
+    expect(screen.queryByRole("button", { name: "Close voice studio" })).not.toBeInTheDocument();
+    await act(async () => save.resolve());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Open voice studio" })).toBeEnabled());
+    expect(props.onChange).not.toHaveBeenCalled();
+  });
+});
+
+function voiceSettingsProps(onChange = vi.fn()) {
+  const action = vi.fn(async () => undefined);
+  const testKey = vi.fn(async () => ({ valid: true, message: "Connected." }));
+  return {
+    onChange, onSaveApiKey: action, onDeleteApiKey: action, onTestApiKey: testKey,
+    onSaveAnthropicApiKey: action, onDeleteAnthropicApiKey: action, onTestAnthropicApiKey: testKey,
+    onSaveElevenLabsApiKey: action, onDeleteElevenLabsApiKey: action, onTestElevenLabsApiKey: testKey,
+    onOpenDataLocation: vi.fn(), onEraseVault: vi.fn(),
+  };
+}
+
+describe("SettingsView voice conversations", () => {
+  it("keeps ElevenLabs conversation voice when choosing System narration", () => {
+    const settings = { ...defaultSettings, liveVoiceProvider: "elevenlabs" as const,
+      speechVoice: "elevenlabs" as const, elevenLabsApiKeyConfigured: true };
+    const props = voiceSettingsProps();
+    render(<SettingsView {...props} settings={settings}/>);
+    fireEvent.click(within(screen.getByRole("radiogroup", { name: "Voice" })).getByRole("radio", { name: "System" }));
+    expect(props.onChange).toHaveBeenLastCalledWith({ ...settings, speechVoice: "system" });
+    expect(screen.getByText(/Choose how notes and decks are read aloud/)).toBeVisible();
+    expect(screen.queryByText(/Play uses ElevenLabs whenever/)).not.toBeInTheDocument();
+  });
+
+  it("defaults legacy settings to OpenAI and changes conversation provider without changing narration or voice", () => {
+    const settings = { ...defaultSettings, liveVoiceProvider: undefined, speechVoice: "openai" as const, elevenLabsVoiceId: "JBFqnCBsd6RMkjVDRZzb" };
+    const props = voiceSettingsProps();
+    const view = render(<SettingsView {...props} settings={settings}/>);
+    const group = within(screen.getByRole("radiogroup", { name: "Voice conversation provider" }));
+    expect(group.getByRole("radio", { name: "OpenAI" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(group.getByRole("radio", { name: "ElevenLabs" }));
+    expect(props.onChange).toHaveBeenLastCalledWith({ ...settings, liveVoiceProvider: "elevenlabs" });
+    view.rerender(<SettingsView {...props} settings={{ ...settings, liveVoiceProvider: "elevenlabs" }}/>);
+    expect(group.getByRole("radio", { name: "ElevenLabs" })).toHaveAttribute("aria-checked", "true");
+    expect(within(screen.getByRole("radiogroup", { name: "Voice" })).getByRole("radio", { name: "OpenAI" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(group.getByRole("radio", { name: "OpenAI" }));
+    expect(props.onChange).toHaveBeenLastCalledWith({ ...settings, liveVoiceProvider: "openai" });
+  });
+
+  it("guides ElevenLabs conversation setup and keeps research on Intelligence", () => {
+    const settings = { ...defaultSettings, liveVoiceProvider: "elevenlabs" as const, apiKeyConfigured: false, chatgptConfigured: true };
+    const props = voiceSettingsProps();
+    const view = render(<SettingsView {...props} settings={settings}/>);
+    expect(screen.getByText(/Add your ElevenLabs API key below to start voice conversations/)).toBeVisible();
+    expect(screen.getByText(/Research continues to use your Intelligence connection/)).toBeVisible();
+    view.rerender(<SettingsView {...props} settings={{ ...settings, elevenLabsApiKeyConfigured: true }}/>);
+    expect(screen.queryByText(/Add your ElevenLabs API key below to start voice conversations/)).not.toBeInTheDocument();
+    expect(screen.getByText("Uses the ElevenLabs voice selected below.")).toBeVisible();
+    expect(props.onChange).not.toHaveBeenCalled();
+  });
+
+  it("does not describe a ChatGPT plan connection as an OpenAI live voice key", () => {
+    const props = voiceSettingsProps();
+    const settings = { ...defaultSettings, liveVoiceProvider: "openai" as const, chatgptConfigured: true, apiKeyConfigured: false };
+    const view = render(<SettingsView {...props} settings={settings}/>);
+    expect(screen.getByText(/A ChatGPT plan connection does not include live voice/)).toBeVisible();
+    view.rerender(<SettingsView {...props} settings={{ ...settings, apiKeyConfigured: true }}/>);
+    expect(screen.getByText("Uses your OpenAI API key for live voice.")).toBeVisible();
+    expect(props.onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("SettingsView current OpenAI models", () => {
+  it.each([
+    ["GPT-6.1 Sol", "gpt-6.1-sol"],
+    ["GPT-6.1 Terra", "gpt-6.1-terra"],
+    ["GPT-6 Luna", "gpt-6-luna"],
+  ])("selects %s without changing reasoning or voice preferences", (name, model) => {
+    const props = voiceSettingsProps();
+    const settings = { ...defaultSettings, reasoningEffort: "medium" as const, liveVoiceProvider: "elevenlabs" as const };
+    render(<SettingsView {...props} settings={settings}/>);
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(name.replace(".", "\\.")) }));
+    expect(props.onChange).toHaveBeenLastCalledWith({ ...settings, model });
+  });
+
+  it.each([
+    ["GPT-5.6 Sol", "gpt-5.6-sol"],
+    ["GPT-5.6 Terra", "gpt-5.6-terra"],
+    ["GPT-5.6 Luna", "gpt-5.6-luna"],
+  ])("preserves a saved %s choice without migrating it", (name, model) => {
+    const props = voiceSettingsProps();
+    render(<SettingsView {...props} settings={{ ...defaultSettings, model }}/>);
+    expect(screen.getByRole("button", { name: new RegExp(name.replace(".", "\\.")) })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getAllByText("Saved selection")).toHaveLength(1);
+    expect(props.onChange).not.toHaveBeenCalled();
+  });
 });
 
 describe("SettingsView appearance", () => {
@@ -103,8 +329,8 @@ describe("SettingsView appearance", () => {
     expect(screen.getByRole("combobox", { name: "Reasoning depth" })).toHaveValue("high");
     expect(screen.getByRole("option", { name: "None" })).toBeDisabled();
 
-    fireEvent.click(screen.getByRole("button", { name: /GPT-5\.6 Sol/ }));
-    expect(onChange).toHaveBeenLastCalledWith({ ...settings, reasoningEffort: "high" });
+    fireEvent.click(screen.getByRole("button", { name: /GPT-6\.1 Sol/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ ...settings, model: "gpt-6.1-sol", reasoningEffort: "high" });
   });
 
   it("offers twelve curated home atmospheres with Line Waves first", () => {

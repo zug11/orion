@@ -1,13 +1,16 @@
+import { resolveWebResearchProvider } from "../lib/webResearchProvider";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import type { AppSnapshot, ChatResult } from "../types";
+import { normalizeLiveVoiceProvider } from "../data/defaults";
 import { chatWithOrion, isTauriRuntime } from "../lib/storage";
 import { isSelectedAIConfigured } from "../lib/ai";
+import { chatPromptAllowsNoteCreation } from "../lib/chat";
 import { VoiceWorkOrderHost } from "../lib/assistant/voiceWorkOrderHost";
 import { startVoiceWorkOrderMailbox } from "../lib/assistant/voiceWorkOrders";
-import { voiceContextUsageRatio, type VoiceEvent, type VoiceStatus } from "../lib/liveVoice";
-import { VoiceResearch, voiceContext, type VoiceCommit, type VoiceReceipt, type VoiceWorkOrder } from "../lib/voiceResearch";
-import { MAX_VOICE_WORKERS_PER_REQUEST, MAX_VOICE_BATCH_ASSIGNMENTS, deferredVoiceCancellation, explicitVoiceAssignment, requestedVoiceWorkerCount, localVoiceTurnDecision, routeVoiceTurn, resolveVoiceClarification, voiceControlAction, voiceContinuationRequest, voiceCorrectionMayAffect, likelyVoiceControl, type VoiceTurnDecision } from "../lib/voiceWorkOrders";
+import { voiceContextUsageRatio, type VoiceEvent, type VoiceStatus, type PrepareVoiceConnection } from "../lib/liveVoice";
+import { VoiceResearch, voiceContext, voicePromptSavesCurrentFinding, type VoiceCommit, type VoiceReceipt, type VoiceWorkOrder } from "../lib/voiceResearch";
+import { MAX_VOICE_WORKERS_PER_REQUEST, MAX_VOICE_BATCH_ASSIGNMENTS, deferredVoiceCancellation, explicitVoiceAssignment, requestedVoiceWorkerCount, workerClarificationAnswer, localVoiceTurnDecision, routeVoiceTurn, resolveVoiceClarification, voiceControlAction, voiceContinuationRequest, voiceCorrectionMayAffect, likelyVoiceControl, type VoiceTurnDecision } from "../lib/voiceWorkOrders";
 import { VoiceConversation, type VoiceTurn, type VoiceDelivery } from "../lib/voiceConversation";
 import { VoiceReservations } from "../lib/voiceReservations";
 import { VoiceTurnRouter, type RoutingVoiceTurn } from "../lib/voiceTurnRouter";
@@ -30,12 +33,19 @@ export interface VoiceConversationContent { hasContent: boolean; revision: strin
 
 interface Props {
   snapshot: AppSnapshot; focusNoteId?: string; enabled: boolean;
+  /** Host-owned text conversation; this identity never comes from the provider. */
+  conversationId?: string;
+  /** Retain research while another text thread is visible, without mixing its UI. */
+  presentationHidden?: boolean;
+  /** Main Chat presents voice through its orbs and audio, without worker text. */
+  hideConversationText?: boolean;
   toggleRequest?: number; onActiveChange?: (active: boolean) => void;
   onVisibleChange?: (visible: boolean) => void;
   commit: (request: VoiceCommit) => Promise<VoiceReceipt>;
   onProposal: (result: ChatResult) => void | Promise<unknown>;
   onOpenNote: (id: string) => void; onOpenSource?: (id: string) => void;
   onOpenSettings: () => void;
+  onPrepareVoiceConnection?: PrepareVoiceConnection;
   floating?: boolean;
   presence?: VoicePresenceStore;
   voicePalette?: IconPalette;
@@ -52,11 +62,18 @@ interface Props {
 const noSelectionSubscription = () => () => {};
 const noSelection = () => undefined;
 export function SpaceVoice(props: Props) {
+  const voiceProvider = normalizeLiveVoiceProvider(props.snapshot.settings.liveVoiceProvider);
+  const webAvailable = !!resolveWebResearchProvider(props.snapshot.settings);
+  const voiceKeyConfigured = voiceProvider === "elevenlabs"
+    ? props.snapshot.settings.elevenLabsApiKeyConfigured
+    : props.snapshot.settings.apiKeyConfigured;
+  const previousVoiceProvider = useRef(voiceProvider);
   const selectedText = useSyncExternalStore(props.voiceSelection?.subscribe ?? noSelectionSubscription, props.voiceSelection?.getSnapshot ?? noSelection);
   const liveProps = useRef(props); liveProps.current = props;
   const [voiceCall] = useState(() => new VoiceCallLifecycle());
   const research = useRef<VoiceResearch | undefined>(undefined);
   const conversation = useRef(new VoiceConversation());
+  const spokenTargets = useRef(new Map<string, Pick<VoiceTurn, "focusNoteId" | "selection" | "focusedWorker">>());
   const conversations = useRef(new Map<string, VoiceConversation>());
   const focusedConversation = useRef<{ id: string; revision: number } | undefined>(undefined);
   const [focusedJobId, setFocusedJobId] = useState<string>();
@@ -203,6 +220,7 @@ export function SpaceVoice(props: Props) {
     conversation.current.stop();
   }
   function stopCall() {
+    spokenTargets.current.clear();
     cancelRouting(); deliveries.clear(); voiceCall.stop();
     setActivity(silentVoiceActivity());
   }
@@ -249,9 +267,10 @@ export function SpaceVoice(props: Props) {
     setDismissedJobIds([]);
     setConfirmClear(false);
     voiceCall.mute(false); setMuted(false); setActivity(silentVoiceActivity());
+    const conversationId = props.conversationId;
     const coordinator = new VoiceResearch({
       snapshot: () => liveProps.current.snapshot, driver: chatWithOrion,
-      commit: request => liveProps.current.commit(request), onProgress: () => undefined,
+      commit: request => liveProps.current.commit({ ...request, ...(conversationId ? { threadId: conversationId } : {}) }), onProgress: () => undefined,
       onJobs: next => {
         if (!alive.current || research.current !== coordinator) return;
         setJobs(next); deliveries.discardInvalid(validDelivery); scheduleDelivery();
@@ -293,24 +312,36 @@ export function SpaceVoice(props: Props) {
     };
     // Each mounted Space owns its coordinator and transient conversational state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.snapshot.workspace.id, voiceGeneration]);
+  }, [props.snapshot.workspace.id, props.conversationId, voiceGeneration]);
 
   useEffect(() => {
-    if (!props.enabled || !props.snapshot.settings.apiKeyConfigured || activeSpace.current !== props.snapshot.workspace.id) {
-      stopCall(); research.current?.cancel(); noteEdits.cancel(); conversation.current.clear(); reservations.reset();
-      setClarification("");
+    if (!props.enabled || !voiceKeyConfigured || activeSpace.current !== props.snapshot.workspace.id) {
+      stopCall();
+      const providerChanged = previousVoiceProvider.current !== voiceProvider;
+      if (!props.enabled || activeSpace.current !== props.snapshot.workspace.id || !providerChanged) {
+        research.current?.cancel(); noteEdits.cancel(); conversation.current.clear(); reservations.reset();
+        setClarification("");
+      }
     }
-  }, [props.enabled, props.snapshot.settings.apiKeyConfigured, props.snapshot.workspace.id]);
+  }, [props.enabled, voiceKeyConfigured, voiceProvider, props.snapshot.workspace.id]);
+
+  useEffect(() => {
+    if (previousVoiceProvider.current === voiceProvider) return;
+    previousVoiceProvider.current = voiceProvider;
+    // A provider change requires a fresh explicit call. Admitted research stays
+    // in this Space and continues independently of the departing audio session.
+    if (voiceCall.acceptsInput) stopCall();
+  }, [voiceProvider]);
 
   useEffect(() => {
     if (status === "listening" && props.enabled) syncContext();
     // Cheap identity/delta checks. Typing in the same note never resends its body.
-  }, [props.focusNoteId, props.snapshot.notes, props.snapshot.workspace.id, props.snapshot.settings.perplexityApiKeyConfigured, props.enabled, status]);
+  }, [props.focusNoteId, props.snapshot.notes, props.snapshot.workspace.id, webAvailable, props.enabled, status]);
 
   useEffect(() => {
     if (!props.toggleRequest || !props.enabled) return;
     if (voiceCall.isActive) stopCall();
-    else if (props.snapshot.settings.apiKeyConfigured) start();
+    else if (voiceKeyConfigured) start();
     else props.onOpenSettings();
     // Only an explicit click may capture the microphone.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -337,6 +368,16 @@ export function SpaceVoice(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobs, focusedJobId, props.snapshot]);
 
+  function saveFindings(engine: VoiceResearch, prompt: string, targets: { id: string; revision: number }[], delegationId: string | null) {
+    // Persistence stays in the background. Audio and other research keep running.
+    void engine.saveRequestedFindings(prompt, targets).catch(cause => {
+      if (!alive.current || research.current !== engine) return;
+      const message = cause instanceof Error ? cause.message : "The worker finding could not be saved.";
+      setError(message);
+      deliveries.enqueue({ text: message, delegationId });
+    });
+  }
+
   function applyDecision(turn: RoutingVoiceTurn, decision: VoiceTurnDecision) {
     if (!alive.current || !voiceCall.acceptsInput) return;
     if (turn.clarification && !reservations.isCurrent(turn.clarification)) return;
@@ -347,6 +388,15 @@ export function SpaceVoice(props: Props) {
       setError("This worker's supporting context changed. Return to the main conversation and ask for fresh research."); return;
     }
     conversation.current.remember(turn.prompt, decision.action === "update");
+    if (turn.focusedWorker && voicePromptSavesCurrentFinding(turn.prompt)) {
+      const target = engine.getJobs().find(job => job.id === turn.focusedWorker!.id && job.revision === turn.focusedWorker!.revision && job.state === "completed" && job.result);
+      if (!target || !engine.isCurrent(target.id, target.revision)) {
+        setError("This worker's supporting context changed. Ask again from its current result."); return;
+      }
+      if (!reservations.handoff(turn, [target.id], undefined, true)) return;
+      saveFindings(engine, turn.prompt, [{ id: target.id, revision: target.revision }], turn.delegationId);
+      return;
+    }
     if (decision.action === "clarify") {
       const deferred = deferredVoiceCancellation(turn.prompt, conversation.current.recentTurns()
         .filter(previous => previous.key < turn.key && !reservations.turn(previous.key) && !reservations.isCancelled(previous.key)));
@@ -385,7 +435,16 @@ export function SpaceVoice(props: Props) {
       if (!captured) return;
       setClarification(reservations.clarification?.question ?? "");
       const context = conversation.current.text() + "\n" + engine.context();
-      for (const { id, assignment } of plan) void engine.run(id, decision.prompt, context, assignment.noteIds ? undefined : captured.focusNoteId, turn.delegationId, false, captured.selection, assignment);
+      // Only a validated reference-only answer completes the original spoken
+      // request. New commands and generated scopes cannot inherit its authority.
+      const original = turn.clarification?.turn.prompt;
+      const prompt = original && chatPromptAllowsNoteCreation(original) && workerClarificationAnswer({ prompt: turn.prompt, jobs: known, delegated: turn.delegated,
+        clarification: { prompt: original, question: turn.clarification!.question, workerCount: turn.clarification!.workerCount } }) ? original : decision.prompt;
+      for (const { id, assignment } of plan) void engine.run(id, prompt, context, assignment.noteIds ? undefined : captured.focusNoteId, turn.delegationId, false, captured.selection, assignment);
+      if (chatPromptAllowsNoteCreation(prompt)) {
+        const targets = engine.getJobs().filter(job => ids.includes(job.id)).map(({ id, revision }) => ({ id, revision }));
+        saveFindings(engine, prompt, targets, turn.delegationId);
+      }
       publishPending();
     } else if (decision.action === "new") {
       const source = turn.clarification?.turn ?? turn;
@@ -394,12 +453,13 @@ export function SpaceVoice(props: Props) {
       if (previous && turn.prompt.startsWith(previous.prompt) && engine.getJobs().some(job => job.id === previous.id && job.state === "cancelled")) return;
       const focused = turn.focusedWorker && engine.getJobs().find(job => job.id === turn.focusedWorker!.id && job.revision === turn.focusedWorker!.revision && job.state === "completed" && job.result);
       if (turn.focusedWorker && !focused) return;
-      const id = focused?.id ?? (previous && (turn.clarification || turn.prompt.startsWith(previous.prompt)) ? previous.id : "voice-" + crypto.randomUUID());
+      const createsNewNote = chatPromptAllowsNoteCreation(turn.prompt);
+      const id = (createsNewNote ? undefined : focused?.id) ?? (previous && (turn.clarification || turn.prompt.startsWith(previous.prompt)) ? previous.id : "voice-" + crypto.randomUUID());
       const captured = reservations.handoff(turn, [id], turn.clarification, true);
       if (!captured) return;
       setClarification(reservations.clarification?.question ?? "");
       const context = conversation.current.text() + "\n" + engine.context();
-      if (focused) {
+      if (focused && !createsNewNote) {
         const selection = captured.selection ?? focused.selection;
         if (focused.prompt === turn.prompt) void engine.run(id, turn.prompt, context, selection?.noteId ?? focused.focusNoteId, turn.delegationId, false, selection, focused.assignment, { expectedRevision: focused.revision });
         else void engine.run(id, turn.prompt, context, selection?.noteId ?? focused.focusNoteId, turn.delegationId, false, selection, focused.assignment);
@@ -469,7 +529,9 @@ export function SpaceVoice(props: Props) {
       routes.replace(turn.key);
       const currentJobs = currentContextJobs().filter(job => !reservations.members(turn.key).some(reserved => reserved.id === job.id));
       const resolved = pending ? resolveVoiceClarification(pending.turn.prompt, turn.prompt, currentJobs) : null;
-      const decision = resolved ?? (turn.clarification && !likelyVoiceControl(turn.prompt) ? null : localVoiceTurnDecision({ prompt: turn.prompt, jobs: currentJobs, delegated: turn.delegated, focusedWorker: turn.focusedWorker }));
+      const decision = turn.focusedWorker && voicePromptSavesCurrentFinding(turn.prompt)
+        ? { action: "new" as const, prompt: turn.prompt }
+        : resolved ?? (turn.clarification && !likelyVoiceControl(turn.prompt) ? null : localVoiceTurnDecision({ prompt: turn.prompt, jobs: currentJobs, delegated: turn.delegated, focusedWorker: turn.focusedWorker }));
       if (decision) applyDecision(turn, decision);
       else if (routes.hasCapacity) {
         const count = requestedVoiceWorkerCount(turn.prompt);
@@ -493,9 +555,30 @@ export function SpaceVoice(props: Props) {
     const current = liveProps.current;
     const selection = current.voiceSelection?.getSnapshot();
     const bound = selection?.spaceId === current.snapshot.workspace.id && selection.noteId === current.focusNoteId ? selection : undefined;
+    if (event.type === "session.input_audio.started") {
+      const id = event.item_id;
+      if (typeof id !== "string" || !id || id.length > 200 || spokenTargets.current.has(id)) return;
+      spokenTargets.current.set(id, {
+        focusNoteId: current.focusNoteId,
+        ...(bound ? { selection: structuredClone(bound) } : {}),
+        ...(focusedConversation.current ? { focusedWorker: { ...focusedConversation.current } } : {}),
+      });
+      if (spokenTargets.current.size > 64) spokenTargets.current.delete(spokenTargets.current.keys().next().value!);
+      return;
+    }
+    const finalizedInput = event.type === "session.input_transcript.delta" &&
+      normalizeLiveVoiceProvider(current.snapshot.settings.liveVoiceProvider) === "elevenlabs";
+    const spokenTarget = finalizedInput && event.item_id ? spokenTargets.current.get(event.item_id) : undefined;
+    if (finalizedInput && !spokenTarget) {
+      setError("This spoken request could not be matched to where you started speaking. Please say it again.");
+      return;
+    }
     // Bind to the exact result handed to this call, never a newer revision that
     // may have completed before React observes its intermediate running state.
-    if (!conversation.current.receive(event, current.focusNoteId, bound, focusedConversation.current)) return;
+    if (!conversation.current.receive(event,
+      spokenTarget ? spokenTarget.focusNoteId : current.focusNoteId,
+      spokenTarget ? spokenTarget.selection : bound,
+      spokenTarget ? spokenTarget.focusedWorker : focusedConversation.current)) return;
     if (event.type === "session.delegation.created" && event.delegation?.id) {
       voiceCall.rememberDelegation(event.delegation.id);
     }
@@ -517,6 +600,11 @@ export function SpaceVoice(props: Props) {
   function start() { startCall(false); }
   function startCall(preserveFindings: boolean) {
     if (!voiceCall.canStart) return;
+    const current = liveProps.current;
+    const provider = normalizeLiveVoiceProvider(current.snapshot.settings.liveVoiceProvider);
+    const configured = provider === "elevenlabs" ? current.snapshot.settings.elevenLabsApiKeyConfigured : current.snapshot.settings.apiKeyConfigured;
+    if (!current.enabled || !configured) { current.onOpenSettings(); return; }
+    spokenTargets.current.clear();
     cancelRouting();
     if (preserveFindings) {
       // Findings belong to admitted work, not to a particular audio recipient.
@@ -527,9 +615,11 @@ export function SpaceVoice(props: Props) {
     reservations.reset();
     conversation.current.reconnect();
     setError(""); setClarification("");
-    const current = liveProps.current;
     let contextSent = false;
     voiceCall.open({
+      provider,
+      prepareConnection: current.onPrepareVoiceConnection,
+      voiceId: provider === "elevenlabs" ? current.snapshot.settings.elevenLabsVoiceId : undefined,
       spaceId: current.snapshot.workspace.id,
       context: voiceContext(current.snapshot, conversation.current.text(), current.focusNoteId),
       onEvent: receive,
@@ -570,19 +660,21 @@ export function SpaceVoice(props: Props) {
     results.map(job => [job.id, job.revision, job.state, job.result?.reply.length, job.updates?.[job.updates.length - 1]?.sequence, job.receipt?.savedNoteIds, job.state === "failed" ? job.progress : ""]), error, clarification, editProgress,
   ]), [results, error, clarification, editProgress]);
   const hasContent = Boolean(candidates.length || hasConversation || active);
+  const visibleConversation = !props.hideConversationText && hasConversation;
+  const visibleConversationRevision = props.hideConversationText ? "" : conversationRevision;
   // Publish meaningful presentation changes, never the incoming audio frames.
   useEffect(() => {
     props.onVisibleChange?.(hasContent);
     return () => props.onVisibleChange?.(false);
   }, [hasContent, props.onVisibleChange]);
   useEffect(() => {
-    props.onConversationContentChange?.({ hasContent: hasConversation, revision: conversationRevision });
-  }, [hasConversation, conversationRevision, props.onConversationContentChange]);
+    props.onConversationContentChange?.({ hasContent: visibleConversation, revision: visibleConversationRevision });
+  }, [visibleConversation, visibleConversationRevision, props.onConversationContentChange]);
   useEffect(() => () => { liveProps.current.onConversationContentChange?.({ hasContent: false, revision: "" }); }, []);
   // Audio levels update the orb frequently. Keep retained Markdown and citation
   // views stable, including while Chat is collapsed. Actions read the current
   // ref-owned controllers; evidence refreshes with the snapshot and job objects.
-  const content = useMemo(() => <div className="voice-conversation-results">
+  const content = useMemo(() => props.hideConversationText ? null : <div className="voice-conversation-results">
     {hasConversation && <div className="voice-conversation-results__label">From voice</div>}
     {editProgress && <div className="space-voice__progress"><span role="status">{editProgress}</span><button type="button" onClick={() => noteEdits.cancel()}>Cancel note changes</button></div>}
     {results.map(job => {
@@ -622,11 +714,11 @@ export function SpaceVoice(props: Props) {
     })}
     {clarification && <div className="space-voice__clarification" role="status">{clarification}</div>}
     {error && <div className="chat-composer__error" role="alert">{error}
-      {status === "disconnected" && props.enabled && props.snapshot.settings.apiKeyConfigured && <button type="button" onClick={start}>Reconnect voice</button>}
+      {status === "disconnected" && props.enabled && voiceKeyConfigured && <button type="button" onClick={start}>Reconnect voice</button>}
     </div>}
-  </div>, [results, hasConversation, props.snapshot, props.onOpenNote, props.onOpenSource, props.enabled,
+  </div>, [results, hasConversation, props.hideConversationText, props.snapshot, props.onOpenNote, props.onOpenSource, props.enabled,
     status, focusedJobId, keeping, error, clarification, editProgress, findingVersion, deliveries, noteEdits]);
-  if (!hasContent) return null;
+  if (!hasContent || props.presentationHidden) return null;
   const embedded = Boolean(props.floating && props.chatVisible && props.sceneHost && props.controlsHost);
   const options = <div className="space-voice__options" role="group" aria-label="Voice options">
     <div className="space-voice__options-header"><strong>Voice</strong><button type="button" aria-label="Close voice options" onClick={() => { setExpanded(false); summaryButton.current?.focus(); }}><X size={15} /></button></div>
@@ -636,15 +728,16 @@ export function SpaceVoice(props: Props) {
       <button type="button" onClick={() => setConfirmClear(false)}>Keep voice chat</button>
     </div> : <>
       {focusedJobId && <button type="button" onClick={() => { focusConversation(undefined); setExpanded(false); }}>Return to Space conversation</button>}
-      {hasConversation && props.onShowConversation && <button type="button" onClick={() => { setExpanded(false); props.onShowConversation?.(); }}>View conversation</button>}
+      {!props.hideConversationText && hasConversation && props.onShowConversation && <button type="button" onClick={() => { setExpanded(false); props.onShowConversation?.(); }}>View conversation</button>}
       {embedded && active && <button type="button" onClick={() => { stopCall(); setExpanded(false); }}>End voice call</button>}
+      {props.hideConversationText && editProgress && <button type="button" onClick={() => { noteEdits.cancel(); setExpanded(false); }}>Cancel note changes</button>}
       {running && <button type="button" onClick={() => { for (const job of candidates) if (job.state === "running") cancelJob(job.id); setExpanded(false); }}>Stop research</button>}
       <button type="button" onClick={() => setConfirmClear(true)}>Clear voice chat…</button>
     </>}
   </div>;
   if (!props.floating) return hasConversation ? <>{content}{options}</> : null;
   const scene = <VoiceConstellation status={status} activity={activity} muted={muted} thinking={thinking} jobs={candidates} focusedJobId={focusedJobId}
-    dismissedJobIds={dismissedJobIds} palette={props.voicePalette} onFocus={focusConversation} onDismiss={dismissJob} size="expanded" motion={sceneMotion} onShowConversation={props.onShowConversation} />;
+    dismissedJobIds={dismissedJobIds} palette={props.voicePalette} onFocus={focusConversation} onDismiss={dismissJob} size="expanded" motion={sceneMotion} onShowConversation={props.hideConversationText ? undefined : props.onShowConversation} />;
   const escape = (event: KeyboardEvent) => {
     if (event.key !== "Escape" || event.defaultPrevented) return;
     if ((event.target as Element).closest('[role="dialog"],[role="menu"]')) return;
@@ -671,7 +764,10 @@ export function SpaceVoice(props: Props) {
       <button ref={summaryButton} type="button" aria-label="Voice options" title="Voice options" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}><Ellipsis size={17} /></button>
       {!embedded && <button type="button" aria-label="Open chat" title="Open chat" onClick={() => { setExpanded(false); props.onOpenChat?.(); }}><MessageCircle size={17} /></button>}
     </div>
-    {!embedded && (error || clarification) && <button type="button" className="space-voice-call__notice" onClick={props.onShowConversation}>{error || clarification}</button>}
+    {props.hideConversationText && (error || clarification) ? <div className="space-voice-call__notice" role={error ? "alert" : "status"}>
+      {error || clarification}
+      {status === "disconnected" && props.enabled && voiceKeyConfigured && <button type="button" onClick={start}>Reconnect voice</button>}
+    </div> : !embedded && (error || clarification) && <button type="button" className="space-voice-call__notice" onClick={props.onShowConversation}>{error || clarification}</button>}
   </section>;
   // Only presentation moves. The call and research remain owned here. Outcomes
   // join Chat as transient content rather than a second worker-management panel.
@@ -680,6 +776,6 @@ export function SpaceVoice(props: Props) {
       {createPortal(active ? <div className="space-voice-call__scene" onKeyDown={escape}>{scene}<span className="space-voice-call__readiness" role="status">{voiceStatus}</span></div> : null, props.sceneHost!)}
       {createPortal(controls, props.controlsHost!)}
     </> : controls}
-    {props.resultsHost ? createPortal(content, props.resultsHost) : null}
+    {!props.hideConversationText && props.resultsHost ? createPortal(content, props.resultsHost) : null}
   </>;
 }

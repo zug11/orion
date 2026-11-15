@@ -2768,6 +2768,7 @@ kbd {
   color: var(--text);
 }
 
+.home-work-check,
 .home-task-row > input {
   width: 17px;
   height: 17px;
@@ -4290,6 +4291,7 @@ kbd {
   cursor: pointer;
 }
 
+.home-work-check,
 .home-task-row > input,
 .note-prose li.task-list-item > input,
 .note-prose ul[data-type="taskList"] input[type="checkbox"] {
@@ -4313,6 +4315,7 @@ kbd {
     box-shadow 140ms ease;
 }
 
+.home-work-check::before,
 .home-task-row > input::before,
 .note-prose li.task-list-item > input::before,
 .note-prose ul[data-type="taskList"] input[type="checkbox"]::before {
@@ -4326,6 +4329,7 @@ kbd {
   transition: transform 120ms ease;
 }
 
+.home-work-check:hover,
 .home-task-row > input:hover,
 .note-prose li.task-list-item > input:hover,
 .note-prose ul[data-type="taskList"] input[type="checkbox"]:hover {
@@ -4334,6 +4338,7 @@ kbd {
     color-mix(in srgb, var(--periwinkle) 11%, transparent);
 }
 
+.home-work-check:checked,
 .home-task-row > input:checked,
 .note-prose li.task-list-item > input:checked,
 .note-prose ul[data-type="taskList"] input[type="checkbox"]:checked {
@@ -4342,6 +4347,7 @@ kbd {
   box-shadow: none;
 }
 
+.home-work-check:checked::before,
 .home-task-row > input:checked::before,
 .note-prose li.task-list-item > input:checked::before,
 .note-prose ul[data-type="taskList"] input[type="checkbox"]:checked::before {
@@ -13814,6 +13820,14 @@ button.source-citation-marker:focus-visible {
 }
 
 .chat-evidence__heading strong { overflow-wrap: anywhere; }
+.chat-evidence__summary {
+  max-height: 220px;
+  margin: 12px 0;
+  color: var(--text);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .chat-evidence blockquote {
   max-height: 220px;
   margin: 10px 0;

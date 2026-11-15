@@ -1,11 +1,22 @@
-import { researchWithPerplexity } from "./lib/perplexity";
+import { dismissCalendarMention, restoreCalendarMention, type DismissCalendarMention } from "./lib/calendarDismissal";
+import { invalidateChatSuggestionConnection } from "./components/useChatSuggestions";
+import { chatGPTCommand, type ChatGPTStatus } from "./lib/chatgpt";
+import { patchTicket, deleteTicket, boardMarker, newBoardId, newTicketMarkdown, collectWork, type Ticket, type TicketPatch } from "./lib/tickets";
+import { inferBoardTickets, applyInferredTickets, validTicketTitle, type TicketInferenceActions } from "./lib/ticketInference";
+import type { CreateWorkItem } from "./components/Tickets";
+import type { HomeWorkPreferences } from "./components/HomeTickets";
+import { createWebResearch } from "./lib/webResearchProvider";
 import { workingTaskSnapshot, requestedTaskView } from "./lib/taskWorkingView";
 import { addHumanPassageComment, passageComments, type PassageCommentHandler, passageAnchorFromSelection, passageIsCurrent, validatePassageRewrite, reviewPassageComment, threadEditProposal, isPassageThreads, MAX_PASSAGE_THREADS, MAX_THREAD_MESSAGES, type PassageThreadHandler, type PassageChatTarget, passageConversationSnapshot, passageArticleReference } from "./lib/passageThreads";
 import { portableChatEvidence } from "./lib/chatCitations";
+import { LEGACY_CHAT_THREAD_ID, listChatThreads, hasChatThread, projectChatThread, createChatThread,
+  renameChatThread, deleteChatThread, messageChatThreadId, chatThreadRevision } from "./lib/chatThreads";
 import type { PassageThread } from "./types";
 import type { VoiceCommit, VoiceReceipt } from "./lib/voiceResearch";
+import type { PrepareVoiceConnection } from "./lib/liveVoice";
 import { attachDictationOriginal, dictationOriginalSource, prepareDictation, type DictationCompletionOptions } from "./lib/dictationCleanup";
 import { cleanUpDictation } from "./lib/storage";
+import { dateKey } from "./lib/calendarDate";
 import { createVoicePresence } from "./lib/voicePresence";
 import { createVoiceSelectionStore, type VoiceSelection } from "./lib/voiceSelection";
 import { validateChatEditTarget, type ChatEditApplication } from "./lib/chatEdits";
@@ -69,6 +80,7 @@ import {
   normalizeElevenLabsVoiceId,
   normalizeElevenLabsVoices,
   normalizeSpeechVoice,
+  normalizeLiveVoiceProvider,
   normalizeThemeAccent,
   normalizeThemeCanvasTone,
   normalizeThemeColor,
@@ -192,7 +204,6 @@ import {
   noteVersion,
   stableSnapshotVersion,
 } from "./lib/knowledgeOrchestration/context";
-import { setTaskChecked, type NoteTask } from "./lib/tasks";
 import {
   getConceptReferences,
   resolveConceptDestination,
@@ -254,7 +265,7 @@ import {
 import {
   spacesNeedingOverviewRefresh,
 } from "./lib/externalVault";
-import { mergeWindowVault, persistWindowVault, preserveWindowNavigation, vaultValuesEqual, WindowVaultConflict, type ConflictChoice } from "./lib/windowVault";
+import { mergeWindowVault, nextVaultRevision, persistWindowVault, preserveWindowNavigation, vaultValuesEqual, WindowVaultConflict, type ConflictChoice } from "./lib/windowVault";
 import { publishWindowVault } from "./lib/windowVaultPublication";
 import { SaveConflictDialog } from "./components/SaveConflictDialog";
 import type {
@@ -344,9 +355,33 @@ function App() {
   );
   const [screen, setScreen] = useState<AppScreen>("home");
   const [passageChat, setPassageChat] = useState<PassageChatTarget>();
+  // Conversation selection belongs to this window; message history belongs to its Space.
+  const [selectedChatThreads, setSelectedChatThreads] = useState<Record<string, string>>({});
+  const selectedChatThreadsRef = useRef(selectedChatThreads);
+  selectedChatThreadsRef.current = selectedChatThreads;
+  const chatThreads = useMemo(() => listChatThreads(snapshot.studio), [snapshot.studio]);
+  const preferredChatThreadId = selectedChatThreads[snapshot.workspace.id];
+  const activeChatThreadId = preferredChatThreadId && hasChatThread(snapshot.studio, preferredChatThreadId)
+    ? preferredChatThreadId : chatThreads[0]?.id ?? LEGACY_CHAT_THREAD_ID;
+  const chatSnapshot = useMemo(() => projectChatThread(snapshot, activeChatThreadId), [snapshot, activeChatThreadId]);
+  const selectedChatThreadFor = useCallback((space: AppSnapshot) => {
+    const preferred = selectedChatThreadsRef.current[space.workspace.id];
+    return preferred && hasChatThread(space.studio, preferred) ? preferred
+      : listChatThreads(space.studio)[0]?.id ?? LEGACY_CHAT_THREAD_ID;
+  }, []);
   const passageChatNote = passageChat?.spaceId === snapshot.workspace.id ? snapshot.notes.find(note => note.id === passageChat.noteId) : undefined;
   const passageChatThread = passageChatNote?.discussionThreads?.find(thread => thread.id === passageChat?.threadId);
   const [hydrated, setHydrated] = useState(false);
+  const rememberChatThread = useCallback((spaceId: string, threadId: string) => {
+    const next = { ...selectedChatThreadsRef.current, [spaceId]: threadId };
+    selectedChatThreadsRef.current = next;
+    setSelectedChatThreads(next);
+  }, []);
+  useEffect(() => {
+    if (hydrated && selectedChatThreads[snapshot.workspace.id] !== activeChatThreadId) {
+      rememberChatThread(snapshot.workspace.id, activeChatThreadId);
+    }
+  }, [hydrated, snapshot.workspace.id, activeChatThreadId, selectedChatThreads, rememberChatThread]);
   const [closing, setClosing] = useState(false);
   const [persistenceEnabled, setPersistenceEnabled] = useState(false);
   const { mark: brandMarkSrc, message: themeIconMessage } = useThemeIcon(resolvedThemePalette, snapshot.settings.themeIcon, hydrated && persistenceEnabled);
@@ -384,6 +419,7 @@ function App() {
   const [assistantJobs, setAssistantJobs] = useState<AssistantJob[]>([]);
   const generateRequests = useRef(new GenerateRequestRegistry());
   const preparedSpeech = useRef(new PreparedSpeechCache());
+  useEffect(() => { preparedSpeech.current.clear(); }, [snapshot.settings.elevenLabsModelId, snapshot.settings.elevenLabsVoiceRevision]);
   const speechPlaybackContext = useRef<AudioContext | null>(null);
   const [history, setHistory] = useState<NavigationEntry[]>(() => [
     createNavigationEntry({ screen: "home" }),
@@ -391,6 +427,7 @@ function App() {
   const [historyIndex, setHistoryIndex] = useState(0);
   // Each window remembers how a note was left, independently in each Space.
   const noteEditingModes = useRef(new Map<string, Map<string, boolean>>());
+  const homeWorkPreferences = useRef(new Map<string, HomeWorkPreferences>());
   let spaceEditingModes = noteEditingModes.current.get(snapshot.workspace.id);
   if (!spaceEditingModes) {
     spaceEditingModes = new Map();
@@ -454,7 +491,7 @@ function App() {
   const chatNoteEdits = useRef(new Map<string, { spaceId: string; controller: AbortController; promise: Promise<ChatEditProposal> }>());
   const linkedArticleRequests = useRef(new LinkedArticleRequestRegistry());
   const wikiEnrichmentRequests = useRef(new Set<string>());
-  const dictationSessions = useRef(new Map<string, { spaceId: string; noteId: string; settings: Settings }>());
+  const dictationSessions = useRef(new Map<string, { spaceId: string; noteId: string; settings: Settings; referenceDate: string }>());
   const overviewRequests = useRef(new Map<string, string>());
   const overviewWaiting = useRef(new Map<string, object>());
   const overviewTimers = useRef(new Map<string, number>());
@@ -786,6 +823,8 @@ function App() {
     snapshot.notes.length,
     snapshot.settings.anthropicApiKeyConfigured,
     snapshot.settings.apiKeyConfigured,
+    snapshot.settings.chatgptConfigured,
+    snapshot.settings.chatgptAccountId,
     snapshot.settings.includeExistingNotesInAIContext,
     snapshot.settings.model,
     snapshot.spaceKnowledge,
@@ -829,6 +868,48 @@ function App() {
     saveQueue.current = queued.then(() => undefined, () => undefined);
     return queued;
   }, [persistLatestVault]);
+
+  const prepareVoiceConnection = useCallback<PrepareVoiceConnection>(async (request, signal) => {
+    // Start can arrive through SpaceVoice's effect as well as a direct click.
+    // Leave that React commit before flushing any queued settings update.
+    await Promise.resolve();
+    const checkCurrent = () => {
+      if (signal.aborted) throw new DOMException("Voice was stopped.", "AbortError");
+      if (closingRef.current || !persistenceEnabledRef.current) throw new Error("Save your library before starting voice.");
+      const current = vaultRef.current;
+      const visibleSpaceId = writingWindow ? windowLaunch.spaceId : current.activeSpaceId;
+      if (visibleSpaceId !== request.spaceId) throw new Error("The voice Space changed. Start voice again in the current Space.");
+      const matches = current.spaces.filter(space => space.workspace.id === request.spaceId);
+      if (matches.length !== 1 || normalizeLiveVoiceProvider(matches[0].settings.liveVoiceProvider) !== request.provider ||
+          request.provider === "elevenlabs" && (matches[0].settings.elevenLabsVoiceId ?? "") !== (request.voiceId ?? "")) {
+        throw new Error("The conversation provider or voice changed. Start voice again with your current choice.");
+      }
+    };
+    if (signal.aborted) throw new DOMException("Voice was stopped.", "AbortError");
+    flushSync(() => setVault(current => { vaultRef.current = current; return current; }));
+    checkCurrent();
+    if (saveTimer.current !== null) { window.clearTimeout(saveTimer.current); saveTimer.current = null; }
+    autosaveDirtySince.current = null;
+    // Await the actual rejecting save result, not the queue tail that swallows
+    // errors to let later saves proceed. Coalescing captures current settings.
+    try {
+      await queueSnapshotSave(vaultRef.current);
+    } catch (error) {
+      // Stop suppresses stale transport errors, but a failed library save still
+      // needs the ordinary global notice. Active calls show the error themselves.
+      if (signal.aborted) showToast("Couldn’t save", error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+    flushSync(() => setVault(current => { vaultRef.current = current; return current; }));
+    checkCurrent();
+    // A published merge may include later unsaved changes. Only persistedVault
+    // proves that native startup will see this exact provider and voice.
+    const saved = persistedVault.current?.spaces.filter(space => space.workspace.id === request.spaceId) ?? [];
+    if (saved.length !== 1 || normalizeLiveVoiceProvider(saved[0].settings.liveVoiceProvider) !== request.provider ||
+        request.provider === "elevenlabs" && (saved[0].settings.elevenLabsVoiceId ?? "") !== (request.voiceId ?? "")) {
+      throw new Error("Your voice choice could not be saved. Check the save status before starting voice again.");
+    }
+  }, [queueSnapshotSave, showToast, writingWindow, windowLaunch.spaceId]);
 
   useEffect(() => {
     if (!hydrated || !persistenceEnabled || !isTauriRuntime()) return;
@@ -989,6 +1070,8 @@ function App() {
               apiKeyConfigured: isTauriRuntime()
                 ? base.settings.apiKeyConfigured
                 : false,
+              chatgptConfigured: isTauriRuntime() && base.settings.chatgptConfigured === true,
+              chatgptAccountId: isTauriRuntime() ? (base.settings.chatgptAccountId ?? "") : "",
               anthropicApiKeyConfigured: isTauriRuntime()
                 ? (base.settings.anthropicApiKeyConfigured ?? false)
                 : false,
@@ -997,6 +1080,7 @@ function App() {
                 : false,
               perplexityApiKeyConfigured: isTauriRuntime() && base.settings.perplexityApiKeyConfigured === true,
               speechVoice: normalizeSpeechVoice(base.settings.speechVoice),
+              liveVoiceProvider: normalizeLiveVoiceProvider(base.settings.liveVoiceProvider),
               sidebarCollapsed: base.settings.sidebarCollapsed === true,
               elevenLabsVoiceId: normalizeElevenLabsVoiceId(
                 base.settings.elevenLabsVoiceId,
@@ -1116,6 +1200,29 @@ function App() {
     showToast,
     vault,
   ]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let disposed = false, sequence = 0;
+    let unlisten: (() => void) | undefined;
+    void import("@tauri-apps/api/event").then(async ({ listen }) => {
+      const stop = await listen("chatgpt-connection-changed", () => {
+        if (disposed) return;
+        // Invalidate immediately, including reauthentication of the same account,
+        // before status hydration can publish a late suggestion from old access.
+        invalidateChatSuggestionConnection("chatgpt");
+        const request = ++sequence;
+        void chatGPTCommand<ChatGPTStatus>("chatgpt_status").then(status => {
+          if (disposed || request !== sequence) return;
+          setVault(current => ({ ...current, spaces: current.spaces.map(space => ({ ...space,
+            settings: { ...space.settings, chatgptConfigured: status.configured, chatgptAccountId: status.activeId ?? "" },
+          })) }));
+        }).catch(() => undefined);
+      });
+      if (disposed) stop(); else unlisten = stop;
+    }).catch(() => undefined);
+    return () => { disposed = true; unlisten?.(); };
+  }, []);
 
   useEffect(() => {
     const cache = preparedSpeech.current;
@@ -2033,7 +2140,7 @@ function App() {
       if (!workspace?.notes.some((note) => note.id === noteId)) {
         throw new Error("This note is no longer available.");
       }
-      dictationSessions.current.set(sessionId, { spaceId: workspaceId, noteId, settings: workspace.settings });
+      dictationSessions.current.set(sessionId, { spaceId: workspaceId, noteId, settings: workspace.settings, referenceDate: dateKey(new Date()) });
       await startVoiceMemoSession(sessionId, {
         language: workspace.settings.whisperLanguage || undefined,
       });
@@ -2100,7 +2207,7 @@ function App() {
         }
         return source.id;
       },
-      clean: signal => cleanUpDictation(transcript, session.settings, signal),
+      clean: signal => cleanUpDictation(transcript, session.settings, signal, session.referenceDate),
     });
   }, [queueSnapshotSave]);
 
@@ -2118,6 +2225,8 @@ function App() {
       const merged: Note = previous
         ? {
             ...normalized,
+            // Dismissals are owned by Home, not a captured editor document.
+            dismissedCalendarMentions: previous.dismissedCalendarMentions,
             conceptIds: [
               ...new Set([
                 ...previous.conceptIds,
@@ -2153,6 +2262,39 @@ function App() {
     });
   }, []);
 
+  const onDismissCalendarMention = useCallback<DismissCalendarMention>((capturedNote, key) => {
+    const spaceId = snapshot.workspace.id;
+    if (writingWindow || vaultRef.current.activeSpaceId !== spaceId) return false;
+    let applied = false;
+    flushSync(() => setSnapshot(current => {
+      if (current.workspace.id !== spaceId) return current;
+      const matches = current.notes.filter(note => note.id === capturedNote.id);
+      if (matches.length !== 1) return current;
+      const changed = dismissCalendarMention(matches[0], capturedNote, key);
+      if (!changed) return current;
+      applied = true;
+      return { ...current, notes: current.notes.map(note => note === matches[0] ? changed : note),
+        updatedAt: nextVaultRevision(current.updatedAt) };
+    }));
+    if (!applied) return false;
+    showToast("Date removed", "This inferred date is hidden from the calendar.", { label: "Undo", run: () => {
+      // The same note may have been edited since dismissal. Remove only this
+      // metadata key, and never restore old prose or write into another Space.
+      if (vaultRef.current.activeSpaceId !== spaceId) return;
+      setSnapshot(current => {
+        if (current.workspace.id !== spaceId) return current;
+        const matches = current.notes.filter(note => note.id === capturedNote.id && note.createdAt === capturedNote.createdAt);
+        if (matches.length !== 1 || current.notes.filter(note => note.id === capturedNote.id).length !== 1) return current;
+        const restored = restoreCalendarMention(matches[0], key);
+        if (!restored) return current;
+        return { ...current, notes: current.notes.map(note => note === matches[0] ? restored : note),
+          updatedAt: nextVaultRevision(current.updatedAt) };
+      });
+      setToast(null);
+    } });
+    return true;
+  }, [snapshot.workspace.id, writingWindow, setSnapshot, showToast]);
+
   const attachSourceToNote = useCallback(
     (noteId: EntityId, sourceId: EntityId) => {
       setSnapshot((current) =>
@@ -2167,22 +2309,61 @@ function App() {
     [],
   );
 
-  const toggleHomeTask = useCallback(
-    (task: NoteTask, checked: boolean) => {
-      const note = snapshotRef.current.notes.find(
-        (candidate) => candidate.id === task.noteId,
-      );
-      if (!note) return;
-      const body = setTaskChecked(note.body, task.lineIndex, checked);
-      if (body === note.body) return;
-      updateNote({
-        ...note,
-        body,
-        updatedAt: new Date().toISOString(),
-      });
+  const updateTicket = useCallback((ticket: Ticket, patch: TicketPatch): boolean => {
+    const current = snapshotRef.current;
+    if (current.workspace.id !== snapshot.workspace.id) return false;
+    const note = current.notes.find(candidate => candidate.id === ticket.noteId);
+    if (!note || patch.boardId && !collectWork(current.notes).boards.some(board => board.id === patch.boardId)) return false;
+    const body = patchTicket(note.body, ticket, patch);
+    if (body === null) return false;
+    updateNote({ ...note, body, updatedAt: new Date().toISOString() });
+    return true;
+  }, [updateNote, snapshot.workspace.id]);
+
+  const removeTicket = useCallback((ticket: Ticket): boolean => {
+    const current = snapshotRef.current;
+    if (current.workspace.id !== snapshot.workspace.id) return false;
+    const note = current.notes.find(candidate => candidate.id === ticket.noteId);
+    if (!note) return false;
+    const body = deleteTicket(note.body, ticket);
+    if (body === null) return false;
+    updateNote({ ...note, body, updatedAt: new Date().toISOString() });
+    return true;
+  }, [updateNote, snapshot.workspace.id]);
+
+  const createWorkItem = useCallback<CreateWorkItem>((kind, title, noteId, boardId, status = "todo", dueDate = "", origin) => {
+    const current = snapshotRef.current;
+    if (current.workspace.id !== snapshot.workspace.id || !validTicketTitle(title)) return false;
+    const note = current.notes.find(candidate => candidate.id === noteId);
+    if (!note || boardId && !collectWork(current.notes).boards.some(board => board.id === boardId)) return false;
+    const addition = kind === "ticket" ? newTicketMarkdown(title, boardId, status, dueDate, origin) : boardMarker({id:newBoardId(),title});
+    updateNote({...note,body:`${note.body.trimEnd()}\n\n${addition}\n`,updatedAt:new Date().toISOString()});
+    return true;
+  }, [updateNote, snapshot.workspace.id]);
+
+  const ticketInferenceAvailable = isSelectedAIConfigured(snapshot.settings);
+  const ticketInference = useMemo<TicketInferenceActions>(() => ({
+
+    generate: async (board, signal, onProgress) => {
+      const current = snapshotRef.current;
+      if (current.workspace.id !== snapshot.workspace.id) throw new Error("This Space is no longer active.");
+      const result = await inferBoardTickets(current, board, chatWithOrion, signal, onProgress);
+      const latest = snapshotRef.current;
+      const note = latest.notes.find(n => n.id === result.noteId);
+      if (latest.workspace.id !== current.workspace.id || !note || note.body !== result.baseBody || note.title !== result.noteTitle) throw new Error("The note changed. Infer again to use its current text.");
+      return result;
     },
-    [updateNote],
-  );
+    apply: (board, result, titles, taskIds) => {
+      const current = snapshotRef.current;
+      if (current.workspace.id !== snapshot.workspace.id || !collectWork(current.notes).boards.some(b => b.id === board.id && b.noteId === board.noteId)) return false;
+      const note = current.notes.find(n => n.id === board.noteId);
+      if (!note) return false;
+      const body = applyInferredTickets(note, board, result, titles, taskIds);
+      if (body === null) return false;
+      updateNote({ ...note, body, updatedAt: new Date().toISOString() });
+      return true;
+    },
+  }), [snapshot.workspace.id, ticketInferenceAvailable, updateNote]);
 
   const refreshWikiFromNote = useCallback(
     async (noteId: EntityId) => {
@@ -3217,6 +3398,8 @@ function App() {
       if (!space) {
         throw new Error("This Space is no longer available.");
       }
+      const threadId = selectedChatThreadFor(space);
+      const historyRevision = chatThreadRevision(space.studio, threadId);
       const token = chatRequests.current.start(
         workspaceId,
         `chat-request-${nanoid(10)}`,
@@ -3239,24 +3422,36 @@ function App() {
       });
 
       try {
-        const result = await runChatReading(space, prompt, chatWithOrion, {
-          webResearch: webEnabled && space.settings.perplexityApiKeyConfigured ? researchWithPerplexity : undefined,
+        const result = await runChatReading(projectChatThread(space, threadId), prompt, chatWithOrion, {
+          webResearch: webEnabled ? createWebResearch(space.settings) : undefined,
           focusNoteId,
           selection,
           signal: controller.signal,
-          currentSnapshot: () => chatRequests.current.isCurrent(token)
-            ? vaultRef.current.spaces.find((candidate) => candidate.workspace.id === workspaceId)
-            : undefined,
-          onProgress: (message) => setChatProgress((current) => ({ ...current, [workspaceId]: message })),
+          currentSnapshot: () => {
+            const current = vaultRef.current.spaces.find(candidate => candidate.workspace.id === workspaceId);
+            return chatRequests.current.isCurrent(token) && current && hasChatThread(current.studio, threadId) &&
+              chatThreadRevision(current.studio, threadId) === historyRevision
+              ? projectChatThread(current, threadId) : undefined;
+          },
+          onProgress: (message) => {
+            if (chatRequests.current.isCurrent(token)) setChatProgress(current => ({ ...current, [workspaceId]: message }));
+          },
         });
+        const currentSpace = vaultRef.current.spaces.find(candidate => candidate.workspace.id === workspaceId);
+        if (controller.signal.aborted || !chatRequests.current.isCurrent(token) || !currentSpace ||
+            !hasChatThread(currentSpace.studio, threadId) || chatThreadRevision(currentSpace.studio, threadId) !== historyRevision ||
+            stableSnapshotVersion(currentSpace) !== baseVersion) {
+          throw new Error("This conversation changed before the reply finished. Your message is ready to send again.");
+        }
         if (chatRequests.current.isCurrent(token)) {
           const now = new Date().toISOString();
           const createdNotes = (result.noteActions?.length ?? 0) > 0;
-          setVault((current) => ({
+          flushSync(() => setVault((current) => ({
             ...current,
             spaces: current.spaces.map((candidate) => {
               if (candidate.workspace.id !== workspaceId) return candidate;
-              if (controller.signal.aborted || stableSnapshotVersion(candidate) !== baseVersion) return candidate;
+              if (controller.signal.aborted || !chatRequests.current.isCurrent(token) || stableSnapshotVersion(candidate) !== baseVersion ||
+                  !hasChatThread(candidate.studio, threadId) || chatThreadRevision(candidate.studio, threadId) !== historyRevision) return candidate;
               const next = applyChatResult(
                 candidate,
                 prompt,
@@ -3265,23 +3460,26 @@ function App() {
                 () => `chat-${nanoid(10)}`,
                 () => `note-${nanoid(10)}`,
                 passage,
+                threadId,
               );
               return createdNotes ? markSpaceOverviewStale(next) : next;
             }),
             updatedAt: now,
-          }));
+          })));
           if (createdNotes) {
             scheduleSpaceOverviewRefresh(workspaceId);
           }
         }
         return result;
       } finally {
-        chatControllers.current.delete(workspaceId);
-        setChatProgress((current) => {
-          const next = { ...current };
-          delete next[workspaceId];
-          return next;
-        });
+        if (chatControllers.current.get(workspaceId) === controller) {
+          chatControllers.current.delete(workspaceId);
+          setChatProgress((current) => {
+            const next = { ...current };
+            delete next[workspaceId];
+            return next;
+          });
+        }
         if (chatRequests.current.finish(token)) {
           setChatBusySpaceIds((current) => {
             const next = new Set(current);
@@ -3291,7 +3489,7 @@ function App() {
         }
       }
     },
-    [scheduleSpaceOverviewRefresh],
+    [scheduleSpaceOverviewRefresh, selectedChatThreadFor],
   );
 
   // Comment metadata is saved through the same window/vault merger as prose.
@@ -3403,13 +3601,16 @@ function App() {
     const messageId = `${request.id}-assistant`;
     const current = vaultRef.current.spaces.find(space => space.workspace.id === request.spaceId);
     if (!current || vaultRef.current.activeSpaceId !== request.spaceId) throw new Error("The voice Space is no longer active.");
+    const threadId = request.threadId ?? LEGACY_CHAT_THREAD_ID;
+    if (!hasChatThread(current.studio, threadId)) throw new Error("The voice conversation was deleted. Its result cannot be saved into another chat.");
     const existing = current.studio.messages.find(message => message.id === messageId);
+    if (existing && messageChatThreadId(existing) !== threadId) throw new Error("The voice result belongs to another conversation.");
     if (!existing) {
       if (stableSnapshotVersion(current) !== request.version) throw new Error("This Space changed. Ask again before saving the result.");
       const now = new Date().toISOString(); let messageIndex = 0; let noteIndex = 0;
       const next = markSpaceOverviewStale(applyChatResult(current, request.prompt, request.result, now,
         () => messageIndex++ === 0 ? `${request.id}-user` : messageId,
-        () => `${request.id}-note-${++noteIndex}`));
+        () => `${request.id}-note-${++noteIndex}`, undefined, threadId));
       if (!next.studio.messages.find(message => message.id === messageId)?.createdNoteIds?.length) throw new Error("No valid note was created. Nothing was saved.");
       const updated = { ...vaultRef.current, spaces: vaultRef.current.spaces.map(space => space.workspace.id === request.spaceId ? next : space), updatedAt: now };
       flushSync(() => { vaultRef.current = updated; setVault(updated); });
@@ -3430,19 +3631,24 @@ function App() {
     const existing = chatNoteEdits.current.get(key);
     if (existing) return existing.promise;
     const message = space.studio.messages.find(item => item.id === messageId && item.role === "assistant");
+    if (!message) return Promise.reject(new Error("This reply is no longer available."));
+    const threadId = messageChatThreadId(message);
+    if (threadId !== selectedChatThreadFor(space)) return Promise.reject(new Error("Return to this reply's chat before using it."));
+    const historyRevision = chatThreadRevision(space.studio, threadId);
     const controller = new AbortController();
-    const promise = prepareChatReplyEdit(space, messageId, noteId, chatWithOrion, {
+    const promise = prepareChatReplyEdit(projectChatThread(space, threadId), messageId, noteId, chatWithOrion, {
       signal: controller.signal,
       onProgress,
       currentSnapshot: () => {
         const current = vaultRef.current.spaces.find(item => item.workspace.id === spaceId);
-        // New chat or removal of this reply revokes the original request.
-        return current?.studio.messages.some(item => item.id === messageId && item.content === message?.content) ? current : undefined;
+        return !controller.signal.aborted && current && hasChatThread(current.studio, threadId) &&
+          selectedChatThreadFor(current) === threadId && chatThreadRevision(current.studio, threadId) === historyRevision
+          ? projectChatThread(current, threadId) : undefined;
       },
     }).finally(() => { chatNoteEdits.current.delete(key); });
     chatNoteEdits.current.set(key, { spaceId, controller, promise });
     return promise;
-  }, []);
+  }, [selectedChatThreadFor]);
 
   const saveChatMessageAsNote = useCallback((messageId: string): Promise<ChatNoteReceipt> => {
     const workspaceId = vaultRef.current.activeSpaceId;
@@ -3472,26 +3678,65 @@ function App() {
     for (const action of chatNoteEdits.current.values()) action.controller.abort(new Error("The window was closed."));
   }, []);
 
-  const clearChat = useCallback(() => {
+  const cancelChatForNavigation = useCallback((spaceId: string) => {
     for (const action of chatNoteEdits.current.values()) {
-      if (action.spaceId === vaultRef.current.activeSpaceId) action.controller.abort(new Error("This Chat was cleared."));
+      if (action.spaceId === spaceId) action.controller.abort(new Error("This conversation was closed."));
     }
     if (chatEditCompletion.current) completeChatEdit(chatEditCompletion.current.id, undefined, false);
-    chatControllers.current.get(vaultRef.current.activeSpaceId)?.abort();
-    chatRequests.current.invalidate(vaultRef.current.activeSpaceId);
+    chatControllers.current.get(spaceId)?.abort(new Error("This conversation was closed. Your message is ready to send again."));
+    chatControllers.current.delete(spaceId);
+    chatRequests.current.cancel(spaceId);
+    setChatBusySpaceIds(current => { const next = new Set(current); next.delete(spaceId); return next; });
+    setChatProgress(current => { const next = { ...current }; delete next[spaceId]; return next; });
+  }, [completeChatEdit]);
+
+  const selectChatThread = useCallback((threadId: string) => {
+    const space = activeSpace(vaultRef.current);
+    if (!hasChatThread(space.studio, threadId) || selectedChatThreadFor(space) === threadId) return;
+    cancelChatForNavigation(space.workspace.id);
+    setPassageChat(undefined);
+    rememberChatThread(space.workspace.id, threadId);
+  }, [selectedChatThreadFor, cancelChatForNavigation, rememberChatThread]);
+
+  // Explicit New chat preserves every previous conversation.
+  const clearChat = useCallback(() => {
+    const space = activeSpace(vaultRef.current);
+    cancelChatForNavigation(space.workspace.id);
+    const threadId = `chat-thread-${nanoid(12)}`;
     const now = new Date().toISOString();
-    setSnapshot((current) => {
-      const studio = normalizeStudio(current.studio);
-      return {
-        ...current,
-        studio: {
-          ...studio,
-          messages: [],
-        },
-        updatedAt: now,
-      };
-    });
+    // The first conversation can still be implicit when it contains only an
+    // unsent draft or retained voice work. Keep its identity navigable before
+    // adding another thread, even though no messages have been committed yet.
+    const current = createChatThread(space, selectedChatThreadFor(space), now);
+    const next = createChatThread(current, threadId, now);
+    const updated = { ...vaultRef.current, spaces: vaultRef.current.spaces.map(item => item.workspace.id === space.workspace.id ? next : item), updatedAt: now };
+    flushSync(() => { vaultRef.current = updated; setVault(updated); rememberChatThread(space.workspace.id, threadId); });
+    setPassageChat(undefined);
+  }, [cancelChatForNavigation, rememberChatThread, selectedChatThreadFor]);
+
+  const renameConversation = useCallback((threadId: string, title: string) => {
+    const space = activeSpace(vaultRef.current);
+    const next = renameChatThread(space, threadId, title, new Date().toISOString());
+    const updated = { ...vaultRef.current, spaces: vaultRef.current.spaces.map(item => item.workspace.id === space.workspace.id ? next : item), updatedAt: next.updatedAt };
+    flushSync(() => { vaultRef.current = updated; setVault(updated); });
   }, []);
+
+  const deleteConversation = useCallback((threadId: string) => {
+    const space = activeSpace(vaultRef.current);
+    if (!hasChatThread(space.studio, threadId)) return;
+    const deletingSelected = selectedChatThreadFor(space) === threadId;
+    if (deletingSelected) cancelChatForNavigation(space.workspace.id);
+    const now = new Date().toISOString();
+    let next = deleteChatThread(space, threadId, now);
+    // Do not reuse the deleted legacy identity for a new empty conversation;
+    // delayed voice receipts must not resurrect it.
+    if (!next.studio.messages.length && !next.studio.threads?.length) next = createChatThread(next, `chat-thread-${nanoid(12)}`, now);
+    const updated = { ...vaultRef.current, spaces: vaultRef.current.spaces.map(item => item.workspace.id === space.workspace.id ? next : item), updatedAt: next.updatedAt };
+    flushSync(() => {
+      vaultRef.current = updated; setVault(updated);
+      if (deletingSelected) rememberChatThread(space.workspace.id, listChatThreads(next.studio)[0]?.id ?? LEGACY_CHAT_THREAD_ID);
+    });
+  }, [selectedChatThreadFor, cancelChatForNavigation, rememberChatThread]);
 
   const applyImport = useCallback(
     (payload: ImportStudioApplyPayload) => {
@@ -3828,11 +4073,15 @@ function App() {
 
   async function handleSaveElevenLabsKey(apiKey: string) {
     await saveElevenLabsApiKey(apiKey);
-    updateSettings({
-      ...snapshot.settings,
-      elevenLabsApiKeyConfigured: true,
-      speechVoice: "elevenlabs",
-    });
+    const now = new Date().toISOString();
+    setVault(current => ({ ...current, updatedAt: now,
+      spaces: current.spaces.map(space => ({ ...space, updatedAt: now,
+        settings: { ...space.settings, elevenLabsApiKeyConfigured: true,
+          ...(normalizeLiveVoiceProvider(space.settings.liveVoiceProvider) === "elevenlabs"
+            ? {} : { speechVoice: "elevenlabs" as const }),
+        },
+      })),
+    }));
   }
 
   async function handleDeleteElevenLabsKey() {
@@ -3855,6 +4104,10 @@ function App() {
     }
     speechPlaybackContext.current = created;
     return created;
+  }
+
+  function generateConfiguredSpeech(...args: Parameters<typeof generateSpeech>) {
+    return generateSpeech(args[0], args[1], args[2], { ...args[3], modelId: snapshot.settings.elevenLabsModelId });
   }
 
   function cloudSpeechKey(
@@ -3895,7 +4148,7 @@ function App() {
         if (signal?.aborted) {
           throw signal.reason ?? new Error("Reading was cancelled.");
         }
-        spoken.push(await generateSpeech(engine, chunk, voiceId));
+        spoken.push(await generateConfiguredSpeech(engine, chunk, voiceId));
       }
       return spoken;
     });
@@ -3925,7 +4178,7 @@ function App() {
     const decoder = new OfflineAudioContext(1, 1, NARRATION_SAMPLE_RATE);
     const audio = await buildNarrationWav({ text, engine, signal, onProgress,
       voiceId: engine === "elevenlabs" ? resolveElevenLabsVoiceId(snapshot.settings) : undefined,
-      cache: preparedSpeech.current, generate: generateSpeech,
+      cache: preparedSpeech.current, generate: generateConfiguredSpeech,
       decode: (bytes) => decoder.decodeAudioData(bytes),
     });
     await downloadNarration(title, audio, signal);
@@ -3956,7 +4209,7 @@ function App() {
       await playTrackedSpeech({
         text, engine, signal, onProgress, options,
         voiceId: engine === "elevenlabs" ? resolveElevenLabsVoiceId(snapshot.settings) : undefined,
-        cache: preparedSpeech.current, context: acquireSpeechPlaybackContext(), generate: generateSpeech,
+        cache: preparedSpeech.current, context: acquireSpeechPlaybackContext(), generate: generateConfiguredSpeech,
       });
       return;
     }
@@ -4058,6 +4311,10 @@ function App() {
       const editorAI = resolveEditorAICapabilities(snapshot.settings);
       return (
         <NoteView
+          onPatchTicket={updateTicket}
+          onDeleteTicket={removeTicket}
+          onCreateWork={createWorkItem}
+          ticketInference={ticketInference}
           onCreateComment={createPassageComment}
           onThreadAction={handlePassageThreadAction}
           voiceSelection={voiceSelection}
@@ -4176,6 +4433,13 @@ function App() {
     }
     return (
       <HomeView
+        key={`home:${snapshot.workspace.id}`}
+        onDismissCalendarMention={onDismissCalendarMention}
+        onPatchTicket={updateTicket}
+        onDeleteTicket={removeTicket}
+        onCreateWork={createWorkItem}
+        workPreferences={homeWorkPreferences.current}
+        ticketInference={ticketInference}
         snapshot={snapshot}
         themePalette={resolvedThemePalette}
         onOpenNote={openNote}
@@ -4183,7 +4447,6 @@ function App() {
         onNewNote={createNote}
         onImport={() => setImportOpen(true)}
         onOpenNotes={() => openView("notes")}
-        onToggleTask={toggleHomeTask}
         overviewBusy={overviewBusySpaceIds.has(snapshot.workspace.id)}
         overviewError={overviewErrors.get(snapshot.workspace.id) ?? null}
         onRefreshOverview={() => {
@@ -4292,7 +4555,10 @@ function App() {
             voicePresence={voicePresence}
             voiceSelection={voiceSelection}
             voicePalette={voicePalette}
-            snapshot={snapshot}
+            snapshot={chatSnapshot}
+            canonicalSnapshot={snapshot}
+            threadNavigation={{ threads: chatThreads, activeThreadId: activeChatThreadId,
+              onSelect: selectChatThread, onNew: clearChat, onRename: renameConversation, onDelete: deleteConversation }}
             passageChat={passageChat && passageChatNote && passageChatThread ? {
               key: passageChat.key, note: passageChatNote, thread: passageChatThread, draft: passageChat.draft,
               onAction: action => {
@@ -4313,6 +4579,7 @@ function App() {
             onSend={sendChatMessage}
             onUseReply={useChatReplyInNote}
             onVoiceCommit={commitVoiceResult}
+            onPrepareVoiceConnection={prepareVoiceConnection}
             onReviewEdit={reviewChatEdit}
             onCommentReply={commentChatReply}
             onClear={clearChat}

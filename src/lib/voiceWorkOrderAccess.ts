@@ -2,6 +2,7 @@ import type { ChatReadRequest, ChatCoverage, ChatEvidence, ChatResult } from "..
 import type { TaskView } from "./taskWorkingView";
 import type { ChatReadingCheckpoint } from "./chatReadingCheckpoint";
 import type { VoiceWorkOrder } from "./voiceResearch";
+import { validWebMetadata } from "./webResearch";
 
 export interface VoiceExternalAuthority { grantId: string; taskView: TaskView; assertCurrent: () => Promise<void> }
 export interface VoiceWorkOrderSummary {
@@ -101,5 +102,6 @@ function operation(request: { kind: ChatReadRequest["kind"]; id: string }): Voic
   return { kind: request.kind, ...(request.id ? { entityId: request.id } : {}) };
 }
 function validEvidence(entry: ChatEvidence): boolean {
-  return Number.isSafeInteger(entry.start) && entry.start >= 0 && Number.isSafeInteger(entry.end) && entry.end === entry.start + entry.text.length;
+  return (entry.kind === "web" ? validWebMetadata(entry.web) && entry.start === 0 : entry.web === undefined) &&
+    Number.isSafeInteger(entry.start) && entry.start >= 0 && Number.isSafeInteger(entry.end) && entry.end === entry.start + entry.text.length;
 }

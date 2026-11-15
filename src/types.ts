@@ -22,6 +22,8 @@ export interface Note {
   summary: string;
   /** Optional heading rows in the writing surface; older notes show both. */
   headingLayout?: NoteHeadingLayout;
+  /** Hidden inferred calendar occurrences; never changes prose or its relative-date anchor. */
+  dismissedCalendarMentions?: string[];
   body: string;
   aliases: string[];
   tags: string[];
@@ -200,6 +202,7 @@ export interface WindowGlassSettings {
 }
 
 export type SpeechVoice = "system" | "openai" | "elevenlabs";
+export type LiveVoiceProvider = "openai" | "elevenlabs";
 
 export interface SavedElevenLabsVoice {
   name: string;
@@ -233,16 +236,23 @@ export interface Settings {
   model: string;
   reasoningEffort: ReasoningEffort;
   apiKeyConfigured: boolean;
+  /** Non-secret desktop ChatGPT connection status. Tokens live only in the OS keychain. */
+  chatgptConfigured?: boolean;
+  chatgptAccountId?: string;
   anthropicApiKeyConfigured: boolean;
-  /** Optional. Used only to speak notes and narrated decks. */
+  /** Optional. Enables ElevenLabs voice conversations, narration and voice creation. */
   elevenLabsApiKeyConfigured: boolean;
   /** Non-secret status only; the credential lives in the desktop Keychain. */
   perplexityApiKeyConfigured?: boolean;
+  /** Web research connection; Auto preserves Perplexity before the selected OpenAI connection. */
+  webResearchProvider?: "auto" | "openai" | "perplexity";
   /**
    * ElevenLabs voice ID from the user's library. Empty uses Orion's default
    * editorial voice. This is not a secret.
    */
   elevenLabsVoiceId: string;
+  elevenLabsModelId?: string;
+  elevenLabsVoiceRevision?: number;
   /** Named local voice presets. Optional in older vaults; never credentials. */
   elevenLabsVoices: SavedElevenLabsVoice[];
   /**
@@ -250,6 +260,8 @@ export interface Settings {
    * OpenAI and ElevenLabs require their respective keys.
    */
   speechVoice: SpeechVoice;
+  /** Live conversations only; independent of narration. Older vaults use OpenAI. */
+  liveVoiceProvider?: LiveVoiceProvider;
   /** Narrow icon rail. Text labels stay hidden while collapsed. */
   sidebarCollapsed: boolean;
   /** Opt-in: retry a failed knowledge request once on the other provider. */
@@ -397,6 +409,8 @@ export interface StudioCard {
 }
 
 export interface StudioMessage {
+  /** Missing on older vaults; those messages belong to the legacy Space chat. */
+  threadId?: EntityId;
   /** Captured when this answer was requested; later highlights cannot retarget it. */
   passage?: { noteId: string; anchor: PassageAnchor };
   id: EntityId;
@@ -412,8 +426,18 @@ export interface StudioMessage {
   createdAt: ISODateString;
 }
 
+export interface ChatThread {
+  id: EntityId;
+  /** Empty until the first prompt supplies a local title. */
+  title: string;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
 export interface ConceptStudioState {
   messages: StudioMessage[];
+  /** Additive metadata only; message content remains in the flat messages array. */
+  threads?: ChatThread[];
   cards: StudioCard[];
   activeConceptId: EntityId | null;
   selectedCardIds: EntityId[];
@@ -744,8 +768,10 @@ export interface ChatReadRequest {
 export interface ChatEvidence {
   id: string;
   kind: "note" | "source" | "web";
-  /** Web offsets refer to the retained search excerpt, never the full remote page. */
-  web?: { url: string; retrievedAt: string; publishedAt?: string };
+  /** Web offsets refer to retained evidence, never the full remote page.
+   * Absent evidenceType means a legacy source excerpt. A cited_summary is
+   * provider-generated text with a source citation, not a quote from that page. */
+  web?: { url: string; retrievedAt: string; publishedAt?: string; evidenceType?: "source_excerpt" | "cited_summary" };
   entityId: EntityId;
   title: string;
   version: string;

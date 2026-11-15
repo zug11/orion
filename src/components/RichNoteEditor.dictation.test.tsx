@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import type { Editor } from "@tiptap/core";
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PreparedDictation } from "../lib/dictationCleanup";
+import { prepareDictation } from "../lib/dictationCleanup";
+import type { Note } from "../types";
 import type { VoiceMemoButton } from "./VoiceMemoButton";
 import { RichNoteEditor } from "./RichNoteEditor";
 
@@ -67,6 +69,130 @@ async function start(editor: Editor, position = 6) {
 }
 
 describe("dictation cleanup in the real rich note editor", () => {
+  const hybrid: PreparedDictation = {
+    original: "Um, this may help. Make a ticket to fix the menu on Launch. Then keep thinking.",
+    blocks: [{ kind: "paragraph", text: "This may help. Make a ticket to fix the menu on Launch. Then keep thinking." }],
+    proposal: { blocks: [
+      { kind: "paragraph", text: "This may help." },
+      { kind: "ticket", text: "Fix the menu", evidence: "Make a ticket to fix the menu on Launch", boardName: "Launch", dueDate: "2026-11-19", urgency: "high" },
+      { kind: "paragraph", text: "Then keep thinking." },
+    ] },
+    sourceId: "source-dictation-session", notice: "",
+  };
+  const boardNote = { id: "board-note", title: "Work", body: "<!-- orion-kanban:v1 board-launch Launch -->", sourceIds: [], conceptIds: [], tags: [], aliases: [] } as unknown as Note;
+
+  it("inserts automatically at the mapped caret, without approval, as one Undo", async () => {
+    const pending = deferred<PreparedDictation>();
+    const { editor, onChange, update } = await fixture({ notes: [boardNote], onPrepareDictation: vi.fn().mockReturnValue(pending.promise) });
+    const session = await start(editor);
+    let completion!: Promise<string | void>;
+    act(() => { completion = session.complete(); });
+    expect(onChange).not.toHaveBeenCalled();
+    act(() => { editor.commands.insertContentAt(1, "New "); editor.commands.setTextSelection(1); });
+    update({ markdown: onChange.mock.lastCall![0] });
+    const before = editor.state.doc;
+    await act(async () => { pending.resolve(hybrid); await completion; await memo.current!.onSessionEnd?.("dictation-session"); });
+    expect(screen.queryByRole("region", { name: "Review dictation" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Accept" })).not.toBeInTheDocument();
+    expect(editor.getMarkdown()).toContain("New Alpha");
+    expect(editor.getMarkdown()).toContain("todo board-launch due=2026-11-19 urgency=high");
+    expect(editor.getMarkdown()).not.toContain("origin=board");
+    expect(editor.getMarkdown().indexOf("This may help.")).toBeLessThan(editor.getMarkdown().indexOf("ticket-"));
+    expect(editor.getMarkdown().indexOf("Then keep thinking.")).toBeGreaterThan(editor.getMarkdown().indexOf("ticket-"));
+    expect(memo.current?.disabled).not.toBe(true);
+    expect(screen.getByRole("button", { name: "Use original dictation" })).toBeInTheDocument();
+    act(() => { editor.commands.undo(); });
+    expect(editor.state.doc.eq(before)).toBe(true);
+    expect(screen.queryByRole("button", { name: "Use original dictation" })).not.toBeInTheDocument();
+  });
+
+  it("offers immediate original recovery after insertion and makes recovery undoable", async () => {
+    const { editor } = await fixture({ onPrepareDictation: vi.fn().mockResolvedValue(hybrid) });
+    const session = await start(editor);
+    await act(async () => { await session.complete(); });
+    const structured = editor.state.doc;
+    fireEvent.click(screen.getByRole("button", { name: "Use original dictation" }));
+    expect(editor.getMarkdown()).toBe(`Alpha ${hybrid.original} beta`);
+    expect(editor.getMarkdown()).not.toContain("orion-ticket");
+    act(() => { editor.commands.undo(); });
+    expect(editor.state.doc.eq(structured)).toBe(true);
+  });
+
+  it("invalidates original replacement after further writing or an external replacement", async () => {
+    const { editor, update } = await fixture({ onPrepareDictation: vi.fn().mockResolvedValue(hybrid) });
+    const session = await start(editor);
+    await act(async () => { await session.complete(); });
+    const recover = screen.getByRole("button", { name: "Use original dictation" });
+    act(() => { editor.commands.insertContentAt(1, "Later "); });
+    const edited = editor.getMarkdown();
+    expect(screen.queryByRole("button", { name: "Use original dictation" })).not.toBeInTheDocument();
+    fireEvent.click(recover);
+    expect(editor.getMarkdown()).toBe(edited);
+    update({ markdown: "Replacement." });
+    fireEvent.click(recover);
+    expect(editor.getMarkdown()).toBe("Replacement.");
+  });
+
+  it("leaves a disappeared board unassigned without delaying insertion", async () => {
+    const pending = deferred<PreparedDictation>();
+    const { editor, update } = await fixture({ notes: [boardNote], onPrepareDictation: vi.fn().mockReturnValue(pending.promise) });
+    const session = await start(editor);
+    let completion!: Promise<string | void>;
+    act(() => { completion = session.complete(); });
+    update({ notes: [] });
+    await act(async () => { pending.resolve(hybrid); await completion; });
+    expect(editor.getMarkdown()).toContain("todo - due=2026-11-19 urgency=high");
+  });
+
+  it("uses a live board rename before its autosave echo when resolving dictated tickets", async () => {
+    const pending = deferred<PreparedDictation>();
+    const note = { ...boardNote, id: "dictation-note", body: `${boardNote.body}\n\nAlpha beta` };
+    const { editor } = await fixture({ markdown: note.body, notes: [note], onPrepareDictation: vi.fn().mockReturnValue(pending.promise) });
+    const session = await start(editor, editor.state.doc.content.size - 1);
+    let completion!: Promise<string | void>;
+    act(() => { completion = session.complete(); });
+    act(() => {
+      const board = editor.state.doc.firstChild!;
+      editor.view.dispatch(editor.state.tr.setNodeMarkup(0, undefined, { ...board.attrs, title: "Renamed" }));
+    });
+    await act(async () => { pending.resolve(hybrid); await completion; });
+    expect(editor.getMarkdown()).toContain("board-launch Renamed");
+    expect(editor.getMarkdown()).toContain("todo - due=2026-11-19 urgency=high");
+    expect(editor.getMarkdown()).not.toContain("todo board-launch");
+  });
+
+  it("keeps dictated tickets unassigned if a duplicate destination appears during cleanup", async () => {
+    const pending = deferred<PreparedDictation>();
+    const { editor, update } = await fixture({ notes: [boardNote], onPrepareDictation: vi.fn().mockReturnValue(pending.promise) });
+    const session = await start(editor);
+    let completion!: Promise<string | void>;
+    act(() => { completion = session.complete(); });
+    update({ notes: [boardNote, { ...boardNote, id: "second-board-note", body: "<!-- orion-kanban:v1 board-copy Launch -->" }] });
+    await act(async () => { pending.resolve(hybrid); await completion; });
+    expect(editor.getMarkdown()).toContain("todo - due=2026-11-19 urgency=high");
+  });
+
+  it("falls back to faithful cleaned text if structured output is invalid", async () => {
+    const invalid = { ...hybrid, proposal: { blocks: [{ ...hybrid.proposal!.blocks[1], boardId: "forbidden" }] } };
+    const { editor } = await fixture({ onPrepareDictation: vi.fn().mockResolvedValue(invalid) });
+    const session = await start(editor);
+    await act(async () => { await session.complete(); });
+    expect(editor.getMarkdown()).toBe(`Alpha ${hybrid.blocks![0].text} beta`);
+    expect(editor.getMarkdown()).not.toContain("orion-ticket");
+  });
+
+  it("removes recovery on navigation and never applies a detached action to the next note", async () => {
+    const { editor, update, container } = await fixture({ onPrepareDictation: vi.fn().mockResolvedValue(hybrid) });
+    const session = await start(editor);
+    await act(async () => { await session.complete(); });
+    const recover = screen.getByRole("button", { name: "Use original dictation" });
+    update({ noteId: "another-note", markdown: "Different note." });
+    await waitFor(() => expect(container.querySelector(".tiptap")?.textContent).toBe("Different note."));
+    fireEvent.click(recover);
+    expect(container.querySelector(".tiptap")?.textContent).toBe("Different note.");
+    expect(screen.queryByRole("button", { name: "Use original dictation" })).not.toBeInTheDocument();
+  });
+
   it("waits for cleanup and maps its original caret through typing without following a moved cursor", async () => {
     const pending = deferred<PreparedDictation>();
     const prepare = vi.fn().mockReturnValue(pending.promise);
@@ -122,6 +248,45 @@ describe("dictation cleanup in the real rich note editor", () => {
     const session = await start(editor);
     await act(async () => { await session.complete("Um, keep the original."); });
     expect(editor.getMarkdown()).toBe("Alpha Um, keep the original. beta");
+  });
+
+  it("archives and inserts already-transcribed speech without cleanup when capture supplies an aborted signal", async () => {
+    const preserveOriginal = vi.fn().mockResolvedValue("source-partial");
+    const clean = vi.fn().mockResolvedValue({ blocks: [{ kind: "paragraph", text: "Must not be used." }] });
+    const { editor } = await fixture({ onPrepareDictation: (_id, transcript, options) => prepareDictation({
+      transcript, aiAvailable: true, preserveOriginal, clean, ...options,
+    }) });
+    const session = await start(editor);
+    session.options.signal = AbortSignal.abort(new Error("A later segment could not be transcribed."));
+    await act(async () => { await session.complete("Already transcribed words."); });
+    expect(preserveOriginal).toHaveBeenCalledTimes(1);
+    expect(clean).not.toHaveBeenCalled();
+    expect(editor.getMarkdown()).toBe("Alpha Already transcribed words. beta");
+    act(() => { editor.commands.undo(); });
+    expect(editor.getMarkdown()).toBe("Alpha beta");
+  });
+
+  it("keeps partial transcript recovery attached to the old session when navigation happens during archival", async () => {
+    const saved = deferred<string>();
+    const preserveOriginal = vi.fn().mockReturnValue(saved.promise);
+    const clean = vi.fn();
+    const { editor, update, container, onChange } = await fixture({ onPrepareDictation: (_id, transcript, options) => prepareDictation({
+      transcript, aiAvailable: true, preserveOriginal, clean, ...options,
+    }) });
+    const session = await start(editor);
+    session.options.signal = AbortSignal.abort(new Error("A segment failed."));
+    let completion!: Promise<string | void>;
+    act(() => { completion = session.complete("Recovered portion."); });
+    expect(preserveOriginal).toHaveBeenCalledTimes(1);
+    update({ noteId: "another-note", markdown: "Other writing." });
+    onChange.mockClear();
+    await act(async () => {
+      saved.resolve("source-partial");
+      await expect(completion).rejects.toThrow(/original is saved in Sources/);
+    });
+    expect(clean).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(container.querySelector(".tiptap")?.textContent).toBe("Other writing.");
   });
 
   it("inserts the complete original if the preparation callback rejects", async () => {

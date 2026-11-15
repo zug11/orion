@@ -46,6 +46,29 @@ afterEach(() => {
 });
 
 describe("VoiceMemoButton", () => {
+  it("disables only starting another recording, preserving Stop and Use original", async () => {
+    const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia } });
+    vi.stubGlobal("MediaRecorder", FakeMediaRecorder);
+    const onComplete = vi.fn(async (_id, _text, options) => {
+      options.onPhase("cleaning");
+      await new Promise<void>(resolve => options.signal.addEventListener("abort", () => resolve(), { once: true }));
+    });
+    const props = { noteId: "note-one", onTranscribe: vi.fn().mockResolvedValue("Raw transcript."), onComplete };
+    const view = render(<VoiceMemoButton {...props} disabled/>);
+    expect(screen.getByRole("button", { name: "Start dictation" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Start dictation" }));
+    expect(getUserMedia).not.toHaveBeenCalled();
+    view.rerender(<VoiceMemoButton {...props}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Start dictation" }));
+    await screen.findByRole("button", { name: /Stop dictation/ });
+    view.rerender(<VoiceMemoButton {...props} disabled/>);
+    expect(screen.getByRole("button", { name: /Stop dictation/ })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: /Stop dictation/ }));
+    expect(await screen.findByRole("button", { name: "Use original dictation" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Use original dictation" }));
+    expect(await screen.findByRole("button", { name: "Start dictation" })).toBeDisabled();
+  });
   it("offers Use original only during cleanup, cancels that wait and keeps recording released", async () => {
     const stopTrack = vi.fn();
     Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
@@ -246,5 +269,60 @@ describe("VoiceMemoButton", () => {
       "First passage. Second passage.",
     );
     expect(stopTrack).toHaveBeenCalledTimes(1);
+  });
+
+  it("drains queued segments in order before completing once after rapid Stop clicks", async () => {
+    vi.useFakeTimers();
+    const stopTrack = vi.fn();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
+      getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: stopTrack }] }),
+    } });
+    vi.stubGlobal("MediaRecorder", FakeMediaRecorder);
+    let finishFirst!: (text: string) => void;
+    const onTranscribe = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>(resolve => { finishFirst = resolve; }))
+      .mockResolvedValueOnce("")
+      .mockResolvedValueOnce("Final passage.");
+    const onComplete = vi.fn().mockResolvedValue(undefined);
+    const onSessionEnd = vi.fn();
+    render(<VoiceMemoButton noteId="queued" onTranscribe={onTranscribe} onComplete={onComplete} onSessionEnd={onSessionEnd}/>);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start dictation" })); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(VOICE_MEMO_SEGMENT_MS * 2); });
+    expect(FakeMediaRecorder.instances).toHaveLength(3);
+    expect(onTranscribe).toHaveBeenCalledTimes(1);
+    const stop = screen.getByRole("button", { name: /Stop dictation/ });
+    act(() => { fireEvent.click(stop); fireEvent.click(stop); });
+    expect(onComplete).not.toHaveBeenCalled();
+    await act(async () => { finishFirst("First passage."); });
+    expect(onTranscribe).toHaveBeenCalledTimes(3);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[0][1]).toBe("First passage. Final passage.");
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+    expect(stopTrack).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("preserves successful segments without AI after a later transcription failure and reports missing speech", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
+      getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] }),
+    } });
+    vi.stubGlobal("MediaRecorder", FakeMediaRecorder);
+    const onTranscribe = vi.fn()
+      .mockResolvedValueOnce("Keep this completed passage.")
+      .mockRejectedValueOnce(new Error("Whisper worker stopped."));
+    const onComplete = vi.fn().mockResolvedValue(undefined);
+    const onSessionEnd = vi.fn();
+    render(<VoiceMemoButton noteId="partial" onTranscribe={onTranscribe} onComplete={onComplete} onSessionEnd={onSessionEnd}/>);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start dictation" })); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(VOICE_MEMO_SEGMENT_MS); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Stop dictation/ })); });
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[0][1]).toBe("Keep this completed passage.");
+    expect(onComplete.mock.calls[0][2].signal.aborted).toBe(true);
+    expect(screen.getByRole("status")).toHaveTextContent(/recording incomplete/i);
+    expect(screen.getByRole("status")).toHaveTextContent(/Whisper worker stopped/);
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Start dictation" })).toBeEnabled();
   });
 });

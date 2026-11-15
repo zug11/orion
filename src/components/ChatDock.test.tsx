@@ -9,6 +9,7 @@ import { CHAT_SUGGESTION_DELAY_MS } from "./useChatSuggestions";
 import type { ChatPromptSuggestion } from "../types";
 import { createVoicePresence } from "../lib/voicePresence";
 import { SidebarVoiceIndicator } from "./SidebarVoiceIndicator";
+import { listChatThreads, projectChatThread } from "../lib/chatThreads";
 const voiceCalls = vi.hoisted(() => ({ start: vi.fn(), close: vi.fn(), dispose: vi.fn(), mute: vi.fn() }));
 vi.mock("../lib/chatSuggestions", async importOriginal => ({
   ...await importOriginal<typeof import("../lib/chatSuggestions")>(),
@@ -27,7 +28,12 @@ const generated = (topic = "Reed beds"): ChatPromptSuggestion[] => [
   { prompt: `Compare ${topic} with the sediment measurements.`, intent: "discuss", evidenceIds: ["s1"] },
 ];
 beforeEach(() => { vi.mocked(generateChatSuggestions).mockReset().mockResolvedValue(generated()); Object.values(voiceCalls).forEach(call => call.mockClear()); });
-afterEach(() => { cleanup(); vi.useRealTimers(); });
+beforeEach(() => {
+  const values = new Map<string, string>();
+  vi.stubGlobal("localStorage", { getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) });
+});
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 let sequence = 0;
 function props() {
   const snapshot = createEmptySnapshot("Research", "2026-10-08T00:00:00Z", `chat-dock-${++sequence}`);
@@ -37,6 +43,91 @@ function props() {
     onClear: vi.fn(), onOpenNote: vi.fn(), onSaveReply: vi.fn(), onOpenSettings: vi.fn() };
 }
 describe("Space chat dock", () => {
+  it("defaults history to collapsed and restores both choices after remounting", () => {
+    window.localStorage.removeItem("orion:chat-history-expanded:v1");
+    const p = props();
+    const navigation = { threads: listChatThreads(p.snapshot.studio), activeThreadId: "chat-legacy",
+      onSelect: vi.fn(), onNew: vi.fn(), onRename: vi.fn(), onDelete: vi.fn() };
+    const view = () => <ChatDock {...p} fullPage threadNavigation={navigation}/>;
+    const first = render(view());
+    fireEvent.click(screen.getByRole("button", { name: "Show chat threads" }));
+    first.unmount();
+    const second = render(view());
+    fireEvent.click(screen.getByRole("button", { name: "Hide chat threads" }));
+    second.unmount();
+    render(view());
+    expect(screen.getByRole("button", { name: "Show chat threads" })).toBeVisible();
+  });
+  it("keeps independent unsent drafts and the collapsed rail when switching threads", () => {
+    const p = props();
+    p.snapshot.studio.threads = [
+      { id: "chat-one", title: "First thought", createdAt: "2026-11-13", updatedAt: "2026-11-13" },
+      { id: "chat-two", title: "Second thought", createdAt: "2026-11-13", updatedAt: "2026-11-13" },
+    ];
+    const actions = { onSelect: vi.fn(), onNew: vi.fn(), onRename: vi.fn(), onDelete: vi.fn() };
+    const navigation = (activeThreadId: string) => ({ ...actions, activeThreadId, threads: listChatThreads(p.snapshot.studio) });
+    const view = (id: string) => <ChatDock {...p} fullPage canonicalSnapshot={p.snapshot}
+      snapshot={projectChatThread(p.snapshot, id)} threadNavigation={navigation(id)}/>;
+    const { rerender } = render(view("chat-one"));
+    fireEvent.click(screen.getByRole("button", { name: "Show chat threads" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Message Orion" }), { target: { value: "An unfinished first thought" } });
+    fireEvent.click(screen.getByRole("button", { name: "Hide chat threads" }));
+    rerender(view("chat-two"));
+    expect(screen.getByRole("textbox", { name: "Message Orion" })).toHaveValue("");
+    expect(screen.queryByRole("navigation", { name: "Space chat threads" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Message Orion" }), { target: { value: "A separate draft" } });
+    rerender(view("chat-one"));
+    expect(screen.getByRole("textbox", { name: "Message Orion" })).toHaveValue("An unfinished first thought");
+    expect(p.onSend).not.toHaveBeenCalled();
+    rerender(view("chat-two"));
+    expect(screen.getByRole("textbox", { name: "Message Orion" })).toHaveValue("A separate draft");
+  });
+
+  it("starts a new threaded chat without clearing the current draft or calling legacy clear", () => {
+    const p = props();
+    p.snapshot.studio.threads = [{ id: "chat-one", title: "First thought", createdAt: "2026-11-13", updatedAt: "2026-11-13" }];
+    const onNew = vi.fn();
+    render(<ChatDock {...p} fullPage canonicalSnapshot={p.snapshot} threadNavigation={{ threads: listChatThreads(p.snapshot.studio),
+      activeThreadId: "chat-one", onSelect: vi.fn(), onNew, onRename: vi.fn(), onDelete: vi.fn() }}/>);
+    fireEvent.change(screen.getByRole("textbox", { name: "Message Orion" }), { target: { value: "Keep this unsent draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+    expect(onNew).toHaveBeenCalledOnce();
+    expect(p.onClear).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox", { name: "Message Orion" })).toHaveValue("Keep this unsent draft");
+  });
+
+  it("restores a thread's attached note while a new full-page chat starts unattached", async () => {
+    const p = props();
+    const note = (id: string) => ({ id, title: id, body: "A thought", summary: "", slug: id, kind: "article" as const, status: "ready" as const,
+      aliases: [], tags: [], sourceIds: [], conceptIds: [], createdAt: "2026-11-13", updatedAt: "2026-11-13" });
+    p.snapshot.notes = [note("first-note"), note("second-note")];
+    p.snapshot.studio.threads = [
+      { id: "chat-one", title: "First thought", createdAt: "2026-11-13", updatedAt: "2026-11-13" },
+      { id: "chat-two", title: "Second thought", createdAt: "2026-11-13", updatedAt: "2026-11-13" },
+      { id: "chat-new", title: "New chat", createdAt: "2026-11-13", updatedAt: "2026-11-13" },
+    ];
+    const view = (id: string, fullPage: boolean, focusNoteId?: string) => <ChatDock {...p} fullPage={fullPage} focusNoteId={focusNoteId}
+      canonicalSnapshot={p.snapshot} snapshot={projectChatThread(p.snapshot, id)} threadNavigation={{ threads: listChatThreads(p.snapshot.studio),
+        activeThreadId: id, onSelect: vi.fn(), onNew: vi.fn(), onRename: vi.fn(), onDelete: vi.fn() }}/>;
+    const { rerender } = render(view("chat-one", false, "first-note"));
+    fireEvent.click(screen.getByRole("button", { name: "Open chat" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Message Orion" }), { target: { value: "Explain this note" } });
+    rerender(view("chat-two", false, "second-note"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Message Orion" }), { target: { value: "Discuss this other note" } });
+    rerender(view("chat-one", true));
+    expect(screen.getByRole("textbox", { name: "Message Orion" })).toHaveValue("Explain this note");
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(p.onSend).toHaveBeenLastCalledWith("Explain this note", "first-note"));
+    rerender(view("chat-new", true));
+    fireEvent.change(screen.getByRole("textbox", { name: "Message Orion" }), { target: { value: "Start fresh" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(p.onSend).toHaveBeenLastCalledWith("Start fresh"));
+    rerender(view("chat-two", true));
+    expect(screen.getByRole("textbox", { name: "Message Orion" })).toHaveValue("Discuss this other note");
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(p.onSend).toHaveBeenLastCalledWith("Discuss this other note", "second-note"));
+  });
+
   it("gates the circle by selected provider and Flow, and keeps full Chat available for setup", () => {
     const p = props();
     const { rerender } = render(<ChatDock {...p} />);

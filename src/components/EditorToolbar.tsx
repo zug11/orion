@@ -1,7 +1,7 @@
 import type { Editor } from "@tiptap/core";
 import { useEditorState } from "@tiptap/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { BookOpen, Bold, Braces, FileCode2, Image as ImageIcon, Italic, Link2, List, ListTodo, ListOrdered, Ruler, Quote, Redo2, Sheet, Undo2, Unlink } from "../lib/icons";
+import { BookOpen, Bold, Braces, FileCode2, Image as ImageIcon, Italic, Link2, List, ListTodo, ListOrdered, Ruler, Quote, Redo2, RotateCcw, Sheet, Undo2, Unlink } from "../lib/icons";
 import { findConceptByPhrase } from "../lib/concepts";
 import type { Concept, EntityId, NoteTypeface } from "../types";
 import { AIWritingMark } from "./icons/AIWritingMark";
@@ -21,6 +21,8 @@ import "./editor/EditorExperience.css";
 
 interface EditorToolbarProps {
   writingSessionDisabled?: boolean;
+  voiceMemoDisabled?: boolean;
+  onUseOriginalDictation?: () => void;
   marginsVisible?: boolean;
   onToggleMargins?: () => void;
   blockControls?: boolean;
@@ -61,11 +63,12 @@ interface EditorToolbarProps {
 
 export function EditorToolbar({
   writingSessionDisabled = false,
+  voiceMemoDisabled = false,
   marginsVisible = false, onToggleMargins,
   blockControls = false, onToggleBlockControls,
   noteTypeface = "sans", onNoteTypefaceChange, editor, concepts, onOpenLink, onUnlink,
   citationAvailable, onOpenCitation, onOpenExcerpt, onOpenTable, onInsertImages, imageBusy = false,
-  noteId, onVoiceMemoSessionStart, onVoiceMemoSessionEnd, onTranscribeVoiceMemo, onCompleteVoiceMemo,
+  noteId, onVoiceMemoSessionStart, onVoiceMemoSessionEnd, onTranscribeVoiceMemo, onCompleteVoiceMemo, onUseOriginalDictation,
   aiWritingBusy = false, aiWritingUnavailableReason, onOpenAIWriting, onAnnounce,
 }: EditorToolbarProps) {
   const toolbarRef = useRef<HTMLDivElement>(null);
@@ -231,9 +234,10 @@ export function EditorToolbar({
     <input ref={imageInputRef} className="sr-only" type="file" accept={NOTE_IMAGE_ACCEPT} multiple tabIndex={-1} aria-hidden="true"
       onChange={event=>{const files=Array.from(event.currentTarget.files??[]);event.currentTarget.value="";if(files.length)onInsertImages?.(files);}}/>
     {noteId&&onTranscribeVoiceMemo&&onCompleteVoiceMemo&&<div className="editor-toolbar-dictation" role="group" aria-label="Dictation" hidden={!textContext || state.flowActive}>
-      <VoiceMemoButton noteId={noteId} onSessionStart={onVoiceMemoSessionStart} onSessionEnd={onVoiceMemoSessionEnd} onTranscribe={onTranscribeVoiceMemo} onComplete={onCompleteVoiceMemo}/>
+      <VoiceMemoButton noteId={noteId} disabled={voiceMemoDisabled} onSessionStart={onVoiceMemoSessionStart} onSessionEnd={onVoiceMemoSessionEnd} onTranscribe={onTranscribeVoiceMemo} onComplete={onCompleteVoiceMemo}/>
     </div>}
     <WritingSessionControl editor={editor} flowDisabled={writingSessionDisabled || aiWritingBusy || imageBusy} onAnnounce={onAnnounce}/>
+    {onUseOriginalDictation && <Tool label="Use original dictation" action={onUseOriginalDictation}><RotateCcw size={14}/></Tool>}
     <div className="editor-toolbar-history" role="group" aria-label="Editing history" inert={aiWritingBusy?true:undefined}>
       <Tool label="Undo" disabled={!state.canUndo} action={()=>editor.chain().focus().undo().run()}><Undo2 size={14}/></Tool>
       <Tool label="Redo" disabled={!state.canRedo} action={()=>editor.chain().focus().redo().run()}><Redo2 size={14}/></Tool>

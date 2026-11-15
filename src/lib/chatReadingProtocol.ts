@@ -59,7 +59,8 @@ export function parseChatReadingContext(value: string | undefined): Record<strin
   }
   const parsed: unknown = JSON.parse(value);
   if (!record(parsed) || typeof parsed.finalizing !== "boolean" ||
-    !Array.isArray(parsed.evidence) || parsed.evidence.length > MAX_CHAT_READING_EVIDENCE) {
+    !Array.isArray(parsed.evidence) || parsed.evidence.length > MAX_CHAT_READING_EVIDENCE ||
+    parsed.evidence.some(item => record(item) && (item.kind === "web" ? !validWebMetadata(item.web) : item.web !== undefined))) {
     throw new Error("Chat received an invalid reading packet.");
   }
   return parsed;

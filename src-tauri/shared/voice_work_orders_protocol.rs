@@ -411,7 +411,11 @@ fn finding(v: &Value) -> Result<usize, String> {
         choice(e, "kind", &["note", "source", "web"])?;
         if e["kind"] == "web" {
             let web = &e["web"];
-            fields(web, &["url", "retrievedAt"], &["publishedAt"])?;
+            fields(
+                web,
+                &["url", "retrievedAt"],
+                &["publishedAt", "evidenceType"],
+            )?;
             let url = string(web, "url", 2048)?;
             if !(url.starts_with("https://") || url.starts_with("http://"))
                 || url.chars().any(|c| c.is_control() || c.is_whitespace())
@@ -422,6 +426,9 @@ fn finding(v: &Value) -> Result<usize, String> {
             chars += url.chars().count() + string(web, "retrievedAt", 40)?.chars().count();
             if web.get("publishedAt").is_some() {
                 chars += string(web, "publishedAt", 100)?.chars().count();
+            }
+            if web.get("evidenceType").is_some() {
+                choice(web, "evidenceType", &["source_excerpt", "cited_summary"])?;
             }
         } else if e.get("web").is_some() {
             return Err("Local evidence cannot carry web provenance.".into());
@@ -724,6 +731,15 @@ mod tests {
         value["workOrder"]["completedOperations"] = json!([{"kind":"web"}]);
         value["workOrder"]["result"]["coverage"] = json!({"availableNotes":0,"availableSources":0,"openedNotes":0,"openedSources":0,"searches":1,"webSearches":12,"limited":false});
         assert!(validate_result(&request, &value).is_ok());
+        for label in ["source_excerpt", "cited_summary"] {
+            value["workOrder"]["result"]["evidence"][0]["web"]["evidenceType"] = json!(label);
+            assert!(validate_result(&request, &value).is_ok());
+        }
+        for label in [json!("full_page"), json!(""), Value::Null, json!(1)] {
+            value["workOrder"]["result"]["evidence"][0]["web"]["evidenceType"] = label;
+            assert!(validate_result(&request, &value).is_err());
+        }
+        value["workOrder"]["result"]["evidence"][0]["web"]["evidenceType"] = json!("cited_summary");
         value["workOrder"]["result"]["coverage"]["webSearches"] = json!(-1);
         assert!(validate_result(&request, &value).is_err());
         value["workOrder"]["result"]["coverage"]["webSearches"] = json!(12);

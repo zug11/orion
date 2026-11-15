@@ -1,3 +1,7 @@
+import { calendarDateFromUrl } from '../lib/calendarDate';
+import { TicketCardControls, TicketDeleteButton } from './Tickets';
+import { collectWork, remarkNoteBoards } from "../lib/tickets";
+import { KanbanBoard, type TicketWorkspace, type CreateWorkItem } from "./Tickets";
 import { visibleNoteSummary } from "../lib/importSummary";
 import { NoteWordCount } from "./NoteWordCount";
 import type { Editor } from "@tiptap/core";
@@ -123,6 +127,10 @@ function withoutTaskMarker(children: ReactNode): ReactNode {
 }
 
 interface NoteViewProps {
+  onPatchTicket?: TicketWorkspace["onPatch"];
+  onDeleteTicket?: TicketWorkspace["onDelete"];
+  onCreateWork?: CreateWorkItem;
+  ticketInference?: TicketWorkspace["inference"];
   onCreateComment?: PassageCommentHandler;
   onThreadAction?: PassageThreadHandler;
   voiceSelection?: VoiceSelectionStore;
@@ -185,6 +193,7 @@ interface NoteViewProps {
 function safeUrl(url: string) {
   if (
     isSafeNoteImageUrl(url) ||
+    Boolean(calendarDateFromUrl(url)) ||
     url.startsWith("orion-note://") ||
     url.startsWith("orion-concept://") ||
     url.startsWith("orion-source://") ||
@@ -198,6 +207,10 @@ function safeUrl(url: string) {
 }
 
 export function NoteView({
+  onPatchTicket,
+  onDeleteTicket,
+  onCreateWork,
+  ticketInference,
   onCreateComment,
   onThreadAction,
   voiceSelection,
@@ -1229,6 +1242,12 @@ export function NoteView({
     p: ({ children, node, ...props }: { children?: ReactNode; node?: MarkdownElement }) => (
       <p {...props} style={paragraphMarginStyle(node)}>{renderLinkedChildren(children)}</p>
     ),
+    section: ({children,node}:{children?:ReactNode;node?:MarkdownElement}) => {
+      const id = node?.properties?.["data-orion-board"];
+      const board = collectWork(notes).boards.find(b => b.id === id && b.noteId === note.id);
+      return board ? <section className="note-kanban"><h3>{board.title}</h3><KanbanBoard board={board} workspace={{work:collectWork(notes),onPatch:onPatchTicket,onDelete:onDeleteTicket,onOpenNote,inference:ticketInference,
+        onCreateTicket:onCreateWork ? (target,title,status,dueDate) => onCreateWork('ticket',title,target.noteId,target.id,status,dueDate) : undefined}}/></section> : <section>{children}</section>;
+    },
     li: ({
       children,
       className,
@@ -1247,6 +1266,8 @@ export function NoteView({
         return <li className={className}>{renderedChildren}</li>;
       }
       const taskBody = withoutTaskMarker(renderedChildren);
+      const ticket = collectWork(notes).tickets.find(t => t.noteId === note.id && t.lineIndex === task.lineIndex && t.durable);
+      if (ticket) return <li className="note-ticket-card">{onDeleteTicket && <TicketDeleteButton title={ticket.title} onDelete={() => onDeleteTicket(ticket)}/>}<div className="note-ticket-prose">{taskBody}</div><TicketCardControls status={ticket.status} dueDate={ticket.dueDate} urgency={ticket.urgency} onPatch={onPatchTicket ? patch => onPatchTicket(ticket, patch) : undefined}/></li>;
       return (
         <li className={className}>
           <input
@@ -1292,6 +1313,8 @@ export function NoteView({
       </blockquote>
     ),
     a: ({ href, title, children }: { href?: string; title?:string; children?: ReactNode }) => {
+      const date = calendarDateFromUrl(href);
+      if (date) return <time className="note-calendar-date" dateTime={date}>{children}</time>;
       if (href?.startsWith("#orion-passage-")) {
         const passage = retainedPassages.find((item) => href === `#orion-passage-${item.id}`);
         if (!passage) return <span>{children}</span>;
@@ -1377,11 +1400,11 @@ export function NoteView({
   // Playback ticks must not remount the reading text: its native ranges also
   // anchor Find, selection, excerpts and narration highlighting.
   const renderedMarkdown = useMemo(() => (
-    <ReactMarkdown remarkPlugins={[remarkGfm, remarkNoteTableMetadata, remarkNoteBlocks, remarkNoteMargins, remarkNoteTextAlignment]} components={markdownComponents} urlTransform={safeUrl}>
+    <ReactMarkdown remarkPlugins={[remarkGfm, remarkNoteBoards, remarkNoteTableMetadata, remarkNoteBlocks, remarkNoteMargins, remarkNoteTextAlignment]} components={markdownComponents} urlTransform={safeUrl}>
       {visibleMarkdown}
     </ReactMarkdown>
   ), [visibleMarkdown, note, notes, concepts, sources, findQuery, selectedPassageId,
-    onOpenNote, onOpenConcept, onOpenSource, onUpdateNote]);
+    onOpenNote, onOpenConcept, onOpenSource, onUpdateNote, onPatchTicket, onDeleteTicket, onCreateWork, ticketInference]);
 
   useLayoutEffect(() => {
     const active = narrationRef.current;
@@ -1633,7 +1656,7 @@ export function NoteView({
               onFlowActiveChange={onFlowActiveChange}
               noteTypeface={noteTypeface}
               onNoteTypefaceChange={onNoteTypefaceChange}
-              key={note.id}
+              key={`editor:${voiceSelection?.spaceId ?? ""}:${note.id}`}
               noteId={note.id}
               markdown={markdown}
               notes={notes}
@@ -1641,6 +1664,9 @@ export function NoteView({
               sources={sources}
               attachedSourceIds={note.sourceIds}
               onChange={(body) => update({ body })}
+              onPatchTicket={onPatchTicket}
+              onDeleteTicket={onDeleteTicket}
+              ticketInference={ticketInference}
               onAttachSource={(sourceId) =>
                 onAttachSource?.(note.id, sourceId)
               }

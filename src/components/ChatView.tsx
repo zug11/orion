@@ -1,3 +1,5 @@
+import { resolveWebResearchProvider, webResearchUnavailableReason } from "../lib/webResearchProvider";
+import { isChatGPTModel, manageChatGPTUsage } from "../lib/chatgpt";
 import {
   ArrowUp,
   ChevronDown,
@@ -14,6 +16,7 @@ import {
 import {
   useEffect,
   useLayoutEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -28,11 +31,13 @@ import type { VoiceSelection } from "../lib/voiceSelection";
 import { PassageThreadConversation, type PassageChatContext } from "./PassageThreads";
 import { passageIsCurrent } from "../lib/passageThreads";
 import { ChatReply } from "./ChatReply";
+import { ChatThreads, type ChatThreadNavigation } from "./ChatThreads";
 import type { AppSnapshot, ChatResult, ChatEditProposal } from "../types";
 import { SpaceVoice, type VoiceConversationContent } from "./SpaceVoice";
 import { VoiceConstellation } from "./VoiceConstellation";
 import type { IconPalette } from "../lib/themeIcon";
 import type { VoiceCommit, VoiceReceipt } from "../lib/voiceResearch";
+import type { PrepareVoiceConnection } from "../lib/liveVoice";
 import { ChatEditPreview } from "./ChatEditPreview";
 import { ChatNoteActions } from "./ChatNoteActions";
 import type { ChatNoteReceipt, UseChatReply } from "../lib/chatNoteActions";
@@ -42,11 +47,26 @@ import {
   selectedAIProviderName,
 } from "../lib/ai";
 
+export interface ChatComposerDraftContext {
+  spaceId: string;
+  noteId?: string;
+  title?: string;
+  editing: boolean;
+}
+
 export interface ChatViewProps {
   passageChat?: PassageChatContext;
   onVoiceCommit?: (request: VoiceCommit) => Promise<VoiceReceipt>;
+  onPrepareVoiceConnection?: PrepareVoiceConnection;
   voiceEnabled?: boolean;
-  voiceControl?: { active: boolean; toggle: () => void };
+  voiceControl?: { active: boolean; toggle: () => void; label?: string };
+  threadNavigation?: ChatThreadNavigation;
+  composerDraft?: {
+    value: string;
+    onChange: (value: string) => void;
+    context?: ChatComposerDraftContext;
+    onContextChange?: (context: ChatComposerDraftContext | undefined) => void;
+  };
   /** Stable portal destinations for the window-owned call. Neither starts audio. */
   voiceSceneRef?: RefCallback<HTMLDivElement>;
   voiceControlsRef?: RefCallback<HTMLDivElement>;
@@ -98,8 +118,11 @@ function sizeComposer(input: HTMLTextAreaElement) {
 
 export function ChatView({
   snapshot,
+  threadNavigation,
+  composerDraft,
   passageChat,
   onVoiceCommit,
+  onPrepareVoiceConnection,
   voiceEnabled = true,
   voiceControl,
   voiceSceneRef,
@@ -127,11 +150,40 @@ export function ChatView({
   focusNoteId,
   selection,
 }: ChatViewProps) {
-  const [draft, setDraft] = useState("");
-  const [webChoice, setWebChoice] = useState({ spaceId: snapshot.workspace.id, enabled: false });
-  const webEnabled = webChoice.spaceId === snapshot.workspace.id && webChoice.enabled && snapshot.settings.perplexityApiKeyConfigured === true;
-  useEffect(() => { setWebChoice({ spaceId: snapshot.workspace.id, enabled: false }); }, [snapshot.workspace.id]);
-  useEffect(() => { if (!snapshot.settings.perplexityApiKeyConfigured) setWebChoice({ spaceId: snapshot.workspace.id, enabled: false }); }, [snapshot.settings.perplexityApiKeyConfigured, snapshot.workspace.id]);
+  const [localDraft, setLocalDraft] = useState("");
+  const draft = composerDraft?.value ?? localDraft;
+  const setDraft = composerDraft?.onChange ?? setLocalDraft;
+  const [localThreadsOpen, setLocalThreadsOpen] = useState(false);
+  const [threadsOverlay, setThreadsOverlay] = useState(false);
+  const threadsOpen = threadNavigation?.expanded ?? localThreadsOpen;
+  const showThreads = Boolean(threadNavigation && !compact && !passageChat);
+  const threadsId = useId();
+  const viewRef = useRef<HTMLElement>(null);
+  const threadsToggleRef = useRef<HTMLButtonElement>(null);
+  function setThreadsOpen(open: boolean) {
+    setLocalThreadsOpen(open);
+    threadNavigation?.onExpandedChange?.(open);
+    if (!open) requestAnimationFrame(() => threadsToggleRef.current?.focus({ preventScroll: true }));
+  }
+  useLayoutEffect(() => {
+    const view = viewRef.current;
+    if (!view || !showThreads) return;
+    const measure = () => { if (view.clientWidth > 0) setThreadsOverlay(view.clientWidth < 780); };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(view);
+    return () => observer.disconnect();
+  }, [showThreads]);
+  const webRoute = resolveWebResearchProvider(snapshot.settings);
+  const webAvailable = !!webRoute;
+  const webRouteKey = webRoute ? JSON.stringify([webRoute.provider, webRoute.provider === "openai" ? webRoute.model : null,
+    webRoute.label === "ChatGPT plan" ? snapshot.settings.chatgptAccountId ?? "" : null]) : "";
+  const [webChoice, setWebChoice] = useState({ spaceId: snapshot.workspace.id, routeKey: webRouteKey, enabled: false });
+  const webEnabled = webChoice.spaceId === snapshot.workspace.id && webChoice.routeKey === webRouteKey && webChoice.enabled && webAvailable;
+  // A different connection needs a fresh opt-in, including Automatic changing
+  // providers after key removal or selecting another ChatGPT account.
+  useEffect(() => { setWebChoice({ spaceId: snapshot.workspace.id, routeKey: webRouteKey, enabled: false }); }, [snapshot.workspace.id, webRouteKey]);
   const [threadBusy, setThreadBusy] = useState(false);
   const [voiceToggle, setVoiceToggle] = useState(0);
   const [localVoiceActive, setVoiceActive] = useState(false);
@@ -143,7 +195,9 @@ export function ChatView({
   const [editProposal, setEditProposal] = useState<ChatEditProposal>();
   const [editRevision, setEditRevision] = useState(0);
   const [suggestionRevision, setSuggestionRevision] = useState(0);
-  const [suggestedContext, setSuggestedContext] = useState<{ spaceId: string; noteId?: string; title?: string; editing: boolean }>();
+  const [localSuggestedContext, setLocalSuggestedContext] = useState<ChatComposerDraftContext>();
+  const suggestedContext = composerDraft?.onContextChange ? composerDraft.context : localSuggestedContext;
+  const setSuggestedContext = composerDraft?.onContextChange ?? setLocalSuggestedContext;
   const composerRef = useRef<HTMLTextAreaElement>(null);
   // Grow only the composer; audio frames never participate in text measurement.
   useLayoutEffect(() => {
@@ -179,6 +233,7 @@ export function ChatView({
   const canSend = isSelectedAIConfigured(snapshot.settings);
   const providerName = selectedAIProviderName(snapshot.settings);
   const isSending = busy || submitting;
+  const threadDisabledReason = threadNavigation?.disabledReason ?? (isSending ? "Wait for this reply or stop it before changing chats." : undefined);
   const externalVoiceActive = voiceControl?.active === true;
   const hasThreadContent = !!passageChat || messages.length > 0 || Boolean(pendingPrompt || error || editProposal || voiceContent?.hasContent) || isSending;
   const scrollVoice = compact && externalVoiceActive && !passageChat && !!dockPanelRef;
@@ -268,6 +323,14 @@ export function ChatView({
   }
 
   function startNewChat() {
+    if (threadDisabledReason) return;
+    // With real threads, New chat selects a new empty conversation. The current
+    // controlled draft belongs to its original thread and must survive leaving.
+    if (threadNavigation) {
+      threadNavigation.onNew();
+      if (threadsOverlay) setThreadsOpen(false);
+      return;
+    }
     onClear();
     setEditProposal(undefined);
     setDraft("");
@@ -278,9 +341,10 @@ export function ChatView({
   }
 
   return (
-    <section className={`chat-view view${passageChat ? " passage-chat" : ""}${compact ? " chat-view--compact" : ""}`}
-      data-voice-active={externalVoiceActive} data-voice-empty={!hasThreadContent} data-voice-scroll={scrollVoice}>
-      <header className="chat-view__header">
+    <section ref={viewRef} className={`chat-view view${passageChat ? " passage-chat" : ""}${compact ? " chat-view--compact" : ""}${showThreads ? " chat-view--threaded" : ""}`}
+      data-voice-active={externalVoiceActive} data-voice-empty={!hasThreadContent} data-voice-scroll={scrollVoice}
+      data-threads-expanded={showThreads && threadsOpen} data-threads-overlay={showThreads && threadsOverlay}>
+      <header className="chat-view__header" inert={showThreads && threadsOpen && threadsOverlay ? true : undefined}>
         <div className="chat-view__title">
           <span className="eyebrow">
             <MessageCircle size={12} />
@@ -308,12 +372,13 @@ export function ChatView({
             </span>
           </div>}
           {passageChat && <button type="button" className="chat-view__new" disabled={threadBusy} onClick={passageChat.onLeave}><MessageCircle size={14} />Space chat</button>}
-          {!passageChat && messages.length > 0 && (
+          {!passageChat && (messages.length > 0 || threadNavigation) && (!showThreads || !threadsOpen) && (
             <button
               type="button"
               className="chat-view__new"
               onClick={startNewChat}
-              disabled={isSending}
+              disabled={Boolean(threadDisabledReason)}
+              title={threadDisabledReason}
             >
               <Plus size={14} />
               New chat
@@ -322,7 +387,9 @@ export function ChatView({
         </div>
       </header>
 
+      <div className="chat-view__body">
       <div className="chat-view__stage" ref={voiceScroll.stageRef} tabIndex={scrollVoice ? 0 : undefined}
+        inert={showThreads && threadsOpen && threadsOverlay ? true : undefined}
         aria-label={scrollVoice ? "Voice and text conversation" : undefined}>
         <div className="chat-view__voice-intro" inert={scrollVoice && voiceScroll.phase === "messages"}>
           <div className="chat-view__voice-scene" ref={voiceSceneRef} />
@@ -497,11 +564,13 @@ export function ChatView({
             </div>
           )}
           {onVoiceCommit && !voiceControl && <SpaceVoice snapshot={snapshot} focusNoteId={focusNote?.id} enabled={voiceEnabled} commit={onVoiceCommit} toggleRequest={voiceToggle} onActiveChange={setVoiceActive}
+            onPrepareVoiceConnection={onPrepareVoiceConnection}
             onProposal={result => { if (result.editProposal) { setEditProposal(result.editProposal); setEditRevision(value => value + 1); } }}
             onOpenNote={onOpenNote} onOpenSource={onOpenSource} onOpenSettings={onOpenSettings} />}
           {error && (
             <div className="chat-composer__error" role="alert">
               <span>{error}</span>
+              {isChatGPTModel(snapshot.settings.model) && /usage|limit/i.test(error) && <button type="button" onClick={() => void manageChatGPTUsage().catch(onOpenSettings)}>Manage usage</button>}
               {!canSend && (
                 <button type="button" onClick={onOpenSettings}>
                   Open settings
@@ -521,7 +590,7 @@ export function ChatView({
               placeholder={
                 canSend
                   ? `Ask about ${snapshot.workspace.name}…`
-                  : `Add an ${providerName} key to start chatting…`
+                  : isChatGPTModel(snapshot.settings.model) ? "Connect ChatGPT in Settings to start chatting…" : `Add an ${providerName} key to start chatting…`
               }
               aria-label="Message Orion"
               rows={1}
@@ -541,7 +610,7 @@ export function ChatView({
                 aria-label="Stop voice" title="Stop voice" onClick={(event) => { event.preventDefault(); toggleVoice(); }}>
                 <Square size={14} fill="currentColor" strokeWidth={0} aria-hidden="true" />
               </button> : onVoiceCommit ? <button key="start-voice" type="button" className="chat-composer__voice" disabled={!voiceEnabled || isSending}
-                aria-label="Talk to Space" title="Talk to Space" onClick={toggleVoice}>
+                aria-label={voiceControl?.label ?? "Talk to Space"} title={voiceControl?.label ?? "Talk to Space"} onClick={toggleVoice}>
                 <AudioLines size={19} strokeWidth={1.8} aria-hidden="true" />
               </button> : <button key="empty-send" type="submit" disabled aria-label="Send message" title="Send message">
                 <ArrowUp size={17} aria-hidden="true" />
@@ -549,11 +618,12 @@ export function ChatView({
             </div>
           </div>
           <div className="chat-composer__footer">
+            {isChatGPTModel(snapshot.settings.model) && <button type="button" className="chat-web-toggle" onClick={() => void manageChatGPTUsage().catch(onOpenSettings)}>Using ChatGPT plan · Manage usage</button>}
             <button type="button" className="chat-web-toggle" aria-pressed={webEnabled}
-              disabled={isSending} title={snapshot.settings.perplexityApiKeyConfigured ? "Include web research when useful for this conversation" : "Add a Perplexity key in Settings"}
+              disabled={isSending} title={webRoute ? `Include web research via ${webRoute.label} when useful for this conversation` : webResearchUnavailableReason(snapshot.settings)}
               onClick={() => {
-                if (!snapshot.settings.perplexityApiKeyConfigured) { onOpenSettings(); return; }
-                setWebChoice({ spaceId: snapshot.workspace.id, enabled: !webEnabled });
+                if (!webAvailable) { onOpenSettings(); return; }
+                setWebChoice({ spaceId: snapshot.workspace.id, routeKey: webRouteKey, enabled: !webEnabled });
               }}><Globe size={13} aria-hidden="true" />Web</button>
             <span>
               <BookOpenText size={11} />
@@ -564,6 +634,18 @@ export function ChatView({
         </form>
         </>}
       </div>
+      </div>
+      {showThreads && threadNavigation && <>
+        {threadsOpen && threadsOverlay && <button type="button" className="chat-view__threads-backdrop" aria-label="Close chat threads" tabIndex={-1} onClick={() => setThreadsOpen(false)}/>}
+        <ChatThreads {...threadNavigation} id={threadsId} spaceName={snapshot.workspace.name}
+          expanded={threadsOpen} onExpandedChange={setThreadsOpen} toggleRef={threadsToggleRef}
+          disabledReason={threadDisabledReason} overlay={threadsOverlay} onClose={() => setThreadsOpen(false)}
+          onNew={startNewChat} onSelect={id => {
+            if (threadDisabledReason) return;
+            threadNavigation.onSelect(id);
+            if (threadsOverlay) setThreadsOpen(false);
+          }}/>
+      </>}
     </section>
   );
 }

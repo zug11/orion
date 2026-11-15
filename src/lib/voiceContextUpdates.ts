@@ -1,3 +1,4 @@
+import { resolveWebResearchProvider } from "./webResearchProvider";
 import type { AppSnapshot } from "../types";
 import { voiceNavigationContext, type VoiceReceipt, type VoiceWorkOrder } from "./voiceResearch";
 import { voiceSelectionContext, type VoiceSelection } from "./voiceSelection";
@@ -83,7 +84,7 @@ export class VoiceContextUpdates {
   /** The connection's initial context already contains this navigation/jobs. */
   reset(input: VoiceContextBaseline) {
     this.navigation = navigationKey(input);
-    this.webAvailable = input.snapshot.settings.perplexityApiKeyConfigured === true;
+    this.webAvailable = !!resolveWebResearchProvider(input.snapshot.settings);
     this.jobs = new Map(input.jobs.map(job => [job.id, project(job)]));
     this.receipts = new Map(receiptRecords(input).map(item => [receiptKey(item), projectReceipt(item)]));
     this.checkpointSent = false;
@@ -99,7 +100,7 @@ export class VoiceContextUpdates {
     const pressured = ratio !== undefined && ratio >= 0.8;
     if (ratio !== undefined && ratio < 0.75) this.checkpointSent = false;
     let sent = 0;
-    const webAvailable = input.snapshot.settings.perplexityApiKeyConfigured === true;
+    const webAvailable = !!resolveWebResearchProvider(input.snapshot.settings);
     if (webAvailable !== this.webAvailable && send(JSON.stringify({ type: "capability_update", referenceOnly: true,
       webResearchAvailable: webAvailable, instruction: "Capability change only. Do not speak or start work because this arrived." }))) {
       this.webAvailable = webAvailable; sent++;
@@ -181,7 +182,7 @@ export class VoiceContextUpdates {
     const packet = { type: "conversation_checkpoint", referenceOnly: true,
       instruction: "Continue the current conversation. These are existing assignments and confirmed saves, not new requests. Do not rerun jobs, resave notes, reconnect, or announce this checkpoint.",
       spaceId: input.snapshot.workspace.id, currentNoteId: note?.id ?? null,
-      webResearchAvailable: input.snapshot.settings.perplexityApiKeyConfigured === true,
+      webResearchAvailable: !!resolveWebResearchProvider(input.snapshot.settings),
       ...quotedConversation(input.conversation), activeJobs: active,
       recentJobs: terminal, confirmedReceipts: receipts, omittedRecords: 0 };
     const serialize = () => JSON.stringify(packet);

@@ -486,7 +486,13 @@ export const NoteTable = Table.extend({
     return parsed;
   },
   renderMarkdown(node, helpers) {
-    const markdown = renderTableToMarkdown(node, helpers);
+    // Cell text is already escaped as ordinary Markdown, but a literal pipe
+    // still acts as a GFM column separator. Escape it before the table renderer
+    // adds its own separators, retaining already-escaped inline/code output.
+    const markdown = renderTableToMarkdown(node, { ...helpers, renderChildren: (...args) =>
+      helpers.renderChildren(...args).replace(/(\\*)\|/g, (_match, slashes: string) =>
+        `${slashes}${slashes.length % 2 === 0 ? "\\" : ""}|`),
+    });
     const cells = node.content?.[0]?.content ?? [];
     const layout: TableLayout = {
       width: boundedTableInteger(node.attrs?.tableWidth, 100, MIN_TABLE_WIDTH, 100),

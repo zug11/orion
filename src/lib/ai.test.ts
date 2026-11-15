@@ -48,3 +48,12 @@ describe("AI provider selection", () => {
     ).toBe(true);
   });
 });
+
+
+describe("ChatGPT plan model configuration", () => {
+  it("keeps subscription text AI independent of an OpenAI media API key", () => {
+    const settings = { ...defaultSettings, model: "chatgpt:gpt-6.1-sol", apiKeyConfigured: false, chatgptConfigured: true };
+    expect(isSelectedAIConfigured(settings)).toBe(true);
+    expect(isSelectedAIConfigured({ ...settings, chatgptConfigured: false, apiKeyConfigured: true })).toBe(false);
+  });
+});

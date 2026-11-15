@@ -1,10 +1,11 @@
-import type { Editor, JSONContent } from "@tiptap/core";
+import { type Editor, type JSONContent } from "@tiptap/core";
 import { closeHistory } from "@tiptap/pm/history";
+import type { Node } from "@tiptap/pm/model";
+import { newBoardId, newTicketId, type NoteBoard } from "../../lib/tickets";
+import { parseDictationProposal, resolveDictationBoard, type DictationBlock,
+  type DictationProposal, type DictationBoardTicket } from "../../lib/dictationCleanup";
 
-export interface VoiceDictationBlock {
-  kind: "paragraph" | "bullet" | "todo";
-  text: string;
-}
+export type VoiceDictationBlock = DictationBlock;
 
 /** Dictation is one undoable insertion, separate from typing on either side. */
 function insertDictationContent(editor: Editor, position: number, content: JSONContent | JSONContent[]): boolean {
@@ -98,4 +99,80 @@ export function insertCleanedVoiceTranscriptAt(
     return false;
   }
   return insertDictationContent(editor, Math.min(Math.max(0, Math.trunc(position)), editor.state.doc.content.size), content);
+}
+
+/** Materialize all structures in one transaction. Provider IDs and markup never
+ * enter the document; existing board assignment is a local unambiguous lookup. */
+export function insertStructuredVoiceTranscriptAt(
+  editor: Editor, position: number, proposal: DictationProposal, original: string,
+  boards: readonly NoteBoard[], document: Node,
+): boolean {
+  if (editor.isDestroyed || !editor.isEditable || !editor.state.doc.eq(document) ||
+      !Number.isInteger(position) || position < 0 || position > document.content.size) return false;
+  let parsed: DictationProposal;
+  try { parsed = parseDictationProposal(proposal, original); } catch { return false; }
+  const content: JSONContent[] = [];
+  const paragraph = (text: string): JSONContent => ({ type: "paragraph",
+    ...(text ? { content: [{ type: "text", text }] } : {}) });
+  const newBoards = new Map<object, string>();
+  for (const block of parsed.blocks) if (block.kind === "kanban") newBoards.set(block, newBoardId());
+  // A spoken name must identify one unique board across existing and new
+  // boards. Otherwise preserve the ticket without an assignment.
+  const destinations = [...boards, ...parsed.blocks.flatMap(block => block.kind === "kanban"
+    ? [{ id: newBoards.get(block)!, title: block.text }] : [])];
+  function appendItem(text: string, task: boolean, attrs?: Record<string, unknown>) {
+    const listType = task ? "taskList" : "bulletList";
+    const item = { type: task ? "taskItem" : "listItem", content: [paragraph(text)],
+      ...(task ? { attrs: { checked: false, ...attrs } } : {}) };
+    const previous = content[content.length - 1];
+    if (previous?.type === listType) previous.content!.push(item);
+    else content.push({ type: listType, content: [item] });
+  }
+  function appendTicket(ticket: DictationBoardTicket, boardId: string) {
+    appendItem(ticket.text, true, { ticketId: newTicketId(), ticketStatus: "todo", ticketBoard: boardId,
+      ticketDueDate: ticket.dueDate, ticketUrgency: ticket.urgency });
+  }
+  if (parsed.blocks.some(block => block.kind === "ticket" || block.kind === "kanban" && block.tickets.length) &&
+      !editor.schema.nodes.taskItem?.spec.attrs?.ticketId) return false;
+  for (const block of parsed.blocks) {
+    if (block.kind === "paragraph") content.push(paragraph(block.text));
+    else if (block.kind === "bullet" || block.kind === "todo") appendItem(block.text, block.kind === "todo");
+    else if (block.kind === "ticket") appendTicket(block, resolveDictationBoard(block.boardName, destinations));
+    else if (block.kind === "kanban") {
+      const boardId = newBoards.get(block)!;
+      content.push({ type: "noteKanban", attrs: { boardId, title: block.text } });
+      for (const ticket of block.tickets) appendTicket(ticket, boardId);
+    } else if (block.kind === "table") {
+      if (block.text) content.push(paragraph(block.text));
+      const row = (cells: string[], header: boolean): JSONContent => ({ type: "tableRow", content: cells.map(text => ({
+        type: header ? "tableHeader" : "tableCell", content: [paragraph(text)],
+      })) });
+      content.push({ type: "table", content: [row(block.columns, true), ...block.rows.map(cells => row(cells, false))] });
+    }
+  }
+  // Full schema validation before the first mutation: unsupported structures
+  // fall back to faithful text without leaving half a board or table behind.
+  try { for (const node of content) editor.schema.nodeFromJSON(node).check(); } catch { return false; }
+  return insertDictationContent(editor, position, content);
+}
+
+/** Optional immediate recovery, only while the inserted document is unchanged.
+ * Later edits always win; the complete transcript also remains in Sources. */
+export function restoreOriginalDictation(
+  editor: Editor, before: Node, after: Node, position: number, original: string,
+): boolean {
+  if (editor.isDestroyed || !editor.isEditable || !editor.state.doc.eq(after) ||
+      !Number.isInteger(position) || position < 0 || position > before.content.size) return false;
+  const normalized = original.trim().replace(/\s+/g, " ");
+  if (!normalized) return false;
+  const left = before.textBetween(Math.max(0, position - 1), position);
+  const right = before.textBetween(position, Math.min(before.content.size, position + 1));
+  const leading = left && !/[\s([{\u201c\u2018"']/.test(left) && !/^[,.;:!?\u2026)\]}]/.test(normalized);
+  const trailing = right && !/[\s.,!?;:)\]}'\u201d\u2019]/.test(right) && !/[([{\u201c\u2018"']$/.test(normalized);
+  const tr = closeHistory(editor.state.tr).replaceWith(0, after.content.size, before.content)
+    .insertText(`${leading ? " " : ""}${normalized}${trailing ? " " : ""}`, position);
+  editor.view.dispatch(tr);
+  editor.view.dispatch(closeHistory(editor.state.tr));
+  editor.view.focus();
+  return true;
 }

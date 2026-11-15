@@ -73,6 +73,34 @@ describe("bounded web research in the shared reader", () => {
     }, { resume: checkpoint });
   });
 
+  it("preserves provider-cited summary provenance through reading, resume and saved evidence", async () => {
+    const state = snapshot();
+    const supplied = response();
+    supplied.sources = [{ ...supplied.sources[0], evidenceType: "cited_summary" }];
+    const research = vi.fn(async () => supplied);
+    let checkpoint: ChatReadingCheckpoint | undefined;
+    const driver = async (request: ChatRequest): Promise<ChatResult> => {
+      const packet = JSON.parse(request.readingContext!);
+      if (!packet.evidence.length) return { reply: "", readRequests: [webRead] };
+      expect(packet.evidence[0].web.evidenceType).toBe("cited_summary");
+      if (packet.results[0]?.citations) {
+        expect(packet.results[0].notice).toContain("not text quoted from the webpage");
+        expect(packet.results[0].citations[0]).toMatchObject({ evidenceType: "cited_summary", url: supplied.sources[0].url });
+      }
+      return { reply: "The cited summary reports this finding [[e1]]." };
+    };
+    await runChatReading(state, "Research", driver, { webResearch: research, onCheckpoint: value => { checkpoint = value; } });
+    const resumed = await runChatReading(state, "Research", driver, { webResearch: research, resume: checkpoint });
+    expect(research).toHaveBeenCalledTimes(1);
+    expect(resumed.evidence?.[0].web?.evidenceType).toBe("cited_summary");
+    const saved = portableChatEvidence(resumed.reply, resumed.evidence!);
+    expect(saved).toContain("AI-cited summary 1 (not a source quotation)");
+    expect(saved).toContain("Cited website:");
+    expect(savedChatEvidence(saved)).toEqual(resumed.evidence);
+    expect(() => validateWebResult({ ...supplied, sources: [{ ...supplied.sources[0], evidenceType: "verbatim" }] })).toThrow("invalid");
+    expect(isChatEvidence({ ...resumed.evidence![0], web: { ...resumed.evidence![0].web, evidenceType: "verbatim" } })).toBe(false);
+  });
+
   it("revokes late research on cancellation, even if the transport resolves afterwards", async () => {
     let finish!: (result: WebResearchResult) => void;
     const research = vi.fn(() => new Promise<WebResearchResult>(resolve => { finish = resolve; }));
