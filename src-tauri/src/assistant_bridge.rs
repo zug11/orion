@@ -93,7 +93,10 @@ fn read_vault(path: &Path) -> Result<Value, String> {
         .map_err(|_| "The library is busy.".to_string())?;
     let value = crate::read_vault_file(path)?
         .ok_or_else(|| "Open Orion once to create its local library.".to_string())?;
-    if value.get("schemaVersion").and_then(Value::as_u64) != Some(2)
+    if !value
+        .get("schemaVersion")
+        .and_then(Value::as_u64)
+        .is_some_and(crate::source_text_ref::supported_vault_schema)
         || !value.get("spaces").is_some_and(Value::is_array)
     {
         return Err("The Orion library has an invalid or unsupported schema.".into());

@@ -363,6 +363,12 @@ pub(super) fn source_version(source: &Source) -> String {
     if let Some(version) = &source.view_version {
         return version.clone();
     }
+    // Externally stored text is identified by its content hash, so read and
+    // write tools agree on a version without loading the text.
+    let text = match source.text_hash() {
+        Some(hash) => format!("sha256:{hash}"),
+        None => source.text.clone(),
+    };
     fingerprint(
         json!([
             source.id,
@@ -370,7 +376,7 @@ pub(super) fn source_version(source: &Source) -> String {
             source.kind,
             source.imported_at,
             source.source_url,
-            source.text,
+            text,
             source.note_ids
         ])
         .to_string(),
@@ -381,7 +387,7 @@ fn citation(space: &Space, note: &Note) -> Value {
     json!({"id":note.id,"title":title,"version":note_version(note),"orionUrl":orion_note_url(&space.workspace.id,&note.id),"citation":citation_markdown(&title,&space.workspace.id,&note.id)})
 }
 fn source_ref(source: &Source) -> Value {
-    json!({"id":source.id,"title":truncate_chars(&source.title,300).0,"kind":source.kind,"version":source_version(source),"importedAt":source.imported_at,"sourceUrl":source.source_url.as_ref().map(|url|truncate_chars(url,4096).0),"textLength":source.text.chars().count()})
+    json!({"id":source.id,"title":truncate_chars(&source.title,300).0,"kind":source.kind,"version":source_version(source),"importedAt":source.imported_at,"sourceUrl":source.source_url.as_ref().map(|url|truncate_chars(url,4096).0),"textLength":source.text_chars()})
 }
 fn note<'a>(scope: &'a Space, id: &str) -> Result<&'a Note, ToolFailure> {
     let found: Vec<_> = scope.notes.iter().filter(|note| note.id == id).collect();

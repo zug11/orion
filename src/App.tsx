@@ -111,6 +111,7 @@ import {
   saveNoteImage,
   clearBrowserSnapshot,
   isTauriRuntime,
+  externalizeVaultForDisk,
   loadSnapshot,
   openDataDirectory,
   organizeWithAI,
@@ -940,7 +941,8 @@ function App() {
         await persistLatestVault();
         const before = vaultRef.current;
         const proposed = composeWorkflowVault(before, base, generated);
-        await invokeAssistantHost("assistant_commit_vault", { jobId: claim.id, sessionId, vault: proposed, expectedUpdatedAt: persistedVaultUpdatedAt.current, result });
+        // The native host compares this with the file on disk, so it must be in the on-disk form.
+        await invokeAssistantHost("assistant_commit_vault", { jobId: claim.id, sessionId, vault: await externalizeVaultForDisk(proposed), expectedUpdatedAt: persistedVaultUpdatedAt.current, result });
         persistedVaultUpdatedAt.current = proposed.updatedAt;
         persistedVault.current = proposed;
         cancelSpaceOverviewRefresh(base.workspace.id);

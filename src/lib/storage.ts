@@ -1,4 +1,5 @@
 import { isCalendarDismissalList } from "./calendarDismissal";
+import { createSourceTextStore, SOURCE_TEXT_MISSING, type SourceTextRef } from "./sourceTextStore";
 import { isPassageAnchor, isPassageThreads } from "./passageThreads";
 import { LEGACY_CHAT_THREAD_ID, MAX_CHAT_THREAD_TITLE_CHARS, validChatThreadId } from "./chatThreads";
 import { parseDictationResult, type DictationCleanupResult } from "./dictationCleanup";
@@ -133,18 +134,53 @@ export function isTauriRuntime(): boolean {
   );
 }
 
+// Preserved source text is stored beside the desktop vault, never inside it.
+// The store keeps the on-disk format out of the rest of the renderer.
+const sourceTexts = createSourceTextStore({
+  save: (texts) => invokeTauri<SourceTextRef[]>("save_source_texts", { texts }),
+  load: (references) => invokeTauri<string[]>("load_source_texts", { references }),
+});
+let inlineTextMigration: Promise<void> | undefined;
+
+/** The form a vault takes on disk. Browser preview keeps text inline. */
+export async function externalizeVaultForDisk(vault: OrionVault): Promise<unknown> {
+  return isTauriRuntime() ? sourceTexts.externalize(vault) : vault;
+}
+
+/**
+ * A library written before source text moved out of the vault is rewritten
+ * once, in the background, with the same content and the same revision. The
+ * expected revision guards it: if anything else saves first, that save has
+ * already migrated the file and this one is dropped.
+ */
+function migrateInlineSourceText(vault: OrionVault): void {
+  if (inlineTextMigration || !vault.spaces.some((space) => space.sources.some((source) => source.text))) return;
+  inlineTextMigration = (async () => {
+    try {
+      await invokeTauri<void>("save_vault", {
+        vault: await sourceTexts.externalize(vault),
+        expectedUpdatedAt: vault.updatedAt,
+      });
+    } catch {
+      // The next ordinary save migrates instead. Allow another attempt.
+      inlineTextMigration = undefined;
+    }
+  })();
+}
+
 export async function loadSnapshot(): Promise<OrionVault | null> {
   if (isTauriRuntime()) {
     const value = await invokeTauri<unknown>("load_vault");
     if (value === null || value === undefined) {
       return null;
     }
-    const parsed = parseVault(value);
+    const parsed = parseVault(await sourceTexts.hydrate(value));
     if (!parsed) {
       throw new Error(
         "The local Orion vault uses an unsupported or invalid schema.",
       );
     }
+    if ((value as { schemaVersion?: unknown }).schemaVersion === 2) migrateInlineSourceText(parsed);
     return parsed;
   }
 
@@ -175,10 +211,19 @@ export async function saveSnapshot(
   expectedUpdatedAt?: string | null,
 ): Promise<void> {
   if (isTauriRuntime()) {
-    await invokeTauri<void>("save_vault", {
-      vault,
+    const save = async () => invokeTauri<void>("save_vault", {
+      vault: await sourceTexts.externalize(vault),
       ...(expectedUpdatedAt !== undefined ? { expectedUpdatedAt } : {}),
     });
+    try {
+      await save();
+    } catch (error) {
+      if (!String(error instanceof Error ? error.message : error).includes(SOURCE_TEXT_MISSING)) throw error;
+      // Stored text was removed outside Orion. This window still holds it:
+      // store everything again and retry the same guarded save once.
+      sourceTexts.forget();
+      await save();
+    }
     return;
   }
   const write = () => {

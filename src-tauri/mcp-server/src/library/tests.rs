@@ -2932,3 +2932,199 @@ fn ticket_scans_reject_multiple_first_line_markers_without_rewriting_metadata() 
         assert_eq!(fs::read(&server.vault_path).unwrap(), before);
     }
 }
+
+// --- Source text stored beside the vault (schema 3) ---
+
+const EXTERNAL_HASH: &str = "3b7a0c9d1e2f4a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e8f901a2b3c4";
+
+/// Moves the fixture source's text into a side file, as the desktop host does.
+fn externalized(text: &str) -> (tempfile::TempDir, Server) {
+    let mut vault = fixture();
+    vault["schemaVersion"] = json!(3);
+    let source = vault["spaces"][0]["sources"][0].as_object_mut().unwrap();
+    source.remove("text");
+    source.insert(
+        "textRef".into(),
+        json!({"sha256": EXTERNAL_HASH, "bytes": text.len(), "chars": text.chars().count()}),
+    );
+    let (dir, server) = server(&vault);
+    let directory = dir.path().join("attachments").join("sources");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(directory.join(format!("{EXTERNAL_HASH}.txt")), text).unwrap();
+    (dir, server)
+}
+
+#[test]
+fn external_source_text_reads_exactly_like_inline_text() {
+    let text = "é😀 source evidence\nsecond evidence";
+    let mut inline = fixture();
+    inline["spaces"][0]["sources"][0]["text"] = json!(text);
+    let (_inline_dir, inline) = server(&inline);
+    let (_dir, external) = externalized(text);
+    for (name, args) in [
+        ("orion_get_source_passage", json!({"source_id":"s1"})),
+        (
+            "orion_get_source_passage",
+            json!({"source_id":"s1","start":2,"max_chars":9}),
+        ),
+        ("orion_search_sources", json!({"query":"second evidence"})),
+        ("orion_get_source", json!({"source_id":"s1"})),
+        (
+            "orion_search",
+            json!({"query":"source evidence","kind":"source"}),
+        ),
+    ] {
+        let mut expected = run(&inline, name, args.clone());
+        let mut actual = run(&external, name, args);
+        // Versions identify stored content differently; everything else matches.
+        for value in [&mut expected, &mut actual] {
+            strip_versions(value);
+        }
+        assert_eq!(actual, expected, "{name}");
+    }
+    let listed = run(&external, "orion_list_sources", json!({}));
+    assert_eq!(listed["sources"][0]["textLength"], text.chars().count());
+}
+
+fn strip_versions(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            map.retain(|key, _| !matches!(key.as_str(), "version" | "sourceVersion"));
+            map.values_mut().for_each(strip_versions);
+        }
+        Value::Array(items) => items.iter_mut().for_each(strip_versions),
+        _ => {}
+    }
+}
+
+#[test]
+fn external_source_versions_are_shared_by_read_and_write_tools() {
+    let (_dir, server) = externalized("é😀 source evidence\nsecond evidence");
+    let listed = run(&server, "orion_list_sources", json!({}));
+    let version = listed["sources"][0]["version"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // The write path never loads the text, yet it must accept the read version.
+    assert_eq!(version, citation_source_version(&server, "s1"));
+    let passage = run(
+        &server,
+        "orion_get_source_passage",
+        json!({"source_id":"s1","expected_version":version}),
+    );
+    assert_eq!(passage["text"], "é😀 source evidence\nsecond evidence");
+
+    let mut vault: Value = serde_json::from_slice(&fs::read(&server.vault_path).unwrap()).unwrap();
+    vault["spaces"][0]["notes"][0]["body"] = json!("A claim.");
+    vault["spaces"][0]["notes"][0]["sourceIds"] = json!([]);
+    fs::write(&server.vault_path, serde_json::to_vec(&vault).unwrap()).unwrap();
+    let version = citation_source_version(&server, "s1");
+    run(
+        &server,
+        NAMES[20],
+        editor_command(
+            &server,
+            json!({"command":"source_citation","citation_action":"insert","source_id":"s1","source_expected_version":version,"placement":"after","anchor":"claim"}),
+        ),
+    );
+    let saved: Value = serde_json::from_slice(&fs::read(&server.vault_path).unwrap()).unwrap();
+    // A note write keeps the format: no inline text reappears, the reference survives.
+    assert_eq!(saved["schemaVersion"], 3);
+    let source = &saved["spaces"][0]["sources"][0];
+    assert!(source.get("text").is_none());
+    assert_eq!(source["textRef"]["sha256"], EXTERNAL_HASH);
+    assert_eq!(source["noteIds"], json!(["n1", "n2"]));
+}
+
+#[test]
+fn working_view_masks_completed_tasks_in_external_source_text() {
+    let text = "plan\n- [x] retired secret\n- [ ] open item\n";
+    let (_dir, server) = externalized(text);
+    let working = run(
+        &server,
+        "orion_get_source_passage",
+        json!({"source_id":"s1"}),
+    );
+    let shown = working["text"].as_str().unwrap();
+    assert!(!shown.contains("retired secret") && shown.contains("open item"));
+    assert_eq!(shown.chars().count(), text.chars().count());
+    let history = run(
+        &server,
+        "orion_get_source_passage",
+        json!({"source_id":"s1","task_view":"history"}),
+    );
+    assert_eq!(history["text"], text);
+    // Both views report the stored original's version.
+    assert_eq!(working["source"]["version"], history["source"]["version"]);
+}
+
+#[test]
+fn missing_damaged_or_inconsistent_source_text_fails_closed() {
+    let text = "é😀 source evidence\nsecond evidence";
+    let (dir, server) = externalized(text);
+    let file = dir
+        .path()
+        .join("attachments")
+        .join("sources")
+        .join(format!("{EXTERNAL_HASH}.txt"));
+    assert!(run(&server, "orion_list_sources", json!({}))["sources"].is_array());
+
+    // A process that has already read the text keeps serving the immutable copy,
+    // so each case uses a hash this process has not cached.
+    let relocate = |hash: &str, content: Option<&str>| {
+        let mut vault: Value =
+            serde_json::from_slice(&fs::read(&server.vault_path).unwrap()).unwrap();
+        vault["spaces"][0]["sources"][0]["textRef"]["sha256"] = json!(hash);
+        fs::write(&server.vault_path, serde_json::to_vec(&vault).unwrap()).unwrap();
+        if let Some(content) = content {
+            fs::write(file.with_file_name(format!("{hash}.txt")), content).unwrap();
+        }
+    };
+    relocate(&"1".repeat(64), None);
+    let error = server
+        .call_tool("orion_list_sources", &Map::new())
+        .unwrap_err();
+    assert!(
+        error.message.contains("missing or damaged") && error.message.contains("Source one"),
+        "{}",
+        error.message
+    );
+    relocate(&"2".repeat(64), Some("truncated"));
+    assert!(server
+        .call_tool(
+            "orion_get_source",
+            json!({"source_id":"s1"}).as_object().unwrap()
+        )
+        .is_err());
+    relocate(&"4".repeat(64), Some(text));
+    assert!(run(&server, "orion_list_sources", json!({}))["sources"].is_array());
+
+    for mutate in [
+        (|vault: &mut Value| vault["schemaVersion"] = json!(2)) as fn(&mut Value),
+        |vault: &mut Value| vault["spaces"][0]["sources"][0]["text"] = json!("also inline"),
+        |vault: &mut Value| {
+            vault["spaces"][0]["sources"][0]["textRef"]["sha256"] = json!("../../vault")
+        },
+        |vault: &mut Value| {
+            vault["spaces"][0]["sources"][0]["textRef"]["path"] = json!("/etc/passwd")
+        },
+        |vault: &mut Value| vault["schemaVersion"] = json!(4),
+    ] {
+        let mut vault: Value =
+            serde_json::from_slice(&fs::read(&server.vault_path).unwrap()).unwrap();
+        mutate(&mut vault);
+        let (_other, invalid) = self::server(&vault);
+        assert!(invalid.call_tool("orion_list_spaces", &Map::new()).is_err());
+        // Writes validate the same invariants and leave the file untouched.
+        let before = fs::read(&invalid.vault_path).unwrap();
+        assert!(invalid
+            .call_tool(
+                "orion_append_to_note",
+                json!({"space_id":"a","note_id":"n1","expected_version":"x","text":"y"})
+                    .as_object()
+                    .unwrap()
+            )
+            .is_err());
+        assert_eq!(fs::read(&invalid.vault_path).unwrap(), before);
+    }
+}
