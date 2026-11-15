@@ -219,7 +219,7 @@ source_fingerprint() (
   {
     find src src-tauri/src src-tauri/shared src-tauri/native src-tauri/mcp-server/src \
       src-tauri/entitlements src-tauri/icons public assets/brand \
-      mcp/orion-claude codex/orion -type f ! -name '.DS_Store'
+      mcp/orion-claude codex/orion docs/agents -type f ! -name '.DS_Store'
     printf '%s\n' \
       AGENTS.md \
       index.html \
