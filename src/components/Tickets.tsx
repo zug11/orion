@@ -1,7 +1,7 @@
 import { DateButton } from './CalendarPicker';
 import { createContext, useContext, useLayoutEffect, useEffect, useRef, useState } from 'react';
 import type { Note } from '../types';
-import { collectWork, TICKET_STATUSES, TICKET_URGENCIES, type TicketUrgency, type NoteBoard, type Ticket, type TicketPatch, type TicketStatus } from '../lib/tickets';
+import { boardColumns, collectWork, TICKET_STATUSES, TICKET_URGENCIES, type TicketUrgency, type NoteBoard, type Ticket, type TicketPatch, type TicketStatus, type BoardChange } from '../lib/tickets';
 import type { TicketInferenceActions } from '../lib/ticketInference';
 import { displayNoteTitle } from '../lib/noteMetadata';
 import { ChevronDown, Plus, Trash2, X } from '../lib/icons';
@@ -16,6 +16,7 @@ import './Tickets.css';
 export type CreateWorkItem = (kind: 'ticket' | 'kanban', title: string, noteId: string, boardId: string, status?: TicketStatus, dueDate?: string, origin?: 'board') => boolean;
 export interface TicketWorkspace {
   work: ReturnType<typeof collectWork>;
+  onChangeBoard?: (board: NoteBoard, change: BoardChange) => boolean;
   onPatch?: (ticket: Ticket, patch: TicketPatch) => boolean;
   onDelete?: (ticket: Ticket) => boolean;
   onOpenNote?: (id: string) => void;
@@ -36,6 +37,12 @@ export function LoadMoreTickets({ remaining, pageSize, label, onLoad }: { remain
 
 export function KanbanBoard({ board, workspace, showSource = false }: { board: NoteBoard; workspace: TicketWorkspace; showSource?: boolean }) {
   const navigation=useTicketNavigation();
+  const columns=boardColumns(board);
+  const [boardEdit,setBoardEdit]=useState<BoardChange | null>(null);
+  const boardEditInput=useRef<HTMLInputElement>(null);
+  const editBoardRef=useRef(board);
+  const beginBoardEdit=(change:BoardChange) => {editBoardRef.current=board;setBoardEdit(change);};
+  useEffect(() => {if(boardEdit) {boardEditInput.current?.focus();boardEditInput.current?.select();}}, [boardEdit?.kind,boardEdit && 'id' in boardEdit ? boardEdit.id : '']);
   const root = useRef<HTMLDivElement>(null);
   const restoreFocus = useRef<string | null>(null);
   const restoreAfterDelete = useRef<{ key?: string; status: TicketStatus } | null>(null);
@@ -100,23 +107,30 @@ export function KanbanBoard({ board, workspace, showSource = false }: { board: N
   }, [creating]);
   const cancel = () => { focusAdd.current = creating; setCreating(null); setTitle(''); setError(''); };
   return <div ref={root} data-board-id={board.id} className="kanban-workspace" role="group" tabIndex={-1} aria-label={`${board.title} board`} data-narration-ignore="true" onClickCapture={drag.onClickCapture} onKeyDownCapture={drag.onKeyDownCapture}>
-    {(showSource || workspace.inference) && <div className="kanban-tools">
+    {(showSource || workspace.inference || workspace.onChangeBoard) && <div className="kanban-tools">
+      {workspace.onChangeBoard && <><button type="button" className="text-button" aria-label={`Rename ${board.title} board`} onClick={() => beginBoardEdit({kind:'title',title:board.title})}>Rename board</button><button type="button" className="text-button" onClick={() => beginBoardEdit({kind:'addColumn',title:''})}><Plus size={13}/>Add column</button></>}
       {showSource && <button type="button" className="ticket-board-source text-button" onClick={() => workspace.onOpenNote?.(board.noteId)}>Open board’s note</button>}
       {workspace.inference && <button ref={inferButton} type="button" className="text-button ticket-infer-button" disabled={Boolean(workspace.inference.unavailableReason)} title={workspace.inference.unavailableReason} onClick={() => setInferring(true)}>Infer tickets from note</button>}
     </div>}
-    <div className="orion-kanban">
-      {TICKET_STATUSES.map(([status, label], columnIndex) => {
+    {boardEdit && <form className="kanban-name-form" onSubmit={event => {event.preventDefault();event.stopPropagation();if(workspace.onChangeBoard?.(editBoardRef.current,boardEdit)){setBoardEdit(null);setError('');root.current?.focus();}else setError('Use a unique name, or reopen this field if the board changed.');}} onKeyDown={event => {event.stopPropagation();if(event.key === 'Escape'){event.preventDefault();setBoardEdit(null);root.current?.focus();}}}>
+      <input ref={boardEditInput} aria-label={boardEdit.kind === 'title' ? 'Board name' : 'Column name'} placeholder="Column name" maxLength={boardEdit.kind === 'title' ? 140 : 80} value={boardEdit.title} onChange={event => setBoardEdit({...boardEdit,title:event.target.value})}/>
+      <button type="submit" className="text-button" disabled={!boardEdit.title.trim()}>{boardEdit.kind === 'addColumn' ? 'Add column' : 'Save name'}</button>
+      <button type="button" className="icon-button" aria-label="Cancel name edit" onClick={() => {setBoardEdit(null);root.current?.focus();}}><X size={14}/></button>
+    </form>}
+    <div className={`orion-kanban${columns.length > 3 ? ' has-extra-columns' : ''}`}>
+
+      {columns.map(([status, label], columnIndex) => {
         const tickets = workspace.work.tickets.filter(t => t.boardId === board.id && t.status === status);
         const visible = tickets.filter((t, i) => i < BOARD_PAGE_SIZE || extra.has(ticketKey(t)));
         const visibleKeys = new Set(visible.map(ticketKey));
         const remaining = tickets.filter(t => !visibleKeys.has(ticketKey(t)));
         return <section key={status} aria-label={label} className="kanban-column" data-ticket-drop-board={board.id} data-ticket-drop-status={status}>
-          <h4>{label}<span>{tickets.length}</span></h4>
+          <h4>{workspace.onChangeBoard ? <button className="kanban-column-name" type="button" aria-label={`Rename ${label} column`} onClick={() => beginBoardEdit({kind:'columnTitle',id:status,title:label})}>{label}</button> : label}<span>{tickets.length}</span></h4>
           {visible.map(t => <article className="kanban-ticket" data-ticket-key={`${t.noteId}:${t.id}`} key={`${t.noteId}:${t.id}`} tabIndex={workspace.onPatch ? 0 : undefined}
             aria-label={t.title} aria-keyshortcuts="ArrowLeft ArrowRight" {...drag.cardProps(t)}
             onKeyDown={event => {
               if (event.target !== event.currentTarget || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
-              const next = TICKET_STATUSES[columnIndex + (event.key === 'ArrowRight' ? 1 : -1)];
+              const next = columns[columnIndex + (event.key === 'ArrowRight' ? 1 : -1)];
               if (next && workspace.onPatch) { event.preventDefault(); move(t, next[0]); }
             }}>
             {workspace.onDelete && <TicketDeleteButton title={t.title} onDelete={() => remove(t)}/>}

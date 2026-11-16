@@ -3,7 +3,7 @@ import { createPortal, flushSync } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ticketDetails, type TicketDetailChange } from '../lib/ticketDetails';
-import { TICKET_STATUSES, TICKET_URGENCIES, type Ticket } from '../lib/tickets';
+import { boardColumns, TICKET_URGENCIES, type Ticket } from '../lib/tickets';
 import type { TicketWorkspace } from './Tickets';
 import { TicketCode } from './TicketCode';
 import { ArrowUp, ArrowDown, Plus, Trash2, X, ExternalLink } from '../lib/icons';
@@ -96,7 +96,7 @@ export function TicketDetailsDialog({ selected, workspace, onClose }: { selected
         }}><option value="">No priority</option>{TICKET_URGENCIES.map(value => <option key={value} value={value}>{value[0].toUpperCase() + value.slice(1)}</option>)}</select></label>
         <label>Status<select aria-label="Ticket status" disabled={!editable} value={ticket.status} onChange={event => {
           const ok = workspace.onPatch?.(ticket, { status: event.target.value as Ticket['status'] }); setError(ok ? '' : 'The status changed. Try again.');
-        }}>{TICKET_STATUSES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
+        }}>{(boardColumns(workspace.work.boards.find(board => board.id === ticket.boardId) ?? {})).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
       </div>
       <section className="ticket-detail-description"><h3>Description</h3>
         {details.descriptionEditable ? <DetailText value={details.descriptionText} label="Ticket description" multiline disabled={!editable} save={text => patch({ kind: 'description', text })}/>

@@ -91,9 +91,9 @@ function AssignTicket({ ticket, workspace, onClose }: { ticket: Ticket; workspac
   </dialog>;
 }
 
-export function HomeTickets({ spaceId, preferences, notes, work, concepts, onOpenConcept, onPatch, onDelete, onOpenNote, onCreate, inference, overview, onDismissCalendarMention }: {
+export function HomeTickets({ spaceId, preferences, notes, work, concepts, onOpenConcept, onChangeBoard, onPatch, onDelete, onOpenNote, onCreate, inference, overview, onDismissCalendarMention }: {
   spaceId: string; preferences?: SessionPreferences; notes: readonly Note[]; work: ReturnType<typeof collectWork>;
-  concepts?: readonly Concept[]; onPatch?: TicketWorkspace['onPatch']; onOpenNote: (id: string) => void;
+  onChangeBoard?: TicketWorkspace['onChangeBoard']; concepts?: readonly Concept[]; onPatch?: TicketWorkspace['onPatch']; onOpenNote: (id: string) => void;
   onDelete?: TicketWorkspace['onDelete'];
   onOpenConcept?: (id: string) => void;
   onCreate?: CreateWorkItem; inference?: TicketWorkspace['inference']; overview?: ReactNode;
@@ -114,7 +114,7 @@ export function HomeTickets({ spaceId, preferences, notes, work, concepts, onOpe
       return [ticket, concept?.label === ticket.noteTitle ? undefined : concept];
     }));
   }, [work, notes, concepts]);
-  const workspace: TicketWorkspace = { work, onPatch, onDelete, onOpenNote, inference,
+  const workspace: TicketWorkspace = { work, onChangeBoard, onPatch, onDelete, onOpenNote, inference,
     onCreateTicket: onCreate ? (board, title, status, dueDate) => onCreate('ticket', title, board.noteId, board.id, status, dueDate, 'board') : undefined };
   const drag = useTicketDrag(root, onPatch);
   const hasTickets = Boolean(tickets.length || work.boards.length);

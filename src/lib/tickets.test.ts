@@ -1,11 +1,56 @@
 import { describe, expect, it } from 'vitest';
 import type { Note } from '../types';
-import { boardMarker, collectWork, deleteTicket, newTicketMarkdown, noteWork, parseBoardMarker, patchTicket, ticketMarker, parseTicketMarker } from './tickets';
+import { boardColumns, changeBoard, boardMarker, collectWork, deleteTicket, newTicketMarkdown, noteWork, parseBoardMarker, patchTicket, ticketMarker, parseTicketMarker } from './tickets';
 
 const note = (body: string, id = 'n', more: Partial<Note> = {}): Note => ({ id, title: id, body, slug: id, summary: '', aliases: [], tags: [], kind: 'article', status: 'ready', conceptIds: [], sourceIds: [], createdAt: '', updatedAt: '', ...more });
 const marker = ticketMarker({ id: 'ticket-a', boardId: 'board-a', status: 'progress' });
 
 describe('note-backed tickets', () => {
+  it('preserves the indentation of a board nested in authored list content', () => {
+    const original=boardMarker({id:'b',title:'Launch'});
+    const body=`- Parent\n\n  ${original}\n\n  After.`;
+    const board=noteWork(note(body)).boards[0];
+    expect(board).toBeDefined();
+    expect(changeBoard(body,board,{kind:'title',title:'Release'})).toBe(body.replace(original,boardMarker({id:'b',title:'Release'})));
+  });
+  it('keeps custom column order when a column is renamed', () => {
+    const original={id:'b',title:'Launch',columns:[{id:'column-review' as const,title:'Review'},{id:'column-blocked' as const,title:'Blocked'}]};
+    const body=boardMarker(original);
+    const board=noteWork(note(body)).boards[0];
+    const changed=changeBoard(body,board,{kind:'columnTitle',id:'column-review',title:'QA'})!;
+    expect(noteWork(note(changed)).boards[0].columns).toEqual([{id:'column-review',title:'QA'},{id:'column-blocked',title:'Blocked'}]);
+  });
+  it('changes only the active board marker, never code or quoted examples', () => {
+    const marker=boardMarker({id:'b',title:'Launch'});
+    const prefix=`\`\`\`md\n${marker}\n\`\`\`\n\n> ${marker}\n\n`;
+    const body=prefix+marker;
+    const board=noteWork(note(body)).boards[0];
+    const changed=changeBoard(body,board,{kind:'title',title:'Release'})!;
+    expect(changed).toBe(prefix+boardMarker({id:'b',title:'Release'}));
+    expect(changeBoard(changed,board,{kind:'title',title:'Stale name'})).toBeNull();
+  });
+  it('adds and renames columns without changing ticket identities or completion', () => {
+    let body=boardMarker({id:'b',title:'Launch'});
+    let board=noteWork(note(body)).boards[0];
+    body=changeBoard(body,board,{kind:'addColumn',title:'Review'})!;
+    board=noteWork(note(body)).boards[0];
+    const id=board.columns![0].id;
+    body+=`\n\n${newTicketMarkdown('Check it','b',id)}`;
+    const ticket=noteWork(note(body)).tickets[0];
+    expect(ticket.status).toBe(id);
+    body=changeBoard(body,board,{kind:'columnTitle',id:'done',title:'Shipped'})!;
+    board=noteWork(note(body)).boards[0];
+    body=changeBoard(body,board,{kind:'title',title:'Release'})!;
+    board=noteWork(note(body)).boards[0];
+    expect(boardColumns(board)).toEqual([['todo','To do'],['progress','In progress'],['done','Shipped'],[id,'Review']]);
+    expect(noteWork(note(body)).tickets[0]).toMatchObject({id:ticket.id,status:id,boardId:'b'});
+    expect(changeBoard(body,board,{kind:'addColumn',title:'Review'})).toBeNull();
+    expect(changeBoard(body,board,{kind:'columnTitle',id:'todo',title:'Shipped'})).toBeNull();
+    const completed=patchTicket(body,noteWork(note(body)).tickets[0],{status:'done'})!;
+    expect(noteWork(note(completed)).tickets[0].status).toBe('done');
+    const moved=patchTicket(body,noteWork(note(body)).tickets[0],{boardId:''})!;
+    expect(noteWork(note(moved)).tickets[0].status).toBe('todo');
+  });
   it('derives real tasks, preserving markup and ignoring code, quotes and frontmatter', () => {
     const n = note(`---\ntitle: test\n- [ ] YAML\n---\n\n- [ ] **Call** [Jo](https://example.com) ${marker}\n  - [x] Child\n\n\`\`\`md\n- [ ] Fenced\n\`\`\`\n\n~~~\n- [ ] Tilde\n~~~\n\n    - [ ] Indented\n\n> - [ ] Quoted\n\n- [ ] Literal \`${marker}\``);
     const tasks = noteWork(n).tickets;

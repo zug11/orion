@@ -34,6 +34,22 @@ function renderSwitcher(deleteResult = true, renameResult = true) {
 }
 
 describe("SpaceSwitcher", () => {
+  it("filters Space names without changing the current Space and opens a single result with Enter", () => {
+    const {onSwitchSpace}=renderSwitcher();
+    fireEvent.click(screen.getByRole('button',{name:/Main project/i}));
+    const search=screen.getByRole('searchbox',{name:'Search spaces'});
+    expect(search).toHaveFocus();
+    fireEvent.change(search,{target:{value:' RESEARCH '}});
+    expect(screen.queryByRole('button',{name:'Main project, 0 notes'})).toBeNull();
+    expect(screen.getByRole('button',{name:'Research project, 0 notes'})).toBeInTheDocument();
+    expect(onSwitchSpace).not.toHaveBeenCalled();
+    fireEvent.keyDown(search,{key:'Enter'});
+    expect(onSwitchSpace).toHaveBeenCalledWith('space-research');
+    fireEvent.click(screen.getByRole('button',{name:/Main project/i}));
+    expect(screen.getByRole('searchbox')).toHaveValue('');
+    fireEvent.change(screen.getByRole('searchbox'),{target:{value:'Missing'}});
+    expect(screen.getByRole('status')).toHaveTextContent('No matching spaces');
+  });
   it("switches to a different isolated space", () => {
     const { onSwitchSpace } = renderSwitcher();
 

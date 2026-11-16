@@ -1,3 +1,5 @@
+import type {TicketWorkspace} from './components/Tickets';
+import {boardColumns, changeBoard} from './lib/tickets';
 import { dismissCalendarMention, restoreCalendarMention, type DismissCalendarMention } from "./lib/calendarDismissal";
 import { invalidateChatSuggestionConnection } from "./components/useChatSuggestions";
 import { chatGPTCommand, type ChatGPTStatus } from "./lib/chatgpt";
@@ -582,6 +584,7 @@ function App() {
     [connectionOriginNoteId, snapshot.notes],
   );
 
+  const spaceReturnPositions = useRef(new Map<string, {route: NavigationRoute; position: ScrollPosition}>());
   const previousReadingRoute=useRef<NavigationRoute|null>(null);
   useLayoutEffect(() => {
     const route = routeForScreen(screen, snapshot.activeNoteId, workTarget);
@@ -597,7 +600,7 @@ function App() {
       return;
     }
     if(!previous || previous.screen!==route.screen || (previous.screen==='note' && route.screen==='note' && previous.noteId!==route.noteId)) resetScrollPosition(workspaceContentRef.current);
-  }, [screen, snapshot.activeNoteId, workTarget]);
+  }, [screen, snapshot.activeNoteId, workTarget, snapshot.workspace.id]);
 
   const showToast = useCallback(
     (
@@ -1479,18 +1482,32 @@ function App() {
       if (!target || spaceId === vaultRef.current.activeSpaceId) {
         return;
       }
+      const leaving = snapshotRef.current;
+      spaceReturnPositions.current.set(leaving.workspace.id, {
+        route: routeForScreen(screen, leaving.activeNoteId),
+        position: readScrollPosition(workspaceContentRef.current),
+      });
+      const remembered = spaceReturnPositions.current.get(spaceId);
+      const rememberedNoteId = remembered?.route.screen === 'note' ? remembered.route.noteId : undefined;
+      const returnTo = remembered && (!rememberedNoteId || target.notes.some(note => note.id === rememberedNoteId)) ? remembered : undefined;
       setVault((current) => ({
         ...current,
         activeSpaceId: spaceId,
+        spaces: returnTo?.route.screen === 'note' ? current.spaces.map(space => space.workspace.id === spaceId ? {...space,activeNoteId:rememberedNoteId!} : space) : current.spaces,
         updatedAt: new Date().toISOString(),
       }));
       resetSpaceNavigation();
+      if (returnTo) {
+        setScreen(returnTo.route.screen);
+        pendingScrollRestore.current = returnTo;
+        replaceHistory([createNavigationEntry(returnTo.route, returnTo.position)], 0);
+      } else pendingScrollRestore.current = {route:{screen:'home'},position:{scrollLeft:0,scrollTop:0}};
       showToast(
         target.workspace.name,
         "Space switched. Its links and concepts stay independent.",
       );
     },
-    [resetSpaceNavigation, showToast],
+    [resetSpaceNavigation, showToast, screen, replaceHistory],
   );
 
   const createSpace = useCallback(
@@ -2361,11 +2378,23 @@ function App() {
     [],
   );
 
+  const updateBoard = useCallback<NonNullable<TicketWorkspace['onChangeBoard']>>((board, change) => {
+    const current=snapshotRef.current;
+    if(current.workspace.id !== snapshot.workspace.id)return false;
+    if(collectWork(current.notes).boards.filter(candidate => candidate.id === board.id && candidate.noteId === board.noteId).length !== 1)return false;
+    const note=current.notes.find(note => note.id === board.noteId);
+    if(!note)return false;
+    const body=changeBoard(note.body,board,change);
+    if(body === null)return false;
+    updateNote({...note,body,updatedAt:new Date().toISOString()});return true;
+  },[updateNote,snapshot.workspace.id]);
+
   const updateTicket = useCallback((ticket: Ticket, patch: TicketPatch): boolean => {
     const current = snapshotRef.current;
     if (current.workspace.id !== snapshot.workspace.id) return false;
     const note = current.notes.find(candidate => candidate.id === ticket.noteId);
     if (!note || patch.boardId && !collectWork(current.notes).boards.some(board => board.id === patch.boardId)) return false;
+    if(patch.status?.startsWith('column-') && !collectWork(current.notes).boards.some(board => board.id === (patch.boardId ?? ticket.boardId) && boardColumns(board).some(([id])=>id===patch.status)))return false;
     const body = patchTicket(note.body, ticket, patch);
     if (body === null) return false;
     updateNote({ ...note, body, updatedAt: new Date().toISOString() });
@@ -2388,6 +2417,7 @@ function App() {
     if (current.workspace.id !== snapshot.workspace.id || !validTicketTitle(title)) return false;
     const note = current.notes.find(candidate => candidate.id === noteId);
     if (!note || boardId && !collectWork(current.notes).boards.some(board => board.id === boardId)) return false;
+    if(status.startsWith('column-') && !collectWork(current.notes).boards.some(board => board.id === boardId && boardColumns(board).some(([id])=>id===status)))return false;
     const addition = kind === "ticket" ? newTicketMarkdown(title, boardId, status, dueDate, origin) : boardMarker({id:newBoardId(),title});
     updateNote({...note,body:`${note.body.trimEnd()}\n\n${addition}\n`,updatedAt:new Date().toISOString()});
     return true;
@@ -4409,7 +4439,8 @@ function App() {
       const editorAI = resolveEditorAICapabilities(snapshot.settings);
       return (
         <NoteView
-          onPatchTicket={updateTicket}
+          onChangeBoard={updateBoard}
+        onPatchTicket={updateTicket}
           onDeleteTicket={removeTicket}
           onCreateWork={createWorkItem}
           ticketInference={ticketInference}
@@ -4533,6 +4564,7 @@ function App() {
       <HomeView
         key={`home:${snapshot.workspace.id}`}
         onDismissCalendarMention={onDismissCalendarMention}
+        onChangeBoard={updateBoard}
         onPatchTicket={updateTicket}
         onDeleteTicket={removeTicket}
         onCreateWork={createWorkItem}

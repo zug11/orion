@@ -1,5 +1,5 @@
 import { calendarDateFromUrl } from './calendarDate';
-import { collectWork, remarkNoteBoards, TICKET_STATUSES } from './tickets';
+import { collectWork, remarkNoteBoards, boardColumns } from './tickets';
 import { noteTableHeaderInfo, noteTableLayoutAtLine, remarkNoteTableMetadata } from "./noteTables";
 import { remarkNoteBlocks } from "./noteBlocks";
 import { remarkNoteTextAlignment } from "./noteTextAlignment";
@@ -604,8 +604,8 @@ function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
       const board = work.boards.find(board => board.id === node?.properties?.['data-orion-board'] && board.noteId === note.id);
       if (!board) return <section>{children}</section>;
       return <section className="export-kanban"><h3>{board.title}</h3>
-        <table><thead><tr>{TICKET_STATUSES.map(([status, label]) => <th key={status}>{label}</th>)}</tr></thead>
-          <tbody><tr>{TICKET_STATUSES.map(([status]) => <td key={status}><ul>{work.tickets.filter(ticket => ticket.boardId === board.id && ticket.status === status).map(ticket =>
+        <table><thead><tr>{boardColumns(board).map(([status, label]) => <th key={status}>{label}</th>)}</tr></thead>
+          <tbody><tr>{boardColumns(board).map(([status]) => <td key={status}><ul>{work.tickets.filter(ticket => ticket.boardId === board.id && ticket.status === status).map(ticket =>
             <li key={`${ticket.noteId}:${ticket.id}:${ticket.lineIndex}`}>{ticket.title} <small>({ticket.noteTitle})</small></li>)}</ul></td>)}</tr></tbody>
         </table>
       </section>;

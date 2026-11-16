@@ -2,7 +2,7 @@ import { ReactNodeViewRenderer } from '@tiptap/react';
 import { TicketItemView } from './TicketItemView';
 import { validCalendarDate } from '../../lib/calendarDate';
 import { getExtensionField, type Node, type JSONContent, type MarkdownExtensionSpec } from '@tiptap/core';
-import { validTicketUrgency, effectiveTicketStatus, parseTicketMarker, ticketMarker } from '../../lib/tickets';
+import { validTicketStatus, validTicketUrgency, effectiveTicketStatus, parseTicketMarker, ticketMarker } from '../../lib/tickets';
 
 /** Tickets remain real task items, including their checkbox, nesting and Markdown exports. */
 export function withTickets(extension: Node) {
@@ -30,7 +30,7 @@ export function withTickets(extension: Node) {
         ticketUrgency: { default: '', keepOnSplit: false, parseHTML: el => validTicketUrgency(el.dataset.ticketUrgency) ? el.dataset.ticketUrgency : '', renderHTML: attrs => attrs.ticketUrgency ? { 'data-ticket-urgency': attrs.ticketUrgency } : {} },
         ticketDueDate: { default: '', keepOnSplit: false, parseHTML: el => validCalendarDate(el.dataset.ticketDue) ? el.dataset.ticketDue : '', renderHTML: attrs => attrs.ticketDueDate ? { 'data-ticket-due': attrs.ticketDueDate } : {} },
         ticketOrigin: { default: '', keepOnSplit: false, parseHTML: el => el.dataset.ticketOrigin === 'board' ? 'board' : '', renderHTML: attrs => attrs.ticketOrigin === 'board' ? { 'data-ticket-origin': 'board' } : {} },
-        ticketStatus: { default: 'todo', keepOnSplit: false, parseHTML: el => el.getAttribute('data-ticket-status') === 'progress' ? 'progress' : 'todo', renderHTML: attrs => ({ 'data-ticket-status': effectiveTicketStatus(Boolean(attrs.checked), attrs.ticketStatus) }) },
+        ticketStatus: { default: 'todo', keepOnSplit: false, parseHTML: el => validTicketStatus(el.getAttribute('data-ticket-status')) ? el.getAttribute('data-ticket-status') : 'todo', renderHTML: attrs => ({ 'data-ticket-status': effectiveTicketStatus(Boolean(attrs.checked), attrs.ticketStatus) }) },
       };
     },
     parseMarkdown(token, helpers) {

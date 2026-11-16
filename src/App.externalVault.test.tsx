@@ -5,7 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { clearMocks, mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import type { Editor } from "@tiptap/core";
-import { createEmptyVault } from "./data/defaults";
+import { createEmptySnapshot, createEmptyVault } from "./data/defaults";
 import type { Note, OrionVault } from "./types";
 
 const runtime = vi.hoisted(() => ({
@@ -26,7 +26,7 @@ vi.mock("./lib/useResolvedTheme", async () => {
 });
 vi.mock("./lib/useThemeIcon", () => ({ useThemeIcon: () => ({ mark: "", message: null }) }));
 vi.mock("./lib/assistant/executor", () => ({ startAssistantExecutor: () => () => undefined }));
-vi.mock("./components/Sidebar", () => ({ Sidebar: () => null }));
+vi.mock("./components/Sidebar", () => ({ Sidebar: ({spaces,onSwitchSpace}: {spaces: Array<{workspace:{id:string;name:string}}> ;onSwitchSpace:(id:string)=>void}) => <nav>{spaces.map(space=><button key={space.workspace.id} onClick={()=>onSwitchSpace(space.workspace.id)}>Switch {space.workspace.name}</button>)}</nav> }));
 vi.mock("./components/HomeView", () => ({ HomeView: () => null }));
 vi.mock("./components/ImportStudio", () => ({ ImportStudio: () => null }));
 vi.mock("./components/CommandPalette", () => ({ CommandPalette: () => null }));
@@ -110,6 +110,39 @@ function deferred<T>() {
 }
 
 describe("external MCP changes with a note already open", () => {
+  it("restores each Space's view and independent scroll position when returning", async () => {
+    const second=createEmptySnapshot('Second',runtime.disk!.updatedAt,'second');
+    runtime.disk!.spaces.push(second);
+    await launch();
+    const main=document.querySelector<HTMLElement>('.workspace-content')!;
+    main.scrollTop=620;main.scrollLeft=25;
+    fireEvent.click(screen.getByRole('button',{name:'Switch Second'}));
+    expect(main.scrollTop).toBe(0);
+    expect(main.scrollLeft).toBe(0);
+    main.scrollTop=180;
+    fireEvent.click(screen.getByRole('button',{name:'Switch External writer fixture'}));
+    await screen.findByRole('textbox',{name:'Note body'});
+    expect(main.scrollTop).toBe(620);
+    expect(main.scrollLeft).toBe(25);
+    fireEvent.click(screen.getByRole('button',{name:'Switch Second'}));
+    expect(main.scrollTop).toBe(180);
+  });
+  it("saves ticket description and checklist from Details while editing a note", async () => {
+    runtime.disk!.spaces[0].notes[0].body = '- [ ] New <!-- orion-ticket:v1 t1 todo b1 urgency=medium -->\n\n\n\n&nbsp;';
+    const editor = await launch();
+    fireEvent.click(await screen.findByRole('button', {name:'Open details for New'}));
+    const description = screen.getByRole('textbox', {name:'Ticket description'});
+    act(() => description.focus());
+    fireEvent.change(description, {target:{value:'Release context'}});
+    act(() => description.blur());
+    expect(screen.queryByText('This ticket changed. Check its current contents and try again.')).toBeNull();
+    expect(editor.getMarkdown()).toContain('Release context');
+    const input = screen.getByRole('textbox', {name:'New checklist item'});
+    fireEvent.change(input, {target:{value:'Check the build'}});
+    fireEvent.submit(input.closest('form')!);
+    expect(editor.getMarkdown()).toContain('[ ] Check the build');
+    await waitFor(() => expect(diskNote().body).toContain('[ ] Check the build'));
+  });
   it.each([false, true])("ignores an overtaken refresh and retries for current remote metadata (newer typing: %s)", async newerTyping => {
     const editor = await launch();
     const stale = structuredClone(runtime.disk!);

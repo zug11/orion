@@ -30,3 +30,8 @@
 }
 
 .space-renamer .space-creator-footer small { min-width: 0; }
+
+.space-search { display:flex; align-items:center; gap:8px; margin:8px; padding:7px 10px; color:var(--faint); background:var(--surface-2); border-radius:8px; }
+.space-search input { min-width:0; width:100%; border:0; background:transparent; color:var(--text); font:inherit; outline:none; }
+.space-search:focus-within { box-shadow:0 0 0 2px var(--accent); }
+.space-search-empty { padding:10px 16px; color:var(--faint); font-size:12px; }

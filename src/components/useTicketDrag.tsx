@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { TICKET_STATUSES, type Ticket, type TicketPatch } from '../lib/tickets';
+import { validTicketStatus, type Ticket, type TicketPatch } from '../lib/tickets';
 
 /** Pointer dragging also works inside WKWebView's native file-drop interception. */
 export function useTicketDrag(root: RefObject<HTMLElement | null>, onPatch?: (ticket: Ticket, patch: TicketPatch) => boolean) {
@@ -73,7 +73,7 @@ export function useTicketDrag(root: RefObject<HTMLElement | null>, onPatch?: (ti
       if (drop) {
         const status = drop.dataset.ticketDropStatus;
         const patch: TicketPatch = { boardId: drop.dataset.ticketDropBoard ?? '' };
-        if (TICKET_STATUSES.some(([id]) => id === status)) patch.status = status as Ticket['status'];
+        if (validTicketStatus(status)) patch.status = status as Ticket['status'];
         const ok = onPatch?.(current.ticket, patch);
         setMessage(ok ? 'Ticket moved.' : 'This ticket changed. Try again.');
       }

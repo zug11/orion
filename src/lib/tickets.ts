@@ -9,19 +9,22 @@ import { splitMarkdownFrontmatter } from './markdown';
 import { displayNoteTitle } from './noteMetadata';
 import { changeTicketBlock, type TicketDetailChange } from './ticketDetails';
 
-export type TicketStatus = 'todo' | 'progress' | 'done';
+export type TicketStatus = 'todo' | 'progress' | 'done' | `column-${string}`;
+export const validTicketStatus = (value: unknown): value is TicketStatus => typeof value === 'string' && (/^(todo|progress|done)$/.test(value) || /^column-[a-zA-Z0-9_-]{1,80}$/.test(value));
+export interface BoardColumn { id: TicketStatus; title: string }
+export type BoardChange = {kind:'title'; title:string} | {kind:'addColumn'; title:string} | {kind:'columnTitle'; id:TicketStatus; title:string};
 export const TICKET_URGENCIES = ['urgent', 'high', 'medium', 'low'] as const;
 export type TicketUrgency = typeof TICKET_URGENCIES[number] | '';
 export const validTicketUrgency = (value: unknown): value is TicketUrgency => value === '' || TICKET_URGENCIES.includes(value as never);
 export interface TicketMeta { id: string; status: TicketStatus; boardId: string; dueDate?: string; origin?: 'board'; urgency?: TicketUrgency }
-export interface NoteBoard { id: string; title: string; noteId: string }
+export interface NoteBoard { id: string; title: string; noteId: string; columns?: BoardColumn[] }
 export interface Ticket extends TicketMeta { noteId: string; noteTitle: string; title: string; lineIndex: number; rawLine: string; rawBlock?: string; durable: boolean; markerStart?: number }
 export type TicketPatch = Partial<Pick<TicketMeta, 'status' | 'boardId' | 'dueDate' | 'urgency'>> & { detail?: TicketDetailChange };
 export const TICKET_STATUSES: readonly [TicketStatus, string][] = [['todo', 'To do'], ['progress', 'In progress'], ['done', 'Done']];
 const ID = /^[a-zA-Z0-9_-]{1,96}$/;
 const TASK = /^(\s*[-+*]\s+\[)([ xX])(\]\s+)(.*)$/;
-const TICKET = /<!-- orion-ticket:v1 ([\w-]{1,96}) (todo|progress|done) ([\w-]{1,96}|-)(?: due=(\d{4}-\d{2}-\d{2}))?(?: (origin=board))?(?: urgency=(urgent|high|medium|low))? -->/;
-const BOARD = /^<!-- orion-kanban:v1 ([\w-]{1,96}) ([^\s<>]{1,1800}) -->$/;
+const TICKET = /<!-- orion-ticket:v1 ([\w-]{1,96}) (todo|progress|done|column-[a-zA-Z0-9_-]{1,80}) ([\w-]{1,96}|-)(?: due=(\d{4}-\d{2}-\d{2}))?(?: (origin=board))?(?: urgency=(urgent|high|medium|low))? -->/;
+const BOARD = /^<!-- orion-kanban:v1 ([\w-]{1,96}) ([^\s<>]{1,1800})(?: columns=([^\s<>]{1,30000}))? -->$/;
 export const newTicketId = () => `ticket-${nanoid(16)}`;
 export const newBoardId = () => `board-${nanoid(16)}`;
 export function parseTicketMarker(value: string): TicketMeta | null {
@@ -30,19 +33,19 @@ export function parseTicketMarker(value: string): TicketMeta | null {
 }
 export function ticketMarker(meta: TicketMeta): string {
   if (meta.urgency !== undefined && !validTicketUrgency(meta.urgency)) return '';
-  if (meta.dueDate && !validCalendarDate(meta.dueDate) || !ID.test(meta.id) || meta.boardId && !ID.test(meta.boardId) || !TICKET_STATUSES.some(([id]) => id === meta.status)) return '';
+  if (meta.dueDate && !validCalendarDate(meta.dueDate) || !ID.test(meta.id) || meta.boardId && !ID.test(meta.boardId) || !validTicketStatus(meta.status)) return '';
   return `<!-- orion-ticket:v1 ${meta.id} ${meta.status} ${meta.boardId || '-'}${meta.dueDate ? ` due=${meta.dueDate}` : ''}${meta.origin === 'board' ? ' origin=board' : ''}${meta.urgency ? ` urgency=${meta.urgency}` : ''} -->`;
 }
 export function parseBoardMarker(value: string): Omit<NoteBoard, 'noteId'> | null {
   const m = value.trim().match(BOARD); if (!m) return null;
-  try { const title = decodeURIComponent(m[2]); return title.trim() && title.length <= 140 && !/[\r\n\u0000-\u001f]/.test(title) ? { id: m[1], title } : null; } catch { return null; }
+  try { const title = decodeURIComponent(m[2]); return title.trim() && title.length <= 140 && !/[\r\n\u0000-\u001f]/.test(title) ? { id: m[1], title, ...(m[3] ? {columns: parseBoardColumns(decodeURIComponent(m[3]))} : {}) } : null; } catch { return null; }
 }
-export function boardMarker(board: Pick<NoteBoard, 'id' | 'title'>): string {
+export function boardMarker(board: Pick<NoteBoard, 'id' | 'title' | 'columns'>): string {
   if (!ID.test(board.id)) return '';
   const title = board.title.trim().slice(0, 140).replace(/[\r\n\u0000-\u001f]/g, ' ');
-  return title ? `<!-- orion-kanban:v1 ${board.id} ${encodeURIComponent(title).replace(/-/g, '%2D')} -->` : '';
+  return title ? `<!-- orion-kanban:v1 ${board.id} ${encodeURIComponent(title).replace(/-/g, '%2D')}${board.columns?.length ? ` columns=${encodeURIComponent(JSON.stringify(parseBoardColumns(JSON.stringify(board.columns))))}` : ''} -->` : '';
 }
-export function effectiveTicketStatus(checked: boolean, status: unknown): TicketStatus { return checked ? 'done' : status === 'progress' ? 'progress' : 'todo'; }
+export function effectiveTicketStatus(checked: boolean, status: unknown): TicketStatus { return checked ? 'done' : validTicketStatus(status) && status !== 'done' ? status : 'todo'; }
 export function newTicketMarkdown(title: string, boardId = '', status: TicketStatus = 'todo', dueDate = '', origin?: 'board', urgency?: TicketUrgency): string {
   // A title is literal prose, not a second Markdown/HTML command channel.
   const text = title.trim().slice(0, 140).replace(/[\r\n\u0000-\u001f]/g, ' ').replace(/[\\`*_[\]<>#~!+|.-]/g, '\\$&');
@@ -67,6 +70,7 @@ function scanWork(markdown: string) {
   const lines = markdown.split(/\r?\n/);
   const tickets: (Omit<Ticket, 'noteId' | 'noteTitle'> & { blockStart?: number; blockEnd?: number })[] = [];
   const boards: Omit<NoteBoard, 'noteId'>[] = [];
+  const boardLines = new Map<string, number[]>();
   const identityCounts = new Map<string, number>();
   function visit(node: MarkdownNode, parent?: MarkdownNode) {
     // Quoted/code examples and raw HTML never become actionable tickets.
@@ -95,11 +99,11 @@ function scanWork(markdown: string) {
       }
     }
     const board = node.type === 'html' && parent?.type !== 'paragraph' ? parseBoardMarker(node.value ?? '') : null;
-    if (board) boards.push(board);
+    if (board) { boards.push(board); boardLines.set(board.id,[...(boardLines.get(board.id) ?? []),lineIndex]); }
     node.children?.forEach(child => visit(child, node));
   }
   visit(parser.parse(content) as MarkdownNode);
-  return { tickets, boards, identityCounts };
+  return { tickets, boards, identityCounts, boardLines };
 }
 const cache = new WeakMap<Note, { tickets: Ticket[]; boards: NoteBoard[] }>();
 /** Derived, Space-local views. Unchanged immutable notes are never rescanned. */
@@ -151,7 +155,7 @@ export function patchTicket(markdown: string, ticket: Ticket, patch: TicketPatch
   }
   if (patch.urgency !== undefined && !validTicketUrgency(patch.urgency)) return null;
   if (patch.dueDate && !validCalendarDate(patch.dueDate)) return null;
-  if (patch.status !== undefined && !TICKET_STATUSES.some(([id]) => id === patch.status) || patch.boardId && !ID.test(patch.boardId)) return null;
+  if (patch.status !== undefined && !validTicketStatus(patch.status) || patch.boardId && !ID.test(patch.boardId)) return null;
   const lines = markdown.split(/\r?\n/);
   const current = scanWork(markdown).tickets;
   const candidates = current.filter(candidate => ticket.durable ? candidate.durable && candidate.id === ticket.id
@@ -159,7 +163,7 @@ export function patchTicket(markdown: string, ticket: Ticket, patch: TicketPatch
   if (candidates.length !== 1) return null;
   const index = candidates[0], line = lines[index], task = line?.match(TASK);
   if (!task || line !== ticket.rawLine) return null;
-  const status = patch.status ?? ticket.status, boardId = patch.boardId ?? ticket.boardId;
+  const status = patch.status ?? (patch.boardId !== undefined && patch.boardId !== ticket.boardId && ticket.status.startsWith('column-') ? 'todo' : ticket.status), boardId = patch.boardId ?? ticket.boardId;
   // Completing an ordinary checklist must not silently promote it into a ticket.
   if (!ticket.durable && patch.boardId === undefined && patch.dueDate === undefined && patch.urgency === undefined && status !== 'progress') {
     lines[index] = `${task[1]}${status === 'done' ? 'x' : ' '}${task[3]}${task[4]}`;
@@ -202,4 +206,39 @@ export function remarkNoteBoards() {
     }
     visit(tree);
   };
+}
+
+export function parseBoardColumns(json: string): BoardColumn[] {
+  const columns: unknown = JSON.parse(json);
+  if (!Array.isArray(columns) || columns.length > 23) throw new Error('Invalid board columns');
+  const ids = new Set<string>();
+  return columns.map(column => {
+    if (!column || typeof column !== 'object' || !validTicketStatus(column.id) || ids.has(column.id) || typeof column.title !== 'string' || !column.title.trim() || column.title.length > 80 || /[\r\n\u0000-\u001f]/.test(column.title)) throw new Error('Invalid board column');
+    ids.add(column.id);
+    return {id: column.id as BoardColumn['id'], title: column.title};
+  });
+}
+export function boardColumns(board: Pick<NoteBoard, 'columns'>): readonly [TicketStatus, string][] {
+  return [...TICKET_STATUSES.map(([id,title]) => [id,board.columns?.find(column => column.id === id)?.title ?? title] as [TicketStatus,string]), ...(board.columns ?? []).filter(column => column.id.startsWith('column-')).map(column => [column.id,column.title] as [TicketStatus,string])];
+}
+export function changeBoard(markdown: string, board: NoteBoard, change: BoardChange): string | null {
+  const scanned = scanWork(markdown);
+  const current = scanned.boards.filter(candidate => candidate.id === board.id);
+  const name = change.title.trim();
+  if (current.length !== 1 || JSON.stringify(current[0].columns ?? []) !== JSON.stringify(board.columns ?? []) || current[0].title !== board.title || !name || name.length > (change.kind === 'title' ? 140 : 80) || /[\r\n\u0000-\u001f]/.test(name)) return null;
+  let updated = {...board};
+  if(change.kind === 'title') updated.title = name;
+  else {
+    const columns = boardColumns(board);
+    if(columns.some(([id,label]) => (change.kind !== 'columnTitle' || id !== change.id) && label.toLocaleLowerCase() === name.toLocaleLowerCase())) return null;
+    if(change.kind === 'addColumn' && columns.length >= 23 || change.kind === 'columnTitle' && !columns.some(([id]) => id === change.id)) return null;
+    const id = change.kind === 'columnTitle' ? change.id : `column-${nanoid(12)}` as TicketStatus;
+    const existing = (board.columns ?? []).some(column => column.id === id);
+    updated.columns = existing ? board.columns!.map(column => column.id === id ? {...column,title:name} : column) : [...(board.columns ?? []), {id,title:name}];
+  }
+  const lines = markdown.split(/\r?\n/);
+  const index = scanned.boardLines.get(board.id)?.[0];
+  if (index === undefined || !parseBoardMarker(lines[index])) return null;
+  lines[index] = (lines[index].match(/^[ \t]*/)?.[0] ?? '') + boardMarker(updated);
+  return lines.join(markdown.includes('\r\n') ? '\r\n' : '\n');
 }

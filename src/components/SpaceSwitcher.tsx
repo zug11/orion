@@ -4,6 +4,7 @@ import {
   Edit3,
   Layers3,
   Plus,
+  Search,
   Trash2,
   X,
 } from "../lib/icons";
@@ -62,6 +63,10 @@ export function SpaceSwitcher({
   const renameTriggerRef = useRef<HTMLButtonElement | null>(null);
   const helpId = useId();
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const visibleSpaces = spaces.filter(space => space.workspace.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  useEffect(() => { if (open) searchRef.current?.focus(); else setQuery(""); }, [open]);
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState<{ id: string; originalName: string } | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -213,8 +218,15 @@ export function SpaceSwitcher({
             <em>{spaces.length}</em>
           </div>
 
+          <label className="space-search"><Search size={14} aria-hidden="true"/>
+            <input ref={searchRef} type="search" aria-label="Search spaces" placeholder="Search spaces" value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => {
+              if (event.key === 'ArrowDown') { event.preventDefault(); rootRef.current?.querySelector<HTMLButtonElement>('.space-option')?.focus(); }
+              if (event.key === 'Enter' && visibleSpaces.length === 1) { event.preventDefault(); onSwitchSpace(visibleSpaces[0].workspace.id); closePopover(true); }
+            }}/>
+          </label>
           <div className="space-switcher-list">
-            {spaces.map((space) => {
+            {visibleSpaces.length === 0 && <p className="space-search-empty" role="status">No matching spaces</p>}
+            {visibleSpaces.map((space) => {
               const active = space.workspace.id === activeSpaceId;
               return (
                 <div

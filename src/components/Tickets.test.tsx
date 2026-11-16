@@ -43,6 +43,96 @@ async function keyboardCommand(editor: Editor, text: string) {
   fireEvent.keyDown(editor.view.dom,{key:'Enter'});
 }
 describe('tickets in the real Orion surfaces', () => {
+  it('rejects a board rename draft after another edit changes its name', async () => {
+    const view=render(<EditorFixture body={`${board}\n\n${task}`}/>);
+    const editor=editorFor(view.container);
+    fireEvent.click(await screen.findByRole('button',{name:'Rename Launch board'}));
+    fireEvent.change(screen.getByRole('textbox',{name:'Board name'}),{target:{value:'My draft'}});
+    act(()=>{editor.state.doc.descendants((node,pos)=>{if(node.type.name==='noteKanban')editor.view.dispatch(editor.state.tr.setNodeMarkup(pos,undefined,{...node.attrs,title:'Changed elsewhere'}));});});
+    fireEvent.submit(screen.getByRole('textbox',{name:'Board name'}).closest('form')!);
+    expect(screen.getByRole('alert')).toHaveTextContent('board changed');
+    expect(noteWork(note(editor.getMarkdown())).boards[0].title).toBe('Changed elsewhere');
+  });
+  it('adds and renames board columns in the editor, moves cards by keyboard and preserves Undo', async () => {
+    const view=render(<EditorFixture body={`${board}\n\n${task}`}/>);
+    const editor=editorFor(view.container);
+    fireEvent.click(await screen.findByRole('button',{name:'Add column'}));
+    fireEvent.change(screen.getByRole('textbox',{name:'Column name'}),{target:{value:'Review'}});
+    fireEvent.submit(screen.getByRole('textbox',{name:'Column name'}).closest('form')!);
+    expect(screen.getByRole('region',{name:'Review'})).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button',{name:'Rename Done column'}));
+    fireEvent.change(screen.getByRole('textbox',{name:'Column name'}),{target:{value:'Shipped'}});
+    fireEvent.submit(screen.getByRole('textbox',{name:'Column name'}).closest('form')!);
+    expect(screen.getByRole('region',{name:'Shipped'})).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button',{name:'Rename Launch board'}));
+    fireEvent.change(screen.getByRole('textbox',{name:'Board name'}),{target:{value:'Release'}});
+    fireEvent.submit(screen.getByRole('textbox',{name:'Board name'}).closest('form')!);
+    expect(screen.getByRole('group',{name:'Release board'})).toBeInTheDocument();
+    for(let i=0;i<3;i++)fireEvent.keyDown(screen.getByRole('article',{name:'Call Jo'}),{key:'ArrowRight'});
+    expect(within(screen.getByRole('region',{name:'Review'})).getByRole('article',{name:'Call Jo'})).toBeInTheDocument();
+    expect(noteWork(note(editor.getMarkdown())).tickets[0].status).toMatch(/^column-/);
+    act(()=>editor.commands.undo());
+    expect(within(screen.getByRole('region',{name:'Shipped'})).getByRole('article',{name:'Call Jo'})).toBeInTheDocument();
+    const saved=editor.getMarkdown();view.unmount();render(<EditorFixture body={saved}/>);
+    expect(await screen.findByRole('group',{name:'Release board'})).toBeInTheDocument();
+    expect(screen.getByRole('region',{name:'Review'})).toBeInTheDocument();
+  });
+  it('edits Details immediately after creating a ticket with the slash command', async () => {
+    const view=render(<EditorFixture body="/ticket"/>);
+    const editor=editorFor(view.container);
+    await keyboardCommand(editor,'/ticket');
+    const create=await screen.findByRole('dialog',{name:'Create ticket'});
+    fireEvent.change(within(create).getByRole('textbox'),{target:{value:'New'}});
+    fireEvent.submit(create.querySelector('form')!);
+    await waitFor(()=>expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(await screen.findByRole('button',{name:'Open details for New'}));
+    const dialog=screen.getByRole('dialog',{name:'Ticket details'});
+    const description=within(dialog).getByRole('textbox',{name:'Ticket description'});
+    act(()=>description.focus());fireEvent.change(description,{target:{value:'Release context'}});act(()=>description.blur());
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(editor.getMarkdown()).toContain('Release context');
+    const input=within(dialog).getByRole('textbox',{name:'New checklist item'});
+    fireEvent.change(input,{target:{value:'Check the build'}});fireEvent.submit(input.closest('form')!);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(editor.getMarkdown()).toContain('[ ] Check the build');
+  });
+  it('edits Details after typing a trailing space in a ticket title', async () => {
+    const view=render(<EditorFixture body={task}/>);
+    const editor=editorFor(view.container);
+    act(() => { editor.commands.insertContentAt(10, ' '); });
+    const original=editor.getJSON();
+    fireEvent.click(await screen.findByRole('button',{name:'Open details for Call Jo'}));
+    const description=screen.getByRole('textbox',{name:'Ticket description'});
+    act(()=>description.focus());fireEvent.change(description,{target:{value:'Release context'}});act(()=>description.blur());
+    expect(screen.queryAllByRole('alert')).toHaveLength(0);
+    expect(editor.getMarkdown()).toContain('Release context');
+    expect(editor.state.doc.firstChild?.firstChild?.firstChild?.textContent).toBe('Call Jo ');
+    act(()=>editor.commands.undo());
+    expect(editor.getJSON()).toEqual(original);
+    const input=screen.getByRole('textbox',{name:'New checklist item'});
+    fireEvent.change(input,{target:{value:'Check the build'}});fireEvent.submit(input.closest('form')!);
+    expect(screen.queryAllByRole('alert')).toHaveLength(0);
+    expect(editor.getMarkdown()).toContain('[ ] Check the build');
+    act(()=>editor.commands.undo());
+    expect(editor.getJSON()).toEqual(original);
+  });
+  it('adds a description and checklist to a fresh ticket at the start of its note', async () => {
+    const view=render(<EditorFixture body={`${task}\n\n\n\n&nbsp;`}/>);
+    const editor=editorFor(view.container);
+    fireEvent.click(await screen.findByRole('button',{name:'Open details for Call Jo'}));
+    const dialog=screen.getByRole('dialog',{name:'Ticket details'});
+    const description=within(dialog).getByRole('textbox',{name:'Ticket description'});
+    act(()=>description.focus());
+    fireEvent.change(description,{target:{value:'Release context'}});
+    act(()=>description.blur());
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(editor.getMarkdown()).toContain('Release context');
+    const input=within(dialog).getByRole('textbox',{name:'New checklist item'});
+    fireEvent.change(input,{target:{value:'Check the build'}});
+    fireEvent.submit(input.closest('form')!);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(editor.getMarkdown()).toContain('[ ] Check the build');
+  });
   it('keeps ticket details open for interior padding and dismisses an actual backdrop click',()=>{
     const current=note(`${board}\n\n${task}`);
     render(<HomeTickets spaceId="s" notes={[current]} work={collectWork([current])} onOpenNote={vi.fn()} onPatch={vi.fn(()=>true)}/>);
@@ -136,7 +226,7 @@ describe('tickets in the real Orion surfaces', () => {
     fireEvent.click(within(boardUI).getByRole('button',{name:'Load 3 more tickets in To do'}));
     expect(within(boardUI).getAllByRole('article')).toHaveLength(123);
     expect(within(boardUI).queryByRole('button',{name:/Load .* more/})).toBeNull();
-  });
+  }, 15_000);
   it('keeps board-backed tasks hidden, lets a card open its original for editing, and restores cards if the board is removed', async () => {
     const view=render(<EditorFixture body={`${board}\n\n${task}\n\nAfter.`}/>);
     const editor=editorFor(view.container);

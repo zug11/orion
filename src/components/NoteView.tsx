@@ -143,6 +143,7 @@ function withoutTaskMarker(children: ReactNode): ReactNode {
 }
 
 interface NoteViewProps {
+  onChangeBoard?: TicketWorkspace["onChangeBoard"];
   onPatchTicket?: TicketWorkspace["onPatch"];
   onDeleteTicket?: TicketWorkspace["onDelete"];
   onCreateWork?: CreateWorkItem;
@@ -224,6 +225,7 @@ function safeUrl(url: string) {
 }
 
 export function NoteView({
+  onChangeBoard,
   onPatchTicket,
   onDeleteTicket,
   onCreateWork,
@@ -1286,7 +1288,7 @@ export function NoteView({
       const ticket = collectWork(notes).tickets.find(t => t.noteId === note.id && t.lineIndex === task.lineIndex && t.durable);
       if (ticket && collectWork(notes).boards.some(board => board.id === ticket.boardId && board.noteId === note.id) &&
           noteWork(note).tickets.filter(t => t.id === ticket.id).length === 1) return null;
-      if (ticket) return <li className="note-ticket-card">{onDeleteTicket && <TicketDeleteButton title={ticket.title} onDelete={() => onDeleteTicket(ticket)}/>}<div data-narration-ignore="true"><TicketDetailLauncher ticket={ticket} workspace={{work:collectWork(notes),onPatch:onPatchTicket,onOpenNote}}/></div><div className="note-ticket-prose">{taskBody}</div><TicketCardControls status={ticket.status} dueDate={ticket.dueDate} urgency={ticket.urgency} onPatch={onPatchTicket ? patch => onPatchTicket(ticket, patch) : undefined}/></li>;
+      if (ticket) return <li className="note-ticket-card">{onDeleteTicket && <TicketDeleteButton title={ticket.title} onDelete={() => onDeleteTicket(ticket)}/>}<div data-narration-ignore="true"><TicketDetailLauncher ticket={ticket} workspace={{work:collectWork(notes),onChangeBoard,onPatch:onPatchTicket,onOpenNote}}/></div><div className="note-ticket-prose">{taskBody}</div><TicketCardControls status={ticket.status} dueDate={ticket.dueDate} urgency={ticket.urgency} onPatch={onPatchTicket ? patch => onPatchTicket(ticket, patch) : undefined}/></li>;
       return (
         <li className={className}>
           <input
@@ -1421,14 +1423,14 @@ export function NoteView({
   // Playback ticks must not remount the reading text: its native ranges also
   // anchor Find, selection, excerpts and narration highlighting.
   const renderedMarkdown = useMemo(() => (
-    <ReadingBoardContext.Provider value={{noteId:note.id,workspace:{work:collectWork(notes),onPatch:onPatchTicket,onDelete:onDeleteTicket,onOpenNote,inference:ticketInference,
+    <ReadingBoardContext.Provider value={{noteId:note.id,workspace:{work:collectWork(notes),onChangeBoard,onPatch:onPatchTicket,onDelete:onDeleteTicket,onOpenNote,inference:ticketInference,
       onCreateTicket:onCreateWork ? (target,title,status,dueDate) => onCreateWork('ticket',title,target.noteId,target.id,status,dueDate) : undefined}}}>
     <ReactMarkdown remarkPlugins={[remarkGfm, ticketReferencePlugin, remarkNoteBoards, remarkNoteTableMetadata, remarkNoteBlocks, remarkNoteMargins, remarkNoteTextAlignment]} components={markdownComponents} urlTransform={safeUrl}>
       {visibleMarkdown}
     </ReactMarkdown>
     </ReadingBoardContext.Provider>
   ), [visibleMarkdown, note, notes, concepts, sources, findQuery, selectedPassageId,
-    onOpenNote, onOpenConcept, onOpenSource, onUpdateNote, onPatchTicket, onDeleteTicket, onCreateWork, ticketInference, ticketReferencePlugin]);
+    onOpenNote, onOpenConcept, onOpenSource, onUpdateNote, onPatchTicket, onDeleteTicket, onCreateWork, onChangeBoard, ticketInference, ticketReferencePlugin]);
 
   useLayoutEffect(() => {
     const active = narrationRef.current;
@@ -1689,6 +1691,7 @@ export function NoteView({
               sources={sources}
               attachedSourceIds={note.sourceIds}
               onChange={(body) => update({ body })}
+              onChangeBoard={onChangeBoard}
               onPatchTicket={onPatchTicket}
               onDeleteTicket={onDeleteTicket}
               ticketInference={ticketInference}

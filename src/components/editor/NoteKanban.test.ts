@@ -19,6 +19,29 @@ afterEach(() => editors.splice(0).forEach(e => e.destroy()));
 const n = (body: string): Note => ({ id:'n', title:'Note', body, slug:'n', summary:'', aliases:[], tags:[], sourceIds:[], conceptIds:[], kind:'article', status:'ready', createdAt:'2026-11-13T00:00:00Z', updatedAt:'2026-11-13T00:00:00Z' });
 
 describe('ticket and board editor transactions', () => {
+  it('moves an open-note ticket into a custom column belonging to another note in its Space', () => {
+    const editor=create(`- [ ] Call Jo ${ticketMarker({id:'t1',boardId:'b',status:'todo'})}`);
+    const ticket=noteWork(n(editor.getMarkdown())).tickets[0];
+    const boards=noteWork({...n(boardMarker({id:'b',title:'Launch',columns:[{id:'column-review',title:'Review'}]})),id:'other-note'}).boards;
+    expect(patchEditorTicket(editor,ticket,{status:'column-missing'},boards)).toBe(false);
+    expect(patchEditorTicket(editor,ticket,{status:'column-review'},boards)).toBe(true);
+    expect(noteWork(n(editor.getMarkdown())).tickets[0].status).toBe('column-review');
+    editor.commands.undo();
+    expect(noteWork(n(editor.getMarkdown())).tickets[0].status).toBe('todo');
+  });
+  it('rejects genuine live changes and duplicate identities for detail edits', () => {
+    const body = `- [ ] Call Jo ${ticketMarker({id:'t1',boardId:'',status:'todo'})}`;
+    const editor = create(body);
+    const captured = noteWork(n(editor.getMarkdown())).tickets[0];
+    editor.commands.insertContentAt(10, ' tomorrow');
+    const changed = editor.getJSON();
+    expect(patchEditorTicket(editor, captured, {detail:{kind:'description',text:'Context'}})).toBe(false);
+    expect(editor.getJSON()).toEqual(changed);
+    const duplicated = create(`${body}\n${body}`);
+    const before = duplicated.getJSON();
+    expect(patchEditorTicket(duplicated, captured, {detail:{kind:'add',text:'Check it'}})).toBe(false);
+    expect(duplicated.getJSON()).toEqual(before);
+  });
   it('skips hidden task text without changing Markdown, but explicitly opens the original card for editing', () => {
     const editor=create(`Before.\n\n${boardMarker({id:'b1',title:'Launch'})}\n\n- [ ] Call Jo ${ticketMarker({id:'t1',boardId:'b1',status:'todo'})}\n\nAfter.`);
     const original=editor.getJSON();

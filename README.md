@@ -13,9 +13,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zug11/orion/releases/download/v0.6.1/Orion-0.6.1.m-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/zug11/orion/releases/download/v0.6.3/Orion-0.6.3.m-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
   ·
-  <a href="https://github.com/zug11/orion/releases/tag/v0.6.1">Release notes · Whisper Medium edition</a>
+  <a href="https://github.com/zug11/orion/releases/tag/v0.6.3">Release notes · Whisper Medium edition</a>
   ·
   <a href="#the-orchestration-topology">How it works</a>
   ·
@@ -24,7 +24,7 @@
   <a href="#local-first-by-construction">Privacy</a>
 </p>
 
-> Orion 0.6.1 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
+> Orion 0.6.3 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
 
 ## ChatGPT plan access and voice choices
 
@@ -856,12 +856,12 @@ See [all 21 tools and their contracts](docs/mcp-library-tools.md).
 
 ## Download
 
-[**Download Orion 0.6.1 for Apple Silicon — Whisper Medium**](https://github.com/zug11/orion/releases/download/v0.6.1/Orion-0.6.1.m-Apple-Silicon.dmg)
+[**Download Orion 0.6.3 for Apple Silicon — Whisper Medium**](https://github.com/zug11/orion/releases/download/v0.6.3/Orion-0.6.3.m-Apple-Silicon.dmg)
 
 This release includes Whisper Medium and its persistent dictation worker, the
 Claude connector and the Codex plugin. It is Developer ID signed,
 Apple-notarized, stapled and Gatekeeper-accepted. Verify the installer with the
-[SHA-256 checksum](releases/0.6.1-sha256.txt). Small edition builds are available
+[SHA-256 checksums](https://github.com/zug11/orion/releases/download/v0.6.3/Orion-0.6.3-SHA256SUMS.txt). Small edition builds are available
 in [earlier releases](https://github.com/zug11/orion/releases).
 
 Requirements:
@@ -1288,3 +1288,11 @@ summary, a finished checklist and reported passing verification. Orion records
 that evidence; it does not independently execute the assistant's checks. The
 `orion_export_collection` workflow exports an explicit note selection through
 Orion's native folder picker without an AI call.
+
+### Boards and Space navigation
+
+Keep the default kanban columns, add extra stages, and rename boards or columns
+without moving their tickets. Drag cards between columns or use Left/Right on a
+focused card. Custom columns remain portable in note Markdown and are available
+through Orion's MCP tools. Use Search spaces in the Space switcher to find a
+project; switching back restores the view and scroll position left in that window.

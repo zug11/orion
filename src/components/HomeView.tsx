@@ -37,6 +37,7 @@ interface HomeViewProps {
   onNewNote: () => void;
   onImport: () => void;
   onOpenNotes: () => void;
+  onChangeBoard?: TicketWorkspace["onChangeBoard"];
   onPatchTicket?: TicketWorkspace["onPatch"];
   onDeleteTicket?: TicketWorkspace["onDelete"];
   onDismissCalendarMention?: import('../lib/calendarDismissal').DismissCalendarMention;
@@ -99,6 +100,7 @@ export function HomeView({
   onNewNote,
   onImport,
   onOpenNotes,
+  onChangeBoard,
   onPatchTicket,
   onDeleteTicket,
   onDismissCalendarMention,
@@ -343,7 +345,7 @@ export function HomeView({
         </section>
       ) : (
         <>
-          <HomeTickets key={snapshot.workspace.id} spaceId={snapshot.workspace.id} preferences={workPreferences} notes={snapshot.notes} work={work} concepts={snapshot.concepts} onOpenConcept={onOpenConcept} onOpenNote={onOpenNote} onPatch={onPatchTicket} onDelete={onDeleteTicket} onCreate={onCreateWork} inference={ticketInference} overview={overviewPanel} onDismissCalendarMention={onDismissCalendarMention}/>
+          <HomeTickets key={snapshot.workspace.id} spaceId={snapshot.workspace.id} preferences={workPreferences} notes={snapshot.notes} work={work} concepts={snapshot.concepts} onOpenConcept={onOpenConcept} onOpenNote={onOpenNote} onChangeBoard={onChangeBoard} onPatch={onPatchTicket} onDelete={onDeleteTicket} onCreate={onCreateWork} inference={ticketInference} overview={overviewPanel} onDismissCalendarMention={onDismissCalendarMention}/>
           <section className="home-section home-explore" aria-label="Continue exploring">
             <div className="section-heading">
               <div>

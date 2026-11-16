@@ -168,3 +168,9 @@
 .ticket-board-choice select { max-width:100%; padding:6px 10px; color:var(--text); background:var(--surface-raised); border:1px solid var(--line); border-radius:6px; font:inherit; }
 .ticket-board-choice select:focus-visible { outline:2px solid var(--periwinkle); outline-offset:2px; }
 .ticket-duplicate-hint { color:var(--text-soft); font:12px/1.5 var(--ui-font); margin:10px 0; }
+
+.orion-kanban.has-extra-columns { grid-template-columns:none; grid-auto-flow:column; grid-auto-columns:minmax(220px,1fr); overflow-x:auto; padding:4px 3px 16px; }
+.kanban-column-name { font:inherit; color:inherit; text-align:left; border:0; padding:0; background:none; cursor:pointer; }
+.kanban-column-name:hover { color:var(--text); }
+.kanban-name-form { display:flex; align-items:center; gap:8px; margin:10px 0; }
+.kanban-name-form input { min-width:0; max-width:300px; flex:1; border:1px solid var(--line); border-radius:8px; padding:8px 10px; color:var(--text); background:var(--surface-1); font:inherit; }

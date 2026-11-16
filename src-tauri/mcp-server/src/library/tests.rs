@@ -3267,3 +3267,73 @@ fn missing_damaged_or_inconsistent_source_text_fails_closed() {
         assert_eq!(fs::read(&invalid.vault_path).unwrap(), before);
     }
 }
+
+#[test]
+fn board_columns_can_be_added_renamed_and_used_through_mcp() {
+    let (_dir, server) = server(&fixture());
+    let created = run(
+        &server,
+        "orion_create_board",
+        editor_command(&server, json!({"title":"Launch"})),
+    );
+    let board = created["work"]["boards"][0]["id"].as_str().unwrap();
+    let added = run(
+        &server,
+        "orion_update_board",
+        editor_command(&server, json!({"board_id":board,"column_title":"Review"})),
+    );
+    let column = added["work"]["boards"][0]["columns"][0]["id"]
+        .as_str()
+        .unwrap();
+    run(
+        &server,
+        "orion_update_board",
+        editor_command(
+            &server,
+            json!({"board_id":board,"column_id":"done","column_title":"Shipped","title":"Release"}),
+        ),
+    );
+    run(
+        &server,
+        "orion_update_board",
+        editor_command(&server, json!({"board_id":board,"column_title":"Blocked"})),
+    );
+    run(
+        &server,
+        "orion_update_board",
+        editor_command(
+            &server,
+            json!({"board_id":board,"column_id":column,"column_title":"QA"}),
+        ),
+    );
+    let created = run(
+        &server,
+        "orion_create_tickets",
+        editor_command(
+            &server,
+            json!({"board_id":board,"status":column,"tickets":[{"title":"Review build"}]}),
+        ),
+    );
+    let ticket = created["work"]["tickets"][0]["id"].as_str().unwrap();
+    assert_eq!(created["work"]["tickets"][0]["status"], column);
+    let updated = run(
+        &server,
+        "orion_update_ticket",
+        editor_command(&server, json!({"ticket_id":ticket,"urgency":"high"})),
+    );
+    assert_eq!(updated["work"]["tickets"][0]["status"], column);
+    let read = run(&server, "orion_get_board", json!({"board_id":board}));
+    assert_eq!(read["board"]["title"], "Release");
+    assert_eq!(read["board"]["columns"].as_array().unwrap().len(), 3);
+    assert_eq!(read["board"]["columns"][0]["id"], column);
+    assert_eq!(read["board"]["columns"][0]["title"], "QA");
+    let before = saved_body(&server);
+    let invalid = editor_command(
+        &server,
+        json!({"ticket_id":ticket,"status":"column-missing"}),
+    );
+    assert!(server
+        .call_tool("orion_update_ticket", invalid.as_object().unwrap())
+        .is_err());
+    assert_eq!(saved_body(&server), before);
+}

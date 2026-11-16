@@ -212,7 +212,10 @@ These product decisions are intentional:
   Undo transaction. Checklists are nested ordinary Markdown tasks, never a new
   store. Add, rename, remove, reorder and completion preserve nested contents and
   surrounding prose; completing children does not complete the parent. Reject
-  stale captured blocks and duplicate identities. Preserve formatted descriptions
+  stale captured blocks and duplicate identities. In the live editor, compare
+  ticket titles using the same trailing-whitespace normalization as the Markdown
+  marker serializer; preserve the authored title when changing another field.
+  Other content and attributes still require exact equality. Preserve formatted descriptions
   for rich editing in the source note. The native modal traps focus, restores its
   launcher and supports Escape; long titles and checklist items wrap.
   Optional Space `ticketCodes` v1 stores only a prefix, nextNumber and permanent
@@ -241,6 +244,23 @@ These product decisions are intentional:
   Continue exploring has no Recent notes heading or three-note limit. Show every
   active-Space note in a keyboard-focusable horizontal strip, newest updated
   first, with contained horizontal overflow and offscreen rendering containment.
+- Boards retain the default todo/progress/done columns and may add up to 20
+  additional columns. Board and column names are editable in Home and notes;
+  renaming never changes board/column identity, ticket assignment or completion.
+  Optional `columns=URI_ENCODED_JSON` on the kanban marker stores `{id,title}`
+  entries, including label overrides for defaults. Custom IDs are `column-...`
+  and are valid open ticket statuses. The checkbox remains authoritative for Done.
+  Additional columns scroll horizontally; drag, keyboard moves, creation, Details,
+  export, clipboard and MCP preserve them. Editor board changes use one Undo;
+  saved-body changes require the exact current board identity and metadata.
+  MCP update_board accepts title, or column_title with optional column_id, and
+  ticket writes validate custom status against the destination board.
+- The Space switcher has local, case-insensitive name search. Search never
+  changes the active Space until a result is chosen. ArrowDown focuses results;
+  Enter opens a sole result. Returning to a Space restores that window's last
+  view and main scroll position during the session. This state stays out of the
+  vault. Ordinary note navigation still starts at the top; Back/Forward retain
+  their independent history positions.
 - Boards in Home and notes offer Add ticket inside every column. Enter creates
   in that board's source note with the column's status and keeps the field ready
   for another; Escape cancels and restores its Add button. Editor creation is

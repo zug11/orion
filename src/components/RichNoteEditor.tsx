@@ -6,7 +6,7 @@ import { EMPTY_WORK, TicketContext, WorkItemComposer, type TicketWorkspace } fro
 import { applyInferredTickets, type TicketInference } from "../lib/ticketInference";
 import { boardTicketVisibilityKey, editBoardTicket } from './editor/boardTicketVisibility';
 import { collectWork, noteWork, type Ticket, type TicketPatch } from "../lib/tickets";
-import { NoteKanban, containsNoteBoard, containsNoteTicket, insertWorkItem, insertBoardTickets, patchEditorTicket, deleteEditorTicket } from "./editor/NoteKanban";
+import { changeEditorBoard, NoteKanban, containsNoteBoard, containsNoteTicket, insertWorkItem, insertBoardTickets, patchEditorTicket, deleteEditorTicket } from "./editor/NoteKanban";
 import { captureCommentCursor, type CommentCursor } from "../lib/commentCursor";
 import type { ChatEditorChange } from "../lib/chatEdits";
 import { prepareChatEditorChange, applyPreparedChatChange, type PreparedChatChange } from "./editor/chatEditTransaction";
@@ -162,6 +162,7 @@ interface RichNoteEditorProps {
   sources: readonly Source[];
   attachedSourceIds: readonly EntityId[];
   onChange: (markdown: string) => void;
+  onChangeBoard?: TicketWorkspace["onChangeBoard"];
   onPatchTicket?: (ticket: Ticket, patch: TicketPatch) => boolean;
   onDeleteTicket?: (ticket: Ticket) => boolean;
   ticketInference?: TicketWorkspace["inference"];
@@ -297,6 +298,7 @@ export function RichNoteEditor({
   sources,
   attachedSourceIds,
   onChange,
+  onChangeBoard,
   onPatchTicket,
   onDeleteTicket,
   ticketInference,
@@ -587,7 +589,7 @@ export function RichNoteEditor({
   const hasTicket = useEditorState({ editor, selector: ({ editor: current }) => Boolean(current && containsNoteTicket(current.state.doc)) }) ?? false;
   useEffect(()=>{
     if(!editor||editor.isDestroyed)return;
-    return ticketNavigation.registerEditor?.({noteId,onPatch:(ticket,patch)=>reviewReadyRef.current()&&patchEditorTicket(editor,ticket,patch),onEditTicket:ticket=>editBoardTicket(editor,ticket)});
+    return ticketNavigation.registerEditor?.({noteId,onPatch:(ticket,patch)=>reviewReadyRef.current()&&patchEditorTicket(editor,ticket,patch,collectWork(notesRef.current).boards),onEditTicket:ticket=>editBoardTicket(editor,ticket)});
   },[editor,noteId,ticketNavigation.registerEditor]);
   useEffect(()=>{if(editor&&!editor.isDestroyed)editor.view.dispatch(editor.state.tr);},[editor,ticketNavigation.index]);
   useEffect(() => {
@@ -2223,8 +2225,9 @@ export function RichNoteEditor({
         editor.state.doc.eq(workInsert.document) && (!boardId || collectWork(notes).boards.some(board => board.id === boardId)) &&
         insertWorkItem(editor,workInsert.kind,title,workInsert.range,boardId,dueDate)}/> }
       <TicketContext.Provider value={{work:hasBoard ? collectWork(notes) : hasTicket && notes.find(note => note.id === noteId) ? noteWork(notes.find(note => note.id === noteId)!) : EMPTY_WORK,onOpenNote,
+        onChangeBoard:(board,change) => reviewReadyRef.current() && (board.noteId === noteId ? changeEditorBoard(editor,board,change) : onChangeBoard?.(board,change) ?? false),
         onEditTicket:ticket => ticket.noteId === noteId && editBoardTicket(editor, ticket),
-        onPatch:(ticket,patch) => reviewReadyRef.current() && (ticket.noteId === noteId ? patchEditorTicket(editor,ticket,patch) : onPatchTicket?.(ticket,patch) ?? false),
+        onPatch:(ticket,patch) => reviewReadyRef.current() && (ticket.noteId === noteId ? patchEditorTicket(editor,ticket,patch,collectWork(notesRef.current).boards) : onPatchTicket?.(ticket,patch) ?? false),
         onDelete:ticket => reviewReadyRef.current() && (ticket.noteId === noteId ? deleteEditorTicket(editor,ticket) : onDeleteTicket?.(ticket) ?? false),
         onCreateTicket:(board,title,status,dueDate) => reviewReadyRef.current() && insertBoardTickets(editor,board.id,[title],status,false,dueDate),
         inference:ticketInference ? {

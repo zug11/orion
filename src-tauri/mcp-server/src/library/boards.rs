@@ -25,6 +25,7 @@ struct Board {
     id: String,
     title: String,
     range: Range<usize>,
+    columns: Vec<Value>,
 }
 #[derive(Clone, Debug)]
 struct Ticket {
@@ -87,6 +88,12 @@ fn valid_date(value: &str) -> bool {
     };
     year >= 1000 && day > 0 && day <= days
 }
+fn valid_status(value: &str) -> bool {
+    matches!(value, "todo" | "progress" | "done")
+        || value
+            .strip_prefix("column-")
+            .is_some_and(|id| id.len() <= 80 && valid_id(id))
+}
 fn valid_urgency(value: &str) -> bool {
     matches!(value, "" | "urgent" | "high" | "medium" | "low")
 }
@@ -98,7 +105,7 @@ fn ticket_meta(value: &str) -> Option<(String, String, String, String, String, S
     if parts.len() < 3
         || parts.len() > 6
         || !valid_id(parts[0])
-        || !matches!(parts[1], "todo" | "progress" | "done")
+        || !valid_status(parts[1])
         || parts[2] != "-" && !valid_id(parts[2])
     {
         return None;
@@ -169,11 +176,35 @@ fn encode(value: &str) -> String {
     }
     out
 }
-fn board_meta(value: &str) -> Option<(String, String)> {
+fn board_meta(value: &str) -> Option<(String, String, Vec<Value>)> {
     let value = value
         .trim()
         .strip_prefix("<!-- orion-kanban:v1 ")?
         .strip_suffix(" -->")?;
+    let (value, columns) = if let Some((base, encoded)) = value.split_once(" columns=") {
+        if encoded.len() > 30000 {
+            return None;
+        }
+        let columns: Vec<Value> = serde_json::from_str(&decode(encoded)?).ok()?;
+        if columns.len() > 23 {
+            return None;
+        }
+        let mut ids = std::collections::HashSet::new();
+        for column in &columns {
+            let id = column.get("id")?.as_str()?;
+            let title = column.get("title")?.as_str()?;
+            if !valid_status(id)
+                || !ids.insert(id.to_owned())
+                || !valid_title(title)
+                || title.encode_utf16().count() > 80
+            {
+                return None;
+            }
+        }
+        (base, columns)
+    } else {
+        (value, vec![])
+    };
     let (id, title) = value.split_once(' ')?;
     if !valid_id(id)
         || title.len() > 1800
@@ -187,7 +218,7 @@ fn board_meta(value: &str) -> Option<(String, String)> {
     if !valid_title(&title) {
         return None;
     }
-    Some((id.into(), title))
+    Some((id.into(), title, columns))
 }
 fn literal(value: &str) -> String {
     value
@@ -272,10 +303,15 @@ fn scan(body: &str) -> Work {
                         .as_ref()
                         .map(|r| &body[r.clone()])
                         .unwrap_or(&html);
-                    if let Some((id, title)) = board_meta(source) {
+                    if let Some((id, title, columns)) = board_meta(source) {
                         let range = html_block.clone().unwrap_or(range);
                         if !result.boards.iter().any(|b| b.range == range) {
-                            result.boards.push(Board { id, title, range });
+                            result.boards.push(Board {
+                                id,
+                                title,
+                                range,
+                                columns,
+                            });
                         }
                     }
                 }
@@ -317,8 +353,8 @@ fn scan(body: &str) -> Work {
             urgency,
             status: if task.checked {
                 "done"
-            } else if status == "progress" {
-                "progress"
+            } else if valid_status(&status) && status != "done" {
+                &status
             } else {
                 "todo"
             }
@@ -348,7 +384,7 @@ fn index(scope: &Space) -> (Vec<(&Note, Work)>, Value) {
     (entries, coverage)
 }
 fn board_json(scope: &Space, note: &Note, board: &Board) -> Value {
-    json!({"id":board.id,"title":board.title,"noteId":note.id,"note":citation(scope,note)})
+    json!({"id":board.id,"title":board.title,"columns":board.columns,"noteId":note.id,"note":citation(scope,note)})
 }
 fn ticket_json(scope: &Space, note: &Note, ticket: &Ticket, boards: &BTreeSet<String>) -> Value {
     json!({"id":if ticket.id.is_empty(){format!("{}:{}",note.id,ticket.line)}else{ticket.id.clone()},"code":ticket_codes::code(&scope.ticket_codes, &ticket.id),"durable":!ticket.id.is_empty(),"title":truncate_chars(&ticket.title,500).0,"titleTruncated":ticket.title.chars().count()>500,"status":ticket.status,"dueDate":ticket.due,"urgency":ticket.urgency,"origin":if ticket.origin.is_empty(){"note"}else{ticket.origin.as_str()},"sourceNoteId":if ticket.origin=="board"{Value::Null}else{json!(note.id)},"boardId":if boards.contains(&ticket.board){ticket.board.as_str()}else{""},"noteId":note.id,"lineIndex":ticket.line,"note":citation(scope,note)})
@@ -441,6 +477,27 @@ fn require_board(scope: &Space, id: &str) -> Result<(), ToolFailure> {
     if !unique_board_ids(&entries).contains(id) {
         return Err(ToolFailure::new(
             "The board is missing or its ID is duplicated in this Space.",
+        ));
+    }
+    Ok(())
+}
+
+fn require_column(scope: &Space, board: &str, status: &str) -> Result<(), ToolFailure> {
+    if !valid_status(status) {
+        return Err(ToolFailure::new("Invalid ticket status."));
+    }
+    if !status.starts_with("column-") {
+        return Ok(());
+    }
+    require_board(scope, board)?;
+    if !scope
+        .notes
+        .iter()
+        .flat_map(|note| scan(&note.body).boards)
+        .any(|b| b.id == board && b.columns.iter().any(|c| c["id"] == status))
+    {
+        return Err(ToolFailure::new(
+            "That column does not belong to the destination board.",
         ));
     }
     Ok(())
@@ -641,15 +698,82 @@ pub(super) fn edit(
         }
         "orion_update_board" => {
             require_board(scope, arg(args, "board_id"))?;
-            let title = arg(args, "title");
-            if !valid_title(title) {
-                return Err(ToolFailure::new("Invalid board title."));
-            }
             let board = work
                 .boards
                 .iter()
                 .find(|b| b.id == arg(args, "board_id"))
                 .ok_or_else(|| ToolFailure::new("That board does not belong to this note."))?;
+            let title = args
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or(&board.title);
+            if !valid_title(title) {
+                return Err(ToolFailure::new("Invalid board title."));
+            }
+            let mut columns = board.columns.clone();
+            if args.contains_key("column_title") {
+                let name = arg(args, "column_title").trim();
+                if !valid_title(name) || name.encode_utf16().count() > 80 {
+                    return Err(ToolFailure::new("Invalid column title."));
+                }
+                let supplied = arg(args, "column_id");
+                let id = if supplied.is_empty() {
+                    unique_id("column")
+                } else {
+                    supplied.to_owned()
+                };
+                if !supplied.is_empty()
+                    && !matches!(supplied, "todo" | "progress" | "done")
+                    && !columns.iter().any(|c| c["id"] == supplied)
+                {
+                    return Err(ToolFailure::new(
+                        "That column does not belong to this board.",
+                    ));
+                }
+                for (default, label) in [
+                    ("todo", "To do"),
+                    ("progress", "In progress"),
+                    ("done", "Done"),
+                ] {
+                    if default != id
+                        && columns
+                            .iter()
+                            .find(|c| c["id"] == default)
+                            .and_then(|c| c["title"].as_str())
+                            .unwrap_or(label)
+                            .to_lowercase()
+                            == name.to_lowercase()
+                    {
+                        return Err(ToolFailure::new("Column names must be unique."));
+                    }
+                }
+                if columns.iter().any(|c| {
+                    c["id"] != id
+                        && c["title"]
+                            .as_str()
+                            .is_some_and(|t| t.to_lowercase() == name.to_lowercase())
+                }) {
+                    return Err(ToolFailure::new("Column names must be unique."));
+                }
+                if supplied.is_empty()
+                    && columns
+                        .iter()
+                        .filter(|c| c["id"].as_str().is_some_and(|id| id.starts_with("column-")))
+                        .count()
+                        >= 20
+                {
+                    return Err(ToolFailure::new(
+                        "This board already has 20 additional columns.",
+                    ));
+                }
+                if let Some(column) = columns.iter_mut().find(|c| c["id"] == id) {
+                    column["title"] = json!(name);
+                } else {
+                    columns.push(json!({"id":id,"title":name}));
+                }
+            } else if args.contains_key("column_id") || !args.contains_key("title") {
+                return Err(ToolFailure::new("Supply title or column_title."));
+            }
             let old = &current.body[board.range.clone()];
             let suffix = if old.ends_with("\r\n") {
                 "\r\n"
@@ -662,9 +786,17 @@ pub(super) fn edit(
             body.replace_range(
                 board.range.clone(),
                 &format!(
-                    "<!-- orion-kanban:v1 {} {} -->{}",
+                    "<!-- orion-kanban:v1 {} {}{} -->{}",
                     board.id,
                     encode(title.trim()),
+                    if columns.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            " columns={}",
+                            encode(&serde_json::to_string(&columns).unwrap())
+                        )
+                    },
                     suffix
                 ),
             );
@@ -677,6 +809,7 @@ pub(super) fn edit(
             }
             let mut existing: BTreeSet<_> =
                 work.tickets.iter().map(|t| normalized(&t.title)).collect();
+            require_column(scope, board, status(args))?;
             let deduplicate = args
                 .get("deduplicate")
                 .and_then(Value::as_bool)
@@ -790,9 +923,14 @@ pub(super) fn edit(
             }
             let state = if args.contains_key("status") {
                 status(args)
+            } else if board != ticket.board && ticket.status.starts_with("column-") {
+                "todo"
             } else {
                 ticket.status.as_str()
             };
+            if args.contains_key("status") {
+                require_column(scope, board, state)?;
+            }
             let due = args
                 .get("due_date")
                 .and_then(Value::as_str)
@@ -880,4 +1018,26 @@ pub(super) fn receipt(
         .map(|t| ticket_json(scope, after, t, &valid))
         .collect();
     json!({"boards":boards,"tickets":tickets})
+}
+
+#[cfg(test)]
+mod column_tests {
+    use super::*;
+    #[test]
+    fn custom_columns_round_trip_and_checked_tasks_still_mean_done() {
+        let columns =
+            json!([{"id":"done","title":"Shipped"},{"id":"column-review","title":"Review"}]);
+        let body=format!("<!-- orion-kanban:v1 b Launch columns={} -->\n\n- [ ] Check it <!-- orion-ticket:v1 t column-review b -->\n- [x] Complete <!-- orion-ticket:v1 d column-review b -->", encode(&columns.to_string()));
+        let work = scan(&body);
+        assert_eq!(work.boards.len(), 1);
+        assert_eq!(work.boards[0].columns, columns.as_array().unwrap().clone());
+        assert_eq!(work.tickets[0].status, "column-review");
+        assert_eq!(work.tickets[1].status, "done");
+        let duplicated = json!([{"id":"todo","title":"A"},{"id":"todo","title":"B"}]);
+        assert!(board_meta(&format!(
+            "<!-- orion-kanban:v1 b Board columns={} -->",
+            encode(&duplicated.to_string())
+        ))
+        .is_none());
+    }
 }
