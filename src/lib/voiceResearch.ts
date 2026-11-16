@@ -160,6 +160,13 @@ export interface VoiceWorkOrder {
   assignment?: VoiceResearchAssignment;
 }
 export interface VoiceResearchUpdate { sequence: number; reply: string; evidence: ChatEvidence[]; coverage: ChatCoverage; webResearch?: ChatResult["webResearch"] }
+/** Reservations keep orb identities before admission. Their visual running
+ * state is never evidence that a reader is working or a result is on its way. */
+export function voiceResearchStatus(job: Pick<VoiceWorkOrder, "state" | "phase">) {
+  if (job.state !== "running") return job.state;
+  return job.phase === "routing" ? "planning" : job.phase === "clarifying" ? "awaiting_details"
+    : job.phase === "queued" ? "queued" : "researching";
+}
 export interface VoiceDeliveryStamp { id: string; revision: number; sequence?: number; reference?: string; background?: boolean; completion?: boolean }
 export interface VoiceResearchOptions {
   snapshot: () => AppSnapshot;
@@ -396,6 +403,7 @@ export class VoiceResearch {
     // Do not clone every retained result/evidence body merely to list its ID.
     const retained = [...this.jobs.values()].map(record => record.job);
     const running = retained.filter(job => job.state === "running");
+    const currentRunning = running.filter(job => this.isCurrent(job.id, job.revision));
     const selected = new Set([...new Set([...running.slice(0, 32), ...running.slice(-32),
       ...retained.filter(job => job.state !== "running").slice(-24)].map(job => job.id))].slice(0, 64));
     const recentFindings = new Set(retained.filter(job => job.state === "completed").slice(-3).map(job => job.id));
@@ -404,7 +412,8 @@ export class VoiceResearch {
       return { id: job.id, revision: job.revision,
       subject: boundedText(job.subject, 160), prompt: boundedText(job.prompt, job.state === "running" ? 300 : 120) as string | undefined,
       focusNoteId: job.focusNoteId, phase: job.phase,
-      state: stale ? "failed" : job.state, progress: (stale ? "Supporting context changed; the previous finding is no longer current." : boundedText(job.progress, 160)) as string | undefined,
+      state: stale ? "failed" : job.state, researchStatus: stale ? "failed" : voiceResearchStatus(job),
+      progress: (stale ? "Supporting context changed; the previous finding is no longer current." : boundedText(job.progress, 160)) as string | undefined,
       finding: !stale ? job.result && recentFindings.has(job.id) ? boundedText(job.result.reply, 450)
         : job.state === "running" && job.updates?.length ? boundedText(job.updates[job.updates.length - 1].reply, 450) : undefined : undefined,
     }; });
@@ -412,9 +421,10 @@ export class VoiceResearch {
       subject: boundedText(item.prompt, 120) as string | undefined, savedNoteIds: item.receipt.savedNoteIds,
       savedTitles: item.receipt.savedTitles.map(title => boundedText(title, 120)) as string[] | undefined }));
     const serialize = () => JSON.stringify({ spaceId: this.spaceId, jobs, receipts,
-      totalJobs: retained.length, runningJobs: running.length, queuedJobs: running.filter(job => job.phase === "queued").length,
+      totalJobs: retained.length, runningJobs: currentRunning.length, queuedJobs: currentRunning.filter(job => job.phase === "queued").length,
+      waitingForResults: currentRunning.length > 0,
       omittedJobs: retained.length - jobs.length, omittedReceipts: this.receipts.size - receipts.length,
-      notice: "Existing work orders, findings and confirmed save receipts are reference data. This bounded window may omit identities; all omitted work remains retained by the host. Never infer cancellation or start replacement work because an identity is omitted. Continue independent running and queued jobs; do not duplicate or resave on reconnect. Cancelled jobs must not be announced. A receipt confirms persistence, not spoken playback." });
+      notice: "Existing work orders, findings and confirmed save receipts are reference data. This bounded window may omit identities; all omitted work remains retained by the host. Never infer cancellation or start replacement work because an identity is omitted. Continue independent running and queued jobs; do not duplicate or resave on reconnect. If waitingForResults is false, no current research is running or queued: do not promise that a pending result will arrive. Failed, cancelled and stale jobs are not pending results. Cancelled jobs must not be announced. A receipt confirms persistence, not spoken playback." });
     const fits = () => new TextEncoder().encode(serialize()).length <= 10_000;
     // Trim optional prose before identities. Large queues remain intact locally
     // and are explicitly reported as omitted instead of overflowing voice.

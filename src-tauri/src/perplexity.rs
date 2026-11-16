@@ -6,14 +6,11 @@ pub(crate) use transport::RequestGate;
 
 const ENDPOINT: &str = "https://api.perplexity.ai/v1/agent";
 
-fn entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, "perplexity-api-key")
-        .map_err(|_| "Orion could not access the Perplexity Keychain entry.".into())
-}
+const KEYCHAIN_ACCOUNT: &str = "perplexity-api-key";
 
 async fn stored_key() -> Result<Zeroizing<String>, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        entry()?.get_password().map(Zeroizing::new).map_err(|_| {
+        read_provider_key(KEYCHAIN_ACCOUNT)?.ok_or_else(|| {
             "Add or re-save your Perplexity API key in Settings → Web research.".into()
         })
     })
@@ -27,25 +24,18 @@ pub(crate) async fn save_perplexity_api_key(
     gate: State<'_, RequestGate>,
 ) -> Result<(), String> {
     let key = normalize_api_key(api_key)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        entry()?
-            .set_password(key.as_str())
-            .map_err(|_| "Orion could not save the Perplexity key in Keychain.".to_string())
-    })
-    .await
-    .map_err(|_| "The secure Perplexity key save could not finish.".to_string())??;
+    tauri::async_runtime::spawn_blocking(move || save_provider_key(KEYCHAIN_ACCOUNT, key))
+        .await
+        .map_err(|_| "The secure Perplexity key save could not finish.".to_string())??;
     gate.reset_cooldown().await;
     Ok(())
 }
 
 #[tauri::command]
 pub(crate) async fn delete_perplexity_api_key() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(|| match entry()?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(_) => Err("Orion could not remove the Perplexity key from Keychain.".into()),
-    })
-    .await
-    .map_err(|_| "The secure Perplexity key removal could not finish.".to_string())?
+    tauri::async_runtime::spawn_blocking(|| delete_provider_key(KEYCHAIN_ACCOUNT))
+        .await
+        .map_err(|_| "The secure Perplexity key removal could not finish.".to_string())?
 }
 
 fn client() -> Result<Client, String> {

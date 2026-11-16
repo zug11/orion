@@ -136,37 +136,130 @@ fn read_manifest(raw: &str) -> Result<Manifest, String> {
 fn chunk_name(manifest: &Manifest, index: usize) -> String {
     format!("chatgpt-plan-{}-{index}", manifest.generation)
 }
+const MAX_STORE_BYTES: usize = 1800 * 2048 / 4 * 3;
+#[cfg(target_os = "macos")]
+const CONSOLIDATED_ACCOUNT: &str = "chatgpt-plan-v2";
+
+fn decode_store(raw: &[u8]) -> Result<Store, String> {
+    if raw.len() > MAX_STORE_BYTES {
+        return Err("Too many saved ChatGPT connections.".into());
+    }
+    serde_json::from_slice(raw).map_err(|_| "Saved ChatGPT credentials could not be read.".into())
+}
+#[cfg(any(target_os = "macos", test))]
+fn encode_store(store: &Store) -> Result<Zeroizing<String>, String> {
+    let raw = Zeroizing::new(
+        serde_json::to_string(store).map_err(|_| "Could not encode ChatGPT credentials.")?,
+    );
+    if raw.len() > MAX_STORE_BYTES {
+        return Err("Too many saved ChatGPT connections.".into());
+    }
+    Ok(raw)
+}
+fn read_legacy_entry(name: &str) -> Result<Option<Zeroizing<String>>, String> {
+    match credential_entry(name)?.get_password() {
+        Ok(raw) => Ok(Some(Zeroizing::new(raw))),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(_) => Err("Could not read ChatGPT credentials from the OS keychain.".into()),
+    }
+}
+
+/// Legacy generations remain readable on every platform. The caller does not
+/// publish a replacement until all parts decode to a complete valid Store.
+fn read_legacy_store(
+    mut read: impl FnMut(&str) -> Result<Option<Zeroizing<String>>, String>,
+) -> Result<Option<(Store, Manifest)>, String> {
+    let Some(raw) = read("chatgpt-plan")? else {
+        return Ok(None);
+    };
+    let manifest = read_manifest(&raw)?;
+    let mut encoded = Zeroizing::new(String::new());
+    for index in 0..manifest.parts {
+        let part = read(&chunk_name(&manifest, index))?
+            .ok_or("Could not read the complete ChatGPT credential record.")?;
+        if part.len() > 1800 {
+            return Err("Invalid ChatGPT credential record.".into());
+        }
+        encoded.push_str(&part);
+    }
+    let decoded = Zeroizing::new(
+        BASE64_STANDARD
+            .decode(encoded.as_bytes())
+            .map_err(|_| "Saved ChatGPT credentials are invalid.")?,
+    );
+    Ok(Some((decode_store(&decoded)?, manifest)))
+}
+
+#[cfg(target_os = "macos")]
+fn retire_legacy_store(captured: Option<Manifest>) -> Result<(), String> {
+    // A pending cleanup after restart has no captured manifest. Retain the old
+    // root until every chunk is removed so this explicit retry can find them.
+    let manifest = match captured {
+        Some(manifest) => manifest,
+        None => match read_legacy_entry("chatgpt-plan")? {
+            Some(raw) => read_manifest(&raw)?,
+            None => return Ok(()),
+        },
+    };
+    retire_legacy_parts(&manifest, crate::credential_store::delete_legacy_entry)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn retire_legacy_parts(
+    manifest: &Manifest,
+    mut remove: impl FnMut(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    for index in 0..manifest.parts {
+        if remove(&chunk_name(manifest, index)).is_err() {
+            // A denial must stop this attempt immediately, not open another
+            // Keychain prompt for every remaining part of the old generation.
+            return Err("ChatGPT credentials were moved, but the old Keychain entries could not all be removed. Use Unlock saved connections in Settings to finish.".into());
+        }
+    }
+    remove("chatgpt-plan").map_err(|_| "ChatGPT credentials were moved, but the old Keychain registration could not be removed. Use Unlock saved connections in Settings to finish.".into())
+}
+
 async fn load() -> Result<Store, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        let raw = match credential_entry("chatgpt-plan")?.get_password() {
-            Ok(value) => value,
-            Err(keyring::Error::NoEntry) => return Ok(Store::default()),
-            Err(_) => return Err("Could not read ChatGPT credentials from the OS keychain.".into()),
-        };
-        let manifest = read_manifest(&raw)?;
-        let mut encoded = Zeroizing::new(String::new());
-        for index in 0..manifest.parts {
-            let part = Zeroizing::new(
-                credential_entry(&chunk_name(&manifest, index))?
-                    .get_password()
-                    .map_err(|_| "Could not read the complete ChatGPT credential record.")?,
-            );
-            if part.len() > 1800 {
-                return Err("Invalid ChatGPT credential record.".into());
-            }
-            encoded.push_str(&part);
+        #[cfg(target_os = "macos")]
+        {
+            let legacy_manifest = std::cell::RefCell::new(None);
+            let raw = crate::credential_store::read_or_migrate(
+                CONSOLIDATED_ACCOUNT,
+                || match read_legacy_store(read_legacy_entry)? {
+                    Some((store, manifest)) => {
+                        let raw = encode_store(&store)?;
+                        legacy_manifest.replace(Some(manifest));
+                        Ok(Some(raw))
+                    }
+                    None => Ok(None),
+                },
+                || retire_legacy_store(legacy_manifest.take()),
+            )?;
+            raw.map(|raw| decode_store(raw.as_bytes()))
+                .unwrap_or_else(|| Ok(Store::default()))
         }
-        let decoded = Zeroizing::new(
-            BASE64_STANDARD
-                .decode(encoded.as_bytes())
-                .map_err(|_| "Saved ChatGPT credentials are invalid.")?,
-        );
-        serde_json::from_slice(&decoded)
-            .map_err(|_| "Saved ChatGPT credentials could not be read.".into())
+        #[cfg(not(target_os = "macos"))]
+        {
+            read_legacy_store(read_legacy_entry)
+                .map(|saved| saved.map(|(store, _)| store).unwrap_or_default())
+        }
     })
     .await
     .map_err(|_| "The ChatGPT credential task could not finish.")?
 }
+
+#[cfg(target_os = "macos")]
+async fn save(store: &Store) -> Result<(), String> {
+    let raw = encode_store(store)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::credential_store::set(CONSOLIDATED_ACCOUNT, raw)
+    })
+    .await
+    .map_err(|_| "The ChatGPT credential save could not finish.")?
+}
+
+#[cfg(not(target_os = "macos"))]
 async fn save(store: &Store) -> Result<(), String> {
     let encoded = Zeroizing::new(
         BASE64_STANDARD.encode(
@@ -1264,6 +1357,125 @@ mod tests {
             expires: now() + 3600,
             scopes: vec![PLAN_SCOPE.into()],
         }
+    }
+    fn legacy_fixture(store: &Store) -> (Manifest, HashMap<String, String>) {
+        let encoded = BASE64_STANDARD.encode(encode_store(store).unwrap().as_bytes());
+        let manifest = Manifest {
+            generation: "41f7f60e-1bc7-4115-9285-2b4cb121f9c2".into(),
+            parts: encoded.len().div_ceil(1800),
+        };
+        let mut entries = HashMap::from([(
+            "chatgpt-plan".into(),
+            serde_json::to_string(&manifest).unwrap(),
+        )]);
+        for (index, part) in encoded.as_bytes().chunks(1800).enumerate() {
+            entries.insert(
+                chunk_name(&manifest, index),
+                std::str::from_utf8(part).unwrap().into(),
+            );
+        }
+        (manifest, entries)
+    }
+    #[test]
+    fn legacy_multipart_credentials_preserve_all_accounts_registration_and_active_selection() {
+        let mut first = account("oaiapp_first");
+        first.access = "synthetic-access-".repeat(400);
+        let store = Store {
+            host: "urn:uuid:synthetic-installation".into(),
+            active: Some("oaiapp_second".into()),
+            accounts: vec![first, account("oaiapp_second")],
+            welcomed: true,
+        };
+        let (manifest, entries) = legacy_fixture(&store);
+        assert!(manifest.parts > 3);
+        let mut reads = Vec::new();
+        let (restored, restored_manifest) = read_legacy_store(|name| {
+            reads.push(name.to_owned());
+            Ok(entries.get(name).cloned().map(Zeroizing::new))
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(reads.len(), manifest.parts + 1);
+        assert_eq!(restored_manifest.generation, manifest.generation);
+        assert_eq!(restored.host, store.host);
+        assert_eq!(restored.active, store.active);
+        assert_eq!(restored.welcomed, store.welcomed);
+        assert_eq!(
+            encode_store(&restored).unwrap().as_str(),
+            encode_store(&store).unwrap().as_str()
+        );
+    }
+    #[test]
+    fn legacy_migration_rejects_incomplete_or_invalid_records_before_publication() {
+        let (manifest, original) = legacy_fixture(&Store {
+            accounts: vec![account("oaiapp_saved")],
+            ..Store::default()
+        });
+        let first = chunk_name(&manifest, 0);
+        for mutation in 0..4 {
+            let mut entries = original.clone();
+            match mutation {
+                0 => {
+                    entries.remove(&first);
+                }
+                1 => {
+                    entries.insert(first.clone(), "x".repeat(1801));
+                }
+                2 => {
+                    entries.insert(
+                        first.clone(),
+                        BASE64_STANDARD.encode(b"not valid store JSON"),
+                    );
+                }
+                _ => {
+                    entries.insert(
+                        "chatgpt-plan".into(),
+                        r#"{"generation":"invalid","parts":1}"#.into(),
+                    );
+                }
+            }
+            assert!(
+                read_legacy_store(|name| Ok(entries.get(name).cloned().map(Zeroizing::new)))
+                    .is_err()
+            );
+        }
+        assert!(read_legacy_store(|_| Ok(None)).unwrap().is_none());
+        assert!(decode_store(&vec![b' '; MAX_STORE_BYTES + 1]).is_err());
+    }
+    #[test]
+    fn legacy_retirement_keeps_manifest_for_partial_failure_retry_and_removes_it_last() {
+        let mut saved = account("oaiapp_saved");
+        saved.access = "synthetic-access-".repeat(400);
+        let (manifest, mut entries) = legacy_fixture(&Store {
+            accounts: vec![saved],
+            ..Store::default()
+        });
+        let failed = chunk_name(&manifest, 1);
+        let mut attempted = Vec::new();
+        let result = retire_legacy_parts(&manifest, |name| {
+            attempted.push(name.to_owned());
+            if name == failed {
+                return Err("simulated locked entry".into());
+            }
+            entries.remove(name);
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert!(entries.contains_key("chatgpt-plan"));
+        assert!(entries.contains_key(&failed));
+        assert!(!entries.contains_key(&chunk_name(&manifest, 0)));
+        assert_eq!(attempted, vec![chunk_name(&manifest, 0), failed]);
+        assert!(entries.contains_key(&chunk_name(&manifest, 2)));
+        let retry_manifest = read_manifest(entries.get("chatgpt-plan").unwrap()).unwrap();
+        let mut removals = Vec::new();
+        retire_legacy_parts(&retry_manifest, |name| {
+            removals.push(name.to_owned());
+            entries.remove(name); // Already deleted entries are an idempotent success.
+            Ok(())
+        })
+        .unwrap();
+        assert!(entries.is_empty());
+        assert_eq!(removals.last().map(String::as_str), Some("chatgpt-plan"));
     }
     #[test]
     fn authorization_uses_fresh_pkce_and_exact_registration_context() {

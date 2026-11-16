@@ -567,13 +567,13 @@ fn read_cases() -> Vec<(&'static str, Value)> {
 fn all_library_tools_have_distinct_validated_contracts_and_read_calls_preserve_the_vault() {
     let (_dir, server) = server(&fixture());
     let before = fs::read(&server.vault_path).unwrap();
-    assert_eq!(definitions().len(), 30);
-    assert_eq!(tool_definitions().len(), 64);
+    assert_eq!(definitions().len(), 31);
+    assert_eq!(tool_definitions().len(), 66);
     let unique: BTreeSet<_> = definitions()
         .iter()
         .map(|def| def["name"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(unique.len(), 30);
+    assert_eq!(unique.len(), 31);
     for (name, args) in read_cases() {
         let value = run(&server, name, args.clone());
         assert_eq!(value["spaceId"], "a", "{name}");
@@ -2616,6 +2616,136 @@ fn comment_cursor_metadata_is_bounded_and_optional() {
 }
 
 #[test]
+fn ticket_details_codes_checklists_and_verified_completion_share_one_guarded_note() {
+    let mut initial = fixture();
+    initial["spaces"][0]["notes"][0]["body"] = json!("Before.\n\n- [ ] Ship it <!-- orion-ticket:v1 ship progress - -->\n\n  Release context.\n\n  - [x] Check types\n  - [ ] Run tests\n\nAfter.");
+    let (_dir, server) = server(&initial);
+    run(
+        &server,
+        "orion_update_ticket",
+        editor_command(&server, json!({"ticket_id":"ship","urgency":"high"})),
+    );
+    let detail = run(
+        &server,
+        "orion_get_ticket",
+        json!({"ticket_code":"ORION-001"}),
+    );
+    assert_eq!(detail["ticket"]["id"], "ship");
+    assert_eq!(detail["ticket"]["checklist"].as_array().unwrap().len(), 1);
+    assert_eq!(detail["ticket"]["checklist"][0]["title"], "Run tests");
+    assert!(detail["ticket"]["url"]
+        .as_str()
+        .unwrap()
+        .contains("ticket_id=ship"));
+    let current_version = version(&server, "n1");
+    let done = editor_command(&server, json!({"ticket_code":"ORION-001","status":"done"}));
+    let before = fs::read(&server.vault_path).unwrap();
+    assert!(server
+        .call_tool("orion_update_ticket", done.as_object().unwrap())
+        .is_err());
+    let bypass = editor_command(
+        &server,
+        json!({"old_text":"- [ ] Ship it","new_text":"- [x] Ship it"}),
+    );
+    assert!(server
+        .call_tool("orion_edit_note_text", bypass.as_object().unwrap())
+        .is_err());
+    let proof = json!([{"label":"cargo test","outcome":"passed","evidence":"131 tests passed, 0 failed; command exit 0."}]);
+    let mut completed = done.clone();
+    completed["implementation_summary"] = json!("Implemented the release checks.");
+    completed["verification"] = proof;
+    assert!(server
+        .call_tool("orion_update_ticket", completed.as_object().unwrap())
+        .is_err());
+    assert_eq!(fs::read(&server.vault_path).unwrap(), before);
+    completed["checklist"] = json!([{"line_index":detail["ticket"]["checklist"][0]["lineIndex"],"expected_title":"Run tests","completed":true}]);
+    let saved = run(&server, "orion_update_ticket", completed.clone());
+    assert_eq!(saved["work"]["tickets"][0]["status"], "done");
+    assert_eq!(saved["verificationRecorded"], true);
+    assert!(saved_body(&server).starts_with("Before.\n\n- [x] Ship it"));
+    assert!(saved_body(&server).ends_with("\n\nAfter."));
+    assert!(saved_body(&server).contains("  Implementation report"));
+    assert!(saved_body(&server).contains("131 tests passed"));
+    assert!(server
+        .call_tool("orion_update_ticket", completed.as_object().unwrap())
+        .is_err());
+    assert_ne!(version(&server, "n1"), current_version);
+    assert!(server
+        .call_tool(
+            "orion_get_ticket",
+            json!({"ticket_code":"ORION-001"}).as_object().unwrap()
+        )
+        .is_err());
+    let history = run(
+        &server,
+        "orion_get_ticket",
+        json!({"ticket_code":"orion-001","task_view":"history"}),
+    );
+    assert_eq!(history["ticket"]["checklist"].as_array().unwrap().len(), 2);
+    assert!(history["ticket"]["checklist"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|item| item["completed"] == true));
+    assert!(history["ticket"]["markdown"]
+        .as_str()
+        .unwrap()
+        .contains("Implementation report"));
+    assert_eq!(
+        run(
+            &server,
+            "orion_list_tickets",
+            json!({"query":"ORION-001","state":"all"})
+        )["tickets"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(server
+        .call_tool(
+            "orion_get_ticket",
+            json!({"space_id":"b","ticket_code":"ORION-001","task_view":"history"})
+                .as_object()
+                .unwrap()
+        )
+        .is_err());
+}
+
+#[test]
+fn ticket_codes_reconcile_a_former_duplicate_after_another_note_removes_it() {
+    let initial = fixture();
+    let mut value = initial.clone();
+    let template = value["spaces"][0]["notes"][0].clone();
+    value["spaces"][0]["notes"] = Value::Array(
+        [("a", "duplicate"), ("b", "duplicate"), ("c", "unique")]
+            .into_iter()
+            .map(|(id, ticket)| {
+                let mut note = template.clone();
+                note["id"] = json!(id);
+                note["body"] = json!(format!(
+                    "- [ ] Work <!-- orion-ticket:v1 {ticket} todo - -->"
+                ));
+                note
+            })
+            .collect(),
+    );
+    allocate_work_codes(&initial, &mut value).unwrap();
+    assert_eq!(value["spaces"][0]["ticketCodes"]["assigned"]["unique"], 1);
+    assert!(value["spaces"][0]["ticketCodes"]["assigned"]
+        .get("duplicate")
+        .is_none());
+    let before = value.clone();
+    value["spaces"][0]["notes"][1]["body"] = json!("Keep this note and its prose.");
+    allocate_work_codes(&before, &mut value).unwrap();
+    assert_eq!(
+        value["spaces"][0]["ticketCodes"]["assigned"]["duplicate"],
+        2
+    );
+    assert_eq!(value["spaces"][1], initial["spaces"][1]);
+}
+
+#[test]
 fn board_tools_round_trip_portable_work_with_versions_and_space_isolation() {
     let initial = fixture();
     let (_dir, server) = server(&initial);
@@ -2655,12 +2785,21 @@ fn board_tools_round_trip_portable_work_with_versions_and_space_isolation() {
         "Review *literal* [draft]"
     );
     assert_eq!(tickets["work"]["tickets"][0]["boardId"], board);
+    assert_eq!(tickets["work"]["tickets"][0]["code"], "ORION-001");
     let moved = run(
         &server,
         "orion_update_ticket",
-        editor_command(&server, json!({"ticket_id":ticket,"status":"done"})),
+        editor_command(
+            &server,
+            json!({"ticket_id":ticket,"status":"done","implementation_summary":"Reviewed the literal draft.","verification":[{"label":"Review","outcome":"passed","evidence":"Compared the draft against the acceptance checklist."}]}),
+        ),
     );
     assert_eq!(moved["work"]["tickets"][0]["status"], "done");
+    assert_eq!(moved["work"]["tickets"][0]["code"], "ORION-001");
+    assert_eq!(
+        run(&server, "orion_list_tickets", json!({"state":"all"}))["tickets"][0]["code"],
+        "ORION-001"
+    );
     assert!(run(&server, "orion_list_tickets", json!({}))["tickets"]
         .as_array()
         .unwrap()
@@ -2797,11 +2936,11 @@ fn ticket_moves_preserve_crlf_formatting_nested_tasks_and_unrelated_metadata() {
     run(
         &server,
         "orion_update_ticket",
-        editor_command(&server, json!({"ticket_id":"t","status":"done"})),
+        editor_command(&server, json!({"ticket_id":"t","status":"todo"})),
     );
     let expected = original
-        .replacen("- [ ] **Review**", "- [x] **Review**", 1)
-        .replace("t progress b", "t done b");
+        .replacen("- [ ] **Review**", "- [ ] **Review**", 1)
+        .replace("t progress b", "t todo b");
     assert_eq!(saved_body(&server), expected);
     run(
         &server,

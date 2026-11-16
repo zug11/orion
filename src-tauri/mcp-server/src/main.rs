@@ -35,9 +35,13 @@ mod library;
 #[path = "../../shared/note_version.rs"]
 #[allow(dead_code)]
 mod note_version;
+#[path = "../../shared/portable_identity.rs"]
+mod portable_identity;
 #[path = "../../shared/source_text_ref.rs"]
 #[allow(dead_code)] // Write-side checks are used only by the native app.
 mod source_text_ref;
+#[path = "../../shared/ticket_codes.rs"]
+mod ticket_codes;
 #[path = "../../shared/voice_work_orders_protocol.rs"]
 #[allow(dead_code)]
 mod voice_work_orders_protocol;
@@ -83,6 +87,8 @@ struct Vault {
 #[serde(rename_all = "camelCase")]
 struct Space {
     schema_version: u64,
+    #[serde(default)]
+    ticket_codes: Value,
     workspace: Workspace,
     #[serde(default)]
     notes: Vec<Note>,
@@ -1144,6 +1150,8 @@ fn read_vault_value_unlocked(path: &Path) -> Result<Value, ToolFailure> {
 }
 
 fn validate_vault_value(value: Value) -> Result<Vault, ToolFailure> {
+    ticket_codes::validate_vault(&value).map_err(ToolFailure::new)?;
+    portable_identity::validate_vault(&value).map_err(ToolFailure::new)?;
     // Reference shape and schema invariants are checked on the raw records.
     source_text_ref::vault_source_text_refs(&value)
         .map_err(|error| ToolFailure::new(format!("Orion's vault JSON is invalid: {error}")))?;
@@ -1253,7 +1261,40 @@ fn mutate_vault(path: &Path, mutation: impl FnOnce(&mut Value) -> ToolResult) ->
     })?;
     let mut value = read_vault_value_unlocked(path)?;
     validate_vault_value(value.clone())?;
-    let result = mutation(&mut value)?;
+    let before = value.clone();
+    let mut result = mutation(&mut value)?;
+    library::validate_completions(&before, &value, &result)?;
+    library::allocate_work_codes(&before, &mut value)?;
+    ticket_codes::validate_transition(Some(&before), &value).map_err(ToolFailure::new)?;
+    portable_identity::validate_transition(Some(&before), &value).map_err(ToolFailure::new)?;
+    if let Some(space_id) = result
+        .get("spaceId")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    {
+        let codes = value["spaces"]
+            .as_array()
+            .and_then(|spaces| {
+                spaces
+                    .iter()
+                    .find(|space| space["workspace"]["id"] == space_id)
+            })
+            .map(|space| &space["ticketCodes"]);
+        if let (Some(codes), Some(tickets)) = (
+            codes,
+            result
+                .get_mut("work")
+                .and_then(|work| work.get_mut("tickets"))
+                .and_then(Value::as_array_mut),
+        ) {
+            for ticket in tickets {
+                ticket["code"] = json!(ticket_codes::code(
+                    codes,
+                    ticket["id"].as_str().unwrap_or("")
+                ));
+            }
+        }
+    }
     validate_vault_value(value.clone())?;
     write_vault_value_unlocked(path, &value)?;
     Ok(result)
@@ -3208,7 +3249,7 @@ mod tests {
                 "params": {}
             }))
             .expect("response");
-        assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(64));
+        assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(66));
         let definitions = tools["result"]["tools"].as_array().expect("tools");
         let browse = definitions
             .iter()

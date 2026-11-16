@@ -121,6 +121,99 @@ function backgroundFinding(job: VoiceWorkOrder, spaceId: string, sequence = 1, d
 const synthesized = () => mock.append.mock.calls.filter(call => call[0] === "thinking" && String(call[1]).includes('"type":"consolidated_worker_finding"'));
 
 describe("Space voice work-order integration", () => {
+  it.each(["openai", "elevenlabs"] as const)("shows routing and admits dense-Space idea workers from the exact %s question without a delegation", async provider => {
+    const { routeVoiceTurn } = await vi.importActual<typeof import("../lib/voiceWorkOrders")>("../lib/voiceWorkOrders");
+    mock.route.mockImplementation(routeVoiceTurn);
+    const snapshot = createEmptySnapshot("Orion product improvements", "2026-11-16", "ambitious-ideas");
+    snapshot.settings.apiKeyConfigured = true;
+    snapshot.settings.elevenLabsApiKeyConfigured = true;
+    snapshot.settings.liveVoiceProvider = provider;
+    snapshot.notes = Array.from({ length: 11 }, (_, i) => ({ id: `idea-${i}`, title: `Ideas ${i}`, body: "An authored idea. ".repeat(i ? 600 : 14_000), summary: "", aliases: [], tags: [], sourceIds: [], conceptIds: [], kind: "article", status: "ready", slug: `idea-${i}`, createdAt: "2026-11-16", updatedAt: "2026-11-16" }));
+    const assignments = [
+      { subject: "Product possibilities", focus: "Read Space notes for ambitious product ideas and their stated purpose." },
+      { subject: "Technical possibilities", focus: "Read Space notes for ambitious technical ideas and dependencies." },
+      { subject: "Novel interactions", focus: "Read Space notes for ambitious interaction ideas and distinct user benefits." },
+    ];
+    let resolve!: (value: unknown) => void;
+    mock.editDriver.mockImplementation(() => new Promise(done => { resolve = done; }));
+    const presence = createVoicePresence();
+    render(<SpaceVoice snapshot={snapshot} presence={presence} enabled toggleRequest={1} commit={vi.fn()} onProposal={vi.fn()} onOpenNote={vi.fn()} onOpenSettings={vi.fn()}/>);
+    const prompt = "whats the 5 most ambitious ideas";
+    event({ type: "session.input_audio.started", item_id: "ideas-input" });
+    speak(prompt, 0, undefined, "ideas-input"); await settle();
+    expect(mock.editDriver).toHaveBeenCalledOnce();
+    expect(presence.getSnapshot()).toMatchObject({ thinking: true, jobs: [expect.objectContaining({ phase: "routing", prompt })] });
+    expect(mock.run).not.toHaveBeenCalled();
+    await act(async () => resolve({ reply: JSON.stringify({ action: "batch", assignments }) })); await settle();
+    expect(presence.getSnapshot()).toMatchObject({ thinking: false });
+    expect(presence.getSnapshot().jobs).toHaveLength(3);
+    expect(mock.run).toHaveBeenCalledTimes(3);
+    expect(mock.run.mock.calls.every(call => call[1] === prompt && call[4] === null)).toBe(true);
+    expect(mock.run.mock.calls.map(call => call[7])).toEqual(assignments);
+    event({ type: "session.delegation.created", delegation: { id: "late-ideas" }, offset_ms: 200 }); await settle();
+    expect(mock.run).toHaveBeenCalledTimes(3);
+  });
+  it.each(["openai", "elevenlabs"] as const)("keeps the original %s plan running when delegation arrives before it completes", async provider => {
+    const { routeVoiceTurn } = await vi.importActual<typeof import("../lib/voiceWorkOrders")>("../lib/voiceWorkOrders");
+    mock.route.mockImplementation(routeVoiceTurn);
+    const snapshot = createEmptySnapshot("Automatic research", "2026-11-16", "pending-automatic-research");
+    snapshot.settings.apiKeyConfigured = true;
+    snapshot.settings.elevenLabsApiKeyConfigured = true;
+    snapshot.settings.liveVoiceProvider = provider;
+    const assignments = [
+      { subject: "Solar evidence", focus: "Assess the evidence for solar costs and reliability." },
+      { subject: "Wind evidence", focus: "Assess the evidence for wind costs and reliability." },
+    ];
+    let resolve!: (value: unknown) => void;
+    mock.editDriver.mockImplementation(() => new Promise(done => { resolve = done; }));
+    const presence = createVoicePresence();
+    render(<SpaceVoice snapshot={snapshot} presence={presence} enabled toggleRequest={1} commit={vi.fn()} onProposal={vi.fn()} onOpenNote={vi.fn()} onOpenSettings={vi.fn()}/>);
+    const prompt = "How do solar and wind compare on costs and reliability?";
+    event({ type: "session.input_audio.started", item_id: "pending-automatic-input" });
+    speak(prompt, 0, undefined, "pending-automatic-input"); await settle();
+    expect(mock.route).toHaveBeenCalledOnce(); expect(mock.editDriver).toHaveBeenCalledOnce();
+    const signal = mock.route.mock.calls[0][0].signal;
+    const [reserved] = presence.getSnapshot().jobs;
+    expect(reserved).toMatchObject({ phase: "routing", provisional: false, prompt });
+    event({ type: "session.delegation.created", delegation: { id: "during-planning" }, offset_ms: 200 });
+    await settle();
+    expect(signal.aborted).toBe(false);
+    expect(mock.route).toHaveBeenCalledOnce(); expect(mock.editDriver).toHaveBeenCalledOnce();
+    expect(presence.getSnapshot().jobs.map(job => job.id)).toEqual([reserved.id]);
+    expect(mock.run).not.toHaveBeenCalled();
+    await act(async () => resolve({ reply: JSON.stringify({ action: "batch", assignments }) })); await settle();
+    expect(mock.run).toHaveBeenCalledTimes(2);
+    expect(mock.run.mock.calls.map(call => call[7])).toEqual(assignments);
+    expect(mock.run.mock.calls[0][0]).toBe(reserved.id);
+    expect(mock.run.mock.calls.every(call => call[1] === prompt)).toBe(true);
+  });
+  it.each(["openai", "elevenlabs"] as const)("automatically starts complementary work from a %s question without a delegation event", async provider => {
+    const { routeVoiceTurn } = await vi.importActual<typeof import("../lib/voiceWorkOrders")>("../lib/voiceWorkOrders");
+    mock.route.mockImplementation(routeVoiceTurn);
+    const snapshot = createEmptySnapshot("Automatic research", "2026-11-16", "automatic-research");
+    snapshot.settings.apiKeyConfigured = true;
+    snapshot.settings.elevenLabsApiKeyConfigured = true;
+    snapshot.settings.liveVoiceProvider = provider;
+    const assignments = [
+      { subject: "Solar evidence", focus: "Assess the evidence for solar costs and reliability." },
+      { subject: "Wind evidence", focus: "Assess the evidence for wind costs and reliability." },
+    ];
+    mock.editDriver.mockResolvedValue({ reply: JSON.stringify({ action: "batch", assignments }) });
+    const commit = vi.fn(), onProposal = vi.fn();
+    render(<SpaceVoice snapshot={snapshot} enabled toggleRequest={1} commit={commit} onProposal={onProposal} onOpenNote={vi.fn()} onOpenSettings={vi.fn()}/>);
+    const prompt = "Compare the evidence for solar and wind, including costs and reliability.";
+    event({ type: "session.input_audio.started", item_id: "automatic-input" });
+    speak(prompt, 0, undefined, "automatic-input");
+    await settle(2_000);
+    expect(mock.run).toHaveBeenCalledTimes(2);
+    expect(mock.run.mock.calls.map(call => call[7])).toEqual(assignments);
+    expect(mock.run.mock.calls.every(call => call[1] === prompt && call[4] === null)).toBe(true);
+    expect(mock.editDriver).toHaveBeenCalledTimes(1);
+    event({ type: "session.delegation.created", delegation: { id: "late-automatic" }, offset_ms: 200 });
+    await settle(2_000);
+    expect(mock.run).toHaveBeenCalledTimes(2);
+    expect(commit).not.toHaveBeenCalled(); expect(onProposal).not.toHaveBeenCalled();
+  });
   it.each(["openai", "elevenlabs"] as const)("passes the current save preparation callback from ChatDock into the %s transport", provider => {
     const snapshot = createEmptySnapshot("Voice setup", "2026-11-14", "prepared-voice");
     snapshot.settings.liveVoiceProvider = provider;
@@ -295,6 +388,42 @@ describe("Space voice work-order integration", () => {
     expect(screen.getByRole("button", { name: "Reconnect voice" })).toBeEnabled();
     expect(screen.queryByText("Climate finding.")).toBeNull();
     expect(document.querySelector(".chat-view")).toHaveAttribute("data-voice-empty", "true");
+  });
+
+  it("keeps failed main-scene research actionable without revealing its retained answer or retrying automatically", async () => {
+    const snapshot = createEmptySnapshot("Research errors", "2026-11-16", "research-errors"); snapshot.settings.apiKeyConfigured = true;
+    render(<ChatDock snapshot={snapshot} fullPage flowActive={false} busy={false}
+      onExpand={vi.fn()} onSend={vi.fn()} onClear={vi.fn()} onOpenNote={vi.fn()} onSaveReply={vi.fn()} onOpenSettings={vi.fn()} onVoiceCommit={vi.fn()}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Talk to Space" }));
+    const failed = { ...finished(), state: "failed" as const, progress: "CHAT_FINAL_MISSING: The provider returned no final answer. Retry this research." };
+    publish([failed, finished("astronomy", "Astronomy")]);
+    expect(screen.getByRole("alert", { name: "Research failed: Climate" })).toHaveTextContent(failed.progress);
+    expect(screen.queryByText("Climate finding.")).toBeNull();
+    expect(screen.queryByText("Astronomy finding.")).toBeNull();
+    expect(document.querySelector(".chat-view")).toHaveAttribute("data-voice-empty", "true");
+    await settle(20_000);
+    expect(mock.retry).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Retry research: Climate" })));
+    expect(mock.retry).toHaveBeenCalledExactlyOnceWith("climate", expect.any(String));
+    expect(mock.run).not.toHaveBeenCalled();
+    expect(mock.connections).toHaveLength(1);
+    publish([{ ...failed, revision: 2, state: "running", progress: "Reading the Space", result: undefined }, finished("astronomy", "Astronomy")]);
+    expect(screen.queryByRole("alert", { name: "Research failed: Climate" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry research: Climate" })).toBeNull();
+  });
+
+  it("shows a failed saved request in the main voice scene without allowing a duplicate save retry", async () => {
+    const snapshot = createEmptySnapshot("Saved research", "2026-11-16", "saved-research"); snapshot.settings.apiKeyConfigured = true;
+    render(<ChatDock snapshot={snapshot} fullPage flowActive={false} busy={false}
+      onExpand={vi.fn()} onSend={vi.fn()} onClear={vi.fn()} onOpenNote={vi.fn()} onSaveReply={vi.fn()} onOpenSettings={vi.fn()} onVoiceCommit={vi.fn()}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Talk to Space" }));
+    const failure = "Saved to disk before the request changed: Climate notes. No further write was attempted.";
+    publish([{ ...finished(), state: "failed", progress: failure, receipt: { savedNoteIds: ["saved-climate"], savedTitles: ["Climate notes"] } }]);
+    expect(screen.getByRole("alert", { name: "Research failed: Climate" })).toHaveTextContent(failure);
+    expect(screen.queryByRole("button", { name: /Retry research/ })).toBeNull();
+    expect(screen.queryByText("Climate finding.")).toBeNull();
+    await settle(20_000);
+    expect(mock.retry).not.toHaveBeenCalled(); expect(mock.run).not.toHaveBeenCalled();
   });
 
   it("can cancel pending note changes from Voice options without showing automatic chat text", async () => {
@@ -789,7 +918,7 @@ describe("Space voice work-order integration", () => {
     setup(); publish([finished(), finished("astronomy", "Astronomy")]);
     speak("Follow that distinction"); await settle();
     expect(mock.run).not.toHaveBeenCalled(); expect(mock.route).not.toHaveBeenCalled();
-    expect(screen.getByRole("status")).toHaveTextContent("Which research request should I change?");
+    expect(screen.getByRole("form", { name: "Which research request should I change?" })).toBeInTheDocument();
   });
   it("admits a second distinct spoken follow-that after completion but not its delayed delegation", async () => {
     setup(); const assignment = { subject: "Climate", focus: "Explain the climate distinction." };
@@ -921,6 +1050,34 @@ describe("Space voice work-order integration", () => {
     await act(async () => oldResult({ action: "new", prompt: "What is happening with climate" }));
     expect(mock.run).toHaveBeenCalledOnce();
   });
+  it("replaces planning for genuine continued speech but ignores a later delegation of that latest text", async () => {
+    const { props, rerender } = setup(), presence = createVoicePresence();
+    rerender(<SpaceVoice {...props} presence={presence} />);
+    let oldResult!: (value: unknown) => void, latestResult!: (value: unknown) => void;
+    mock.route.mockImplementationOnce(() => new Promise(resolve => { oldResult = resolve; }));
+    mock.route.mockImplementationOnce(() => new Promise(resolve => { latestResult = resolve; }));
+    speak("Compare solar and wind", 0); await settle();
+    const reservedId = presence.getSnapshot().jobs[0].id;
+    const firstSignal = mock.route.mock.calls[0][0].signal;
+    const prompt = "Compare solar and wind including costs and reliability";
+    event({ type: "session.input_transcript.delta", delta: " including costs and reliability", start_ms: 300, end_ms: 500 });
+    await settle();
+    expect(firstSignal.aborted).toBe(true);
+    expect(mock.route).toHaveBeenCalledTimes(2);
+    expect(mock.route.mock.calls[1][0].prompt).toBe(prompt);
+    const latestSignal = mock.route.mock.calls[1][0].signal;
+    event({ type: "session.delegation.created", delegation: { id: "latest-text-acknowledgement" }, offset_ms: 500 });
+    await settle();
+    expect(latestSignal.aborted).toBe(false);
+    expect(mock.route).toHaveBeenCalledTimes(2);
+    expect(presence.getSnapshot().jobs.map(job => job.id)).toEqual([reservedId]);
+    expect(mock.run).not.toHaveBeenCalled();
+    await act(async () => latestResult({ action: "new", prompt })); await settle();
+    expect(mock.run).toHaveBeenCalledOnce();
+    expect(mock.run.mock.calls[0].slice(0, 2)).toEqual([reservedId, prompt]);
+    await act(async () => oldResult({ action: "new", prompt: "Compare solar and wind" }));
+    expect(mock.run).toHaveBeenCalledOnce();
+  });
   it("admits a separate correction of the last pending reservation without inheriting its cancelled turn key", async () => {
     const { props, rerender } = setup(), presence = createVoicePresence();
     rerender(<SpaceVoice {...props} presence={presence} />);
@@ -955,7 +1112,7 @@ describe("Space voice work-order integration", () => {
     mock.current.mockImplementation((id, revision) => id !== "climate" && mock.jobs.some(job => job.id === id && job.revision === revision));
     await settle();
     expect(mock.run).not.toHaveBeenCalled(); expect(mock.cancel).not.toHaveBeenCalled();
-    expect(screen.getByRole("status")).toHaveTextContent("Which research request should I change?");
+    expect(screen.getByRole("form", { name: "Which research request should I change?" })).toBeInTheDocument();
   });
   it("retains child read-only authority but replaces its scope only for an explicit scoped correction", async () => {
     setup(); const child = { ...finished("climate", "Historical climate"), assignment: { subject: "Climate", focus: "Compare climate and astronomy." } };
@@ -1594,5 +1751,285 @@ describe("selected passage during a live Space call", () => {
     const job = { ...finished("climate", "Climate"), state: "running" as const, result: undefined, updates: [{ sequence: 1, reply: "A preliminary finding", evidence: [], coverage: { availableNotes: 2, availableSources: 0, openedNotes: 1, openedSources: 0, searches: 0, limited: false } }] };
     publish([job]); speak("Tell me the climate result", 0); await settle();
     expect(mock.finding).toHaveBeenCalledWith("climate"); expect(mock.announce).not.toHaveBeenCalled();
+  });
+});
+
+describe("Space voice clarification controls", () => {
+  it("keeps a pending question visible and answerable after collapsing an opened Chat dock", async () => {
+    const snapshot = createEmptySnapshot("Product questions", "2026-11-16", "collapsed-question");
+    snapshot.settings.apiKeyConfigured = true;
+    const props = { snapshot, fullPage: false, flowActive: false, busy: false,
+      onExpand: vi.fn(), onSend: vi.fn(), onClear: vi.fn(), onOpenNote: vi.fn(),
+      onSaveReply: vi.fn(), onOpenSettings: vi.fn(), onVoiceCommit: vi.fn() };
+    render(<ChatDock {...props}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Open chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Talk to Space" }));
+    const question = "Which product comparison should I research?";
+    mock.route.mockResolvedValueOnce({ action: "clarify", question, choices: [
+      { id: "answer-0", label: "Closest products", answer: "Products closest to Orion" },
+    ] });
+    speak("Research product comparisons"); await settle();
+    expect(screen.getByRole("form", { name: question }).closest("#space-chat-panel")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Collapse chat" }));
+    const panel = screen.getByRole("form", { name: question });
+    expect(panel).toBeVisible();
+    expect(panel.closest("[hidden]")).toBeNull();
+    fireEvent.click(within(panel).getByRole("radio", { name: "Closest products" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "Continue" })); await settle();
+    expect(mock.run).toHaveBeenCalledOnce();
+    expect(props.onSend).not.toHaveBeenCalled();
+    expect(mock.connections).toHaveLength(1);
+  });
+
+  it.each(["openai", "elevenlabs"] as const)("answers a %s clarification separately from the existing Chat draft", async provider => {
+    const snapshot = createEmptySnapshot("Product questions", "2026-11-16", "clarification-chat");
+    snapshot.settings.apiKeyConfigured = true;
+    snapshot.settings.elevenLabsApiKeyConfigured = true;
+    snapshot.settings.liveVoiceProvider = provider;
+    const props = { snapshot, fullPage: true, flowActive: false, busy: false,
+      onExpand: vi.fn(), onSend: vi.fn(), onClear: vi.fn(), onOpenNote: vi.fn(),
+      onSaveReply: vi.fn(), onOpenSettings: vi.fn(), onVoiceCommit: vi.fn() };
+    render(<ChatDock {...props}/>);
+    const draft = screen.getByRole("textbox");
+    fireEvent.click(screen.getByRole("button", { name: "Talk to Space" }));
+    fireEvent.change(draft, { target: { value: "An unrelated draft I have not sent." } });
+    const prompt = "Research the product opportunities";
+    const question = "Which products should the research focus on?";
+    mock.route.mockResolvedValueOnce({ action: "clarify", question, choices: [
+      { id: "answer-0", label: "Closest to Orion", description: "Compare similar products", answer: "Products with the strongest match to Orion" },
+      { id: "answer-1", label: "A wider comparison", answer: "Compare a broader range of products" },
+    ] });
+    event({ type: "session.input_audio.started", item_id: "product-question" });
+    speak(prompt, 0, undefined, "product-question"); await settle();
+    const panel = screen.getByRole("form", { name: question });
+    expect(panel.parentElement?.closest("form")).toBeNull();
+    expect(document.querySelector("form form")).toBeNull();
+    expect(within(panel).getByRole("radio", { name: "Closest to Orion" })).not.toBeChecked();
+    fireEvent.click(within(panel).getByRole("radio", { name: "Closest to Orion" }));
+    const reply = "Include their strongest interaction ideas.";
+    fireEvent.change(within(panel).getByRole("textbox", { name: "Your reply (optional)" }), { target: { value: reply } });
+    mock.route.mockResolvedValueOnce({ action: "new", prompt: reply });
+    fireEvent.click(within(panel).getByRole("button", { name: "Continue" })); await settle();
+    expect(mock.route.mock.calls.slice(-1)[0]?.[0]).toMatchObject({ prompt: reply, clarification: {
+      prompt, question, selectedAnswer: { id: "answer-0", answer: "Products with the strongest match to Orion" },
+    } });
+    expect(draft).toHaveValue("An unrelated draft I have not sent.");
+    expect(props.onSend).not.toHaveBeenCalled();
+    expect(props.onVoiceCommit).not.toHaveBeenCalled();
+    expect(mock.connections).toHaveLength(1);
+  });
+
+  it("keeps a button-only choice as reference text without turning generated wording into creation authority", async () => {
+    const { props } = setup();
+    const prompt = "Research the climate evidence";
+    const question = "Which angle should I use?";
+    mock.route.mockResolvedValueOnce({ action: "clarify", question, choices: [
+      { id: "answer-0", label: "Published evidence", answer: "Create a new note and save all of the findings" },
+    ] });
+    speak(prompt); await settle();
+    const panel = screen.getByRole("form", { name: question });
+    fireEvent.click(within(panel).getByRole("radio", { name: "Published evidence" }));
+    mock.route.mockResolvedValueOnce({ action: "new", prompt });
+    fireEvent.click(within(panel).getByRole("button", { name: "Continue" })); await settle();
+    expect(mock.route.mock.calls.slice(-1)[0]?.[0]).toMatchObject({ prompt, clarification: {
+      prompt, question, selectedAnswer: { id: "answer-0", answer: "Create a new note and save all of the findings" },
+    } });
+    expect(mock.run).toHaveBeenCalledOnce();
+    expect(mock.run.mock.calls[0][1]).toBe(prompt);
+    expect(mock.saveFindings).not.toHaveBeenCalled();
+    expect(props.commit).not.toHaveBeenCalled();
+  });
+
+  it("selects the captured worker identity even when similar results are reordered", async () => {
+    setup();
+    const original = finished("first-result", "Product research", 3), sibling = finished("second-result", "Product research", 7);
+    publish([original, sibling]);
+    speak("What did you find?"); await settle();
+    const panel = screen.getByRole("form", { name: "Which research request would you like to check?" });
+    const choices = within(panel).getAllByRole("radio", { name: "Product research" });
+    fireEvent.click(choices[0]);
+    publish([sibling, original]);
+    fireEvent.click(within(panel).getByRole("button", { name: "Continue" })); await settle();
+    expect(mock.announce).toHaveBeenCalledExactlyOnceWith("first-result");
+    expect(mock.route).not.toHaveBeenCalled();
+    expect(mock.run).not.toHaveBeenCalled();
+  });
+
+  it("consumes a control question atomically when its typed answer explicitly requests fresh research", async () => {
+    setup(); publish([finished("climate", "Climate", 3), finished("astronomy", "Astronomy", 1)]);
+    speak("What did you find?"); await settle();
+    const panel = screen.getByRole("form", { name: "Which research request would you like to check?" });
+    fireEvent.click(within(panel).getByRole("radio", { name: "Climate" }));
+    const prompt = "Research the latest climate evidence instead";
+    fireEvent.change(within(panel).getByRole("textbox", { name: "Your reply (optional)" }), { target: { value: prompt } });
+    mock.route.mockResolvedValueOnce({ action: "new", prompt });
+    fireEvent.click(within(panel).getByRole("button", { name: "Continue" })); await settle();
+    expect(mock.run).toHaveBeenCalledOnce();
+    expect(mock.run.mock.calls[0][1]).toBe(prompt);
+    expect(screen.queryByRole("form", { name: "Which research request would you like to check?" })).toBeNull();
+    expect(mock.announce).not.toHaveBeenCalled();
+  });
+
+  it("rejects a selected result whose captured revision changed before submission", async () => {
+    setup(); publish([finished("climate", "Climate", 3), finished("astronomy", "Astronomy", 1)]);
+    speak("What did you find?"); await settle();
+    const panel = screen.getByRole("form", { name: "Which research request would you like to check?" });
+    fireEvent.click(within(panel).getByRole("radio", { name: "Climate" }));
+    publish([finished("climate", "Climate", 4), finished("astronomy", "Astronomy", 1)]);
+    fireEvent.click(within(panel).getByRole("button", { name: "Continue" })); await settle();
+    expect(mock.announce).not.toHaveBeenCalled();
+    expect(mock.route).not.toHaveBeenCalled();
+    expect(mock.run).not.toHaveBeenCalled();
+    expect(screen.getAllByText("That research request has changed or no longer has a result. Ask again to see the current requests.").length).toBeGreaterThan(0);
+  });
+
+  it.each(["running", "completed"] as const)("rejects a %s result whose evidence changes while the answer is being interpreted", async state => {
+    setup();
+    const target = { ...finished("climate", "Climate", 3), state, ...(state === "running" ? { result: undefined } : {}) };
+    publish([target, finished("astronomy", "Astronomy", 1)]);
+    speak("What did you find?"); await settle();
+    const panel = screen.getByRole("form", { name: "Which research request would you like to check?" });
+    fireEvent.click(within(panel).getByRole("radio", { name: "Climate" }));
+    fireEvent.change(within(panel).getByRole("textbox", { name: "Your reply (optional)" }), { target: { value: "Focus on practical relevance." } });
+    let resolve!: (value: unknown) => void;
+    mock.route.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    fireEvent.click(within(panel).getByRole("button", { name: "Continue" })); await settle();
+    mock.current.mockImplementation((id, revision) => id !== "climate" && mock.jobs.some(job => job.id === id && job.revision === revision));
+    await act(async () => resolve({ action: "result", jobId: "climate", revision: 3 })); await settle();
+    expect(mock.announce).not.toHaveBeenCalled();
+    expect(mock.finding).not.toHaveBeenCalled();
+    expect(mock.run).not.toHaveBeenCalled();
+    expect(screen.getAllByText("That research no longer has current evidence. There is no result to wait for; ask for fresh research.").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Climate is still researching/)).toBeNull();
+  });
+
+  it("offers an explicit Hear result action after selecting a ready result with voice stopped", async () => {
+    const { props, rerender } = setup();
+    rerender(<SpaceVoice {...props} floating hideConversationText/>);
+    publish([finished("climate", "Climate", 3), finished("astronomy", "Astronomy", 1)]);
+    speak("What did you find?"); await settle();
+    rerender(<SpaceVoice {...props} floating hideConversationText toggleRequest={2}/>);
+    const panel = screen.getByRole("form", { name: "Which research request would you like to check?" });
+    fireEvent.click(within(panel).getByRole("radio", { name: "Climate" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "Continue" })); await settle();
+    expect(mock.connections).toHaveLength(1);
+    expect(screen.queryByRole("form")).toBeNull();
+    const hear = screen.getByRole("button", { name: "Hear result" });
+    expect(hear).toBeEnabled();
+    fireEvent.click(hear); await settle();
+    expect(mock.connections).toHaveLength(2);
+    expect(mock.announce).toHaveBeenCalledWith("climate");
+    expect(mock.run).not.toHaveBeenCalled();
+  });
+
+  it("keeps the question operable after Stop voice without reconnecting the microphone", async () => {
+    const { props, rerender } = setup(); const presence = createVoicePresence();
+    rerender(<SpaceVoice {...props} presence={presence}/>);
+    const prompt = "Research the product opportunities", question = "Which opportunity should I explore?";
+    mock.route.mockResolvedValueOnce({ action: "clarify", question, choices: [
+      { id: "answer-0", label: "Useful interactions", answer: "Explore useful interactions" },
+    ] });
+    speak(prompt); await settle();
+    const reserved = presence.getSnapshot().jobs.map(job => job.id);
+    rerender(<SpaceVoice {...props} presence={presence} toggleRequest={2}/>);
+    expect(mock.close).toHaveBeenCalledOnce();
+    const panel = screen.getByRole("form", { name: question });
+    expect(within(panel).getByRole("radio", { name: "Useful interactions" })).toBeEnabled();
+    fireEvent.click(within(panel).getByRole("radio", { name: "Useful interactions" }));
+    mock.route.mockResolvedValueOnce({ action: "new", prompt });
+    fireEvent.click(within(panel).getByRole("button", { name: "Continue" })); await settle();
+    expect(mock.run).toHaveBeenCalledOnce();
+    expect(mock.run.mock.calls[0][0]).toBe(reserved[0]);
+    expect(mock.connections).toHaveLength(1);
+    expect(screen.queryByRole("form", { name: question })).toBeNull();
+  });
+
+  it("cancels only the pending question and rejects a late answer without cancelling admitted research", async () => {
+    const { props, rerender } = setup(); const presence = createVoicePresence();
+    rerender(<SpaceVoice {...props} presence={presence}/>);
+    const existing = { ...finished("existing", "Existing research"), state: "running" as const };
+    publish([existing]);
+    const question = "Which angles should the two workers cover?";
+    mock.route.mockResolvedValueOnce({ action: "clarify", question, workerCount: 2, choices: [
+      { id: "answer-0", label: "Products and interactions", answer: "Products and interactions" },
+    ] });
+    speak("Spawn two workers"); await settle();
+    expect(presence.getSnapshot().jobs).toHaveLength(3);
+    const panel = screen.getByRole("form", { name: question });
+    fireEvent.click(within(panel).getByRole("radio", { name: "Products and interactions" }));
+    let resolve!: (value: unknown) => void;
+    mock.route.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    fireEvent.click(within(panel).getByRole("button", { name: "Continue" })); await settle();
+    const signal = mock.route.mock.calls.slice(-1)[0]?.[0].signal as AbortSignal;
+    expect(signal.aborted).toBe(false);
+    fireEvent.click(within(panel).getByRole("button", { name: "Cancel" }));
+    expect(signal.aborted).toBe(true);
+    expect(screen.queryByRole("form", { name: question })).toBeNull();
+    expect(presence.getSnapshot().jobs.map(job => job.id)).toEqual(["existing"]);
+    await act(async () => resolve({ action: "batch", prompt: "Spawn two workers", assignments: [
+      { subject: "Products", focus: "Research products" }, { subject: "Interactions", focus: "Research interactions" },
+    ] })); await settle();
+    expect(mock.run).not.toHaveBeenCalled();
+    expect(mock.cancel).not.toHaveBeenCalled();
+    expect(mock.jobs).toEqual([existing]);
+  });
+
+  it("answers the captured question and note after navigation instead of retargeting the current note", async () => {
+    const { props, rerender } = setup();
+    rerender(<SpaceVoice {...props} focusNoteId="original-note"/>);
+    const prompt = "Research this note", question = "Which aspect should I examine?";
+    mock.route.mockResolvedValueOnce({ action: "clarify", question, choices: [
+      { id: "answer-0", label: "Characters", answer: "Character motivations" },
+    ] });
+    speak(prompt); await settle();
+    rerender(<SpaceVoice {...props} focusNoteId="different-note"/>);
+    const panel = screen.getByRole("form", { name: question });
+    fireEvent.click(within(panel).getByRole("radio", { name: "Characters" }));
+    const answer = "Focus on the opening scene.";
+    fireEvent.change(within(panel).getByRole("textbox", { name: "Your reply (optional)" }), { target: { value: answer } });
+    mock.route.mockResolvedValueOnce({ action: "new", prompt: answer });
+    fireEvent.click(within(panel).getByRole("button", { name: "Continue" })); await settle();
+    expect(mock.route.mock.calls.slice(-1)[0]?.[0]).toMatchObject({ prompt: answer, focusNoteId: "original-note", clarification: {
+      prompt, question, selectedAnswer: { id: "answer-0", answer: "Character motivations" },
+    } });
+    expect(mock.run).toHaveBeenCalledOnce();
+    expect(mock.run.mock.calls[0][3]).toBe("original-note");
+  });
+
+  it("states that no result exists without presenting an imaginary request or a waiting question", async () => {
+    const { props, rerender } = setup();
+    rerender(<SpaceVoice {...props} floating hideConversationText/>);
+    speak("What did you find?"); await settle();
+    expect(screen.getByRole("status")).toHaveTextContent("No research is running, and there is no completed result to read.");
+    expect(screen.queryByRole("form")).toBeNull();
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(mock.run).not.toHaveBeenCalled();
+    expect(mock.route).not.toHaveBeenCalled();
+    expect(mock.announce).not.toHaveBeenCalled();
+  });
+
+  it("preserves an answer for an explicit retry when interpreting it fails", async () => {
+    setup();
+    const prompt = "Research the product opportunities", question = "Which opportunity should I explore?";
+    mock.route.mockResolvedValueOnce({ action: "clarify", question, choices: [
+      { id: "answer-0", label: "Useful interactions", answer: "Explore useful interactions" },
+    ] });
+    speak(prompt); await settle();
+    const panel = screen.getByRole("form", { name: question });
+    fireEvent.click(within(panel).getByRole("radio", { name: "Useful interactions" }));
+    const reply = "Focus on helping writers.";
+    fireEvent.change(within(panel).getByRole("textbox", { name: "Your reply (optional)" }), { target: { value: reply } });
+    mock.route.mockRejectedValueOnce(new Error("Could not understand this answer. Try again."));
+    fireEvent.click(within(panel).getByRole("button", { name: "Continue" })); await settle();
+    expect(within(panel).getByRole("radio", { name: "Useful interactions" })).toBeChecked();
+    expect(within(panel).getByRole("textbox", { name: "Your reply (optional)" })).toHaveValue(reply);
+    expect(within(panel).getByRole("button", { name: "Continue" })).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not understand this answer. Try again.");
+    mock.route.mockResolvedValueOnce({ action: "new", prompt: reply });
+    fireEvent.click(within(panel).getByRole("button", { name: "Continue" })); await settle();
+    expect(mock.run).toHaveBeenCalledOnce();
+    expect(mock.run.mock.calls[0][1]).toBe(reply);
+    expect(mock.connections).toHaveLength(1);
+    expect(screen.queryByRole("form", { name: question })).toBeNull();
   });
 });

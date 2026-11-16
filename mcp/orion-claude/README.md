@@ -20,8 +20,8 @@ This local Claude Desktop extension gives Claude direct access to Orion.
 
 ## Additional local tools
 
-The connector also exposes 30 additional local library tools (64 tools total:
-39 local library tools, 14 desktop workflows, three edit-review tools, one
+The connector also exposes 31 additional local library tools (66 tools total:
+40 local library tools, 15 desktop workflows, three edit-review tools, one
 active-editor-context reader, three voice work-order tools and four selected-editor-action tools):
 exact source passages and note sections, batch reads, concepts, link resolution
 and paths, provenance, tags, Markdown tasks, duplicate detection, integrity,
@@ -39,6 +39,16 @@ is performed by the calling assistant from the board's source note; the local
 writer can validate exact evidence and deduplicate titles before saving an
 authorized batch. It does not make a provider request. Completed tasks remain
 excluded from ordinary working reads; unsupported or stale edits save nothing.
+
+`orion_get_ticket` resolves a durable ID or published code and returns the source
+note version, child checklist, backlinks and a direct ticket URL. Ticket updates
+can check exact child lines and append an implementation summary with verification
+evidence. Moving an open ticket to Done requires a summary, passing checks and no
+open checklist items; generic note writes cannot bypass that completion rule.
+Evidence is recorded as the caller's report, not independently executed by Orion.
+`orion_export_collection` accepts an explicit list of note IDs and uses the same
+curated `.orion` export as the desktop, with its native folder picker and workflow
+permissions. The assistant cannot supply a filesystem destination.
 
 The separate `orion_get_editor_context` tool requires Orion to be open, desktop
 workflows enabled and the exact Space allowed. Choose a current `editorTargets`

@@ -97,6 +97,7 @@ export class LiveVoiceConnection implements VoiceConnection {
   private lastActivity = "";
   private inputMuted = false;
   private playbackReady = false;
+  private readonly quietDelegations = new Set<string>();
   constructor(private readonly options: VoiceTransportOptions) {}
   private later(fn: () => void, delay: number) { const id = setTimeout(() => { this.timers.delete(id); fn(); }, delay); this.timers.add(id); return id; }
   async start() {
@@ -198,6 +199,22 @@ export class LiveVoiceConnection implements VoiceConnection {
         // also reaches the provider once its session accepts control messages.
         if (this.inputMuted) this.send("session.input_audio.mute");
         this.options.onStatus("listening");
+      }
+    }
+    if (event.type === "session.delegation.created" && this.started && !this.closing && !this.ended) {
+      const delegation = event.delegation;
+      if (delegation?.target === "client" && delegation.type === "delegation" &&
+          typeof delegation.id === "string" && delegation.id.trim() && delegation.id.length <= 200 &&
+          !/[\u0000-\u001f\u007f]/.test(delegation.id) && !this.quietDelegations.has(delegation.id)) {
+        // GPT-Live otherwise schedules a spoken acknowledgment while the host
+        // is still deciding whether to admit work. Send this documented silent
+        // update immediately, before transcript routing or backend awaits.
+        // It suppresses pending automatic acknowledgments, not existing audio,
+        // and grants no work admission, result or playback confirmation.
+        if (this.send("session.thinking.append", { delegation_id: delegation.id, content: "" })) {
+          this.quietDelegations.add(delegation.id);
+          if (this.quietDelegations.size > 1_000) this.quietDelegations.delete(this.quietDelegations.values().next().value!);
+        }
       }
     }
     this.options.onEvent(event);
@@ -314,6 +331,7 @@ export class LiveVoiceConnection implements VoiceConnection {
   private fail(message: string) { if (this.ended) return; this.dispose(); this.options.onStatus("disconnected", message); }
   dispose() {
     this.ended = true; this.connectAbort.abort();
+    this.quietDelegations.clear();
     this.closeActivityMonitor();
     this.releaseCapture();
     if (this.audio) {

@@ -1,0 +1,9 @@
+.portable-note-selection > p { color:var(--text-soft); font:13px/1.5 var(--ui-font); margin:0 0 12px; }
+.portable-selection-actions { display:flex; gap:16px; margin-bottom:8px; }
+.portable-note-options { max-height:230px; overflow:auto; overscroll-behavior:contain; padding:4px; }
+.portable-note-options label { display:flex; gap:10px; align-items:flex-start; padding:9px 4px; font:13px/1.4 var(--ui-font); cursor:pointer; }
+.portable-note-options label span { overflow-wrap:anywhere; }
+.portable-note-options input { accent-color:var(--periwinkle); flex-shrink:0; margin-top:2px; }
+.portable-note-options input:focus-visible { outline:2px solid var(--periwinkle); outline-offset:3px; }
+.portable-open-file { padding:0 24px 18px; }
+@media(max-width:600px) { .portable-open-file { padding-inline:16px; } }

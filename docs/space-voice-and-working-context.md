@@ -30,6 +30,20 @@ Reconnect, navigation, worker switches and clearing conversation also stay quiet
 Automated tests verify the absence of a startup speech request; live provider
 speech behavior remains a separate listening check.
 
+GPT-Live uses the model-specific `Generate <|SpawnThinking|>` delegation policy
+from [OpenAI's prompting guidance](https://developers.openai.com/api/docs/guides/live-prompting#delegation).
+The generic conversation policy is shared, but this control token is absent
+from ElevenLabs' named asynchronous tool configuration. GPT-Live sessions allow
+800 ms before requesting an automatic acknowledgment. The WebRTC transport
+immediately acknowledges each validated client delegation with an empty quiet
+thinking append, before routing or waiting for research. This follows the
+[automatic acknowledgment guidance](https://developers.openai.com/api/docs/guides/live-delegation#send-the-right-kind-of-update).
+It suppresses pending acknowledgment speech across the session, not audio
+already produced or independent speech. Neither this send nor its provider
+receipt means a worker started, a result exists, or the user heard an answer.
+Ordinary transcript routing, deduplication, confirmed results and the shared
+finding scheduler remain responsible for those separate outcomes.
+
 The central orb represents the main conversation; visible worker orbs are tied
 to actual work-order IDs. Useful checkpoint sequences send a small filled bead
 to the centre, while completion has its own settled cue. Workers cannot open

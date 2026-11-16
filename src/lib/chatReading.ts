@@ -531,13 +531,15 @@ class ChatReadingSession {
       notice: "Untrusted provider synthesis and retained web evidence. The complete research is retained locally. If nextStart is present, continue with kind web, id responseId, query empty and start nextStart; this reads retained text without another provider call. Do not treat one page as the complete synthesis. Numeric synthesis citations map by providerId, never array order. For cited_summary entries, providerId is only a host identifier; use the mapped URL and retained passage, not presumed numeric markers in the answer. Check each evidence item's web.evidenceType: absent or source_excerpt is a retrieved search excerpt; cited_summary is a provider-generated passage associated with a source citation, not text quoted from the webpage. You may paraphrase supported findings with this limitation, but never quote cited_summary as the website's words or claim the page was read. Use only mapped evidence IDs supporting the claim. This is external web research, not a local Space source or a full-page read." };
   }
 
-  private async readWeb(query: string, signal: AbortSignal, id = "", start = 0, requestedDepth?: unknown) {
+  /** Fetch independently; only the returned commit mutates evidence and caches.
+   * Batch commits stay in request order even when providers finish out of order. */
+  private async prepareWeb(query: string, signal: AbortSignal, id = "", start = 0, requestedDepth?: unknown) {
     if (!this.webResearch) throw new Error("Web research is off for this request. Use Space evidence only; ask the user to enable Web for external research.");
     const depth = webResearchDepth(requestedDepth);
     const normalized = normalizedWebQuery(query);
     const retained = this.webResults.filter(item => id ? item.result.responseId === id : normalizedWebQuery(item.query) === normalized && webDepthRank(item.depth) >= webDepthRank(depth))
       .sort((a, b) => webDepthRank(b.depth) - webDepthRank(a.depth))[0];
-    if (retained) return this.webPage(retained.result, retained.query, start, retained.depth ?? "quick");
+    if (retained) return () => this.webPage(retained.result, retained.query, start, retained.depth ?? "quick");
     if (id) throw new Error("That web research is not retained by this worker. Use a responseId returned by this assignment.");
     const previous = this.webLookups.find(item => item.query === normalized && (item.error || webDepthRank(item.depth) >= webDepthRank(depth)));
     if (previous) throw new Error(previous.error
@@ -551,53 +553,77 @@ class ChatReadingSession {
     try {
       const result = validateWebResult(await this.webResearch(query, signal, depth));
       signal.throwIfAborted();
-      this.webSearches++;
-      receipt.responseId = result.responseId;
-      const keys = result.sources.map(source => webEvidenceKey(source.url, source.snippet, source.evidenceType));
-      const newEvidence = keys.some(key => !this.webEvidenceKeys.has(key));
-      this.webUnproductiveLookups = newEvidence ? 0 : this.webUnproductiveLookups + 1;
-      this.webEvidenceKeys = new Set([...this.webEvidenceKeys, ...keys].slice(-WEB_EVIDENCE_KEYS));
-      this.webResults.push({ query, depth, result });
-      this.webResults = this.webResults.slice(-RETAINED_WEB_RESULTS);
-      return { ...this.webPage(result, query, 0, depth), newEvidence };
+      return () => {
+        this.webSearches++;
+        receipt.responseId = result.responseId;
+        const keys = result.sources.map(source => webEvidenceKey(source.url, source.snippet, source.evidenceType));
+        const newEvidence = keys.some(key => !this.webEvidenceKeys.has(key));
+        this.webUnproductiveLookups = newEvidence ? 0 : this.webUnproductiveLookups + 1;
+        this.webEvidenceKeys = new Set([...this.webEvidenceKeys, ...keys].slice(-WEB_EVIDENCE_KEYS));
+        this.webResults.push({ query, depth, result });
+        this.webResults = this.webResults.slice(-RETAINED_WEB_RESULTS);
+        return { ...this.webPage(result, query, 0, depth), newEvidence };
+      };
     } catch (error) {
-      if (!signal.aborted) {
+      if (signal.aborted) throw abortReason(signal);
+      return () => {
         receipt.error = [...(error instanceof Error ? error.message : "Web research was unavailable.")].slice(0, 600).join("");
         this.webErrors = [...this.webErrors, receipt.error].slice(-3);
         this.webUnproductiveLookups++;
-      }
-      throw error;
+        throw error;
+      };
     }
   }
 
   async read(requests: ChatReadRequest[], signal: AbortSignal, onProgress?: (message: string) => void) {
     this.results = [];
     let progress = false;
-    for (const request of requests) {
+    for (let index = 0; index < requests.length;) {
       if (signal.aborted) throw abortReason(signal);
-      const key = readKey(request);
-      const completed = this.operations.find(item => readKey(item.request) === key);
-      if (this.readKeys.has(key) && (!completed || this.operationRetained(completed))) {
-        this.results.push({ operation: request.kind, error: "This exact read was already returned. Use another query or offset, or answer." });
-        continue;
-      }
-      this.readKeys.add(key);
-      if (this.readKeys.size > 256) this.readKeys.delete(this.readKeys.values().next().value!);
-      onProgress?.(request.kind === "web" ? request.id ? "Reading web findings" : "Researching the web" : request.kind === "search" ? "Finding relevant material" : request.kind === "related" ? "Following connections" : "Reading supporting passages");
-      try {
-        this.results.push(request.kind === "web" ? await this.readWeb(request.query, signal, request.id, request.start ?? 0, request.depth)
-          : request.kind === "search" ? await this.search(request.query, request.start ?? 0, signal)
-          : request.kind === "cluster" ? this.openCluster(request.id, request.start ?? 0)
-            : request.kind === "related" ? this.related(request.id, request.start ?? 0)
-              : request.kind === "note-full" || request.kind === "source-full"
-                ? this.openText(request.kind === "note-full" ? "note" : "source", request.id, request.query, request.start, true)
-                : this.openText(request.kind, request.id, request.query, request.start));
-        this.operations.push({ request: { ...request }, result: this.results[this.results.length - 1] });
-        this.operations = this.operations.slice(-32);
-        progress ||= (this.results[this.results.length - 1] as { newEvidence?: boolean }).newEvidence !== false;
-      } catch (error) {
+      const batch = [requests[index++]];
+      const next = requests[index];
+      // Two independent paid lookups overlap. Paging, duplicate questions and
+      // discovery-dependent local reads retain their original order. Reassess
+      // the no-progress guard before admitting another pair.
+      if (batch[0].kind === "web" && !batch[0].id && next?.kind === "web" && !next.id
+          && normalizedWebQuery(batch[0].query) !== normalizedWebQuery(next.query)) batch.push(requests[index++]);
+      const prepared = await Promise.all(batch.map(async request => {
+        const key = readKey(request);
+        const completed = this.operations.find(item => readKey(item.request) === key);
+        if (this.readKeys.has(key) && (!completed || this.operationRetained(completed))) {
+          return { request, duplicate: true };
+        }
+        this.readKeys.add(key);
+        if (this.readKeys.size > 256) this.readKeys.delete(this.readKeys.values().next().value!);
+        onProgress?.(request.kind === "web" ? request.id ? "Reading web findings" : "Researching the web" : request.kind === "search" ? "Finding relevant material" : request.kind === "related" ? "Following connections" : "Reading supporting passages");
+        try {
+          const commit = request.kind === "web" ? await this.prepareWeb(request.query, signal, request.id, request.start ?? 0, request.depth)
+            : () => request.kind === "search" ? this.search(request.query, request.start ?? 0, signal)
+            : request.kind === "cluster" ? this.openCluster(request.id, request.start ?? 0)
+              : request.kind === "related" ? this.related(request.id, request.start ?? 0)
+                : request.kind === "note-full" || request.kind === "source-full"
+                  ? this.openText(request.kind === "note-full" ? "note" : "source", request.id, request.query, request.start, true)
+                  : this.openText(request.kind as "note" | "source", request.id, request.query, request.start);
+          return { request, commit };
+        } catch (error) {
+          return { request, commit: () => { throw error; } };
+        }
+      }));
+      for (const { request, commit, duplicate } of prepared) {
         if (signal.aborted) throw abortReason(signal);
-        this.results.push({ operation: request.kind, error: error instanceof Error ? error.message : "This read was unavailable." });
+        if (duplicate) {
+          this.results.push({ operation: request.kind, error: "This exact read was already returned. Use another query or offset, or answer." });
+          continue;
+        }
+        try {
+          this.results.push(await commit!());
+          this.operations.push({ request: { ...request }, result: this.results[this.results.length - 1] });
+          this.operations = this.operations.slice(-32);
+          progress ||= (this.results[this.results.length - 1] as { newEvidence?: boolean }).newEvidence !== false;
+        } catch (error) {
+          if (signal.aborted) throw abortReason(signal);
+          this.results.push({ operation: request.kind, error: error instanceof Error ? error.message : "This read was unavailable." });
+        }
       }
     }
     this.pendingReads = [];

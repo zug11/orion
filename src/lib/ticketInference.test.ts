@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createEmptySnapshot } from '../data/defaults';
 import type { Note } from '../types';
 import { boardMarker, newTicketMarkdown, noteWork, patchTicket } from './tickets';
-import { applyInferredTickets, buildTicketInferenceRequest, inferBoardTickets, parseTicketSuggestions } from './ticketInference';
+import { applyInferredTickets, buildTicketInferenceRequest, inferBoardTickets, parseTicketSuggestions, noteInferenceTarget } from './ticketInference';
 
 const board = { id:'b', title:'Launch', noteId:'n' };
 const body = `We need to ask Jo about the launch date.\n\nMaybe test a smaller event first.\n\n${boardMarker(board)}\n\n- [x] Secret finished action\n- [ ] Existing task`;
@@ -11,6 +11,23 @@ function snapshot() { const s=createEmptySnapshot('Launch');s.settings.apiKeyCon
 const reply = JSON.stringify({tickets:[{title:'Ask Jo about the launch date',evidence:'We need to ask Jo about the launch date.'}]});
 
 describe('note-local ticket inference', () => {
+  it('extracts from a note without a board, suggests a destination and flags duplicate candidates across this Space',async()=>{
+    const s=snapshot();
+    s.notes=[note('We need to test launch checkout.\n\n- [ ] Ask Jo about launch dates'),{...note(`${boardMarker(board)}\n\n${newTicketMarkdown('Test launch checkout','b')}`),id:'other'}];
+    const target=noteInferenceTarget(s.notes[0]);
+    const call=vi.fn(async(_input: import('../types').ChatRequest)=>({reply:JSON.stringify({tickets:[{title:'Test launch checkout',evidence:'We need to test launch checkout.'}]})}));
+    const result=await inferBoardTickets(s,target,call,new AbortController().signal);
+    expect(result).toMatchObject({fromNote:true,boards:[{id:'b',noteId:'other'}]});
+    expect(result.suggestions[0]).toMatchObject({boardId:'b',taskId:expect.any(String)});
+    expect(result.suggestions[1]).toMatchObject({boardId:'b',likelyDuplicate:{noteId:'other',title:'Test launch checkout'}});
+    expect(call.mock.calls[0][0].notes).toHaveLength(1);
+    const chosen=result.suggestions[0];
+    const changed=applyInferredTickets(s.notes[0],target,result,[chosen.title],[chosen.taskId],[''],['b'],result.boards)!;
+    expect(noteWork(note(changed)).tickets).toMatchObject([{title:'Ask Jo about launch dates',durable:true,boardId:'b'}]);
+    expect(changed).toContain('We need to test launch checkout.');
+    expect(applyInferredTickets(s.notes[0],target,result,[chosen.title],[chosen.taskId],[''],['b'],[])).toBeNull();
+    expect(applyInferredTickets(note(changed),target,result,[chosen.title],[chosen.taskId],[''],['b'],result.boards)).toBeNull();
+  });
   it('infers urgency for written and new actions in the same reader call and persists it without duplicating tasks', async () => {
     const s = snapshot();
     s.notes = [note(`${boardMarker(board)}\n\n- [ ] Fix sign-in: it is blocking launch.\n- [ ] Pick a colour.\n\nThe checkout is down. Restore payments immediately.`)];

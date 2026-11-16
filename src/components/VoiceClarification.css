@@ -1,0 +1,122 @@
+.voice-clarification {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  width: 100%;
+  max-height: var(--voice-clarification-max-height, none);
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.voice-clarification__body {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: -3px;
+  padding: 3px;
+}
+.voice-clarification__question {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+.voice-clarification__choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.voice-clarification__choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface-1);
+  color: var(--text);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.voice-clarification__choice:hover {
+  background: color-mix(in srgb, var(--text) 5%, var(--surface-1));
+}
+.voice-clarification__choice.is-selected {
+  border-color: var(--periwinkle);
+  background: color-mix(in srgb, var(--periwinkle) 10%, var(--surface-1));
+}
+.voice-clarification__choice > input {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 3px 0 0;
+  accent-color: var(--periwinkle);
+}
+.voice-clarification__choice > span { min-width: 0; }
+.voice-clarification__choice-label { display: block; font-weight: 550; }
+.voice-clarification__choice-detail { display: block; margin-top: 2px; color: var(--text-soft); font-size: 12px; }
+.voice-clarification__choice:has(input:focus-visible) { outline: 2px solid var(--periwinkle); outline-offset: 2px; }
+.voice-clarification__choices:disabled .voice-clarification__choice { opacity: .6; cursor: wait; }
+.voice-clarification__reply { display: grid; gap: 6px; min-width: 0; color: var(--text-soft); font-size: 12px; }
+.voice-clarification__reply > textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 64px;
+  max-height: 160px;
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface-1);
+  color: var(--text);
+  caret-color: var(--periwinkle);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.voice-clarification__reply > textarea::placeholder { color: var(--text-soft); opacity: 1; }
+.voice-clarification__reply > textarea:focus-visible,
+.voice-clarification__actions > button:focus-visible { outline: 2px solid var(--periwinkle); outline-offset: 2px; }
+.voice-clarification__reply > textarea:disabled { opacity: .6; cursor: wait; }
+.voice-clarification__actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.voice-clarification__actions > button {
+  min-height: 34px;
+  padding: 7px 13px;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 550;
+  cursor: pointer;
+}
+.voice-clarification__actions > .voice-clarification__cancel { background: transparent; color: var(--text-soft); }
+.voice-clarification__actions > .voice-clarification__cancel:hover { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
+.voice-clarification__actions > .voice-clarification__continue { background: var(--periwinkle); color: var(--accent-ink); }
+.voice-clarification__actions > .voice-clarification__continue:hover:not(:disabled) { filter: brightness(1.08); }
+.voice-clarification__actions > button:disabled { opacity: .45; cursor: default; }
+@media (max-width: 480px) {
+  .voice-clarification { padding: 12px; }
+  .voice-clarification__choices { grid-template-columns: 1fr; }
+}
+@media (forced-colors: active) {
+  .voice-clarification__choice.is-selected { border-color: Highlight; outline: 1px solid Highlight; }
+}

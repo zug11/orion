@@ -24,6 +24,7 @@ fn operation(name: &str) -> Option<Operation> {
         "orion_research" => Operation::Research,
         "orion_search_space" => Operation::Search,
         "orion_export_word" => Operation::Export,
+        "orion_export_collection" => Operation::Export,
         "orion_import" => Operation::Import,
         "orion_reprocess_sources" => Operation::Reprocess,
         "orion_generate" => Operation::Generate,
@@ -135,6 +136,29 @@ pub fn call(path: &Path, name: &str, arguments: &Map<String, Value>) -> ToolResu
                 .map_err(|_| ToolFailure::new("Invalid note-edit review lookup."))?,
         )
     } else if let Some(operation) = operation(name) {
+        if name == "orion_export_collection" {
+            if input
+                .keys()
+                .any(|key| !matches!(key.as_str(), "space_id" | "request_id" | "note_ids"))
+            {
+                return Err(ToolFailure::new(
+                    "Collection export accepts only Space, request and selected note IDs.",
+                ));
+            }
+            input.insert("scope".into(), json!("selected"));
+            input.insert("format".into(), json!("orion"));
+        } else if name == "orion_export_word"
+            && input.keys().any(|key| {
+                !matches!(
+                    key.as_str(),
+                    "space_id" | "request_id" | "scope" | "note_id"
+                )
+            })
+        {
+            return Err(ToolFailure::new(
+                "Word export accepts only its declared note scope.",
+            ));
+        }
         let request = StartRequest {
             space_id: take_id(&mut input, "space_id")?,
             request_id: take_id(&mut input, "request_id")?,
@@ -707,6 +731,7 @@ pub fn definitions() -> Vec<Value> {
         tool("orion_get_context","Build a bounded, versioned context packet using Orion's Space hierarchy and exact note/source excerpts. Runs locally without an AI API call; coverage is explicitly partial.",context,&["query"],false,false),
         tool("orion_search_space", "Ask an explicit natural-language question across one Space. Orion adaptively searches and reads relevant notes and preserved sources, returning an AI answer with exact versioned passages, citations, and coverage. Never changes notes, settings, or Chat.", json!({"task_view":crate::working_view::schema(),"query":string(600)}), &["query"], false, true),
         tool("orion_export_word", "Export an exact note, its linked notes, or the whole Space as one editable Word document. Opens Orion's native save dialog; the user chooses the destination. No caller-supplied filesystem paths, no AI use, and no vault changes. Requires desktop workflows; cancellation before saving prevents the export.", json!({"scope":{"enum":["note","linked","space"]}, "note_id":string(200)}), &["scope"], true, false),
+        tool("orion_export_collection", "Export 1–200 explicitly selected notes as portable .orion files. Each file holds the same curated collection with a different opening note. Includes note-backed work and referenced images, excludes private unselected content, raw sources, settings and Chat. Opens a native folder picker; no caller destination path. Requires desktop workflows, makes no AI call, and does not change the vault.",json!({"note_ids":{"type":"array","minItems":1,"maxItems":200,"uniqueItems":true,"items":string(96)}}), &["note_ids"],true,false),
         tool("orion_research","Ask Orion AI to answer, compare supplied material, find gaps, review an argument, or prepare a brief grounded in the selected Space. Returns evidence references, uncertainty, and coverage. Does not save notes or alter Chat.",research,&["question"],false,true),
         tool("orion_import","Process text, an absolute local document/image/media path, or a public HTTPS webpage/YouTube URL through Orion's import flow. Preserves original extracted sources. AI mode synthesizes ideas and can revise matching canonical notes; local mode preserves source notes without provider use. Successful notes are saved atomically.",
             json!({"inputs":{"type":"array","minItems":1,"maxItems":12,"items":{"oneOf":[
@@ -845,7 +870,7 @@ mod tests {
     #[test]
     fn every_workflow_is_scoped_and_has_a_structured_result() {
         let tools = definitions();
-        assert_eq!(tools.len(), 25);
+        assert_eq!(tools.len(), 26);
         for tool in &tools {
             assert!(recognizes(tool["name"].as_str().unwrap()));
             assert!(tool["outputSchema"].is_object());

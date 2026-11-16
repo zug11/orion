@@ -49,7 +49,19 @@ not stop remote playback. Remove capture listeners before deliberate disposal.
   Selecting a completed worker moves both poses to that worker; the main orb
   retains its separate receiving reaction when findings arrive.
 - The approved gravity study supplies the asymmetric worker angles, working/ready
-  orbit radii, depth, and central proportion. Four inactive reserves and 23
+  orbit radii and depth. Expanded Chat uses a central body about 2.2 times its
+  previous diameter (roughly 195 px at the full 360 px body reference), keeping the
+  Jelly glass material. Expanded fields have up to 1.5 times the previous width
+  and height, with the old body size measured separately so the main orb stays
+  the same size. Short conversation layouts use a wider rectangular field within
+  their existing row, with independent horizontal/vertical projection. Worker
+  bodies are 14% larger and background/reserve beads 18% larger. Satellite contact
+  and viewport fitting keep the main body fixed; dense groups may reduce satellite
+  sizes instead. Sidebar and pill proportions
+  remain compact. Expanded positions preserve the original asymmetric angles and
+  varied inner/outer distances through a bounded radial map, rather than packing
+  inner bodies onto the enlarged rim. Drag coordinates use the inverse map, with
+  continuous centre crossings and outward dismissal. Four inactive reserves and 23
   mixed-size ambient circles form the resting field. Jobs promote those existing
   circles; further workers promote ambient positions, then add their own stable
   bodies. Larger groups use denser, smaller separated orbits while preserving the
@@ -97,6 +109,22 @@ not stop remote playback. Remove capture listeners before deliberate disposal.
 
 ## Multiple workers and clarification
 
+Ordinary substantive research questions reach the host scope planner without
+requiring a delegation tool call or worker wording. The planner chooses a direct
+conversation, one reader or usually two to four complementary independent readers;
+simple definitions and conversation retain their direct path. Whole-Space reading
+can select one to four readers from note count and text workload locally, partitioning
+note IDs exactly once without a planning-provider call. Explicit counts remain exact.
+Scope decisions use low reasoning effort; actual research retains the saved model
+and effort. Generated scopes never grant permission to save or edit.
+
+OpenAI and ElevenLabs share this host admission. Their voice policies ask for the
+whole original request once and let the host choose a useful team. ElevenLabs keeps
+its asynchronous, nonblocking delegation tool and refreshes the verified policy at
+the next explicit call startup. Late tool events cannot duplicate admitted workers.
+Within each shared Chat/voice reader, independent web requests overlap in bounded
+pairs and merge evidence in request order. Dependent follow-ups stay sequential.
+
 An explicit request for several orbs creates distinct work orders rather than one
 worker with a plural prompt. Each pending orb stays present while Orion asks for
 missing topics; unrelated conversation does not consume that question. A reply
@@ -124,6 +152,20 @@ history retention. Child scopes are read-only: generated scope text cannot grant
 permission to edit or save notes.
 
 ## Verification boundary
+
+The November 16 automatic-worker update was checked with the real host router and
+simulated OpenAI/ElevenLabs transports: ordinary comparison questions admit separate
+workers, original reservations survive, and late delegation cannot restart either
+the initial plan or its continued transcript. Existing-result questions keep their
+original worker. Shared-reader deferred-request tests prove paired overlap and
+ordered evidence publication, including failure, cancellation and deduplication.
+These checks do not measure live provider latency or exercise a microphone call.
+
+The enlarged production component was rendered in the real Chat layout at
+1416×900 and 640×720 with isolated fixture jobs. Settled workers remained visible,
+clickable and keyboard-focusable; geometry tests cover 0, 3, 10 and 24 workers.
+Captures and the fixture are under `output/playwright/automatic-workers/`; the
+scoped visual review is `.impeccable/review/automatic-workers/orb-review.md`.
 
 Focused automated checks cover PCM envelope behavior and cleanup, startup mute,
 playback gating, stale activity, live level-driven motion, worker identity,
@@ -165,3 +207,18 @@ only the original note's bounded reference metadata. It uses a deterministic
 provider and simulated voice, with no external requests or page errors. Evidence:
 `outputs/voice-constellation-qa/multiple-workers/20261011-clarification/`;
 runner: `outputs/voice-constellation-qa/multiple-workers/clarification-smoke.mjs`.
+
+### Jelly and Cellular glass
+
+Expanded Chat scenes and the idle Chat welcome use the prototype's Jelly main
+material and simple Cellular Material echo workers. Their two colours resolve
+from the existing Home shader tone/custom-colour settings and active theme, with
+no additional persisted settings. Light mode gently lifts colour and transmits
+12% more of the background. Sidebar and pill icons retain the lightweight 2D
+renderer, also used for unavailable/lost WebGL and increased contrast.
+
+Mouse speed adds a bounded, decaying offset to the material clock only. It never
+rotates surface normals, synthesizes speech, or changes job state. Worker drag,
+keyboard controls and actual PCM motion remain authoritative. Reduced motion
+freezes material animation. Each expanded scene owns one low-power offscreen
+WebGL context, released on unmount; offscreen/hidden scenes skip rendering.

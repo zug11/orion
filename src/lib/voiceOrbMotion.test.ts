@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { VoiceOrbMotion, VOICE_ORB_UPDATE_FLIGHT_SECONDS, VOICE_ORB_VISIBLE_BUDGET, projectVoiceOrbs, separateVoiceOrbs, type OrbJob, type VoiceOrbFrame } from "./voiceOrbMotion";
+import { VoiceOrbMotion, VOICE_ORB_UPDATE_FLIGHT_SECONDS, VOICE_ORB_VISIBLE_BUDGET, projectVoiceOrbs, separateVoiceOrbs, unprojectVoiceOrbPoint, type OrbJob, type VoiceOrbFrame } from "./voiceOrbMotion";
 
 const quiet = { inputActive: false, outputActive: false, measured: true, inputLevel: 0, outputLevel: 0, inputMeasured: true, outputMeasured: true, inputMuted: false };
 const job = (id: string, state: OrbJob["state"] = "running", sequence = 0): OrbJob => ({ id, revision: 1, state, updates: sequence ? [{ sequence }] : [], ...(state === "completed" ? { result: { reply: "Verified result" } } : {}) });
@@ -46,6 +46,122 @@ describe("live voice constellation motion", () => {
     expect(projected.centre.y).toBe(size * .48);
     expect(projected.centre.radius).toBeCloseTo(size * (size < 80 ? .155 : .104));
     expect(projected.companions).toHaveLength(size === 20 ? 8 : size === 46 ? 12 : 27);
+  });
+  it.each([0, 3, 10, 24])("keeps the enlarged centre and %i workers separated within the viewport", count => {
+    const motion = new VoiceOrbMotion();
+    const scene = motion.advance(frame({ jobs: Array.from({ length: count }, (_, index) => job(String(index), "completed")), reducedMotion: true }), 0);
+    for (const size of [210, 300, 360]) {
+      const projection = projectVoiceOrbs(scene, size, size, 2.6);
+      expect(projection.centre.radius).toBeCloseTo(size * .104 * 2.6 * projection.fit);
+      expect(projection.centreBounds.radius).toBe(projection.centre.radius);
+      if (count <= 3) expect(projection.centre.radius * 2).toBeGreaterThan(size * .5);
+      const circles = [projection.centreBounds, ...projection.workerBounds, ...projection.companions];
+      for (const circle of circles) {
+        expect(circle.x - circle.radius).toBeGreaterThanOrEqual(0);
+        expect(circle.y - circle.radius).toBeGreaterThanOrEqual(0);
+        expect(circle.x + circle.radius).toBeLessThanOrEqual(size);
+        expect(circle.y + circle.radius).toBeLessThanOrEqual(size);
+      }
+      for (let a = 0; a < circles.length; a++) for (let b = a + 1; b < circles.length; b++) {
+        expect(Math.hypot(circles[a].x - circles[b].x, circles[a].y - circles[b].y)).toBeGreaterThanOrEqual(circles[a].radius + circles[b].radius - .002);
+      }
+    }
+  });
+  it.each([0, 3, 10, 24, 48])("fits %i workers in a wider field without shrinking the main orb", count => {
+    const motion = new VoiceOrbMotion();
+    const scene = motion.advance(frame({ jobs: Array.from({ length: count }, (_, index) => job(String(index), "completed")), reducedMotion: true }), 0);
+    for (const [width, height] of [[540, 540], [540, 280], [300, 300]]) {
+      const projection = projectVoiceOrbs(scene, width, height, 2.6, 360);
+      expect(projection.fit).toBe(1);
+      expect(projection.centre.radius).toBeCloseTo(Math.min(360, width, height) * .104 * 2.6);
+      expect(projection.positionScaleX).toBe(width); expect(projection.positionScaleY).toBe(height);
+      expect(projection.workers).toHaveLength(count);
+      const circles = [projection.centreBounds, ...projection.workerBounds, ...projection.companions];
+      for (const circle of circles) {
+        expect(circle.x - circle.radius).toBeGreaterThanOrEqual(0);
+        expect(circle.y - circle.radius).toBeGreaterThanOrEqual(0);
+        expect(circle.x + circle.radius).toBeLessThanOrEqual(width);
+        expect(circle.y + circle.radius).toBeLessThanOrEqual(height);
+      }
+      for (let a = 0; a < circles.length; a++) for (let b = a + 1; b < circles.length; b++) {
+        expect(Math.hypot(circles[a].x - circles[b].x, circles[a].y - circles[b].y)).toBeGreaterThanOrEqual(circles[a].radius + circles[b].radius - .002);
+      }
+    }
+  });
+  it("spreads the field with slightly larger satellites while keeping the original main diameter", () => {
+    const motion = new VoiceOrbMotion();
+    const scene = motion.advance(frame({ jobs: [job("a"), job("b"), job("c")], reducedMotion: true }), 0);
+    const previous = projectVoiceOrbs(scene, 360, 360, 2.6);
+    const wider = projectVoiceOrbs(scene, 540, 540, 2.6, 360);
+    expect(wider.centre.radius).toBeCloseTo(previous.centre.radius);
+    for (const [index, worker] of wider.workers.entries()) {
+      expect(worker.radius).toBeCloseTo(previous.workers[index].radius * 1.14);
+      const old = previous.workers[index];
+      expect(Math.hypot(worker.x - wider.centre.x, worker.y - wider.centre.y)).toBeGreaterThan(Math.hypot(old.x - previous.centre.x, old.y - previous.centre.y) * 1.3);
+    }
+    for (const [index, companion] of wider.companions.entries()) expect(companion.radius).toBeCloseTo(previous.companions[index].radius * 1.18);
+  });
+  it.each([3, 48])("contains %i workers during live speech and a real finding receipt", count => {
+    const motion = new VoiceOrbMotion();
+    const jobs = Array.from({ length: count }, (_, index) => job(String(index)));
+    run(motion, frame({ jobs }), 1);
+    const input = frame({ jobs: jobs.map((item, index) => index ? item : job(item.id, "running", 1)),
+      activity: { ...quiet, outputActive: true, outputLevel: 1, inputActive: true, inputLevel: .7 } });
+    let sawReceipt = false;
+    for (let step = 0; step < 90; step++) {
+      const scene = motion.advance(input, 1 / 30);
+      sawReceipt ||= scene.central.receiving > 0;
+      if (step % 10) continue;
+      for (const [width, height] of [[540, 540], [540, 280], [300, 300]]) {
+        const projected = projectVoiceOrbs(scene, width, height, 2.6, 360);
+        expect(projected.fit).toBe(1);
+        const main = projected.centreBounds;
+        for (const circle of [...projected.workerBounds, ...projected.companions]) {
+          expect(Math.hypot(circle.x - main.x, circle.y - main.y)).toBeGreaterThanOrEqual(circle.radius + main.radius - .002);
+          expect(circle.x - circle.radius).toBeGreaterThanOrEqual(0);
+          expect(circle.y - circle.radius).toBeGreaterThanOrEqual(0);
+          expect(circle.x + circle.radius).toBeLessThanOrEqual(width);
+          expect(circle.y + circle.radius).toBeLessThanOrEqual(height);
+        }
+      }
+    }
+    expect(sawReceipt).toBe(true);
+  });
+  it("maps rectangular-field pointer coordinates back to the same shared motion position", () => {
+    const scene = new VoiceOrbMotion().snapshot();
+    scene.companions = [{ slot: 0, radius: .005, x: .25, y: .18 }];
+    const projection = projectVoiceOrbs(scene, 540, 280, 2.6, 360);
+    const point = projection.companions[0];
+    const restored = unprojectVoiceOrbPoint((point.x - 270) / projection.positionScaleX, (point.y - 134.4) / projection.positionScaleY, 2.6);
+    expect(restored.x).toBeCloseTo(.25); expect(restored.y).toBeCloseTo(.18);
+  });
+  it("preserves scattered inner and outer distances around the large orb and maps drag coordinates back", () => {
+    const initial = new VoiceOrbMotion().snapshot();
+    const distances = [.16, .22, .31, .43];
+    const scene = { ...initial, companions: distances.map((distance, slot) => ({ slot, radius: .005, x: Math.cos(slot * 1.5) * distance, y: Math.sin(slot * 1.5) * distance })) };
+    const projected = projectVoiceOrbs(scene, 360, 360, 2.6);
+    const radii = projected.companions.map(point => Math.hypot(point.x - projected.centre.x, point.y - projected.centre.y));
+    expect(projected.centre.radius * 2).toBeCloseTo(194.688);
+    expect(radii[0] - projected.centre.radius).toBeGreaterThan(15);
+    expect(radii[3] - radii[0]).toBeGreaterThan(45);
+    for (const [index, point] of projected.companions.entries()) {
+      const restored = unprojectVoiceOrbPoint((point.x - 180) / 360 / projected.fit, (point.y - 172.8) / 360 / projected.fit, 2.6);
+      expect(restored.x).toBeCloseTo(scene.companions[index].x);
+      expect(restored.y).toBeCloseTo(scene.companions[index].y);
+    }
+    expect(unprojectVoiceOrbPoint(0, 0, 2.6)).toEqual({ x: 0, y: 0 });
+    expect(unprojectVoiceOrbPoint(.3, .2)).toEqual({ x: .3, y: .2 });
+  });
+  it("keeps centre-crossing and outward drag coordinates continuous", () => {
+    const positions = [-.6, -.46, -.31, -.01, 0, .01, .31, .46, .6];
+    const mapped = positions.map(x => unprojectVoiceOrbPoint(x, 0, 2.6).x);
+    expect(mapped[0]).toBe(-.6); expect(mapped[4]).toBe(0); expect(mapped[8]).toBe(.6);
+    for (let index = 1; index < mapped.length; index++) expect(mapped[index]).toBeGreaterThan(mapped[index - 1]);
+    for (const boundary of [0, .31, .46]) {
+      const left = unprojectVoiceOrbPoint(boundary - .0001, 0, 2.6).x;
+      const right = unprojectVoiceOrbPoint(boundary + .0001, 0, 2.6).x;
+      expect(right - left).toBeLessThan(.001);
+    }
   });
   it("uses actual output/input envelopes and returns to the resting pose during silence", () => {
     const motion = new VoiceOrbMotion();

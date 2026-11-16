@@ -324,8 +324,8 @@ try {
     "Bundled MCP initialize response is invalid.",
   );
   assert(
-    byId.get(2)?.result?.tools?.length === 64,
-    "Bundled MCP must expose 39 local library tools and twenty-five desktop workflow/review/context/voice/editor-action tools.",
+    byId.get(2)?.result?.tools?.length === 66,
+    "Bundled MCP must expose 40 local library tools and twenty-six desktop workflow/review/context/voice/editor-action tools.",
   );
   assert(
     byId.get(3)?.result?.structuredContent?.activeSpaceId ===

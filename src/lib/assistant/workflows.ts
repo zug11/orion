@@ -130,6 +130,15 @@ export async function executeAssistantWorkflow(snapshot: AppSnapshot, request: A
       return { result: assistantSearchResult(snapshot, reply) };
     }
     case "export": {
+      if(request.input.format==='orion'){
+        const ids=request.input.note_ids??[];
+        if(request.input.scope!=='selected'||!ids.length||ids.length>200||new Set(ids).size!==ids.length||ids.some(id=>snapshot.notes.filter(n=>n.id===id).length!==1))throw new Error('Choose 1–200 exact notes in this Space for the collection.');
+        if(!deps.exportCollection)throw new Error('Orion collection export is unavailable in this connection.');
+        await deps.progress('Preparing Orion collection');
+        const result=await deps.exportCollection(snapshot,ids);
+        return {result:{spaceId:snapshot.workspace.id,format:'orion',noteIds:ids,...result,providerCalls:0}};
+      }
+      if(request.input.scope==='selected')throw new Error('Word export needs a note, linked, or Space scope.');
       const noteId = request.input.note_id ?? null;
       if (request.input.scope !== "space" && !snapshot.notes.some((note) => note.id === noteId)) throw new Error("Select an exact note in this Space to export.");
       const notes = notesForExportScope(snapshot, request.input.scope, noteId);

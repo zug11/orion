@@ -1,0 +1,45 @@
+{
+  "format": "orion",
+  "version": 1,
+  "exportId": "fixture_collection_2026",
+  "entryNoteId": "n1",
+  "collection": {
+    "title": "Shared café 🧭",
+    "notes": [
+      {
+        "id": "n1",
+        "title": "One",
+        "summary": "",
+        "body": "![Picture](orion-image://localhost/picture_fixture_2026)\n\n- [ ] Ship <!-- orion-ticket:v1 ticket1 todo - -->\n  - [ ] Verify picture",
+        "tags": [
+          "shared"
+        ],
+        "sourceIds": []
+      },
+      {
+        "id": "n2",
+        "title": "Two",
+        "summary": "",
+        "body": "[One](orion-note://n1) — ORION-001",
+        "tags": [],
+        "sourceIds": []
+      }
+    ],
+    "sources": [],
+    "ticketCodes": {
+      "version": 1,
+      "prefix": "ORION",
+      "nextNumber": 2,
+      "assigned": {
+        "ticket1": 1
+      }
+    }
+  },
+  "assets": [
+    {
+      "id": "picture_fixture_2026",
+      "mimeType": "image/png",
+      "base64Data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1ZkAAAAASUVORK5CYII="
+    }
+  ]
+}

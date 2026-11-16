@@ -54,6 +54,7 @@ export { default as ListOrdered } from "lucide-react/dist/esm/icons/list-ordered
 export { default as ListTodo } from "lucide-react/dist/esm/icons/list-todo.mjs";
 export { default as ListTree } from "lucide-react/dist/esm/icons/list-tree.mjs";
 export { default as LoaderCircle } from "lucide-react/dist/esm/icons/loader-circle.mjs";
+export { default as ListChecks } from "lucide-react/dist/esm/icons/list-checks.mjs";
 export { default as LockKeyhole } from "lucide-react/dist/esm/icons/lock-keyhole.mjs";
 export { default as Menu } from "lucide-react/dist/esm/icons/menu.mjs";
 export { default as Maximize2 } from "lucide-react/dist/esm/icons/maximize-2.mjs";
@@ -97,3 +98,4 @@ export { default as Globe } from "lucide-react/dist/esm/icons/globe.mjs";
 
 export { default as Columns3 } from "lucide-react/dist/esm/icons/columns-3.mjs";
 export { default as CalendarDays } from "lucide-react/dist/esm/icons/calendar-days.mjs";
+export { default as ArrowDown } from 'lucide-react/dist/esm/icons/arrow-down.mjs';

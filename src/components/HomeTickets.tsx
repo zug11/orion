@@ -9,6 +9,9 @@ import { ChevronRight, Columns3, List, ListTodo, Plus, X } from '../lib/icons';
 import { UrgencyPicker, KanbanBoard, LoadMoreTickets, WorkItemComposer, type CreateWorkItem, type TicketWorkspace } from './Tickets';
 import { useTicketDrag } from './useTicketDrag';
 import type { DismissCalendarMention } from '../lib/calendarDismissal';
+import { TicketCode } from './TicketCode';
+import { useTicketNavigation } from './TicketNavigation';
+import { TicketDetailsDialog } from './TicketDetailsDialog';
 
 export interface HomeWorkPreferences {
   view?: 'list' | 'board'; boardId?: string; todosCompleted?: boolean; ticketsCompleted?: boolean;
@@ -22,6 +25,8 @@ function WorkList({ tickets, workspace, concepts, completed, onCompletedChange, 
   onOpenConcept?: (id: string) => void;
   drag: ReturnType<typeof useTicketDrag>;
 }) {
+  const navigation=useTicketNavigation();
+  const [expanded, setExpanded] = useState<Pick<Ticket, 'id' | 'noteId'> | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const disclosure = useRef<HTMLButtonElement>(null);
   const restore = useRef<string | 'completed' | null>(null);
@@ -52,7 +57,7 @@ function WorkList({ tickets, workspace, concepts, completed, onCompletedChange, 
     const board = workspace.work.boards.find(b => b.id === ticket.boardId);
     return <div className={`ticket-row${ticket.status === 'done' ? ' is-complete' : ''}`} data-work-key={rowKey(ticket)} key={rowKey(ticket)} {...drag.cardProps(ticket)}>
       <input className="home-work-check" type="checkbox" aria-label={`Complete ${ticket.title}`} checked={ticket.status === 'done'} disabled={!workspace.onPatch} onChange={e => toggle(ticket, e.target.checked)}/>
-      <div className="ticket-row-copy"><button type="button" className="ticket-open" onClick={() => workspace.onOpenNote?.(ticket.noteId)}>{ticket.title}</button>
+      <div className="ticket-row-copy">{ticket.durable && <TicketCode id={ticket.id}/>}<button type="button" className="ticket-open" onClick={() => ticket.durable ? navigation.openTicket ? navigation.openTicket(ticket.id) : setExpanded({ id: ticket.id, noteId: ticket.noteId }) : workspace.onOpenNote?.(ticket.noteId)}>{ticket.title}</button>
         <small>{ticket.origin !== 'board' && <span>{ticket.noteTitle}</span>}{ticket.origin !== 'board' && concept && onOpenConcept && <><button type="button" className="ticket-concept" onClick={() => onOpenConcept(concept.id)}>{concept.label}</button></>}{ticket.status === 'progress' && <span className="ticket-progress"> · In progress</span>}</small>
       </div>
       {ticket.durable && workspace.onPatch && <UrgencyPicker value={ticket.urgency} title={ticket.title} onChange={urgency => workspace.onPatch?.(ticket, { urgency }) ?? false}/>}
@@ -67,6 +72,7 @@ function WorkList({ tickets, workspace, concepts, completed, onCompletedChange, 
     {done.length > 0 && <><button ref={disclosure} type="button" className="ticket-completed-toggle" aria-expanded={completed} aria-controls={completedId} onClick={() => onCompletedChange(!completed)}><ChevronRight size={13}/>Completed <span>{done.length}</span></button>
       {completed && <div id={completedId}>{done.slice(0, doneLimit).map(row)}<LoadMoreTickets remaining={done.length - doneLimit} pageSize={20} label="completed items" onLoad={() => { restore.current = rowKey(done[doneLimit]); setDoneLimit(limit => limit + 20); }}/></div>}</>}
     {error && <p role="alert" className="ticket-error">{error}</p>}
+    {expanded && <TicketDetailsDialog selected={expanded} workspace={workspace} onClose={() => setExpanded(null)}/>}
   </div>;
 }
 

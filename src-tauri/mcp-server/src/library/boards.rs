@@ -2,8 +2,15 @@
 use super::*;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use std::ops::Range;
+mod detail;
+pub(crate) use detail::validate_completions;
 
-pub(super) const READS: [&str; 3] = ["orion_list_boards", "orion_get_board", "orion_list_tickets"];
+pub(super) const READS: [&str; 4] = [
+    "orion_list_boards",
+    "orion_get_board",
+    "orion_list_tickets",
+    "orion_get_ticket",
+];
 pub(super) const WRITES: [&str; 4] = [
     "orion_create_board",
     "orion_update_board",
@@ -31,6 +38,7 @@ struct Ticket {
     line: usize,
     marker: usize,
     meta: Option<Range<usize>>,
+    range: Range<usize>,
 }
 #[derive(Default)]
 struct Work {
@@ -213,6 +221,8 @@ fn scan(body: &str) -> Work {
     let mut quote_depth = 0;
     let mut paragraph_depth = 0;
     let mut html_block: Option<Range<usize>> = None;
+    let mut items = Vec::new();
+    let mut ranges = BTreeMap::new();
     for (event, range) in Parser::new_ext(
         body,
         Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES,
@@ -220,6 +230,10 @@ fn scan(body: &str) -> Work {
     .into_offset_iter()
     {
         match event {
+            Event::Start(Tag::Item) => items.push(range.clone()),
+            Event::End(TagEnd::Item) => {
+                items.pop();
+            }
             Event::Start(Tag::BlockQuote(_)) => quote_depth += 1,
             Event::End(TagEnd::BlockQuote(_)) => quote_depth -= 1,
             Event::Start(Tag::HtmlBlock) => html_block = Some(range.clone()),
@@ -232,6 +246,9 @@ fn scan(body: &str) -> Work {
                     .saturating_sub(1);
                 if lines.get(line).is_some_and(|l| l.visible) {
                     task_lines.insert(line);
+                    if let Some(item) = items.last() {
+                        ranges.insert(line, item.clone());
+                    }
                 }
             }
             Event::Html(html) | Event::InlineHtml(html) if quote_depth == 0 => {
@@ -310,6 +327,9 @@ fn scan(body: &str) -> Work {
             line: task.line,
             marker: task.marker_byte,
             meta: metadata.map(|m| m.1.clone()),
+            range: ranges.get(&task.line).cloned().unwrap_or(
+                lines[task.line].byte..lines[task.line].byte + lines[task.line].text.len(),
+            ),
         });
     }
     result
@@ -331,7 +351,72 @@ fn board_json(scope: &Space, note: &Note, board: &Board) -> Value {
     json!({"id":board.id,"title":board.title,"noteId":note.id,"note":citation(scope,note)})
 }
 fn ticket_json(scope: &Space, note: &Note, ticket: &Ticket, boards: &BTreeSet<String>) -> Value {
-    json!({"id":if ticket.id.is_empty(){format!("{}:{}",note.id,ticket.line)}else{ticket.id.clone()},"durable":!ticket.id.is_empty(),"title":truncate_chars(&ticket.title,500).0,"titleTruncated":ticket.title.chars().count()>500,"status":ticket.status,"dueDate":ticket.due,"urgency":ticket.urgency,"origin":if ticket.origin.is_empty(){"note"}else{ticket.origin.as_str()},"sourceNoteId":if ticket.origin=="board"{Value::Null}else{json!(note.id)},"boardId":if boards.contains(&ticket.board){ticket.board.as_str()}else{""},"noteId":note.id,"lineIndex":ticket.line,"note":citation(scope,note)})
+    json!({"id":if ticket.id.is_empty(){format!("{}:{}",note.id,ticket.line)}else{ticket.id.clone()},"code":ticket_codes::code(&scope.ticket_codes, &ticket.id),"durable":!ticket.id.is_empty(),"title":truncate_chars(&ticket.title,500).0,"titleTruncated":ticket.title.chars().count()>500,"status":ticket.status,"dueDate":ticket.due,"urgency":ticket.urgency,"origin":if ticket.origin.is_empty(){"note"}else{ticket.origin.as_str()},"sourceNoteId":if ticket.origin=="board"{Value::Null}else{json!(note.id)},"boardId":if boards.contains(&ticket.board){ticket.board.as_str()}else{""},"noteId":note.id,"lineIndex":ticket.line,"note":citation(scope,note)})
+}
+
+/// Called under the existing cross-process vault lock, after a note mutation.
+pub(crate) fn allocate_work_codes(before: &Value, after: &mut Value) -> Result<(), ToolFailure> {
+    for space in after["spaces"].as_array_mut().into_iter().flatten() {
+        let old = before["spaces"].as_array().and_then(|spaces| {
+            spaces
+                .iter()
+                .find(|old| old["workspace"]["id"] == space["workspace"]["id"])
+        });
+        if old.is_some_and(|old| old["notes"] == space["notes"]) {
+            continue;
+        }
+        let scope: Space = serde_json::from_value(space.clone())
+            .map_err(|error| ToolFailure::new(error.to_string()))?;
+        if let (Some(assigned), Some(old_notes)) = (
+            space["ticketCodes"]["assigned"].as_object(),
+            old.and_then(|old| old["notes"].as_array()),
+        ) {
+            if old_notes.len() == scope.notes.len() {
+                let before: BTreeMap<&str, &str> = old_notes
+                    .iter()
+                    .filter_map(|note| Some((note["id"].as_str()?, note["body"].as_str()?)))
+                    .collect();
+                let needs_allocation = scope.notes.iter().any(|note| {
+                    let previous = before.get(note.id.as_str()).copied();
+                    previous != Some(note.body.as_str())
+                        && [Some(note.body.as_str()), previous]
+                            .into_iter()
+                            .flatten()
+                            .any(|body| {
+                                body.contains("<!-- orion-ticket:v1 ")
+                                    && scan(body).tickets.iter().any(|ticket| {
+                                        !ticket.id.is_empty() && !assigned.contains_key(&ticket.id)
+                                    })
+                            })
+                });
+                if !needs_allocation {
+                    continue;
+                }
+            }
+        }
+        if !scope
+            .notes
+            .iter()
+            .any(|note| note.body.contains("<!-- orion-ticket:v1 "))
+        {
+            continue;
+        }
+        let (entries, coverage) = index(&scope);
+        if coverage["complete"] != true {
+            return Err(ToolFailure::new(
+                "The Space is too large to allocate ticket codes safely. Nothing was saved.",
+            ));
+        }
+        let ids = entries.iter().flat_map(|(_, work)| {
+            work.tickets
+                .iter()
+                .filter(|t| !t.id.is_empty())
+                .map(|t| t.id.clone())
+        });
+        space["ticketCodes"] =
+            ticket_codes::allocate(space.get("ticketCodes"), ids).map_err(ToolFailure::new)?;
+    }
+    Ok(())
 }
 fn unique_board_ids(entries: &[(&Note, Work)]) -> BTreeSet<String> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
@@ -369,6 +454,7 @@ pub(super) fn read(scope: &Space, name: &str, args: &Map<String, Value>) -> Tool
         note(scope, wanted_note)?;
     }
     let mut result = match name {
+        "orion_get_ticket" => detail::read(scope, args, &entries, &coverage, &valid)?,
         "orion_list_boards" => bounded_page(
             args,
             "boards",
@@ -440,6 +526,8 @@ pub(super) fn read(scope: &Space, name: &str, args: &Map<String, Value>) -> Tool
                             .iter()
                             .filter(|t| {
                                 (include_todos || !t.id.is_empty())
+                                    && (arg(args, "query").is_empty()
+                                        || detail::matches_query(scope, t, arg(args, "query")))
                                     && (state == "all"
                                         || (state == "completed") == (t.status == "done"))
                                     && (!args.contains_key("board_id")
@@ -618,14 +706,48 @@ pub(super) fn edit(
                         "Invalid ticket date or urgency. Nothing was saved.",
                     ));
                 }
-                lines.push(ticket_line(
+                let mut entry = ticket_line(
                     &unique_id("ticket"),
                     title,
                     board,
                     status(args),
                     due,
                     urgency,
-                ));
+                );
+                if let Some(description) = ticket.get("description").and_then(Value::as_str) {
+                    entry.push_str("\n\n");
+                    entry.push_str(
+                        &literal(description)
+                            .lines()
+                            .map(|line| format!("  {line}"))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    );
+                }
+                if let Some(checklist) = ticket.get("checklist").and_then(Value::as_array) {
+                    if !checklist.is_empty() {
+                        entry.push('\n');
+                    }
+                    for item in checklist {
+                        let title = item["title"].as_str().unwrap();
+                        if title.trim().is_empty() || title.chars().any(char::is_control) {
+                            return Err(ToolFailure::new(
+                                "Checklist titles must be nonempty literal single lines.",
+                            ));
+                        }
+                        if item
+                            .get("evidence")
+                            .and_then(Value::as_str)
+                            .is_some_and(|evidence| !visible.contains(evidence))
+                        {
+                            return Err(ToolFailure::new(
+                                "Checklist evidence is absent or belongs to completed work.",
+                            ));
+                        }
+                        entry.push_str(&format!("\n  - [ ] {}", literal(title.trim())));
+                    }
+                }
+                lines.push(entry);
             }
             if lines.is_empty() {
                 Ok(current.body.clone())
@@ -638,15 +760,18 @@ pub(super) fn edit(
                 && !args.contains_key("board_id")
                 && !args.contains_key("due_date")
                 && !args.contains_key("urgency")
+                && !args.contains_key("implementation_summary")
+                && !args.contains_key("checklist")
             {
                 return Err(ToolFailure::new(
                     "Supply a status, board_id, due_date or urgency change.",
                 ));
             }
+            let resolved_id = detail::resolve_id(scope, args)?;
             let matches: Vec<_> = work
                 .tickets
                 .iter()
-                .filter(|t| !t.id.is_empty() && t.id == arg(args, "ticket_id"))
+                .filter(|t| !t.id.is_empty() && t.id == resolved_id)
                 .collect();
             if matches.len() != 1 {
                 return Err(ToolFailure::new(
@@ -654,6 +779,7 @@ pub(super) fn edit(
                 ));
             }
             let ticket = matches[0];
+            detail::require_unique(scope, &ticket.id, &current.id)?;
             let board = if args.contains_key("board_id") {
                 arg(args, "board_id")
             } else {
@@ -681,7 +807,7 @@ pub(super) fn edit(
                 ));
             }
             let meta = ticket.meta.clone().unwrap();
-            let mut body = current.body.clone();
+            let mut body = detail::apply(scope, current, ticket, args, state)?;
             body.replace_range(
                 meta,
                 &format!(
@@ -747,7 +873,8 @@ pub(super) fn receipt(
             if name == "orion_create_tickets" {
                 !old.tickets.iter().any(|o| o.id == t.id)
             } else {
-                name == "orion_update_ticket" && t.id == arg(args, "ticket_id")
+                name == "orion_update_ticket"
+                    && detail::resolve_id(scope, args).is_ok_and(|id| t.id == id)
             }
         })
         .map(|t| ticket_json(scope, after, t, &valid))

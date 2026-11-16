@@ -12,7 +12,7 @@ export type ImportInput = { kind: "text"; title: string; text: string } | { kind
 export type AssistantRequest = { space_id: string; request_id: string } & (
   | { operation: "context"; input: ContextInput }
   | { operation: "search"; input: { query: string; task_view?: import("../taskWorkingView").TaskView } }
-  | { operation: "export"; input: { scope: "note" | "linked" | "space"; note_id?: string } }
+  | { operation: "export"; input: { scope: "note" | "linked" | "space" | "selected"; note_id?: string; format?:'word'|'orion'; note_ids?:string[] } }
   | { operation: "research"; input: ResearchInput }
   | { operation: "import"; input: { inputs: ImportInput[]; guidance?: string; mode?: "ai" | "local" } }
   | { operation: "reprocess"; input: { source_ids: string[]; guidance?: string } }
@@ -38,6 +38,7 @@ export interface WorkflowDependencies {
   driver: KnowledgeAssignmentDriver;
   buildImportPayload: typeof buildImportPayload;
   exportWord?: (snapshot: AppSnapshot, scope: "note" | "linked" | "space", noteId: string | null) => Promise<{ path: string; cancelled: boolean; noteIds: string[]; title: string }>;
+  exportCollection?: (snapshot:AppSnapshot,noteIds:string[])=>Promise<{directory:string;cancelled:boolean;exportedCount:number}>;
   readInput: (index: number) => Promise<ParsedImport>;
   previousResult: (jobId: string) => Promise<Record<string, unknown>>;
   illustrate: (body: string, title: string) => Promise<{ body: string; warnings: string[] }>;

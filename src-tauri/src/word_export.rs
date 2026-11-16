@@ -40,7 +40,9 @@ fn check_workflow(app: &AppHandle, workflow: Option<&ExportWorkflow>) -> Result<
         let request = app
             .state::<crate::assistant_bridge::AssistantBridge>()
             .assert_running(&workflow.job_id, &workflow.session_id)?;
-        if request.operation != crate::assistant_protocol::Operation::Export {
+        if request.operation != crate::assistant_protocol::Operation::Export
+            || request.input["format"] == "orion"
+        {
             return Err("This assistant job is not authorized to export a document.".into());
         }
     }

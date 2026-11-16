@@ -1,4 +1,5 @@
 import { isCalendarDismissalList } from "./calendarDismissal";
+import { allocateTicketCodes } from './ticketCodes';
 import type { ConceptStudioState, ChatThread, StudioMessage, OrionVault } from "../types";
 import { messageChatThreadId } from "./chatThreads";
 
@@ -195,6 +196,7 @@ export async function persistWindowVault(
     if (!base && latest) {
       throw new Error("Another window created the library first. Reload Orion before editing this window.");
     }
+    merged = allocateTicketCodes(merged, latest ?? undefined);
     if (latest && same(merged, latest)) return latest;
     merged = {
       ...merged,

@@ -1,4 +1,6 @@
 import { isCalendarDismissalList } from "./calendarDismissal";
+import { isTicketCodes } from './ticketCodes';
+import { isPortableImportIdentity } from './portableOrion';
 import { createSourceTextStore, SOURCE_TEXT_MISSING, type SourceTextRef } from "./sourceTextStore";
 import { isPassageAnchor, isPassageThreads } from "./passageThreads";
 import { LEGACY_CHAT_THREAD_ID, MAX_CHAT_THREAD_TITLE_CHARS, validChatThreadId } from "./chatThreads";
@@ -859,6 +861,14 @@ export async function apiKeyStatus(): Promise<ApiKeyStatus> {
     return invokeTauri<ApiKeyStatus>("api_key_status");
   }
   return { configured: Boolean(getBrowserApiKey()) };
+}
+
+/** Explicit user retry after dismissing a system credential prompt. Never run
+ * this from status polling or an automatic provider retry. */
+export async function retrySavedConnections(): Promise<void> {
+  if (isTauriRuntime()) await invokeTauri<void>("retry_saved_connections");
+  invalidateProviderKey("openai");
+  invalidateProviderKey("anthropic");
 }
 
 export async function anthropicApiKeyStatus(): Promise<ApiKeyStatus> {
@@ -2303,6 +2313,8 @@ function isSnapshot(value: unknown): boolean {
     !isSettings(value.settings) ||
     !isOptionalSpaceOverview(value.spaceOverview) ||
     !isOptionalSpaceKnowledge(value.spaceKnowledge) ||
+    (value.ticketCodes !== undefined && !isTicketCodes(value.ticketCodes)) ||
+    (value.portableImport !== undefined && !isPortableImportIdentity(value.portableImport)) ||
     !isNullableString(value.activeNoteId) ||
     typeof value.updatedAt !== "string"
   ) {

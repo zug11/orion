@@ -55,6 +55,66 @@ function localAudioFixture() {
   return { Context, Playback, output, outputTrack };
 }
 describe("live voice transport", () => {
+  it("silences a client delegation's automatic acknowledgment before handing it to the host", async () => {
+    const config = { ...options(), onActivity: vi.fn() };
+    const voice = new LiveVoiceConnection(config); await voice.start();
+    Peer.latest.channel.emit({ type: "session.started" });
+    config.onEvent.mockClear(); config.onStatus.mockClear(); config.onActivity.mockClear();
+    const event = { type: "session.delegation.created", event_id: "delegation-event", offset_ms: 1_000,
+      delegation: { id: "work-a", type: "delegation", target: "client" } };
+    config.onEvent.mockImplementation(received => {
+      if (received.type === "session.delegation.created") {
+        expect(Peer.latest.channel.sent.map(value => JSON.parse(value))).toEqual([
+          { type: "session.thinking.append", event_id: expect.any(String), delegation_id: "work-a", content: "" },
+        ]);
+      }
+    });
+    Peer.latest.channel.emit(event);
+    expect(config.onEvent).toHaveBeenCalledExactlyOnceWith(event);
+    expect(config.onStatus).not.toHaveBeenCalled(); expect(config.onActivity).not.toHaveBeenCalled();
+    expect(voice.append("thinking", "")).toBe(false);
+    expect(voice.append("commentary", "")).toBe(false);
+    const sent = JSON.parse(Peer.latest.channel.sent[0]);
+    Peer.latest.channel.emit({ type: "session.thinking.appended", client_event_id: sent.event_id, start_ms: 1_000, end_ms: 1_000 });
+    expect(Peer.latest.channel.sent).toHaveLength(1);
+    expect(config.onStatus).not.toHaveBeenCalled(); expect(config.onActivity).not.toHaveBeenCalled();
+    voice.dispose();
+  });
+  it("deduplicates quiet delegation updates by identity and bounds their retained history", async () => {
+    const voice = new LiveVoiceConnection(options()); await voice.start();
+    Peer.latest.channel.emit({ type: "session.started" });
+    const delegation = (id: string) => ({ type: "session.delegation.created", delegation: { id, type: "delegation", target: "client" } });
+    Peer.latest.channel.emit(delegation("work-0")); Peer.latest.channel.emit(delegation("work-0"));
+    expect(Peer.latest.channel.sent).toHaveLength(1);
+    for (let i = 1; i <= 1_000; i++) Peer.latest.channel.emit(delegation(`work-${i}`));
+    expect(Peer.latest.channel.sent).toHaveLength(1_001);
+    Peer.latest.channel.emit(delegation("work-1000"));
+    expect(Peer.latest.channel.sent).toHaveLength(1_001);
+    Peer.latest.channel.emit(delegation("work-0"));
+    expect(Peer.latest.channel.sent).toHaveLength(1_002);
+    const ids = Peer.latest.channel.sent.map(value => JSON.parse(value).event_id);
+    expect(new Set(ids).size).toBe(ids.length);
+    voice.dispose();
+  });
+  it("never acknowledges malformed, nonclient, unstarted, closed-channel or stopped delegations", async () => {
+    const config = options(); const voice = new LiveVoiceConnection(config); await voice.start();
+    const valid = { type: "session.delegation.created", delegation: { id: "work-a", type: "delegation", target: "client" } };
+    Peer.latest.channel.emit(valid); expect(Peer.latest.channel.sent).toEqual([]);
+    Peer.latest.channel.emit({ type: "session.started" });
+    for (const delegation of [null, {}, { id: "a" }, { id: "a", target: "responses", type: "delegation" },
+      { id: "a", target: "client", type: "other" }, { id: "", target: "client", type: "delegation" },
+      { id: " ", target: "client", type: "delegation" }, { id: "bad\nidentity", target: "client", type: "delegation" },
+      { id: 123, target: "client", type: "delegation" }, { id: "x".repeat(201), target: "client", type: "delegation" }]) {
+      Peer.latest.channel.emit({ type: "session.delegation.created", delegation });
+    }
+    expect(Peer.latest.channel.sent).toEqual([]);
+    Peer.latest.channel.readyState = "connecting"; Peer.latest.channel.emit(valid);
+    expect(Peer.latest.channel.sent).toEqual([]);
+    Peer.latest.channel.readyState = "open"; voice.close();
+    const count = Peer.latest.channel.sent.length;
+    Peer.latest.channel.emit(valid); expect(Peer.latest.channel.sent).toHaveLength(count);
+    voice.dispose(); Peer.latest.channel.emit(valid); expect(Peer.latest.channel.sent).toHaveLength(count);
+  });
   it("sends finding metadata only as quiet thinking and qualified prose only as commentary", async () => {
     const config = options(); const voice = new LiveVoiceConnection(config); await voice.start();
     Peer.latest.channel.emit({ type: "session.started" });

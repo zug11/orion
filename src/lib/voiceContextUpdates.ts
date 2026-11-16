@@ -1,6 +1,6 @@
 import { resolveWebResearchProvider } from "./webResearchProvider";
 import type { AppSnapshot } from "../types";
-import { voiceNavigationContext, type VoiceReceipt, type VoiceWorkOrder } from "./voiceResearch";
+import { voiceNavigationContext, voiceResearchStatus, type VoiceReceipt, type VoiceWorkOrder } from "./voiceResearch";
 import { voiceSelectionContext, type VoiceSelection } from "./voiceSelection";
 
 interface VoiceContextBaseline {
@@ -27,6 +27,8 @@ interface JobContext {
   focusNoteId: string | null;
   state: VoiceWorkOrder["state"];
   phase: VoiceWorkOrder["phase"] | null;
+  researchStatus: ReturnType<typeof voiceResearchStatus>;
+  hasFindings: boolean;
   progress?: string;
   receipt: VoiceReceipt | null;
 }
@@ -65,9 +67,23 @@ function quotedConversation(text: string) {
 function project(job: VoiceWorkOrder): JobContext {
   return { id: job.id, revision: job.revision, subject: clip(job.subject, 120),
     prompt: clip(job.prompt, 600), promptTruncated: Array.from(job.prompt).length > 600,
-    focusNoteId: job.focusNoteId ?? null, state: job.state, phase: job.phase ?? null, progress: clip(job.progress, 180),
+    focusNoteId: job.focusNoteId ?? null, state: job.state, phase: job.phase ?? null,
+    researchStatus: voiceResearchStatus(job),
+    hasFindings: (job.state === "running" || job.state === "completed") && !!(job.result?.reply.trim() || job.updates?.some(update => update.reply.trim())),
+    progress: clip(job.progress, 180),
     receipt: job.receipt ? structuredClone(job.receipt) : null };
 }
+
+function activity(jobs: readonly VoiceWorkOrder[]) {
+  const states = jobs.map(voiceResearchStatus);
+  const researching = states.filter(state => state === "researching").length;
+  const queued = states.filter(state => state === "queued").length;
+  return { researching, queued, planning: states.filter(state => state === "planning").length,
+    awaitingDetails: states.filter(state => state === "awaiting_details").length,
+    readyResults: jobs.filter(job => job.state === "completed" && !!job.result?.reply.trim()).length,
+    waitingForResults: researching + queued > 0 };
+}
+const activityInstruction = "Current host state replaces earlier work status. Planning and awaiting_details are reservations, not admitted research. Only researching or queued work can produce a future result. When waitingForResults is false, do not say that you are waiting for research or promise a result will arrive. A question asking for details is waiting for the user, not for a worker. No speech or new work is requested by this update.";
 
 /** Only successfully appended context becomes a baseline. Results have their
  * own stamped delivery path and are never repeated by ordinary job updates.
@@ -147,7 +163,7 @@ export class VoiceContextUpdates {
       changes.push({ id, revision: job.revision, removed: true }); accepted.delete(id);
     }
     if (changes.length && send(JSON.stringify({ type: "work_order_update", referenceOnly: true,
-      spaceId: input.snapshot.workspace.id, jobs: changes }))) {
+      spaceId: input.snapshot.workspace.id, jobs: changes, activity: activity(input.jobs), instruction: activityInstruction }))) {
       this.jobs = accepted; sent++;
       for (const change of changes) if (change.receipt) {
         const job = input.jobs.find(item => item.id === change.id && item.revision === change.revision);
@@ -170,8 +186,11 @@ export class VoiceContextUpdates {
 
   private checkpoint(input: VoiceContextUpdate): string {
     const note = input.snapshot.notes.find(item => item.id === input.focusNoteId);
-    const active = input.jobs.filter(job => job.state === "running").map(job => ({ id: job.id,
+    const active = input.jobs.filter(job => job.state === "running" && job.phase !== "routing" && job.phase !== "clarifying").map(job => ({ id: job.id,
       revision: job.revision, phase: job.phase ?? null, prompt: clip(job.prompt, 240), focusNoteId: job.focusNoteId ?? null }));
+    const pending = input.jobs.filter(job => job.state === "running" && (job.phase === "routing" || job.phase === "clarifying")).map(job => ({
+      id: job.id, revision: job.revision, researchStatus: voiceResearchStatus(job), prompt: clip(job.prompt, 240), focusNoteId: job.focusNoteId ?? null,
+    }));
     const terminal = input.jobs.filter(job => job.state !== "running").slice(-3).map(job => ({
       id: job.id, revision: job.revision, state: job.state,
       finding: job.state === "completed" && job.result ? clip(job.result.reply, 350) : undefined,
@@ -180,10 +199,10 @@ export class VoiceContextUpdates {
       revision: item.revision, savedNoteIds: item.receipt.savedNoteIds,
       savedTitles: item.receipt.savedTitles.map(title => clip(title, 100)) }));
     const packet = { type: "conversation_checkpoint", referenceOnly: true,
-      instruction: "Continue the current conversation. These are existing assignments and confirmed saves, not new requests. Do not rerun jobs, resave notes, reconnect, or announce this checkpoint.",
+      instruction: "Continue the current conversation. These are existing assignments and confirmed saves, not new requests. Do not rerun jobs, resave notes, reconnect, or announce this checkpoint. " + activityInstruction,
       spaceId: input.snapshot.workspace.id, currentNoteId: note?.id ?? null,
       webResearchAvailable: !!resolveWebResearchProvider(input.snapshot.settings),
-      ...quotedConversation(input.conversation), activeJobs: active,
+      ...quotedConversation(input.conversation), activeJobs: active, pendingRequests: pending, activity: activity(input.jobs),
       recentJobs: terminal, confirmedReceipts: receipts, omittedRecords: 0 };
     const serialize = () => JSON.stringify(packet);
     while (encoder.encode(serialize()).length > CHECKPOINT_BYTES) {
@@ -191,6 +210,8 @@ export class VoiceContextUpdates {
       else if (terminal.length) { terminal.shift(); packet.omittedRecords++; }
       else if (receipts.length) { receipts.shift(); packet.omittedRecords++; }
       else if (active.some(job => job.prompt.length > 80)) active.forEach(job => { job.prompt = clip(job.prompt, 80); });
+      else if (pending.some(job => job.prompt.length > 80)) pending.forEach(job => { job.prompt = clip(job.prompt, 80); });
+      else if (pending.length) { pending.shift(); packet.omittedRecords++; }
       else if (active.length) { active.shift(); packet.omittedRecords++; }
       else break;
     }

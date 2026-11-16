@@ -71,6 +71,7 @@ export interface ChatViewProps {
   voiceSceneRef?: RefCallback<HTMLDivElement>;
   voiceControlsRef?: RefCallback<HTMLDivElement>;
   voiceResultsRef?: RefCallback<HTMLDivElement>;
+  voiceClarificationRef?: RefCallback<HTMLDivElement>;
   voiceContent?: VoiceConversationContent;
   voiceRevealRequest?: number;
   voicePalette?: IconPalette;
@@ -128,6 +129,7 @@ export function ChatView({
   voiceSceneRef,
   voiceControlsRef,
   voiceResultsRef,
+  voiceClarificationRef,
   voiceContent,
   voiceRevealRequest,
   voicePalette,
@@ -403,7 +405,7 @@ export function ChatView({
           references={{ notes: snapshot.notes, sources: snapshot.sources, onOpenNote, onOpenSource }}
           initialDraft={passageChat.draft} active={visible} onBusyChange={setThreadBusy}
           intro={<blockquote className="passage-chat__anchor">{passageChat.thread.anchor.scope === "note" ? "About this note" : passageChat.thread.anchor.text.slice(0, 600)}</blockquote>}
-          between={<div className="chat-view__voice-controls" ref={voiceControlsRef} />} /> : <>
+          between={<><div className="chat-view__clarification" ref={voiceClarificationRef} /><div className="chat-view__voice-controls" ref={voiceControlsRef} /></>} /> : <>
         <div className="chat-view__thread" ref={voiceScroll.threadRef} aria-live="polite" hidden={externalVoiceActive && !hasThreadContent}
           tabIndex={scrollVoice ? 0 : undefined} aria-label={scrollVoice ? "Conversation messages" : undefined}
           inert={scrollVoice && voiceScroll.phase === "voice" && !voiceScroll.peeking}>
@@ -415,7 +417,7 @@ export function ChatView({
           {!externalVoiceActive && messages.length === 0 && !pendingPrompt && !voiceContent?.hasContent ? (
             <div className="chat-welcome">
               <div className="chat-welcome__voice" aria-hidden="true">
-                <VoiceConstellation status="idle" activity={idleVoiceActivity} muted={false} jobs={[]}
+                <VoiceConstellation settings={snapshot.settings} status="idle" activity={idleVoiceActivity} muted={false} jobs={[]}
                   size="expanded" interactive={false} palette={voicePalette} onFocus={noVoiceAction} onDismiss={noVoiceAction} />
               </div>
               <span className="eyebrow">Orion is listening</span>
@@ -550,7 +552,9 @@ export function ChatView({
           {scrollVoice && <div className="chat-view__prompt-tail" aria-hidden="true" />}
         </div>
 
-        <form className="chat-composer" onSubmit={handleSubmit}>
+        <div className="chat-composer">
+        <div className="chat-view__clarification" ref={voiceClarificationRef} />
+        <form onSubmit={handleSubmit}>
           {selection?.spaceId === snapshot.workspace.id && selection.noteId === focusNote?.id && (
             <div className="chat-composer__suggested-target" title={selection.text.slice(0, 240)}>
               <span>Selected text</span><span>{selection.noteTitle}</span>
@@ -632,6 +636,7 @@ export function ChatView({
             <span>Enter to send · Shift Enter for a new line</span>
           </div>
         </form>
+        </div>
         </>}
       </div>
       </div>

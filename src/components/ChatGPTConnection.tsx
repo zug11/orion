@@ -3,8 +3,9 @@ import { isTauri } from "@tauri-apps/api/core";
 import type { Settings } from "../types";
 import { chatGPTCommand, isChatGPTModel, manageChatGPTUsage, type ChatGPTModel, type ChatGPTStatus } from "../lib/chatgpt";
 
-export function ChatGPTConnection({ settings, onChange, onModels }: {
+export function ChatGPTConnection({ settings, onChange, onModels, credentialsRevision = 0 }: {
   settings: Settings; onChange: (settings: Settings) => void; onModels: (models: ChatGPTModel[]) => void;
+  credentialsRevision?: number;
 }) {
   const [status, setStatus] = useState<ChatGPTStatus>();
   const [busy, setBusy] = useState(false);
@@ -65,6 +66,9 @@ export function ChatGPTConnection({ settings, onChange, onModels }: {
       operation.current = null;
     };
   }, []);
+  useEffect(() => {
+    if (credentialsRevision && isTauri()) void refresh();
+  }, [credentialsRevision]);
   useEffect(() => {
     if (isTauri() && statusRef.current && ((settings.chatgptAccountId ?? "") !== (statusRef.current.activeId ?? "") || settings.chatgptConfigured !== statusRef.current.configured)) {
       void refresh();

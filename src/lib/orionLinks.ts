@@ -1,6 +1,8 @@
 export interface OrionNoteLink {
   spaceId: string;
   noteId: string;
+  ticketId?: string;
+  boardId?: string;
 }
 
 export function parseOrionNoteLink(rawUrl: string): OrionNoteLink | null {
@@ -18,5 +20,8 @@ export function parseOrionNoteLink(rawUrl: string): OrionNoteLink | null {
   if (!spaceId || !noteId) {
     return null;
   }
-  return { spaceId, noteId };
+  const ticketId = url.searchParams.get('ticket_id') ?? undefined;
+  const boardId = url.searchParams.get('board_id') ?? undefined;
+  if ([ticketId,boardId].some(value=>value!==undefined&&!/^[\w-]{1,96}$/.test(value)) || ticketId&&boardId) return null;
+  return { spaceId, noteId, ...(ticketId?{ticketId}:{}), ...(boardId?{boardId}:{}) };
 }

@@ -1,11 +1,14 @@
 import { NodeViewContent, NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
 import { closeHistory } from '@tiptap/pm/history';
 import { effectiveTicketStatus, type TicketPatch } from '../../lib/tickets';
-import { TicketCardControls, TicketDeleteButton } from '../Tickets';
+import { TicketCardControls, TicketDeleteButton, useTickets } from '../Tickets';
+import { TicketDetailLauncher } from '../TicketDetailsDialog';
 import { deleteEditorTicketNode } from './NoteKanban';
 
 /** Ticket prose remains directly editable. Only its small controls are outside the document. */
 export function TicketItemView({ node, editor, getPos }: NodeViewProps) {
+  const workspace = useTickets();
+  const ticket = workspace.work.tickets.find(ticket => ticket.durable && ticket.id === node.attrs.ticketId);
   const status = effectiveTicketStatus(node.attrs.checked, node.attrs.ticketStatus);
   const patch = (change: TicketPatch) => {
     if (editor.isDestroyed || !editor.isEditable) return false;
@@ -33,6 +36,7 @@ export function TicketItemView({ node, editor, getPos }: NodeViewProps) {
     <NodeViewContent as="div"/>
   </NodeViewWrapper>;
   return <NodeViewWrapper as="li" data-type="taskItem" data-ticket-id={node.attrs.ticketId} data-checked={Boolean(node.attrs.checked)} className="note-ticket-card">
+    {ticket && <div contentEditable={false} data-narration-ignore="true"><TicketDetailLauncher ticket={ticket} workspace={workspace}/></div>}
     <div contentEditable={false} data-narration-ignore="true"><TicketDeleteButton title={node.firstChild?.textContent.trim() || 'ticket'} onDelete={() => {
       const pos = getPos();
       return typeof pos === 'number' && deleteEditorTicketNode(editor, pos, node);

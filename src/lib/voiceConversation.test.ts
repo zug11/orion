@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { VoiceConversation, VoiceDeliveryQueue, type VoiceDelivery } from "./voiceConversation";
+import { VoiceConversation, VoiceDeliveryQueue, type VoiceDelivery, type VoiceTurn } from "./voiceConversation";
 
 describe("voice conversation assembly", () => {
   const speech = (delta: string, start_ms: number, end_ms: number, role = "input") => ({ type: "session." + role + "_transcript.delta", delta, start_ms, end_ms });
@@ -101,6 +101,48 @@ describe("voice conversation assembly", () => {
     history.takeTurns(); history.reconnect();
     expect(history.text()).toContain("2024 figures"); expect(history.takeTurns()).toEqual([]);
     history.clear(); expect(history.text().trim()).toBe("");
+  });
+  it("records typed answers in order with fresh identities and their original captured references", () => {
+    const history = new VoiceConversation();
+    history.receive(speech("Research related products", 0, 100), "original-note");
+    history.receive({ type: "session.delegation.created", delegation: { id: "original-delegation" }, offset_ms: 100 });
+    const captured: VoiceTurn = { ...history.takeTurns()[0], focusedWorker: { id: "worker-a", revision: 2 },
+      selection: { id: "selected", spaceId: "space", noteId: "original-note", noteTitle: "Original", version: "v1",
+        range: { from: 0, to: 8, unit: "dom-text-utf16" }, text: "Original", hiddenTaskRanges: [] } };
+    history.receive(speech("Which comparison matters?", 200, 300, "output"));
+    const answer = history.answer("  products with strongest match to Orion  ", captured);
+    captured.selection!.text = "Changed selection"; captured.focusedWorker!.revision = 3;
+    expect(answer).toMatchObject({ key: 3, prompt: "  products with strongest match to Orion  ", delegated: true,
+      delegationId: null, focusNoteId: "original-note", selection: { text: "Original" }, focusedWorker: { id: "worker-a", revision: 2 } });
+    expect(history.text()).toContain("user: Research related products\nassistant: Which comparison matters?\nuser:   products with strongest match to Orion  ");
+    expect(history.takeTurns()).toEqual([]);
+    const next = history.answer("Include tools for research", captured);
+    expect(next.key).toBe(4); expect(next.delegationId).toBeNull();
+    expect(history.recentTurns().map(turn => [turn.key, turn.delegated])).toEqual([[1, true], [3, true], [4, true]]);
+    history.reconnect();
+    expect(history.text()).toContain("products with strongest match to Orion");
+    expect(history.takeTurns()).toEqual([]);
+    expect(history.answer("Another answer", captured).key).toBe(5);
+  });
+  it("keeps subsequent microphone speech separate from a typed answer without synthesizing audio offsets", () => {
+    const history = new VoiceConversation();
+    history.receive(speech("Research alpha", 0, 100));
+    const original = history.takeTurns()[0];
+    const answer = history.answer("Focus on costs", original);
+    history.receive(speech("Actually compare beta too", 200, 400));
+    expect(history.takeTurns()).toEqual([{ key: answer.key + 1, prompt: "Actually compare beta too", delegated: false, delegationId: null, focusNoteId: undefined }]);
+    expect(history.text()).toContain("user: Focus on costs\nuser: Actually compare beta too");
+  });
+  it("bounds retained typed answers and never reuses an identity after clearing conversation history", () => {
+    const history = new VoiceConversation();
+    const captured: VoiceTurn = { key: 0, prompt: "Original question", delegationId: "old-provider", delegated: false };
+    for (let i = 0; i < 45; i++) history.answer(`Answer ${i}: ` + "x".repeat(200), captured);
+    expect(history.recentTurns()).toHaveLength(40);
+    expect(history.text().length).toBeLessThanOrEqual(8_000);
+    expect(history.takeTurns()).toEqual([]);
+    history.clear(); expect(history.text().trim()).toBe("");
+    expect(history.answer("Fresh answer", captured)).toMatchObject({ key: 46, delegationId: null, delegated: true });
+    expect(history.answer("Restored question", { ...captured, key: 70 })).toMatchObject({ key: 71, delegationId: null });
   });
   it("retains opening qualifications and flags an oversized utterance rather than authorizing its tail", () => {
     const history = new VoiceConversation();

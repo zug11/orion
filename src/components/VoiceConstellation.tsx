@@ -1,11 +1,16 @@
+import type { Settings } from "../types";
+import { resolveAtmospherePalette } from "../lib/homeAtmosphere";
+import { resolveThemeMode, resolveThemePalette } from "../lib/theme";
+import { createVoiceGlass } from "./voiceShaders/renderer";
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { VoiceActivity, VoiceStatus } from "../lib/liveVoice";
 import type { VoiceWorkOrder } from "../lib/voiceResearch";
 import type { IconPalette } from "../lib/themeIcon";
-import { VoiceOrbMotion, VOICE_ORB_UPDATE_FLIGHT_SECONDS, projectVoiceOrbs, type OrbCircle } from "../lib/voiceOrbMotion";
+import { VoiceOrbMotion, VOICE_ORB_UPDATE_FLIGHT_SECONDS, projectVoiceOrbs, unprojectVoiceOrbPoint, type OrbCircle } from "../lib/voiceOrbMotion";
 import "./VoiceConstellation.css";
 
 export interface VoiceConstellationProps {
+  settings?: Settings;
   status: VoiceStatus;
   activity: VoiceActivity;
   muted: boolean;
@@ -43,13 +48,15 @@ function cssPalette(element: HTMLElement): IconPalette {
 export function VoiceConstellation(props: VoiceConstellationProps) {
   const latest = useRef(props); latest.current = { ...props, jobs: props.jobs.filter(job => !job.provisional) };
   const host = useRef<HTMLDivElement>(null), canvas = useRef<HTMLCanvasElement>(null);
+  const bodyMeasure = useRef<HTMLSpanElement>(null);
   const model = useRef<VoiceOrbMotion | null>(null);
   if (model.current === null) model.current = new VoiceOrbMotion();
   const motion = props.motion ?? model.current;
   const targets = useRef(new Map<string, HTMLButtonElement>());
   const centreTarget = useRef<HTMLButtonElement>(null);
   const gesture = useRef<{ id: string; pointerId: number; x: number; y: number; moved: boolean } | undefined>(undefined);
-  const projectionFit = useRef(1);
+  const projection = useRef({ fit: 1, x: 1, y: 1 });
+  const shaderHover = useRef({ phase: 0, velocity: 0, x: 0, y: 0, at: 0 });
   const [crowded, setCrowded] = useState(false);
   const crowdedRef = useRef(false);
   const [visibleIds, setVisibleIds] = useState<readonly string[]>([]);
@@ -61,18 +68,29 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
     const element = host.current, surface = canvas.current;
     if (!element || !surface) return;
     const context = surface.getContext("2d", { alpha: true });
-    if (!context) { element.dataset.rendering = "fallback"; return; }
+    if (!context) {
+      element.dataset.rendering = "fallback";
+      const resizeFallback = () => element.style.setProperty("--voice-fallback-diameter",
+        `${Math.min(element.clientWidth, element.clientHeight, bodyMeasure.current?.clientWidth || Infinity) * .104 * 2.6 * 2}px`);
+      const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(resizeFallback);
+      observer?.observe(element); if (bodyMeasure.current) observer?.observe(bodyMeasure.current); resizeFallback();
+      return () => { observer?.disconnect(); element.style.removeProperty("--voice-fallback-diameter"); };
+    }
+    const glass = size === "expanded" ? createVoiceGlass() : null;
+    let shaderTime = 0, shaderAt = 0;
+    let paletteSettings: Settings | undefined, paletteMode = "";
+    let glassPalette: ReturnType<typeof resolveAtmospherePalette> | null = null;
     const motionPreference = matchMedia("(prefers-reduced-motion: reduce)"), contrastPreference = matchMedia("(prefers-contrast: more)");
     let reduced = motionPreference.matches, contrast = contrastPreference.matches, visible = true;
     let animation = 0, paintedAt = 0, paletteAt = -Infinity, palette = cssPalette(element);
-    let width = 0, height = 0;
-    const resize = () => { width = element.clientWidth; height = element.clientHeight; };
+    let width = 0, height = 0, bodySize = 0;
+    const resize = () => { width = element.clientWidth; height = element.clientHeight; bodySize = bodyMeasure.current?.clientWidth ?? 0; };
     const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(resize);
-    observer?.observe(element); resize();
+    observer?.observe(element); if (bodyMeasure.current) observer?.observe(bodyMeasure.current); resize();
     const intersection = typeof IntersectionObserver === "undefined" ? undefined : new IntersectionObserver(entries => { visible = entries[0]?.isIntersecting ?? true; });
     intersection?.observe(element);
     const preferences = () => { reduced = motionPreference.matches; contrast = contrastPreference.matches; };
-    const abandonDrag = () => { motion.releaseDrag(true); gesture.current = undefined; motion.point(0, 0, false); };
+    const abandonDrag = () => { motion.releaseDrag(true); gesture.current = undefined; shaderHover.current.velocity=0; shaderHover.current.at=0; motion.point(0, 0, false); };
     window.addEventListener("blur", abandonDrag);
     motionPreference.addEventListener("change", preferences); contrastPreference.addEventListener("change", preferences);
     const draw = (now: number) => {
@@ -81,22 +99,34 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
       if (now - paintedAt < 1000 / 30) return;
       paintedAt = now;
       const current = latest.current;
+      const dt=shaderAt ? Math.min(.06,(now-shaderAt)/1000) : 0;shaderAt=now;
+      if(!reduced){shaderTime+=dt;shaderHover.current.phase+=shaderHover.current.velocity*dt;shaderHover.current.velocity*=Math.exp(-dt*2.4);}else shaderHover.current.velocity=0;
+      const settings=current.settings;
+      const mode=settings ? resolveThemeMode(settings.theme,matchMedia('(prefers-color-scheme: light)').matches) : 'dark';
+      if(settings && (settings!==paletteSettings || mode!==paletteMode)){
+        glassPalette=resolveAtmospherePalette(settings.homeAtmosphere,settings.homeAtmosphereTone,resolveThemePalette(settings,mode),settings.homeAtmosphereCustomColor,settings.homeAtmosphereCustomSecondaryColor);
+        paletteSettings=settings;paletteMode=mode;
+      }
       if (current.palette) palette = current.palette;
       else if (now - paletteAt > 250) { palette = cssPalette(element); paletteAt = now; }
       const scene = motion.advanceAt({ ...current, reducedMotion: reduced }, now);
       const dpr = Math.min(2, devicePixelRatio || 1), scale = Math.min(width, height), small = scale < 80, sidebar = scale < 30;
       if (surface.width !== Math.round(width * dpr) || surface.height !== Math.round(height * dpr)) { surface.width = Math.round(width * dpr); surface.height = Math.round(height * dpr); }
       context.setTransform(dpr, 0, 0, dpr, 0, 0); context.clearRect(0, 0, width, height);
-      const { centre, workers, companions, fit } = projectVoiceOrbs(scene, width, height);
-      projectionFit.current = fit;
+      // Size the visible body before collision and viewport fitting so workers,
+      // finding packets and click targets share the enlarged silhouette.
+      const { centre, workers, companions, fit, positionScaleX, positionScaleY } = projectVoiceOrbs(scene, width, height, size === "expanded" ? 2.6 : 1,
+        size === "expanded" ? bodySize || Math.min(width, height) : undefined);
+      projection.current = { fit, x: positionScaleX, y: positionScaleY };
       const projected = new Map(workers.map(point => [point.slot, point]));
       const bodies = new Map(scene.workers.map(body => [body.id, body]));
       const ids = scene.workers.filter(body => projected.has(body.slot) && !body.returned).map(body => body.id);
       const key = JSON.stringify(ids);
       if (key !== visibleKey.current) { visibleKey.current = key; setVisibleIds(ids); }
       const live = current.status === "listening";
-      function sphere(point: OrbCircle, rgb: RGB, stretch = 1, opacity = 1, glow = 0, focused = false, angle = 0) {
+      function sphere(point: OrbCircle, rgb: RGB, stretch = 1, opacity = 1, glow = 0, focused = false, angle = 0, main = false) {
         if (!context) return;
+        if(glass && glassPalette && !contrast && glass.draw(context,point,glassPalette,shaderTime,shaderHover.current.phase,main,stretch,main ? 1 : opacity,glow,angle))return;
         const { radius } = point;
         context.save(); context.translate(point.x, point.y); context.rotate(angle); context.scale(1 / Math.sqrt(stretch), Math.sqrt(stretch)); context.globalAlpha = opacity;
         // The approved gravity study has a softly illuminated volume even at
@@ -150,7 +180,7 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
       let mainColor = palette.body;
       if (scene.receivingSlot >= 0) mainColor = blend(mainColor, tint(scene.receivingSlot), scene.central.receiving * .28);
       if (current.muted) mainColor = blend(mainColor, palette.shadow, .3);
-      sphere(centre, mainColor, scene.central.stretch, live ? 1 : .55, scene.central.receiving * .4 + scene.central.level * .2, !current.focusedJobId, scene.central.angle);
+      sphere(centre, mainColor, scene.central.stretch, live ? 1 : .55, scene.central.receiving * .4 + scene.central.level * .2, !current.focusedJobId, scene.central.angle, true);
       if (!current.focusedJobId && (current.status === "connecting" || current.thinking && !current.activity.outputActive)) ring(centre, mainColor, -1);
       scene.workers.forEach((body, index) => { if (body.y >= 0) drawWorker(index); });
       let needsWorkList = workers.length < scene.workers.filter(body => !body.returned).length;
@@ -179,12 +209,14 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
       element.dataset.workingRings = String(workers.filter(point => working.has(scene.workers.find(body => body.slot === point.slot)?.id ?? "")).length);
     };
     animation = requestAnimationFrame(draw);
-    return () => { cancelAnimationFrame(animation); abandonDrag(); observer?.disconnect(); intersection?.disconnect(); motionPreference.removeEventListener("change", preferences); contrastPreference.removeEventListener("change", preferences); window.removeEventListener("blur", abandonDrag); };
-  }, [motion]);
+    return () => { cancelAnimationFrame(animation); glass?.dispose(); abandonDrag(); observer?.disconnect(); intersection?.disconnect(); motionPreference.removeEventListener("change", preferences); contrastPreference.removeEventListener("change", preferences); window.removeEventListener("blur", abandonDrag); };
+  }, [motion, size]);
 
   const point = (event: ReactPointerEvent) => {
     const bounds = host.current!.getBoundingClientRect(), scale = Math.min(bounds.width, bounds.height);
-    return { x: (event.clientX - bounds.left - bounds.width / 2) / scale / projectionFit.current, y: (event.clientY - bounds.top - bounds.height * .48) / scale / projectionFit.current };
+    const x = (event.clientX - bounds.left - bounds.width / 2) / projection.current.x / projection.current.fit;
+    const y = (event.clientY - bounds.top - bounds.height * .48) / projection.current.y / projection.current.fit;
+    return size === "expanded" && scale >= 80 ? unprojectVoiceOrbPoint(x, y, 2.6) : { x, y };
   };
   const endDrag = (event: ReactPointerEvent, cancel: boolean) => {
     if (gesture.current?.pointerId !== event.pointerId) return;
@@ -199,8 +231,13 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
   };
   return <div ref={host} className={`voice-constellation voice-constellation--${size}`} data-muted={props.muted} data-status={props.status}
     role={interactive ? "group" : "img"} aria-label={props.status === "listening" ? props.muted ? "Voice on, microphone muted" : "Voice conversation" : props.status === "connecting" ? "Voice connecting" : "Voice disconnected"}
-    onPointerMove={event => { const location = point(event); motion.point(location.x, location.y, true); if (gesture.current?.pointerId === event.pointerId) { if (Math.hypot(event.clientX - gesture.current.x, event.clientY - gesture.current.y) > 5) gesture.current.moved = true; if (gesture.current.moved) motion.moveDrag(location.x, location.y); } }}
-    onPointerLeave={() => motion.point(0, 0, false)}>
+    onPointerMove={event => { const location = point(event); const hover=shaderHover.current;
+      const elapsed=(event.timeStamp-hover.at)/1000;
+      if(!gesture.current && hover.at && elapsed>0 && elapsed<.18)hover.velocity=Math.max(-10,Math.min(10,hover.velocity*.35+((location.x-hover.x)-(location.y-hover.y))/Math.max(.008,elapsed)*.65));
+      hover.x=location.x;hover.y=location.y;hover.at=event.timeStamp;
+      motion.point(0,0,false); if (gesture.current?.pointerId === event.pointerId) { if (Math.hypot(event.clientX - gesture.current.x, event.clientY - gesture.current.y) > 5) gesture.current.moved = true; if (gesture.current.moved) motion.moveDrag(location.x, location.y); } }}
+    onPointerLeave={() => { shaderHover.current.at=0; motion.point(0, 0, false); }}>
+    {size === "expanded" && <span ref={bodyMeasure} className="voice-constellation__body-size" aria-hidden="true" />}
     <canvas ref={canvas} aria-hidden="true" />
     {interactive && <>
       <button type="button" ref={centreTarget} className="voice-constellation__target" aria-label="Return to main voice conversation" aria-pressed={!props.focusedJobId}

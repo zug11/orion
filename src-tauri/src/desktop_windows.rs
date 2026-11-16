@@ -111,6 +111,10 @@ struct NoteNavigation {
     target: NoteTarget,
     #[serde(skip_serializing_if = "Option::is_none")]
     passages: Option<Vec<NavigationPassage>>,
+    #[serde(rename = "ticketId", skip_serializing_if = "Option::is_none")]
+    ticket_id: Option<String>,
+    #[serde(rename = "boardId", skip_serializing_if = "Option::is_none")]
+    board_id: Option<String>,
 }
 
 impl From<NoteTarget> for NoteNavigation {
@@ -118,6 +122,8 @@ impl From<NoteTarget> for NoteNavigation {
         Self {
             target,
             passages: None,
+            ticket_id: None,
+            board_id: None,
         }
     }
 }
@@ -307,7 +313,11 @@ fn validate_id(id: &str) -> Result<(), String> {
 fn validate_note_target(vault: &Value, target: &NoteTarget) -> Result<(), String> {
     validate_id(&target.space_id)?;
     validate_id(&target.note_id)?;
-    if vault.get("schemaVersion").and_then(Value::as_u64) != Some(2) {
+    if !vault
+        .get("schemaVersion")
+        .and_then(Value::as_u64)
+        .is_some_and(crate::source_text_ref::supported_vault_schema)
+    {
         return Err("The Orion library has an invalid or unsupported schema.".into());
     }
     let spaces = vault
@@ -465,6 +475,21 @@ pub async fn new_orion_window(
     create_window(&app, Some(&window), &space_id, None, false, None).map(|_| ())
 }
 
+pub(crate) async fn ensure_library_window(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<DesktopWindows>();
+    let _creation = state.creation.lock().await;
+    if let Some(window) = preferred_library_window(&app) {
+        return reveal_window(&window);
+    }
+    let vault = crate::load_vault(app.clone())
+        .await?
+        .ok_or("Open Orion before opening a collection.")?;
+    let space_id = vault["activeSpaceId"]
+        .as_str()
+        .ok_or("The active Space is unavailable.")?;
+    create_window(&app, None, space_id, None, false, None).map(|_| ())
+}
+
 #[tauri::command]
 pub async fn open_writing_window(
     app: AppHandle,
@@ -500,6 +525,20 @@ pub async fn open_writing_window(
 }
 
 async fn show_target_in_library(app: AppHandle, navigation: NoteNavigation) -> Result<(), String> {
+    if navigation.ticket_id.is_some() && navigation.board_id.is_some()
+        || [&navigation.ticket_id, &navigation.board_id]
+            .iter()
+            .filter_map(|id| id.as_ref())
+            .any(|id| {
+                id.is_empty()
+                    || id.len() > 96
+                    || !id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            })
+    {
+        return Err("Invalid ticket or board navigation target.".into());
+    }
     validate_navigation_passages(navigation.passages.as_deref())?;
     validate_saved_target(&app, &navigation.target).await?;
     let state = app.state::<DesktopWindows>();
@@ -519,7 +558,10 @@ async fn show_target_in_library(app: AppHandle, navigation: NoteNavigation) -> R
         focused(&app, window.label());
         reveal_window(&window)
     } else {
-        let pending = navigation.passages.as_ref().map(|_| navigation.clone());
+        let pending = (navigation.passages.is_some()
+            || navigation.ticket_id.is_some()
+            || navigation.board_id.is_some())
+        .then(|| navigation.clone());
         create_window(
             &app,
             None,
@@ -538,12 +580,16 @@ pub async fn show_note_in_library(
     space_id: String,
     note_id: String,
     passages: Option<Vec<NavigationPassage>>,
+    ticket_id: Option<String>,
+    board_id: Option<String>,
 ) -> Result<(), String> {
     show_target_in_library(
         app,
         NoteNavigation {
             target: NoteTarget { space_id, note_id },
             passages: passages.filter(|items| !items.is_empty()),
+            ticket_id,
+            board_id,
         },
     )
     .await
@@ -1117,6 +1163,9 @@ mod tests {
         assert!(validate_note_target(&vault, &target("a", "deleted")).is_err());
         let mut invalid = vault.clone();
         invalid["schemaVersion"] = serde_json::json!(3);
+        assert!(validate_note_target(&invalid, &target("a", "a-note")).is_ok());
+        assert!(validate_note_target(&invalid, &target("a", "b-note")).is_err());
+        invalid["schemaVersion"] = serde_json::json!(4);
         assert!(validate_note_target(&invalid, &target("a", "a-note")).is_err());
         invalid = vault.clone();
         invalid["spaces"][0]["schemaVersion"] = serde_json::json!(2);
@@ -1174,6 +1223,8 @@ mod tests {
         .unwrap();
         assert!(validate_navigation_passages(Some(&passages)).is_ok());
         let navigation = NoteNavigation {
+            ticket_id: None,
+            board_id: Some("board-test".into()),
             target: target("a", "a-note"),
             passages: Some(passages),
         };
@@ -1186,6 +1237,7 @@ mod tests {
         let value = serde_json::to_value(&navigation).unwrap();
         assert_eq!(value["spaceId"], "a");
         assert_eq!(value["noteId"], "a-note");
+        assert_eq!(value["boardId"], "board-test");
         assert_eq!(value["passages"][0]["from"], 3);
         assert_eq!(value["passages"][1]["locator"], "unique-text");
         let tauri::WebviewUrl::App(path) = window_url("a", Some("a-note"), false) else {

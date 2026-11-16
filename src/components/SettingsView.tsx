@@ -1,5 +1,7 @@
+import { TicketCodeSettings } from './TicketNavigation';
 import { ElevenLabsVoiceStudio } from "./ElevenLabsVoiceStudio";
 import { ChatGPTConnection } from "./ChatGPTConnection";
+import { SavedConnectionsAccess } from "./SavedConnectionsAccess";
 import { isChatGPTModel, manageChatGPTUsage, type ChatGPTModel } from "../lib/chatgpt";
 import { PerplexitySettings } from "./PerplexitySettings";
 import { AppUpdateSettings, AppUpdateSettingsLink } from "./AppUpdate";
@@ -286,6 +288,7 @@ export function SettingsView({
   onEraseVault,
 }: SettingsViewProps) {
   const [chatgptModels, setChatgptModels] = useState<ChatGPTModel[]>([]);
+  const [credentialsRevision, setCredentialsRevision] = useState(0);
   const [apiKey, setApiKey] = useState("");
   const [revealKey, setRevealKey] = useState(false);
   const [keyBusy, setKeyBusy] = useState(false);
@@ -630,7 +633,12 @@ export function SettingsView({
               </span>
             </div>
 
-            <ChatGPTConnection settings={settings} onChange={onChange} onModels={setChatgptModels} />
+            {desktopRuntime && <SavedConnectionsAccess onUnlocked={() => {
+              setCredentialsRevision(value => value + 1);
+              setKeyMessage(null); setAnthropicKeyMessage(null); setElevenLabsKeyMessage(null);
+              invalidateAccountVoices(); setAccountVoicesRevision(value => value + 1);
+            }} />}
+            <ChatGPTConnection settings={settings} onChange={onChange} onModels={setChatgptModels} credentialsRevision={credentialsRevision} />
             <div className="setting-card api-key-card">
               <div className="setting-row">
                 <span>
@@ -1843,6 +1851,7 @@ export function SettingsView({
           </section>
 
           <section className="settings-section" id="data">
+            <TicketCodeSettings/>
             <div className="settings-section-title">
               <span className="settings-icon blue">
                 <Database size={18} />

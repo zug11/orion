@@ -16,6 +16,9 @@
 .space-voice__clear p { margin: 0 0 8px; color: var(--text-soft); line-height: 1.5; }
 .space-voice__progress [role="status"] { max-width: 100%; overflow-wrap: anywhere; }
 .space-voice__clarification { padding: 10px 0; color: var(--text-soft); }
+.chat-view__clarification:empty { display: none; }
+.chat-view__clarification:not(:empty) { --voice-clarification-max-height: min(420px, 45dvh); margin-bottom: 12px; padding: 3px; }
+.space-voice-call__question { --voice-clarification-max-height: min(500px, 65dvh); width: min(430px, calc(100vw - 40px)); margin-top: 8px; }
 .space-voice__finding { margin-top: 6px; }
 .space-voice__finding > summary { padding: 4px 0; color: var(--text-soft); cursor: pointer; font-size: 12px; }
 .space-voice__finding > summary span { margin-left: 5px; color: var(--muted); font-size: 10px; }
@@ -32,6 +35,9 @@
 .space-voice-call__pill .is-muted { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
 .space-voice-call__expanded { position: absolute; right: 0; bottom: calc(100% + 8px); width: min(300px, calc(100vw - 40px)); max-height: min(340px, calc(100dvh - 140px)); overflow-y: auto; overscroll-behavior: contain; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 18px; background: color-mix(in srgb, var(--surface-raised) 94%, transparent); backdrop-filter: blur(32px); box-shadow: 0 12px 40px #0003; }
 .space-voice-call__notice { display: block; margin: 5px 0 0 auto; padding: 8px 12px; max-width: 330px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-raised); color: var(--text-soft); font-size: 11px; }
+.space-voice-call__research-error { display: grid; gap: 6px; overflow-wrap: anywhere; }
+.space-voice-call__research-error > strong { font-weight: 600; }
+.space-voice-call__research-error > button { justify-self: start; padding: 3px 0; border: 0; background: transparent; color: var(--text); font-size: 12px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
 .space-voice-call--embedded { position: relative; inset: auto; width: auto; max-width: none; z-index: 3; }
 .space-voice-call--embedded .space-voice-call__pill { width: auto; gap: 2px; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; backdrop-filter: none; }
 .space-voice-call--embedded .space-voice-call__pill > button { width: 30px; height: 30px; }

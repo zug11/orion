@@ -160,7 +160,10 @@ impl VoiceWorkOrdersStore {
         FileExt::lock_shared(&lock).map_err(|_| "The library is busy.")?;
         let vault =
             crate::read_vault_file(&self.path)?.ok_or("Open Orion once to create its library.")?;
-        if vault["schemaVersion"].as_u64() != Some(2) {
+        if !vault["schemaVersion"]
+            .as_u64()
+            .is_some_and(crate::source_text_ref::supported_vault_schema)
+        {
             return Err("The library has an invalid schema.".into());
         }
         sweep(&mut state, &vault);
@@ -549,6 +552,22 @@ mod tests {
             v["state"] = json!("cancelled");
         }
         v
+    }
+    #[test]
+    fn voice_targets_support_external_source_text_vaults_without_writes() {
+        let (_d, s) = store();
+        let mut v = vault();
+        v["schemaVersion"] = json!(3);
+        crate::write_vault_file(&s.path, &v).unwrap();
+        let before = std::fs::read(&s.path).unwrap();
+        let t = register(&s, "main", "session", "a");
+        assert_eq!(s.capabilities().unwrap()["voiceTargets"][0]["id"], t);
+        let id = list(&s, &t);
+        assert_eq!(get(&s, &id).unwrap()["state"], "pending");
+        assert_eq!(std::fs::read(&s.path).unwrap(), before);
+        v["schemaVersion"] = json!(4);
+        crate::write_vault_file(&s.path, &v).unwrap();
+        assert!(s.capabilities().is_err());
     }
     #[test]
     fn voice_work_orders_reads_and_cancel_need_no_ai_or_write_and_never_mutate_vault() {

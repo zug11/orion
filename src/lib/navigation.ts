@@ -16,9 +16,9 @@ export type NavigationScreen =
   | "settings"
   | "note";
 
-export type NavigationRoute =
+export type NavigationRoute = (
   | { screen: Exclude<NavigationScreen, "note"> }
-  | { screen: "note"; noteId: string };
+  | { screen: "note"; noteId: string }) & { ticketId?:string; boardId?:string };
 
 export interface NavigationEntry extends ScrollPosition {
   route: NavigationRoute;
@@ -60,6 +60,7 @@ export function routesMatch(
 ): boolean {
   return (
     left.screen === right.screen &&
+    left.ticketId === right.ticketId && left.boardId === right.boardId &&
     (left.screen !== "note" ||
       (right.screen === "note" && left.noteId === right.noteId))
   );

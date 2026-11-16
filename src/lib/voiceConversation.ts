@@ -3,7 +3,10 @@ import type { VoiceSelection } from "./voiceSelection";
 import { explicitVoiceAssignment, type VoiceFocusedWorker } from "./voiceWorkOrders";
 import { unfinishedVoiceThought, voiceTurnSettleMs, VOICE_THOUGHT_CONTINUATION_MS, VOICE_TURN_SETTLE_MS } from "./voiceUtterance";
 
-interface Fragment { id: number; role: "user" | "assistant"; text: string; start: number; end: number; focusNoteId?: string; selection?: VoiceSelection; focusedWorker?: VoiceFocusedWorker }
+interface FragmentReference { id: number; role: "user" | "assistant"; text: string; focusNoteId?: string; selection?: VoiceSelection; focusedWorker?: VoiceFocusedWorker }
+interface SpeechFragment extends FragmentReference { start: number; end: number; kind?: undefined }
+interface AnswerFragment extends FragmentReference { kind: "answer" }
+type Fragment = SpeechFragment | AnswerFragment;
 export interface VoiceTurn { key: number; prompt: string; delegationId: string | null; delegated: boolean; focusNoteId?: string; selection?: VoiceSelection; focusedWorker?: VoiceFocusedWorker }
 
 /** Transcripts are fragments on a session timeline, not complete work orders. */
@@ -32,14 +35,39 @@ export class VoiceConversation {
   }
   clear() { this.carry = ""; this.fragments = []; this.delegations.clear(); this.handled.clear(); this.seen.clear(); this.seenDelegations.clear(); this.decisions = []; this.opened = false; }
   stop() { this.delegations.clear(); }
+  /** A UI answer is an independent user turn, never synthetic microphone input. */
+  answer(prompt: string, captured: VoiceTurn): VoiceTurn {
+    if (Number.isSafeInteger(captured.key)) this.nextId = Math.max(this.nextId, captured.key);
+    const turn: VoiceTurn = { key: ++this.nextId, prompt, delegated: true, delegationId: null,
+      focusNoteId: captured.focusNoteId,
+      ...(captured.selection ? { selection: structuredClone(captured.selection) } : {}),
+      ...(captured.focusedWorker ? { focusedWorker: { ...captured.focusedWorker } } : {}) };
+    this.fragments.push({ id: turn.key, kind: "answer", role: "user", text: prompt.slice(0, 4_001),
+      focusNoteId: turn.focusNoteId, selection: turn.selection, focusedWorker: turn.focusedWorker });
+    this.handled.set(turn.key, { text: prompt.slice(0, 4_001), delegated: true });
+    this.trimFragments();
+    return turn;
+  }
+  private trimFragments() {
+    this.fragments = this.fragments.slice(-40);
+    const retained = new Set(this.fragments.map(item => item.id));
+    for (const key of this.handled.keys()) if (!retained.has(key)) this.handled.delete(key);
+  }
   /** The first fragment owns this reference throughout the utterance. */
   get userSelection() { return [...this.fragments].reverse().find(item => item.role === "user")?.selection; }
   get settleMs() { return voiceTurnSettleMs([...this.fragments].reverse().find(item => item.role === "user")?.text ?? ""); }
   /** Bounded exact user text for suppressing a cancelled delayed delegation. */
   recentTurns(): Pick<VoiceTurn, "key" | "prompt" | "delegated">[] {
-    return this.fragments.filter(item => item.role === "user" && item.text.trim())
-      .sort((a, b) => a.start - b.start || a.id - b.id)
-      .map(item => ({ key: item.id, prompt: item.text.trim(), delegated: this.handled.get(item.id)?.delegated ?? false }));
+    const ordered: Fragment[] = [], spoken: SpeechFragment[] = [];
+    const flush = () => { ordered.push(...spoken.sort((a, b) => a.start - b.start || a.id - b.id)); spoken.length = 0; };
+    for (const item of this.fragments) if (item.role === "user" && item.text.trim()) {
+      // Typed answers have no microphone timestamp. Preserve their insertion
+      // boundary while retaining speech order within each transcript segment.
+      if (item.kind === "answer") { flush(); ordered.push(item); }
+      else spoken.push(item);
+    }
+    flush();
+    return ordered.map(item => ({ key: item.id, prompt: item.text.trim(), delegated: this.handled.get(item.id)?.delegated ?? false }));
   }
   receive(event: VoiceEvent, focusNoteId?: string, selection?: VoiceSelection, focusedWorker?: VoiceFocusedWorker): boolean {
     if (event.event_id) {
@@ -62,7 +90,8 @@ export class VoiceConversation {
     const role = event.type === "session.input_transcript.delta" ? "user" : "assistant";
     const start = event.start_ms!, end = event.end_ms!;
     // Full-duplex assistant backchannels must not split one user's utterance.
-    const recent = [...this.fragments].reverse().find(item => item.role === role);
+    const latest = [...this.fragments].reverse().find(item => item.role === role);
+    const recent = latest?.kind === "answer" ? undefined : latest;
     // Use the same silence boundary for live and batched transcripts. Once
     // dispatched, a new explicit assignment also starts its own turn.
     const continuation = role === "user" && recent && unfinishedVoiceThought(recent.text) &&
@@ -77,16 +106,14 @@ export class VoiceConversation {
     } else this.fragments.push({ id: ++this.nextId, role, text: event.delta.slice(0, 4_001), start, end, focusNoteId,
       ...(role === "user" && selection ? { selection: structuredClone(selection) } : {}),
       ...(role === "user" && focusedWorker ? { focusedWorker: { ...focusedWorker } } : {}) });
-    this.fragments = this.fragments.slice(-40);
-    const retained = new Set(this.fragments.map(item => item.id));
-    for (const key of this.handled.keys()) if (!retained.has(key)) this.handled.delete(key);
+    this.trimFragments();
     return true;
   }
   /** Called after a silence/debounce window; an early delegation remains pending. */
   takeTurns(): VoiceTurn[] {
     // Keep unfinished text and its captured target for a later continuation.
     // A provider delegation is not proof that the person finished the sentence.
-    const users = this.fragments.filter(item => item.role === "user" && !unfinishedVoiceThought(item.text));
+    const users = this.fragments.filter((item): item is SpeechFragment => item.kind !== "answer" && item.role === "user" && !unfinishedVoiceThought(item.text));
     const turns = new Map<number, VoiceTurn>();
     for (const [id, offset] of this.delegations) {
       const target = [...users].reverse().find(item => offset === null || (item.start <= offset && item.end >= offset - 1_500));

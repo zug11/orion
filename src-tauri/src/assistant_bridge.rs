@@ -599,7 +599,7 @@ impl AssistantBridge {
     pub fn begin_export_commit(&self, id: &str, session_id: &str) -> Result<(), String> {
         let request = self.assert_running(id, session_id)?;
         if request.operation != Operation::Export {
-            return Err("This job is not a Word export.".into());
+            return Err("This job is not a document export.".into());
         }
         let vault = read_vault(&self.path)?;
         let current_policy = policy(&vault, &request)?;
@@ -618,7 +618,7 @@ impl AssistantBridge {
             return Err("The Space or its settings changed before exporting.".into());
         }
         job.view.state = "committing".into();
-        job.view.stage = "Saving Word document".into();
+        job.view.stage = "Saving export".into();
         job.view.updated_at = now();
         Ok(())
     }
@@ -641,8 +641,8 @@ impl AssistantBridge {
             .ok_or("This export has not entered its atomic save.")?;
         match outcome {
             Ok(path) => {
-                let result = json!({"spaceId":job.request.space_id,"format":"word","scope":job.request.input["scope"],
-                    "noteId":job.request.input.get("note_id"),"path":path,"cancelled":false,"providerCalls":0});
+                let result = json!({"spaceId":job.request.space_id,"format":job.request.input.get("format").and_then(Value::as_str).unwrap_or("word"),"scope":job.request.input["scope"],
+                    "noteId":job.request.input.get("note_id"),"noteIds":job.request.input.get("note_ids"),"path":path,"cancelled":false,"providerCalls":0});
                 Self::end_job(job, "succeeded", Some(result), None);
             }
             Err(error) => Self::end_job(job, "failed", None, Some(error)),

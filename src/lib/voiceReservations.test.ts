@@ -14,6 +14,16 @@ const turn = (key = 1, prompt = "Have three workers study this note"): VoiceTurn
 });
 
 describe("voice reservation ownership", () => {
+  it("ignores unchanged provider acknowledgements during planning but retains genuine speech updates", () => {
+    const state = setup(), source = { ...turn(), delegated: false, delegationId: null };
+    state.reserve(source, 1, "routing");
+    const ids = state.jobs().map(job => job.id);
+    expect(state.isReplay({ ...source, delegated: true, delegationId: "late-provider" }, [])).toBe(true);
+    expect(state.isReplay({ ...source, delegated: true, prompt: source.prompt + " and compare the costs" }, [])).toBe(false);
+    expect(state.isReplay({ ...source, key: 2, delegated: true }, [])).toBe(false);
+    expect(state.isReplay(source, [])).toBe(false);
+    expect(state.jobs().map(job => job.id)).toEqual(ids);
+  });
   it("leaves unassigned siblings waiting after one member is steered during the original route", () => {
     const state = setup(), source = turn(); state.reserve(source, 3, "routing");
     const ids = state.jobs().map(job => job.id);
@@ -106,13 +116,32 @@ describe("voice reservation ownership", () => {
     expect(state.handoff(turn(2), ids, fresh)).toMatchObject({ focusNoteId: "new-call-note", selection: undefined });
   });
 
-  it("requires an exact valid single reservation for a clarified one-worker handoff", () => {
+  it("admits an unreserved clarification answer once and still enforces an existing group's exact count", () => {
     const state = setup(), source = turn();
     const question = state.ask(source, "Which assignment?", 1);
-    expect(state.handoff(turn(2), ["invented"], question, true)).toBeUndefined();
+    expect(state.handoff(turn(2), ["one", "two"], question, true)).toBeUndefined();
+    expect(state.handoff(turn(2), ["new-worker"], question, true)).toEqual(source);
+    expect(state.clarification).toBeUndefined();
+    expect(state.turn(source.key)?.ids).toEqual(["new-worker"]);
+    expect(state.turn(2)?.ids).toEqual(["new-worker"]);
+    expect(state.handoff(turn(3), ["duplicate"], question, true)).toBeUndefined();
     state.reserve(source, 2, "clarifying");
+    state.ask(source, "Which topics?", 2);
     expect(state.handoff(turn(2), [state.jobs()[0].id], state.clarification, true)).toBeUndefined();
     expect(state.jobs()).toHaveLength(2);
+  });
+
+  it("captures stable choice targets and validates selected-answer snapshots against the question revision", () => {
+    const state = setup(), source = turn();
+    const choices = [{ id: "worker:alpha:2", label: "Alpha research", answer: "Check alpha", jobId: "alpha", revision: 2 }];
+    const question = state.ask(source, "Which result?", undefined, { choices, controlAction: "result" });
+    const selected = { ...question, selectedAnswer: { id: choices[0].id, answer: choices[0].answer } };
+    choices[0].revision = 3; choices[0].answer = "Changed answer";
+    expect(question).toMatchObject({ controlAction: "result", choices: [{ jobId: "alpha", revision: 2, answer: "Check alpha" }] });
+    expect(state.isCurrent(selected)).toBe(true);
+    state.ask(source, "Choose the latest result", undefined, { choices, controlAction: "result" });
+    expect(state.isCurrent(selected)).toBe(false);
+    expect(selected.selectedAnswer).toEqual({ id: "worker:alpha:2", answer: "Check alpha" });
   });
 
   it("enforces the per-request guard without capping cumulative groups or erasing them when aliases rotate", () => {

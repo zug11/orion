@@ -59,6 +59,7 @@ export function ChatDock({ canonicalSnapshot, fullPage, flowActive, onExpand, al
   const [voiceSceneHost, setVoiceSceneHost] = useState<HTMLDivElement | null>(null);
   const [voiceControlsHost, setVoiceControlsHost] = useState<HTMLDivElement | null>(null);
   const [voiceResultsHost, setVoiceResultsHost] = useState<HTMLDivElement | null>(null);
+  const [voiceClarificationHost, setVoiceClarificationHost] = useState<HTMLDivElement | null>(null);
   const [voiceContent, setVoiceContent] = useState<VoiceConversationContent>({ hasContent: false, revision: "" });
   const [voiceRevealRequest, setVoiceRevealRequest] = useState(0);
   const lastVoiceToggleRequest = useRef(voiceToggleRequest);
@@ -179,7 +180,7 @@ export function ChatDock({ canonicalSnapshot, fullPage, flowActive, onExpand, al
         voiceControl={{ active: voiceActive && inVoiceThread, toggle: toggleVoice,
           ...(!inVoiceThread && (voiceVisible || voiceContent.hasContent) ? { label: `Resume voice in ${voiceTitle}` } : {}) }}
         dockPanelRef={panelRef}
-        voiceSceneRef={setVoiceSceneHost} voiceControlsRef={setVoiceControlsHost} voicePalette={voicePalette}
+        voiceSceneRef={setVoiceSceneHost} voiceControlsRef={setVoiceControlsHost} voiceClarificationRef={setVoiceClarificationHost} voicePalette={voicePalette}
         voiceResultsRef={setVoiceResultsHost} voiceContent={!fullPage && inVoiceThread ? voiceContent : undefined} voiceRevealRequest={voiceRevealRequest}
         onCommentReply={chat.onCommentReply ? async (id, selected) => { await chat.onCommentReply!(id, selected); setOpen(false); } : undefined}
         onReviewEdit={chat.onReviewEdit ? proposal => { setOpen(false); return chat.onReviewEdit!(proposal); } : undefined} />}
@@ -207,7 +208,7 @@ export function ChatDock({ canonicalSnapshot, fullPage, flowActive, onExpand, al
       }}
       onOpenNote={chat.onOpenNote} onOpenSource={chat.onOpenSource} onOpenSettings={chat.onOpenSettings}
       chatVisible={visible && inVoiceThread} sceneHost={inVoiceThread ? voiceSceneHost : null} controlsHost={inVoiceThread ? voiceControlsHost : null}
-      resultsHost={inVoiceThread ? voiceResultsHost : null} onConversationContentChange={setVoiceContent}
+      resultsHost={inVoiceThread ? voiceResultsHost : null} clarificationHost={visible && inVoiceThread ? voiceClarificationHost : null} onConversationContentChange={setVoiceContent}
       onShowConversation={() => { if (showVoiceThread()) { setOpen(true); setVoiceRevealRequest(value => value + 1); } }}
       onCloseChat={!fullPage ? close : undefined}
       onOpenChat={() => { if (showVoiceThread() && !fullPage) setOpen(true); }} />}

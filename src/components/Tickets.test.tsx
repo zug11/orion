@@ -9,6 +9,8 @@ import { HomeTickets } from './HomeTickets';
 import type { TicketWorkspace } from './Tickets';
 import { RichNoteEditor } from './RichNoteEditor';
 import { NoteView } from './NoteView';
+import { TicketNavigationRoot } from './TicketNavigation';
+import { createEmptyVault } from '../data/defaults';
 const note = (body: string, id = 'n'): Note => ({ id, title: id, body, slug: id, summary: '', aliases: [], tags: [], kind: 'article', status: 'ready', conceptIds: [], sourceIds: [], createdAt: '2026-11-13T00:00:00Z', updatedAt: '2026-11-13T00:00:00Z' });
 const board = boardMarker({id:'b1',title:'Launch'});
 const task = `- [ ] Call Jo ${ticketMarker({id:'t1',boardId:'b1',status:'todo'})}`;
@@ -41,6 +43,82 @@ async function keyboardCommand(editor: Editor, text: string) {
   fireEvent.keyDown(editor.view.dom,{key:'Enter'});
 }
 describe('tickets in the real Orion surfaces', () => {
+  it('keeps ticket details open for interior padding and dismisses an actual backdrop click',()=>{
+    const current=note(`${board}\n\n${task}`);
+    render(<HomeTickets spaceId="s" notes={[current]} work={collectWork([current])} onOpenNote={vi.fn()} onPatch={vi.fn(()=>true)}/>);
+    fireEvent.click(screen.getByRole('button',{name:'Call Jo'}));
+    const dialog=screen.getByRole('dialog',{name:'Ticket details'});
+    vi.spyOn(dialog,'getBoundingClientRect').mockReturnValue({left:100,right:600,top:100,bottom:700} as DOMRect);
+    fireEvent.click(dialog,{clientX:105,clientY:105});expect(dialog).toBeInTheDocument();
+    fireEvent.click(dialog,{clientX:20,clientY:20});expect(screen.queryByRole('dialog',{name:'Ticket details'})).toBeNull();
+  });
+  it('opens the shared routed detail from the editor and preserves the editor Undo path',async()=>{
+    function Fixture(){
+      const [current,setCurrent]=useState(note(`${board}\n\n${task}\n\n  - [ ] Verify it`));
+      const [target,setTarget]=useState<{ticketId?:string}>({});
+      const snapshot={...createEmptyVault().spaces[0],notes:[current],ticketCodes:{version:1 as const,prefix:'ORION',nextNumber:2,assigned:{t1:1}}};
+      return <TicketNavigationRoot snapshot={snapshot} target={target} openTicket={ticketId=>setTarget({ticketId})} openBoard={vi.fn()} changePrefix={vi.fn()} onClose={()=>setTarget({})} onOpenNote={vi.fn()} onPatch={()=>{throw Error('Must use the live editor');}}>
+        <RichNoteEditor noteId="n" markdown={current.body} notes={[current]} concepts={[]} sources={[]} attachedSourceIds={[]} onChange={body=>setCurrent(n=>({...n,body}))} onAttachSource={vi.fn()} onRegisterConcept={vi.fn()} onDisableConceptAutoLink={vi.fn()}/>
+      </TicketNavigationRoot>;
+    }
+    const view=render(<Fixture/>);const editor=editorFor(view.container);
+    fireEvent.click(within(await screen.findByRole('group',{name:'Launch board'})).getByRole('button',{name:'Call Jo'}));
+    expect(screen.getAllByRole('dialog',{name:'Ticket details'})).toHaveLength(1);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('checkbox',{name:'Complete Verify it'}));
+    expect(editor.getMarkdown()).toContain('[x] Verify it');
+    act(()=>editor.commands.undo());
+    expect(editor.getMarkdown()).toContain('[ ] Verify it');
+  });
+  it.each(['Ticket title', 'Checklist item 1'])('keeps editing %s after cancelling a draft with Escape', async label => {
+    const view = render(<EditorFixture body={`${board}\n\n${task}\n\n  - [ ] Original subtask`}/>);
+    const editor = editorFor(view.container);
+    fireEvent.click(within(await screen.findByRole('group', {name:'Launch board'})).getByRole('button', {name:'Call Jo'}));
+    const field = within(screen.getByRole('dialog', {name:'Ticket details'})).getByRole('textbox', {name:label});
+    act(() => field.focus());
+    fireEvent.change(field, {target:{value:'Cancelled draft'}});
+    fireEvent.keyDown(field, {key:'Escape'});
+    expect(field).toHaveFocus();
+    expect(field).toHaveValue(label === 'Ticket title' ? 'Call Jo' : 'Original subtask');
+    fireEvent.change(field, {target:{value:'Replacement after Escape'}});
+    if (label === 'Ticket title') fireEvent.keyDown(field, {key:'Enter'});
+    else act(() => field.blur());
+    expect(editor.getMarkdown()).toContain('Replacement after Escape');
+    expect(editor.getMarkdown()).not.toContain('Cancelled draft');
+  });
+  it('edits an expanded checklist in the real editor, keeps one Undo and survives Markdown reopening', async () => {
+    const view=render(<EditorFixture body={`${board}\n\n${task}\n\n  Release context.\n\n  - [ ] Build it\n  - [ ] Check it\n\nAfter.`}/>);
+    const editor=editorFor(view.container);
+    const boardUI=await screen.findByRole('group',{name:'Launch board'});
+    fireEvent.click(within(boardUI).getByRole('button',{name:'Call Jo'}));
+    const dialog=screen.getByRole('dialog',{name:'Ticket details'});
+    fireEvent.click(within(dialog).getByRole('checkbox',{name:'Complete Build it'}));
+    expect(noteWork(note(editor.getMarkdown())).tickets.find(t=>t.title==='Build it')?.status).toBe('done');
+    expect(noteWork(note(editor.getMarkdown())).tickets.find(t=>t.id==='t1')?.status).toBe('todo');
+    act(()=>{editor.commands.undo();});
+    expect(within(dialog).getByRole('checkbox',{name:'Complete Build it'})).not.toBeChecked();
+    const input=within(dialog).getByRole('textbox',{name:'New checklist item'});
+    fireEvent.change(input,{target:{value:'Publish [literal]'}});
+    fireEvent.submit(input.closest('form')!);
+    expect(within(dialog).getByRole('checkbox',{name:'Complete Publish [literal]'})).toBeInTheDocument();
+    const title=within(dialog).getByRole('textbox',{name:'Ticket title'});
+    fireEvent.focus(title);fireEvent.change(title,{target:{value:'Ship the release'}});fireEvent.blur(title);
+    expect(noteWork(note(editor.getMarkdown())).tickets.find(t=>t.id==='t1')?.title).toBe('Ship the release');
+    const saved=editor.getMarkdown();view.unmount();
+    const reopened=render(<EditorFixture body={saved}/>);
+    fireEvent.click(within(await screen.findByRole('group',{name:'Launch board'})).getByRole('button',{name:'Ship the release'}));
+    expect(screen.getByRole('dialog',{name:'Ticket details'})).toHaveTextContent('0/3 completed');
+    expect(editorFor(reopened.container).getMarkdown()).toContain('After.');
+  });
+  it('rejects a stale expanded field after external checklist changes', async () => {
+    function Fixture(){const [current,setCurrent]=useState(note(`${board}\n\n${task}\n  - [ ] First`));return <><HomeTickets spaceId="s" notes={[current]} work={collectWork([current])} onOpenNote={vi.fn()} onPatch={(ticket,patch)=>{const body=patchTicket(current.body,ticket,patch);if(body===null)return false;setCurrent({...current,body});return true;}}/><button onClick={()=>setCurrent({...current,body:current.body.replace('First','External edit')})}>External edit</button></>;}
+    render(<Fixture/>);
+    fireEvent.click(screen.getByRole('button',{name:'Call Jo'}));
+    const title=screen.getByRole('textbox',{name:'Ticket title'});fireEvent.focus(title);fireEvent.change(title,{target:{value:'My draft'}});
+    fireEvent.click(screen.getByRole('button',{name:'External edit'}));fireEvent.blur(title);
+    expect(screen.getByRole('textbox',{name:'Ticket title'})).toHaveValue('Call Jo');
+    expect(within(screen.getByRole('dialog',{name:'Ticket details'})).getByRole('checkbox',{name:'Complete External edit'})).toBeInTheDocument();
+    expect(screen.getAllByRole('alert').length).toBeGreaterThan(0);
+  });
   it.each(['editor','reading','dashboard'] as const)('loads a large board in exact batches on the %s surface', async surface => {
     const tasks = Array.from({length:123},(_,i)=>`- [ ] Action ${i + 1} ${ticketMarker({id:`t-${i}`,boardId:'b1',status:'todo'})}`).join('\n');
     const n=note(`${board}\n\n${tasks}\n\nAfter the board.`);
@@ -67,7 +145,9 @@ describe('tickets in the real Orion surfaces', () => {
     expect(backing()).not.toBeVisible();
     expect(noteWork(note(editor.getMarkdown())).tickets).toHaveLength(1);
     fireEvent.click(within(boardUI).getByRole('button',{name:'Call Jo'}));
-    expect(backing()).toBeVisible();
+    const detail = screen.getByRole('dialog',{name:'Ticket details'});
+    fireEvent.click(within(detail).getByRole('button',{name:'n'}));
+    await waitFor(()=>expect(backing()).toBeVisible());
     act(()=>editor.commands.insertContent('Now '));
     expect(noteWork(note(editor.getMarkdown())).tickets[0].title).toBe('Now Call Jo');
     act(()=>editor.commands.setTextSelection(editor.state.doc.content.size-1));

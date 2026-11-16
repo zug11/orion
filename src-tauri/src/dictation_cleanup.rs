@@ -115,7 +115,7 @@ A command-only recording can produce a proposal containing just ticket blocks.
 Use at most 32 tickets in total (including nested board tickets), 4 new kanbans,
 4 tables, 256 total proposal blocks and 32,000 visible text
 characters. Each ticket block has exactly kind:"ticket", text, evidence,
-boardName, dueDate, urgency, sourceIndices. text is a literal title of at most
+boardName, dueDate, urgency, checklist, sourceIndices. text is a literal title of at most
 140 characters. Separate consecutive requests into distinct faithful blocks
 and ticket blocks, even when the speaker dictates several in one sentence.
 Never replace several independent faithful todo blocks with one compound ticket.
@@ -140,9 +140,17 @@ medium or choose urgency from tone or subject importance. Preserve negation and
 self-corrections: "High priority—no, leave urgency unset" leaves it empty. All ticket fields
 are required, using empty strings for unassigned fields. Never include IDs,
 status, checked flags, note targets, markup, links or any other action fields.
+checklist is an array of at most 32 {"text":"literal step, at most 140 characters",
+"evidence":"exact supporting transcript quote"} entries, or [] when none.
+Only use a child checklist for clearly spoken steps or acceptance conditions of
+one ticket. Never invent conventional implementation steps or verification tasks.
+Preserve each separately completable project work item as its own ticket; do not
+bury unrelated tasks in a checklist. No checked flags: new children are open.
+Use at most 256 checklist items across the proposal. Preserve uncertainty,
+negations and cancellations as prose, never as a committed child action.
 Kanban blocks have exactly kind:"kanban", text (short board title), evidence,
 tickets, sourceIndices. Each nested ticket has exactly text, evidence, dueDate,
-urgency, using the same ticket field rules above. The board owns its nested tickets;
+urgency and checklist, using the same ticket field rules above. The board owns its nested tickets;
 do not duplicate them as separate ticket blocks. An explicitly requested empty
 board may have zero tickets. A new board always gets a new identity: do not claim
 to update an existing board. A concise title may describe the spoken project even
@@ -229,11 +237,20 @@ struct Block {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ChecklistItem {
+    text: String,
+    evidence: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct BoardTicket {
     text: String,
     evidence: String,
     due_date: String,
     urgency: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    checklist: Vec<ChecklistItem>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -267,6 +284,8 @@ enum ProposalBlock {
         #[serde(rename = "dueDate")]
         due_date: String,
         urgency: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        checklist: Vec<ChecklistItem>,
     },
 }
 
@@ -338,6 +357,8 @@ enum WireProposalBlock {
         #[serde(rename = "dueDate")]
         due_date: String,
         urgency: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        checklist: Vec<ChecklistItem>,
         #[serde(rename = "sourceIndices")]
         source_indices: Vec<usize>,
     },
@@ -457,7 +478,7 @@ fn schema() -> Value {
     });
     let ticket = json!({
         "type": "object", "additionalProperties": false,
-        "required": ["kind", "text", "evidence", "boardName", "dueDate", "urgency", "sourceIndices"],
+        "required": ["kind", "text", "evidence", "boardName", "dueDate", "urgency", "checklist", "sourceIndices"],
         "properties": {
             "kind": { "type": "string", "enum": ["ticket"] },
             "text": { "type": "string", "minLength": 1, "maxLength": MAX_TICKET_TITLE_CHARS },
@@ -465,6 +486,11 @@ fn schema() -> Value {
             "boardName": { "type": "string", "maxLength": MAX_BOARD_NAME_CHARS },
             "dueDate": { "type": "string", "maxLength": 10 },
             "urgency": { "type": "string", "enum": ["", "urgent", "high", "medium", "low"] },
+            "checklist": { "type":"array", "maxItems":32, "items":{
+                "type":"object", "additionalProperties":false, "required":["text","evidence"],
+                "properties": {"text":{"type":"string","minLength":1,"maxLength":MAX_TICKET_TITLE_CHARS},
+                    "evidence":{"type":"string","minLength":1,"maxLength":MAX_EVIDENCE_CHARS}}
+            }},
             "sourceIndices": { "type": "array", "minItems": 1, "maxItems": MAX_BLOCKS,
                 "items": { "type": "integer", "minimum": 0, "maximum": MAX_BLOCKS - 1 } }
         }
@@ -477,7 +503,7 @@ fn schema() -> Value {
             .unwrap()
             .remove(field);
     }
-    nested_ticket["required"] = json!(["text", "evidence", "dueDate", "urgency"]);
+    nested_ticket["required"] = json!(["text", "evidence", "dueDate", "urgency", "checklist"]);
     let kanban = json!({
         "type":"object", "additionalProperties":false,
         "required":["kind","text","evidence","tickets","sourceIndices"],
@@ -587,6 +613,7 @@ fn expand_proposal(wire: WireProposal, blocks: &[Block]) -> Option<Proposal> {
                 board_name,
                 due_date,
                 urgency,
+                checklist,
                 source_indices: _,
             } => {
                 expanded.push(ProposalBlock::Ticket {
@@ -595,6 +622,7 @@ fn expand_proposal(wire: WireProposal, blocks: &[Block]) -> Option<Proposal> {
                     board_name,
                     due_date,
                     urgency,
+                    checklist,
                 });
             }
         }
@@ -608,8 +636,26 @@ fn valid_evidence(evidence: &str, transcript: &str) -> bool {
         && transcript.contains(evidence.trim())
 }
 
+fn valid_checklist(items: &mut [ChecklistItem], transcript: &str) -> bool {
+    if items.len() > 32 {
+        return false;
+    }
+    for item in items {
+        if !literal_block_text(&item.text)
+            || item.text.trim().chars().count() > MAX_TICKET_TITLE_CHARS
+            || !valid_evidence(&item.evidence, transcript)
+        {
+            return false;
+        }
+        item.text = item.text.trim().to_owned();
+        item.evidence = item.evidence.trim().to_owned();
+    }
+    true
+}
+
 fn valid_board_ticket(ticket: &mut BoardTicket, transcript: &str) -> bool {
-    if !literal_block_text(&ticket.text)
+    if !valid_checklist(&mut ticket.checklist, transcript)
+        || !literal_block_text(&ticket.text)
         || ticket.text.trim().chars().count() > MAX_TICKET_TITLE_CHARS
         || !valid_evidence(&ticket.evidence, transcript)
         || (!ticket.due_date.trim().is_empty() && !calendar_date(ticket.due_date.trim()))
@@ -640,6 +686,7 @@ fn valid_proposal(proposal: &mut Proposal, transcript: &str) -> bool {
     let mut boards = 0;
     let mut tables = 0;
     let mut nested_chars = 0;
+    let mut checklist_count = 0;
     for block in &mut proposal.blocks {
         if !(matches!(block, ProposalBlock::Table { text, .. } if text.trim().is_empty() && !text.chars().any(char::is_control))
             || literal_block_text(block.text()))
@@ -665,7 +712,13 @@ fn valid_proposal(proposal: &mut Proposal, transcript: &str) -> bool {
                         return false;
                     }
                     tickets += 1;
-                    nested_chars += child.text.chars().count();
+                    checklist_count += child.checklist.len();
+                    nested_chars += child.text.chars().count()
+                        + child
+                            .checklist
+                            .iter()
+                            .map(|item| item.text.chars().count())
+                            .sum::<usize>();
                 }
             }
             ProposalBlock::Table {
@@ -712,10 +765,17 @@ fn valid_proposal(proposal: &mut Proposal, transcript: &str) -> bool {
             board_name,
             due_date,
             urgency,
+            checklist,
         } = block
         {
             tickets += 1;
-            if text.chars().count() > MAX_TICKET_TITLE_CHARS
+            checklist_count += checklist.len();
+            nested_chars += checklist
+                .iter()
+                .map(|item| item.text.chars().count())
+                .sum::<usize>();
+            if !valid_checklist(checklist, transcript)
+                || text.chars().count() > MAX_TICKET_TITLE_CHARS
                 || !plain_text(evidence)
                 || evidence.trim().chars().count() > MAX_EVIDENCE_CHARS
                 || !transcript.contains(evidence.trim())
@@ -741,6 +801,7 @@ fn valid_proposal(proposal: &mut Proposal, transcript: &str) -> bool {
     // retains the loss guard; structured content has an inflation cap as well.
     tickets + boards + tables > 0
         && tickets <= MAX_TICKETS
+        && checklist_count <= 256
         && boards <= MAX_BOARDS
         && tables <= MAX_TABLES
         && output_chars <= MAX_OUTPUT_CHARS
@@ -1090,6 +1151,34 @@ mod tests {
     fn wire_ticket(evidence: &str, source_indices: Vec<usize>) -> Value {
         json!({ "kind":"ticket", "text":"Call Jo", "evidence":evidence,
             "boardName":"", "dueDate":"", "urgency":"", "sourceIndices":source_indices })
+    }
+
+    #[test]
+    fn dictated_checklists_need_literal_evidence_and_remain_creation_only() {
+        let transcript = "Make a ticket to test export. Select notes and reopen the file.";
+        let mut ticket = wire_ticket(transcript, vec![0]);
+        ticket["text"] = json!("Test export");
+        ticket["checklist"] = json!([{ "text":"Select notes", "evidence":"Select notes" },{ "text":"Reopen the file", "evidence":"reopen the file" }]);
+        let mut wire = json!({"blocks":[{"kind":"paragraph","text":transcript}],"proposal":{"blocks":[ticket]}});
+        let result =
+            serde_json::to_value(parse_result(&wire.to_string(), transcript).unwrap()).unwrap();
+        assert_eq!(
+            result["proposal"]["blocks"][0]["checklist"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        wire["proposal"]["blocks"][0]["checklist"][0]["evidence"] = json!("invented step");
+        assert!(parse_result(&wire.to_string(), transcript)
+            .unwrap()
+            .proposal
+            .is_none());
+        wire["proposal"]["blocks"][0]["checklist"][0]["evidence"] = json!("Select notes");
+        wire["proposal"]["blocks"][0]["checklist"][0]["checked"] = json!(true);
+        let fallback = parse_result(&wire.to_string(), transcript).unwrap();
+        assert!(fallback.proposal.is_none());
+        assert_eq!(fallback.blocks[0].text, transcript);
     }
 
     fn ticket_response(transcript: &str) -> Value {

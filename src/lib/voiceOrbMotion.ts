@@ -58,12 +58,15 @@ function companion(x: number, y: number, radius: number, slot: number): Companio
 
 /** Circle contact is also applied to each pixel-sized projection, where minimum
  * readable radii differ. Larger bodies never make small ones disappear. */
-export function separateVoiceOrbs(circles: OrbCircle[], fixed: readonly OrbCircle[], gap: number, heldSlot?: number) {
-  for (let pass = 0; pass < 20; pass++) {
+export function separateVoiceOrbs(circles: OrbCircle[], fixed: readonly OrbCircle[], gap: number, heldSlot?: number,
+  bounds?: { width: number; height: number; inset: number }) {
+  for (let pass = 0; pass < (bounds ? 64 : 20); pass++) {
+    let moved = false;
     for (let i = 0; i < circles.length; i++) for (let j = i + 1; j < circles.length; j++) {
       const a = circles[i], b = circles[j], dx = b.x - a.x, dy = b.y - a.y, distance = Math.hypot(dx, dy);
       const minimum = a.radius + b.radius + gap;
       if (distance >= minimum) continue;
+      moved = true;
       const angle = (a.slot + b.slot) * 2.39996, nx = distance ? dx / distance : Math.cos(angle), ny = distance ? dy / distance : Math.sin(angle);
       const share = a.slot === heldSlot ? 0 : b.slot === heldSlot ? 1 : .5;
       a.x -= nx * (minimum - distance) * share; a.y -= ny * (minimum - distance) * share;
@@ -73,44 +76,98 @@ export function separateVoiceOrbs(circles: OrbCircle[], fixed: readonly OrbCircl
       if (circle.slot === heldSlot) continue;
       const dx = circle.x - obstacle.x, dy = circle.y - obstacle.y, distance = Math.hypot(dx, dy), minimum = circle.radius + obstacle.radius + gap;
       if (distance >= minimum) continue;
+      moved = true;
       const angle = circle.slot * 2.39996;
       circle.x = obstacle.x + (distance ? dx / distance : Math.cos(angle)) * minimum;
       circle.y = obstacle.y + (distance ? dy / distance : Math.sin(angle)) * minimum;
     }
+    if (bounds) for (const circle of circles) {
+      const x = clamp(circle.x, bounds.inset + circle.radius, bounds.width - bounds.inset - circle.radius);
+      const y = clamp(circle.y, bounds.inset + circle.radius, bounds.height - bounds.inset - circle.radius);
+      moved ||= x !== circle.x || y !== circle.y;
+      circle.x = x; circle.y = y;
+    }
+    if (!moved) break;
   }
+}
+
+/** Fit the satellites around a fixed main body. Only crowded satellites may
+ * reduce in size; the main orb never shrinks when the field gains workers. */
+function containVoiceSatellites(circles: OrbCircle[], fixed: readonly OrbCircle[], gap: number, width: number, height: number) {
+  const bounds = { width, height, inset: Math.min(10, Math.min(width, height) * .03) };
+  let sizeScale = 1;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    separateVoiceOrbs(circles, fixed, gap, undefined, bounds);
+    const separated = circles.every((circle, index) => [...fixed, ...circles.slice(index + 1)].every(other =>
+      Math.hypot(circle.x - other.x, circle.y - other.y) >= circle.radius + other.radius - .001));
+    if (separated) break;
+    // A dense field can reduce its satellite bodies while retaining every
+    // identity and its existing keyboard/conversation-list alternative.
+    circles.forEach(circle => { circle.radius *= .9; });
+    sizeScale *= .9;
+  }
+  return sizeScale;
+}
+
+/** Preserve the original angular arrangement and radial variety around the
+ * larger centre, instead of letting contact push all inner bodies onto its rim.
+ * The outer orbit stays fixed so enlargement does not shrink the whole field. */
+function scatteredRadius(distance: number, centreScale: number, inverse = false) {
+  const offset = .16 * clamp((centreScale - 1) / 1.6, 0, 1);
+  const from = inverse ? .15 + offset : .15, to = inverse ? .15 : .15 + offset;
+  // Keep centre-crossing and outward dismissal gestures continuous too.
+  if (distance <= from) return distance * to / from;
+  if (distance >= .46) return distance;
+  return to + (distance - from) * (.46 - to) / (.46 - from);
+}
+
+/** Convert pointer coordinates back to the shared motion field after the
+ * expanded view's radial scatter. Compact copies retain their original map. */
+export function unprojectVoiceOrbPoint(x: number, y: number, centreScale = 1) {
+  const distance = Math.hypot(x, y);
+  const ratio = distance > 0 ? scatteredRadius(distance, centreScale, true) / distance : 0;
+  return { x: x * ratio, y: y * ratio };
 }
 
 /** All actual sizes use the same motion snapshot. Pixel floors are followed by
  * contact projection so the legible small circles cannot overlap larger ones. */
-export function projectVoiceOrbs(scene: VoiceOrbSnapshot, width: number, height: number) {
+export function projectVoiceOrbs(scene: VoiceOrbSnapshot, width: number, height: number, centreScale = 1, bodySize?: number) {
   const scale = Math.min(width, height), small = scale < 80, sidebar = scale < 30;
+  const expandedField = bodySize !== undefined;
+  const bodyScale = expandedField ? Math.min(bodySize, scale) : scale;
+  const positionScaleX = expandedField ? width : scale, positionScaleY = expandedField ? height : scale;
   const outline = (stretch: number) => Math.max(Math.sqrt(stretch), 1 / Math.sqrt(stretch));
   const originX = width / 2, originY = height * .48;
-  const project = (body: OrbCircle, minimum: number, ambient = false): OrbCircle => {
+  const project = (body: OrbCircle, minimum: number, ambient = false, radiusScale = 1): OrbCircle => {
     const distance = Math.max(.001, Math.hypot(body.x, body.y));
-    const spread = small ? ((ambient ? .245 : .255) + Math.max(0, distance - (ambient ? .14 : .16)) * .65) / distance : 1;
-    return { slot: body.slot, x: originX + body.x * spread * scale, y: originY + body.y * spread * scale, radius: Math.max(minimum, body.radius * scale) };
+    const spread = small ? ((ambient ? .245 : .255) + Math.max(0, distance - (ambient ? .14 : .16)) * .65) / distance
+      : centreScale > 1 ? scatteredRadius(distance, centreScale) / distance : 1;
+    return { slot: body.slot, x: originX + body.x * spread * positionScaleX, y: originY + body.y * spread * positionScaleY, radius: Math.max(minimum, body.radius * bodyScale * radiusScale) };
   };
-  const centre = { x: originX + scene.central.x * scale, y: originY + scene.central.y * scale, radius: scale * (small ? .155 : .104) * (1 + scene.central.receiving * .055), slot: -1 };
+  const centre = { x: originX + scene.central.x * bodyScale, y: originY + scene.central.y * bodyScale, radius: bodyScale * (small ? .155 : .104) * centreScale * (1 + scene.central.receiving * .055), slot: -1 };
   const budget = sidebar ? 6 : small ? 10 : Math.min(VOICE_ORB_VISIBLE_BUDGET, Math.max(8, Math.floor(scale / 14) ** 2));
   const bodies = displayedWorkers(scene.workers, budget, scene.focusedSlot);
   const workers = bodies.map(body => {
     const depth = 1 + Math.sin(body.angle) * .12;
-    const point = project({ ...body, radius: body.radius * depth }, body.returned ? (sidebar ? .65 : small ? .8 : .9) : sidebar ? 1.3 : small ? 2.5 : 0);
+    const point = project({ ...body, radius: body.radius * depth }, body.returned ? (sidebar ? .65 : small ? .8 : .9) : sidebar ? 1.3 : small ? 2.5 : 0, false, expandedField ? 1.14 : 1);
     point.radius *= 1 + body.finished * .1 + body.level * .035; return point;
   });
   const workerBounds = workers.map((point, index) => ({ ...point, radius: point.radius * outline(bodies[index].stretch) }));
   const centreBounds = { ...centre, radius: centre.radius * outline(scene.central.stretch) };
-  separateVoiceOrbs(workerBounds, [centreBounds], Math.max(.45, scale * .008));
+  if (expandedField) {
+    const sizeScale = containVoiceSatellites(workerBounds, [centreBounds], Math.max(.45, bodyScale * .008), width, height);
+    workers.forEach(point => { point.radius *= sizeScale; });
+  } else separateVoiceOrbs(workerBounds, [centreBounds], Math.max(.45, scale * .008));
   workerBounds.forEach((point, index) => { workers[index].x = point.x; workers[index].y = point.y; });
   const reserves = scene.companions.filter(body => body.slot < 4);
   const ambientLimit = small ? Math.max(0, (sidebar ? 8 : 12) - reserves.length - workers.length) : Infinity;
   const ambient = scene.companions.filter(body => body.slot >= 4).slice(0, ambientLimit);
   const companions = [...reserves, ...ambient].map(body => project(body,
-    body.slot < 4 ? (sidebar ? .7 : small ? 1 : 0) : sidebar ? .65 : small ? .8 : 0, body.slot >= 4));
-  separateVoiceOrbs(companions, [centreBounds, ...workerBounds], small ? .3 : scale * .007);
+    body.slot < 4 ? (sidebar ? .7 : small ? 1 : 0) : sidebar ? .65 : small ? .8 : 0, body.slot >= 4, expandedField ? 1.18 : 1));
+  if (expandedField) containVoiceSatellites(companions, [centreBounds, ...workerBounds], small ? .3 : bodyScale * .007, width, height);
+  else separateVoiceOrbs(companions, [centreBounds, ...workerBounds], small ? .3 : scale * .007);
   let fit = 1;
-  if (scene.workers.length > 6) {
+  if (!expandedField && (scene.workers.length > 6 || centreScale > 1)) {
     // Contact resolution may expand a crowded projection. Fit the complete
     // silhouettes together instead of clipping workers at the canvas edge.
     const circles = [centreBounds, ...workerBounds, ...companions];
@@ -120,7 +177,7 @@ export function projectVoiceOrbs(scene: VoiceOrbSnapshot, width: number, height:
       point.x = originX + (point.x - originX) * fit; point.y = originY + (point.y - originY) * fit; point.radius *= fit;
     }
   }
-  return { centre, workers, companions, centreBounds, workerBounds, fit };
+  return { centre, workers, companions, centreBounds, workerBounds, fit, positionScaleX, positionScaleY };
 }
 
 /** Stateful, deterministic geometry. Only real local audio energy drives the

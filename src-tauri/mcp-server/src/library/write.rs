@@ -220,6 +220,20 @@ pub(super) fn call(path: &Path, name: &str, args: &Map<String, Value>) -> ToolRe
                 name,
                 args,
             );
+            if name == "orion_update_ticket"
+                && arg(args, "status") == "done"
+                && args.contains_key("verification")
+            {
+                result["verifiedTicketIds"] = json!(result["work"]["tickets"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|ticket| ticket["id"].clone())
+                    .collect::<Vec<_>>());
+                result["verificationRecorded"] = json!(true);
+                result["verificationNotice"] =
+                    json!("Evidence was supplied by the caller; Orion did not execute the checks.");
+            }
         }
         if !attachments.is_empty() {
             let attached: Vec<_> = attachments.iter().map(|(note_id, id, _, changed)| {

@@ -201,10 +201,28 @@ These product decisions are intentional:
   appear in the board without repeating their backing task cards below it.
   This is presentation only: keep the complete Markdown, identities, nested
   content and Undo. Missing/ambiguous boards and standalone tickets stay visible.
-  In edit mode, clicking a board card's title reveals that original task for
-  direct rich editing; leaving it collapses it again. Cursor navigation skips
+  Clicking a board card's title opens the shared expanded ticket dialog. Its
+  source-note action reveals that original task for direct rich editing in edit
+  mode; leaving it collapses it again. Cursor navigation skips
   hidden backing tasks, and adjacent Backspace/Delete must not erase them.
   Removing the board reveals its tickets again; Undo restores the presentation.
+- Expanded tickets use `TicketDetailsDialog.tsx` and its scoped CSS. Title,
+  description, status, priority, due date and checklist changes always patch the
+  original note through guarded `TicketPatch` operations; editor changes are one
+  Undo transaction. Checklists are nested ordinary Markdown tasks, never a new
+  store. Add, rename, remove, reorder and completion preserve nested contents and
+  surrounding prose; completing children does not complete the parent. Reject
+  stale captured blocks and duplicate identities. Preserve formatted descriptions
+  for rich editing in the source note. The native modal traps focus, restores its
+  launcher and supports Escape; long titles and checklist items wrap.
+  Optional Space `ticketCodes` v1 stores only a prefix, nextNumber and permanent
+  ticket-ID-to-number assignments. Allocate sequential ORION-001-style codes
+  after merging current disk under the existing revision-guarded save, or inside
+  the MCP vault lock. Publish only saved numbers; retain deleted assignments so
+  Undo and later tickets never reuse a code. Native validation rejects erasing or
+  renumbering published codes. Cards, details, exact local code search and MCP
+  work results use this same ledger. Codes are Space-local; Markdown retains
+  portable task IDs, while code assignments live in the vault. See `docs/tickets.md`.
 - Home adapts to the active Space's authored work: omit unused To-dos/Tickets
   sections, place the kanban/ticket view first above a paired To-do and Across
   this Space card row, then Continue exploring, and compact the atmosphere
@@ -623,9 +641,10 @@ to the desktop host; direct MCP writes preserve source references but do not
 create an additional backup.
 
 - Never silently replace an invalid vault with an empty one.
-- Never persist either provider key in the vault, browser storage, logs,
-  exports, or renderer state. The desktop keys live as separate OS credential
-  entries (`openai-api-key` and `anthropic-api-key`).
+- Never persist provider keys in the vault, browser storage, logs,
+  exports, or renderer state. On macOS they share the protected
+  `orion-credentials-v1` OS-Keychain item and native session cache; other
+  platforms retain separate OS credential entries for each provider.
 - Treat additions to persisted interfaces in `src/types.ts` as migrations.
   Existing vaults must continue to validate. New optional settings should be
   accepted by `src/lib/storage.ts`, then hydrated through `defaultSettings` in
@@ -877,7 +896,7 @@ Preserve these trust boundaries:
 
 ### Additional local library tools
 
-The independent MCP crate also exposes 30 tools from `src/library`:
+The independent MCP crate also exposes 31 tools from `src/library`:
 `orion_list_sources`, `orion_search_sources`, `orion_get_source_passage`,
 `orion_get_note_section`, `orion_get_notes`, `orion_list_concepts`,
 `orion_get_concept`, `orion_resolve_link`, `orion_get_related_notes`,
@@ -887,7 +906,7 @@ The independent MCP crate also exposes 30 tools from `src/library`:
 `orion_check_space_integrity`, `orion_get_recent_changes`, and
 `orion_get_link_path`, `orion_apply_note_command`, `orion_propose_passage_comment`,
 `orion_get_passage_threads`, `orion_list_boards`, `orion_get_board`,
-`orion_list_tickets`, `orion_create_board`, `orion_update_board`,
+`orion_list_tickets`, `orion_get_ticket`, `orion_create_board`, `orion_update_board`,
 `orion_create_tickets`, and `orion_update_ticket`. They work with Orion closed, without credentials or
 provider calls, under the existing direct local-library access contract.
 
@@ -983,7 +1002,7 @@ provider calls, under the existing direct local-library access contract.
   version history. Integrity tooling never silently repairs or deletes data.
 - Run `script/test_mcp_library.mjs` against each exact extracted package binary
   and include this harness in release fingerprints. The harness uses only
-  isolated fixtures and exercises all 30 local additions, including real atomic edits.
+  isolated fixtures and exercises all 31 local additions, including real atomic edits.
   Its completed-task contract checks default and explicit working reads, scoped
   history, cached derivative suppression, completion followed by a fresh read in
   the same process, original versions/Unicode-scalar ranges/CRLF line positions,
@@ -994,12 +1013,12 @@ provider calls, under the existing direct local-library access contract.
 
 ### Optional native desktop workflows
 
-The shared connector now exposes 64 tools: 39 local library tools, 14 desktop
+The shared connector now exposes 66 tools: 40 local library tools, 15 desktop
 workflow/capability/job tools, three native edit-review tools and one read-only
 active-editor-context tool, plus three finite voice work-order tools and four
 captured-editor-generation tools. The optional workflows are
 `orion_get_capabilities`, `orion_get_context`, `orion_research`,
-`orion_search_space`, `orion_export_word`, `orion_import`,
+`orion_search_space`, `orion_export_word`, `orion_export_collection`, `orion_import`,
 `orion_reprocess_sources`, `orion_generate`, `orion_develop_concept`,
 `orion_enrich_knowledge`, `orion_refresh_overview`, `orion_get_job`,
 `orion_list_jobs`, and `orion_cancel_job`.
@@ -2351,12 +2370,29 @@ checks. Webpage import is intentionally a single-page reader, not a crawler.
 ## Portable export contract
 
 The top-bar Share or export action supports a self-contained web article,
-an editable Word document, and portable Markdown files. All formats share three active-Space scopes: the
+an editable Word document, portable Markdown files, and native `.orion` collections.
+Web/Word/Markdown share three active-Space scopes: the
 open note, the open note plus exactly one hop through its visible links, or the
 entire Space. A linked-page scope includes destinations reached through
 explicit note/concept links, resolved wiki syntax, and the same automatic
 concept-title matching shown in the reading surface. It is not recursive and
 must never cross a Space boundary.
+
+`.orion` uses explicit individual-note selection, never implicit linked-note
+inclusion. Each selected note's file contains the same curated collection and
+export identity with a different entry note. `portableOrion.ts` whitelists visible
+note content and safe citation attribution, freezes included wiki links, removes
+excluded targets and private metadata, and includes only real referenced raster
+images. Native `portable_orion.rs` validates bounded JSON and image signatures,
+saves without overwriting files, and stages imports under content-addressed image
+IDs. Finder file opens use native opaque queue tokens, drained by the preferred
+library window after hydration. New collection Spaces have immutable
+`portableImport:{version:1,exportId,collectionHash}` validated by both native
+writers. Reopening never replays the exported note text over local edits or
+resurrects deleted notes. Conflicting content with the same export identity fails
+explicitly. MCP `orion_export_collection` uses the existing export lease with exact
+selected IDs and a folder picker; no caller destination path. See
+`docs/portable-orion.md` for limits and format details.
 
 `src/lib/webExport.tsx` produces one semantic offline HTML document rather than
 capturing Orion's live DOM. Preserve these rules:
@@ -3641,11 +3677,31 @@ state/nonce/S256 PKCE and an HTTP 127.0.0.1 `/auth/callback` listener. Preserve 
 issued client registration across sign-out and failed code exchange. Validate ID
 signature/JWKS, issuer, audience, expiry, nonce and returning subject; require the
 plan-use scope before activating. Never expose tokens or authorization URLs through
-IPC, diagnostics, MCP or the vault. Credential records are atomic generations of
-small base64 OS-keychain entries (Windows credential-size compatible); the root
-manifest is published only after all new entries are written. Refresh is serialized
+IPC, diagnostics, MCP or the vault. On macOS, `credential_store.rs` keeps provider
+keys and the complete ChatGPT record in one versioned OS-Keychain item. A serialized,
+zeroizing native session cache shares access across windows and concurrent workers;
+normal requests/status checks never repeat an unlock. Denial/error is latched until
+the user chooses Unlock saved connections in Settings or an explicit key save/delete.
+Already unlocked slots without pending migration cleanup remain readable from
+memory after another connection fails, without accessing Keychain. Ordinary
+writes and new reads stay blocked. Automatic OAuth refresh must not clear this
+latch. No startup credential read or
+global Keychain ACL change is allowed. Legacy entries migrate lazily: validate, write
+and read back the consolidated record before retiring old secrets. Persist pending
+retirement across failures; stop at the first denied deletion and keep the old
+manifest until all chunks retire. Tombstones prevent deleted credentials from
+reappearing. Never silently fall back to stale legacy credentials once a new slot
+exists. On other platforms, credential records remain atomic generations of small
+base64 OS-keychain entries (Windows credential-size compatible); the root manifest
+is published only after all new entries are written. Refresh is serialized
 inside the single native application process. Sign-out attempts remote revocation,
 clears local tokens, retains registration/host and reports unconfirmed revocation.
+
+macOS credential updates/deletions use attribute-only Security.framework queries
+scoped to the user-domain default Keychain and exact Orion service/account. Do
+not fetch the old password to mutate it. Updates change only value data; creation
+is allowed only after item-not-found, never after denied access. Check deletion
+status, preserve existing ACLs, and retain the explicit post-write verification.
 
 `chatgpt:<slug>` is an explicit text-model route. Its selected account’s OAuth token
 is used only for supported public Responses requests. `text_request` owns request
@@ -4290,7 +4346,12 @@ Before handoff:
 6. Run `cargo test --manifest-path src-tauri/mcp-server/Cargo.toml`.
 7. Run `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` and
    `cargo fmt --manifest-path src-tauri/mcp-server/Cargo.toml -- --check`.
-8. For native changes, run `npm run tauri build`.
+8. For native changes, run `npm run tauri build`. In this maintainer checkout,
+   build the real app that accesses saved connections with `npm run build:local`:
+   it wraps Tauri with the installed stable Developer ID Application identity.
+   Do not hand off another ad-hoc production-identity rebuild for normal Keychain
+   use; its changing code requirement causes repeated authorization. The isolated
+   `script/build_and_run.sh` Preview keeps its separate identity and ad-hoc signing.
 9. Exercise the finished UI in a real browser or desktop runtime at normal and
    narrow sizes; inspect console errors and keyboard behavior.
 10. Update `README.md` and this file when behavior or operational assumptions
@@ -4436,6 +4497,15 @@ disabled and zero-day scheduled transcript/audio deletion; this is not a claim
 of enterprise zero-retention processing. Provider-side agent setup is generic,
 and each call uses the existing Space-scoped research coordinator and authority
 checks. A client-tool request never substitutes for the human transcript.
+The shared conversation policy selects provider-specific handoff wording:
+GPT-Live uses the documented `Generate <|SpawnThinking|>` conditions and
+pre-answer signal; ElevenLabs keeps `delegate_to_orion` and never receives that
+control token. GPT-Live client delegation sets `acknowledgement_delay_ms: 800`.
+On a validated client delegation event, its transport immediately sends an
+empty `session.thinking.append` with that delegation ID before application
+routing. This suppresses pending automatic acknowledgments; it does not admit
+work, confirm results, prove silence or stop existing audio. Keep it distinct
+from useful findings, which still use the shared scheduler and commentary.
 Only completed ElevenLabs user transcriptions enter that coordinator, once per
 utterance. Capture the note, selected passage and focused worker at speech onset;
 use that same target when its transcript arrives, rejecting an unmatched target.
@@ -4516,7 +4586,15 @@ AbortController. Ordinary speech never invalidates other work. `voiceWorkOrders.
 interprets complete buffered turns as conversation, new assignments, targeted
 corrections/cancellation, result requests or clarification. Preserve the exact
 user-authored prompt as authority; never authorize writes from a rewritten
-model prompt. `voiceConversation.ts` groups same-speaker fragments across duplex
+model prompt. Result/status controls resolve only current running work or a
+completed worker with a nonempty result; failed, cancelled and empty-result
+workers cannot masquerade as pending findings. With no eligible work, return an
+accurate notice instead of asking the user to choose an imaginary request.
+Ambiguous controls expose host-authored choices carrying the exact worker ID and
+revision. Recheck unique identity, revision and action eligibility when answering;
+stale choices cannot silently select another worker. Planning, awaiting details,
+queued research, active research and a ready result remain distinct states.
+`voiceConversation.ts` groups same-speaker fragments across duplex
 backchannels and associates delegation offsets with the original utterance and
 captured note. Once dispatched, another explicit assignment or a silence of at
 least the 900 ms routing debounce starts a separate complete turn. Conservative
@@ -4549,7 +4627,25 @@ after Keep, while the per-worker save reservation still prevents duplicate saves
 Interpret turns in order; direct local cancellation also reaches pending routing
 requests. Cancelled generations cannot be revived by a late model response.
 A single spoken request can admit multiple distinct read-only assignments. The
-host reserves one stable orb identity per requested worker while routing or
+host sends complete natural question forms, including contracted questions, to
+semantic routing without requiring a provider delegation event, worker keywords,
+or an evidence-word allowlist. Dense-Space rankings require actual note evidence;
+give the planner the Space name and total note-text workload as bounded orientation.
+Requested answer counts (such as five ideas) do not imply worker counts. Preserve
+direct conversation, simple definitions,
+focused-worker follow-ups, controls and existing write authority. Scope planning uses
+low reasoning effort without changing the workers' saved effort or model, and chooses
+independent complementary work rather than sibling-dependent synthesis jobs. Unqualified
+whole-Space reading selects one to four readers from note count/text workload locally,
+partitioning each note ID once; explicit counts remain exact, and filtered scopes still
+go through the planner. Both OpenAI and ElevenLabs submit the whole original request
+once; the shared host owns admission and rejects late duplicate delegation. ElevenLabs
+keeps its pinned asynchronous tool schema and refreshes/verifies policy on explicit
+call startup. Shared Chat/voice web reading overlaps independent requests in bounded
+pairs, committing evidence/cache/checkpoints in request order and checking cancellation
+before publication. Dependent reads remain sequential.
+
+The host reserves one stable orb identity per requested worker while routing or
 clarifying; a topic answer consumes those same identities and the original note
 and selection capture. Clarification, unrelated speech and note navigation cannot
 drop reservations. Cancelling a reservation aborts any dependent answer route so
@@ -4573,6 +4669,24 @@ Scope planning receives the original captured note's ID, title bounded to 200
 Unicode characters and current content version as reference metadata. Keep its
 body/summary with the research reader. Missing or duplicate original note IDs
 require clarification and cannot silently fall back to current navigation.
+
+Clarification presents selectable choices and an optional text answer through
+`VoiceClarification.tsx`, including in the full main voice scene. Answers remain
+bound to that captured question, Space, call epoch and reservation revision;
+typing an answer must not accidentally start a separate ordinary Chat response.
+Host control choices use stable worker ID/revision references. Provider topic
+choices accept only two to four bounded literal labels/answers/descriptions and
+cannot supply targets, actions or write authority. A selected provider answer is
+reference-only scope context, never substituted for the exact human prompt.
+Retain the captured original question for general as well as plural-worker
+clarifications. Optional human detail may refine a selected control without
+repeating the worker's subject; an explicit new human control takes precedence
+over the earlier question, and a conflicting named target needs clarification.
+Cancelled reservation slots stay cancelled even when choosing a topic keeps the
+original prompt and its larger original worker count. Ordinary unrelated speech
+retains conservative routing and cannot inherit a pending request's authority.
+Choosing a target for a worker-count correction still runs semantic scope
+planning before dispatch; a current target choice is not itself a direct update.
 
 `voiceReservations.ts` owns pending groups, turn aliases, cancelled turns and the
 current clarification. It captures the original note/selection and preserves the
@@ -4713,7 +4827,11 @@ and never turn an oversized reply into a misleading prefix. Explicit Keep gets
 a brief acknowledgement only from a confirmed save receipt. These channel
 choices do not establish that the provider spoke naturally or was heard.
 `voiceContextUpdates.ts` sends changed job fields and confirmed receipts only,
-with full bounded context reserved for connection/reconnect. It uses validated
+with full bounded context reserved for connection/reconnect. Context states
+explicitly distinguish actual pending results from routing reservations and
+requests awaiting user details. No active worker means no result is pending;
+failed, stopped or invalidated work must not cause the live agent to claim it is
+still waiting for findings. It uses validated
 `session.usage.updated.context_window.usage_ratio`, retaining the last known
 ratio when a later event omits it. At 80% usage it omits optional note excerpts
 and progress; at 85% it sends one bounded 6 KB continuity checkpoint, rearmed only
@@ -4837,7 +4955,15 @@ responses only. `ChatDock` passes `hideConversationText` to its retained
 and do not publish worker content as a reason to reveal or expand the text pane.
 Ordinary typed Chat history remains visible. Research, routing, spoken summaries,
 captured ownership and retained findings continue unchanged. Keep actionable
-disconnect/clarification notices with voice controls, and preserve Cancel note
+disconnect/status notices and compact failed-worker alerts with Retry
+research beside voice controls, even when worker prose is hidden. Clarification
+uses its own choice-and-optional-text form above the ordinary composer, outside
+that composer's form. Keep its actions visible in narrow windows. When Chat is
+collapsed, move that question to the floating voice controls rather than a hidden
+portal. A selected ready result after audio ends offers an explicit Hear result
+action; only that click reconnects voice, preserving and rechecking the finding.
+Status notices about an unfinished worker clear when its state or revision changes.
+Preserve Cancel note
 changes in Voice options during edit preparation. Switching between full and
 compact layouts changes presentation only, never restarts the call or research.
 
@@ -4869,8 +4995,21 @@ playback. No synthetic speech envelope, transcript or append ACK may animate
 speaking. The selected recipient (main or one finished worker) owns the audio
 gesture. Sidebar/pill/expanded circles share one SpaceVoice-owned physical field
 and the adaptive icon palette; advance that field once per animation timestamp.
-Keep the approved gravity study's asymmetric orbits, central proportions and
-mixed-size ambient field. Worker updates arrive on one shared flight clock and
+Keep the approved gravity study's asymmetric orbits and mixed-size ambient field.
+Expanded Chat enlarges the main Jelly glass body about 2.2 times relative to its
+previous diameter (projection centre scale 2.6 instead of post-projection 1.18).
+Apply this before collision bounds, hit targets and viewport fitting so other bodies
+stay clear and narrow views contain the field; compact pill/sidebar proportions stay
+unchanged. Preserve the scattered field's asymmetric angles and varied distances
+with an expanded-only radial map before contact projection; never pile inner bodies
+onto one rim. Invert that map for pointer drags, continuously through the centre
+and outward dismissal. Expanded fields get up to 1.5 times the prior footprint
+while a hidden zero-height measure retains the old CSS body reference; clamp that
+reference to physically available space. Keep the main body's size independent of
+satellite fitting. Expanded worker bodies are 14% larger and companion beads 18%
+larger; compact copies stay unchanged. Constrained Chat rows retain their layout
+and can use a rectangular field. Use each projection axis for inverse pointer
+coordinates. Worker updates arrive on one shared flight clock and
 give the centre a finite receiving gesture; they must never masquerade as speech. See `docs/voice-constellation.md` for bounded motion and controls.
 Only completed, current workers with results may open conversations. Switching
 explicitly disposes the old audio connection before starting the selected one,
@@ -5040,3 +5179,45 @@ body text in the source and note; do not turn their first characters into a
 subtitle. `importSummary.ts` hides legacy mechanical Markdown excerpts only
 when they exactly match their linked original source. Authored summaries and
 explicit AI-organized summaries remain supported; no vault migration is needed.
+
+### Voice orb glass materials
+
+Expanded VoiceConstellation scenes use Jelly main / Cellular Material echo worker
+shaders in `src/components/voiceShaders`. Resolve colours from existing Home
+shader settings and the current theme. Light mode lifts colour 7% toward white
+and reduces material alpha 12%; dark mode retains the original material. Mouse
+velocity changes only the material clock with bounded decaying momentum, never
+surface normals, audio activity or research state. Preserve worker targets,
+drag/cancel, focus, PCM gestures and shared motion ownership. Reduced motion
+freezes shader animation. Keep Canvas2D for tiny pill/sidebar views, increased
+contrast and WebGL failure/loss, and release GPU resources on unmount.
+
+### Ticket references, extraction, and implementation evidence
+
+The optional Space ticket-code ledger now accepts `assignedPrefixes` to preserve
+published codes when the future prefix changes in Settings. Bare known codes
+become Space-local references in reading, rich editing and Chat. Literal code
+and existing external links stay untouched. The ledger builds the reference
+index; ordinary typing never reparses the library for navigation. The shared
+detail dialog uses the current editor's guarded transaction when it owns the
+source note. Source, board, reference backlinks and ticket routes participate in
+history without resetting the reading position when a modal opens.
+
+Any reading note can start Infer tickets from this note. Use the existing bounded
+readers, completed-text masking and local task collection. Board suggestions and
+likely-duplicate comparisons run locally; review can change destination or leave
+it unassigned. Duplicates are candidates, left unchecked, never automatically
+merged. Recheck the captured note and unique Space-local boards before one write.
+Dictation's existing cleanup request may return at most 32 literal checklist
+children per ticket, 256 total, with exact transcript evidence. They are ordinary
+nested tasks inserted with the parent in one Undo; invalid structure retains the
+independently validated faithful prose. Do not invent conventional next steps.
+
+`orion_get_ticket` resolves ID/code with bounded source and checklist context.
+`orion_update_ticket` can update guarded child lines and append implementation
+summary/verification prose to the task. Completing existing open work requires
+a nonempty summary, all ordinary children completed and reported passing checks.
+The global MCP mutation boundary rejects bypass through generic note edits,
+including moving a ticket between notes. These reports are caller-supplied
+evidence, never independent Orion test execution. Manual UI completion is
+unchanged. Keep completed material excluded from ordinary working reads.

@@ -1,12 +1,21 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { createEmptySnapshot } from "../data/defaults";
 import type { Concept, Note } from "../types";
 import { ExportDialog } from "./ExportDialog";
 
 const NOW = "2026-08-07T05:00:00.000Z";
+
+it('requires a deliberate per-note collection selection and preserves exclusions in the export request',async()=>{
+  const snapshot=fixture(),onExport=vi.fn(async()=>true);
+  render(<ExportDialog open snapshot={snapshot} activeNote={snapshot.notes[0]} onClose={()=>{}} onExport={onExport}/>);
+  fireEvent.click(screen.getByRole('radio',{name:'Orion collection'}));
+  expect(screen.getByRole('checkbox',{name:'Origin'})).toBeChecked();expect(screen.getByRole('checkbox',{name:'Other'})).not.toBeChecked();
+  fireEvent.click(screen.getByRole('checkbox',{name:'Comte'}));fireEvent.click(screen.getByRole('button',{name:'Export Orion files'}));
+  expect(onExport).toHaveBeenCalledWith({format:'orion',scope:'note',noteIds:['origin','comte']});
+});
 
 function note(id: string, title: string, body: string): Note {
   return {
@@ -49,6 +58,18 @@ function fixture() {
 }
 
 describe("ExportDialog", () => {
+  it('keeps busy export focus on visible sequential controls in both directions',async()=>{
+    let finish!:(closed:boolean)=>void;
+    const snapshot=fixture();
+    render(<ExportDialog open snapshot={snapshot} activeNote={snapshot.notes[0]} onClose={vi.fn()} onOpenCollection={vi.fn()} onExport={()=>new Promise(resolve=>{finish=resolve;})}/>);
+    const first=screen.getByRole('radio',{name:'Orion collection'});
+    fireEvent.click(first);fireEvent.click(screen.getByRole('button',{name:'Export Orion files'}));
+    expect(screen.getByRole('button',{name:'Open an .orion file…'})).toBeDisabled();
+    const last=screen.getByRole('checkbox',{name:'Other'});
+    first.focus();fireEvent.keyDown(first,{key:'Tab',shiftKey:true});expect(last).toHaveFocus();
+    fireEvent.keyDown(last,{key:'Tab'});expect(first).toHaveFocus();
+    await act(async()=>finish(false));
+  });
   it("defaults to a web export of the open note and previews linked scope", async () => {
     const snapshot = fixture();
     const onExport = vi.fn().mockResolvedValue(true);

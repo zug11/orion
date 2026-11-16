@@ -8,8 +8,16 @@ import { boardTicketVisibility } from './boardTicketVisibility';
 import { KanbanBoard, useTickets } from '../Tickets';
 import { validTicketUrgency, boardMarker, effectiveTicketStatus, newBoardId, newTicketId, parseBoardMarker, parseTicketMarker, type Ticket, type TicketPatch, type TicketStatus } from '../../lib/tickets';
 import { MAX_INFERRED_TICKETS, ticketTitleKey, validTicketTitle } from '../../lib/ticketInference';
+import { changeTicketBlock } from '../../lib/ticketDetails';
 
 const boardPresence = new WeakMap<ProseMirrorNode, boolean>();
+const ticketPresence = new WeakMap<ProseMirrorNode, boolean>();
+export function containsNoteTicket(node: ProseMirrorNode): boolean {
+  const known = ticketPresence.get(node); if (known !== undefined) return known;
+  let found = node.type.name === 'taskItem' && Boolean(node.attrs.ticketId);
+  node.forEach(child => { if (!found) found = containsNoteTicket(child); });
+  ticketPresence.set(node, found); return found;
+}
 /** A normal keystroke only checks changed branches, never the whole document. */
 export function containsNoteBoard(node: ProseMirrorNode): boolean {
   const known = boardPresence.get(node);
@@ -101,6 +109,7 @@ export function insertWorkItem(editor: Editor, kind: 'ticket'|'kanban', title: s
 }
 /** Board changes to the open note are real editor transactions and retain Undo. */
 export function patchEditorTicket(editor: Editor, ticket: Ticket, patch: TicketPatch): boolean {
+  if (patch.detail) return Object.keys(patch).length === 1 && patchEditorTicketDetails(editor, ticket, patch.detail);
   if(patch.urgency !== undefined && !validTicketUrgency(patch.urgency))return false;
   if(patch.dueDate && !validCalendarDate(patch.dueDate))return false;
   if(!editor.isEditable||editor.isDestroyed||!ticket.durable)return false;
@@ -113,6 +122,38 @@ export function patchEditorTicket(editor: Editor, ticket: Ticket, patch: TicketP
   const status=patch.status??ticket.status;
   editor.view.dispatch(closeHistory(editor.state.tr).setNodeMarkup(pos,undefined,{...node.attrs,checked:status==='done',ticketStatus:status,ticketBoard:patch.boardId??ticket.boardId,ticketDueDate:patch.dueDate??ticket.dueDate??'',ticketUrgency:patch.urgency??ticket.urgency??''}));
   editor.view.dispatch(closeHistory(editor.state.tr));return true;
+}
+
+/** A detail operation replaces only this exact, unchanged task node, in one Undo. */
+function patchEditorTicketDetails(editor: Editor, ticket: Ticket, change: NonNullable<TicketPatch['detail']>): boolean {
+  if (editor.isDestroyed || !editor.isEditable || !editor.markdown || !ticket.rawBlock || !ticket.durable) return false;
+  const replacement = changeTicketBlock(ticket, change);
+  if (replacement === null) return false;
+  const normalize = (value: string) => {
+    const indent = value.match(/^[ \t]*/)?.[0] ?? '';
+    return value.split(/\r?\n/).map(line => line.startsWith(indent) ? line.slice(indent.length) : line).join('\n');
+  };
+  try {
+    const read = (markdown: string) => {
+      const doc = ProseMirrorNode.fromJSON(editor.schema, editor.markdown!.parse(normalize(markdown)));
+      const nodes: ProseMirrorNode[] = [];
+      doc.descendants(node => { if (node.type.name === 'taskItem' && node.attrs.ticketId === ticket.id) nodes.push(node); });
+      return nodes.length === 1 ? nodes[0] : undefined;
+    };
+    const before = read(ticket.rawBlock), after = read(replacement);
+    if (!before || !after) return false;
+    const positions: number[] = [];
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === 'taskItem' && node.attrs.ticketId === ticket.id) positions.push(pos);
+      if (Array.isArray(node.attrs.ticketUnresolvedMarkers)) for (const marker of node.attrs.ticketUnresolvedMarkers) if (parseTicketMarker(marker)?.id === ticket.id) positions.push(pos);
+    });
+    if (positions.length !== 1) return false;
+    const pos = positions[0], current = editor.state.doc.nodeAt(pos);
+    if (!current?.eq(before)) return false;
+    editor.view.dispatch(closeHistory(editor.state.tr).replaceWith(pos, pos + current.nodeSize, after));
+    editor.view.dispatch(closeHistory(editor.state.tr));
+    return true;
+  } catch { return false; }
 }
 
 /** Remove exactly the confirmed task subtree, cleaning up only its empty list. */

@@ -1,6 +1,8 @@
 mod chat_edits;
 mod chat_reading;
 mod chatgpt;
+#[cfg(any(target_os = "macos", test))]
+mod credential_store;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chat_reading::{ChatReadRequest, ChatReadingFinding, ChatVoicePresentation};
 use fs2::FileExt;
@@ -47,9 +49,15 @@ mod knowledge_schemas;
 mod note_version;
 mod openai_web;
 mod perplexity;
+#[path = "../shared/portable_identity.rs"]
+mod portable_identity;
+mod portable_orion;
 #[path = "../shared/source_text_ref.rs"]
 mod source_text_ref;
 mod source_texts;
+#[path = "../shared/ticket_codes.rs"]
+#[allow(dead_code)]
+mod ticket_codes;
 mod vault_backups;
 #[path = "../shared/voice_work_orders_protocol.rs"]
 mod voice_work_orders_protocol;
@@ -1490,6 +1498,8 @@ fn write_vault_file_if_current(
 
     // Source text lives beside the vault. Never publish a vault that refers to
     // text which is not safely on disk yet.
+    ticket_codes::validate_transition(current.as_ref(), vault)?;
+    portable_identity::validate_transition(current.as_ref(), vault)?;
     source_text_ref::verify_vault_source_texts(
         vault,
         &source_text_ref::source_text_directory(path)?,
@@ -1815,19 +1825,89 @@ async fn open_data_directory(app: AppHandle) -> Result<String, String> {
     Ok(display_path)
 }
 
-fn keychain_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
-        .map_err(|error| format!("Orion could not access the operating system keychain: {error}"))
+fn provider_keychain_entry(account: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(KEYCHAIN_SERVICE, account)
+        .map_err(|_| "Orion could not access the operating system keychain.".into())
 }
 
-fn anthropic_keychain_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, ANTHROPIC_KEYCHAIN_ACCOUNT)
-        .map_err(|error| format!("Orion could not access the operating system keychain: {error}"))
+fn read_legacy_provider_key(account: &str) -> Result<Option<Zeroizing<String>>, String> {
+    match provider_keychain_entry(account)?.get_password() {
+        Ok(password) => {
+            let value = Zeroizing::new(password);
+            Ok((!value.trim().is_empty()).then_some(value))
+        }
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(_) => Err("Orion could not unlock the saved API key.".into()),
+    }
 }
 
-fn elevenlabs_keychain_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, ELEVENLABS_KEYCHAIN_ACCOUNT)
-        .map_err(|error| format!("Orion could not access the operating system keychain: {error}"))
+fn delete_legacy_provider_key(account: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        credential_store::delete_legacy_entry(account)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        match provider_keychain_entry(account)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err("Orion could not remove the older API key from Keychain.".into()),
+        }
+    }
+}
+
+fn read_provider_key(account: &str) -> Result<Option<Zeroizing<String>>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        credential_store::read_or_migrate(
+            account,
+            || read_legacy_provider_key(account),
+            || delete_legacy_provider_key(account),
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        read_legacy_provider_key(account)
+    }
+}
+
+fn save_provider_key(account: &str, value: Zeroizing<String>) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        credential_store::set_and_retire(account, value, || delete_legacy_provider_key(account))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        provider_keychain_entry(account)?
+            .set_password(&value)
+            .map_err(|_| {
+                "Orion could not save the API key in the operating system keychain.".into()
+            })
+    }
+}
+
+fn delete_provider_key(account: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        credential_store::delete(account, || delete_legacy_provider_key(account))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        delete_legacy_provider_key(account)
+    }
+}
+
+#[tauri::command]
+async fn retry_saved_connections() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        tauri::async_runtime::spawn_blocking(credential_store::retry_access)
+            .await
+            .map_err(|_| "The secure connection unlock task could not finish.".to_string())?
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(())
+    }
 }
 
 fn normalize_api_key(mut api_key: String) -> Result<Zeroizing<String>, String> {
@@ -1847,68 +1927,33 @@ fn normalize_api_key(mut api_key: String) -> Result<Zeroizing<String>, String> {
 }
 
 fn read_api_key_from_keychain() -> Result<Option<Zeroizing<String>>, String> {
-    match keychain_entry()?.get_password() {
-        Ok(password) if password.trim().is_empty() => Ok(None),
-        Ok(password) => Ok(Some(Zeroizing::new(password))),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(error) => Err(format!(
-            "Orion could not read the API key from the operating system keychain: {error}"
-        )),
-    }
+    read_provider_key(KEYCHAIN_ACCOUNT)
 }
 
 fn read_anthropic_api_key_from_keychain() -> Result<Option<Zeroizing<String>>, String> {
-    match anthropic_keychain_entry()?.get_password() {
-        Ok(password) if password.trim().is_empty() => Ok(None),
-        Ok(password) => Ok(Some(Zeroizing::new(password))),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(error) => Err(format!(
-            "Orion could not read the Anthropic API key from the operating system keychain: {error}"
-        )),
-    }
+    read_provider_key(ANTHROPIC_KEYCHAIN_ACCOUNT)
 }
 
 fn read_elevenlabs_api_key_from_keychain() -> Result<Option<Zeroizing<String>>, String> {
-    match elevenlabs_keychain_entry()?.get_password() {
-        Ok(password) if password.trim().is_empty() => Ok(None),
-        Ok(password) => Ok(Some(Zeroizing::new(password))),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(error) => Err(format!(
-            "Orion could not read the ElevenLabs API key from the operating system keychain: {error}"
-        )),
-    }
+    read_provider_key(ELEVENLABS_KEYCHAIN_ACCOUNT)
 }
 
 #[tauri::command]
 async fn save_api_key(api_key: String) -> Result<(), String> {
     let api_key = normalize_api_key(api_key)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        keychain_entry()?
-            .set_password(api_key.as_str())
-            .map_err(|error| {
-                format!(
-                    "Orion could not save the API key in the operating system keychain: {error}"
-                )
-            })
-    })
-    .await
-    .map_err(|error| format!("The secure key save task could not finish: {error}"))?
+    tauri::async_runtime::spawn_blocking(move || save_provider_key(KEYCHAIN_ACCOUNT, api_key))
+        .await
+        .map_err(|_| "The secure key save task could not finish.".to_string())?
 }
 
 #[tauri::command]
 async fn save_anthropic_api_key(api_key: String) -> Result<(), String> {
     let api_key = normalize_api_key(api_key)?;
     tauri::async_runtime::spawn_blocking(move || {
-        anthropic_keychain_entry()?
-            .set_password(api_key.as_str())
-            .map_err(|error| {
-                format!(
-                    "Orion could not save the Anthropic API key in the operating system keychain: {error}"
-                )
-            })
+        save_provider_key(ANTHROPIC_KEYCHAIN_ACCOUNT, api_key)
     })
     .await
-    .map_err(|error| format!("The secure Anthropic key save task could not finish: {error}"))?
+    .map_err(|_| "The secure Anthropic key save task could not finish.".to_string())?
 }
 
 #[tauri::command]
@@ -1919,7 +1964,7 @@ async fn api_key_status() -> Result<ApiKeyStatus, String> {
         })
     })
     .await
-    .map_err(|error| format!("The secure key status task could not finish: {error}"))?
+    .map_err(|_| "The secure key status task could not finish.".to_string())?
 }
 
 #[tauri::command]
@@ -1930,59 +1975,43 @@ async fn anthropic_api_key_status() -> Result<ApiKeyStatus, String> {
         })
     })
     .await
-    .map_err(|error| format!("The secure Anthropic key status task could not finish: {error}"))?
+    .map_err(|_| "The secure Anthropic key status task could not finish.".to_string())?
 }
 
 #[tauri::command]
 async fn delete_api_key() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(|| match keychain_entry()?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(error) => Err(format!(
-            "Orion could not delete the API key from the operating system keychain: {error}"
-        )),
-    })
-    .await
-    .map_err(|error| format!("The secure key deletion task could not finish: {error}"))?
+    tauri::async_runtime::spawn_blocking(|| delete_provider_key(KEYCHAIN_ACCOUNT))
+        .await
+        .map_err(|_| "The secure key deletion task could not finish.".to_string())?
 }
 
 #[tauri::command]
 async fn delete_anthropic_api_key() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(|| match anthropic_keychain_entry()?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(error) => Err(format!(
-            "Orion could not delete the Anthropic API key from the operating system keychain: {error}"
-        )),
-    })
-    .await
-    .map_err(|error| format!("The secure Anthropic key deletion task could not finish: {error}"))?
+    tauri::async_runtime::spawn_blocking(|| delete_provider_key(ANTHROPIC_KEYCHAIN_ACCOUNT))
+        .await
+        .map_err(|_| "The secure Anthropic key deletion task could not finish.".to_string())?
 }
 
 async fn stored_api_key() -> Result<Option<Zeroizing<String>>, String> {
     tauri::async_runtime::spawn_blocking(read_api_key_from_keychain)
         .await
-        .map_err(|error| format!("The secure key read task could not finish: {error}"))?
+        .map_err(|_| "The secure key read task could not finish.".to_string())?
 }
 
 async fn stored_anthropic_api_key() -> Result<Option<Zeroizing<String>>, String> {
     tauri::async_runtime::spawn_blocking(read_anthropic_api_key_from_keychain)
         .await
-        .map_err(|error| format!("The secure Anthropic key read task could not finish: {error}"))?
+        .map_err(|_| "The secure Anthropic key read task could not finish.".to_string())?
 }
 
 #[tauri::command]
 async fn save_elevenlabs_api_key(api_key: String) -> Result<(), String> {
     let api_key = normalize_api_key(api_key)?;
     tauri::async_runtime::spawn_blocking(move || {
-        elevenlabs_keychain_entry()?
-            .set_password(api_key.as_str())
-            .map_err(|error| {
-                format!(
-                    "Orion could not save the ElevenLabs API key in the operating system keychain: {error}"
-                )
-            })
+        save_provider_key(ELEVENLABS_KEYCHAIN_ACCOUNT, api_key)
     })
     .await
-    .map_err(|error| format!("The secure ElevenLabs key save task could not finish: {error}"))?
+    .map_err(|_| "The secure ElevenLabs key save task could not finish.".to_string())?
 }
 
 #[tauri::command]
@@ -1993,29 +2022,20 @@ async fn elevenlabs_api_key_status() -> Result<ApiKeyStatus, String> {
         })
     })
     .await
-    .map_err(|error| format!("The secure ElevenLabs key status task could not finish: {error}"))?
+    .map_err(|_| "The secure ElevenLabs key status task could not finish.".to_string())?
 }
 
 #[tauri::command]
 async fn delete_elevenlabs_api_key() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        match elevenlabs_keychain_entry()?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(error) => Err(format!(
-                "Orion could not delete the ElevenLabs API key from the operating system keychain: {error}"
-            )),
-        }
-    })
-    .await
-    .map_err(|error| {
-        format!("The secure ElevenLabs key deletion task could not finish: {error}")
-    })?
+    tauri::async_runtime::spawn_blocking(|| delete_provider_key(ELEVENLABS_KEYCHAIN_ACCOUNT))
+        .await
+        .map_err(|_| "The secure ElevenLabs key deletion task could not finish.".to_string())?
 }
 
 async fn stored_elevenlabs_api_key() -> Result<Option<Zeroizing<String>>, String> {
     tauri::async_runtime::spawn_blocking(read_elevenlabs_api_key_from_keychain)
         .await
-        .map_err(|error| format!("The secure ElevenLabs key read task could not finish: {error}"))?
+        .map_err(|_| "The secure ElevenLabs key read task could not finish.".to_string())?
 }
 
 fn validate_elevenlabs_voice_id(value: Option<&str>) -> Result<String, String> {
@@ -4948,6 +4968,7 @@ pub fn run() {
         .manage(KnowledgeCancellation::default())
         .manage(perplexity::RequestGate::default())
         .manage(VaultWriteLock::default())
+        .manage(portable_orion::PendingFiles::default())
         .manage(desktop_windows::DesktopWindows::default())
         .manage(app_updates::AppUpdates::default())
         .manage(local_transcription::VoiceMemoWorkers::default())
@@ -5034,6 +5055,7 @@ pub fn run() {
             connector_installation::open_codex_plugin,
             save_api_key,
             api_key_status,
+            retry_saved_connections,
             chatgpt::chatgpt_status,
             chatgpt::chatgpt_sign_in,
             chatgpt::chatgpt_cancel_sign_in,
@@ -5084,6 +5106,9 @@ pub fn run() {
             local_transcription::transcription_setup_status,
             export_markdown,
             export_web_page,
+            portable_orion::export_orion_files,
+            portable_orion::open_orion_file,
+            portable_orion::pending_orion_files,
             word_export::export_word_document,
             word_export::read_word_export_image,
             desktop_windows::new_orion_window,
@@ -5102,6 +5127,8 @@ pub fn run() {
         .expect("error while building Orion");
 
     app.run(|app_handle, event| match event {
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        tauri::RunEvent::Opened { urls } => portable_orion::receive(app_handle, urls),
         tauri::RunEvent::ExitRequested { api, .. } => {
             if !desktop_windows::may_exit(app_handle) {
                 api.prevent_exit();

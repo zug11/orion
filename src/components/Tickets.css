@@ -164,3 +164,7 @@
 .ticket-delete:focus-visible { opacity:1; pointer-events:auto; outline:2px solid var(--periwinkle); outline-offset:2px; }
 .ticket-delete-error { display:block; padding-right:28px; margin-bottom:8px; font:12px/1.4 var(--ui-font); }
 @media(hover:none) { .ticket-delete { opacity:1; pointer-events:auto; } }
+.ticket-board-choice { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:10px 0; color:var(--text-soft); font-size:12px; }
+.ticket-board-choice select { max-width:100%; padding:6px 10px; color:var(--text); background:var(--surface-raised); border:1px solid var(--line); border-radius:6px; font:inherit; }
+.ticket-board-choice select:focus-visible { outline:2px solid var(--periwinkle); outline-offset:2px; }
+.ticket-duplicate-hint { color:var(--text-soft); font:12px/1.5 var(--ui-font); margin:10px 0; }

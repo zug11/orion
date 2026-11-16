@@ -7,6 +7,10 @@ import { displayNoteTitle } from '../lib/noteMetadata';
 import { ChevronDown, Plus, Trash2, X } from '../lib/icons';
 import { useTicketDrag } from './useTicketDrag';
 import { TicketInferenceDialog } from './TicketInferenceDialog';
+import { TicketDetailsDialog } from './TicketDetailsDialog';
+import { TicketCode } from './TicketCode';
+import { useTicketNavigation } from './TicketNavigation';
+import { ticketDetails } from '../lib/ticketDetails';
 import './Tickets.css';
 
 export type CreateWorkItem = (kind: 'ticket' | 'kanban', title: string, noteId: string, boardId: string, status?: TicketStatus, dueDate?: string, origin?: 'board') => boolean;
@@ -31,6 +35,7 @@ export function LoadMoreTickets({ remaining, pageSize, label, onLoad }: { remain
 }
 
 export function KanbanBoard({ board, workspace, showSource = false }: { board: NoteBoard; workspace: TicketWorkspace; showSource?: boolean }) {
+  const navigation=useTicketNavigation();
   const root = useRef<HTMLDivElement>(null);
   const restoreFocus = useRef<string | null>(null);
   const restoreAfterDelete = useRef<{ key?: string; status: TicketStatus } | null>(null);
@@ -42,6 +47,7 @@ export function KanbanBoard({ board, workspace, showSource = false }: { board: N
   const [title, setTitle] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [inferring, setInferring] = useState(false);
+  const [expanded, setExpanded] = useState<Pick<Ticket, 'id' | 'noteId'> | null>(null);
   const [error, setError] = useState('');
   const [pages, setPages] = useState({ board: board.id, extra: new Set<string>() });
   const extra = pages.board === board.id ? pages.extra : new Set<string>();
@@ -93,7 +99,7 @@ export function KanbanBoard({ board, workspace, showSource = false }: { board: N
     else if (focusAdd.current) { addButtons.current.get(focusAdd.current)?.focus({ preventScroll: true }); focusAdd.current = null; }
   }, [creating]);
   const cancel = () => { focusAdd.current = creating; setCreating(null); setTitle(''); setError(''); };
-  return <div ref={root} className="kanban-workspace" role="group" tabIndex={-1} aria-label={`${board.title} board`} data-narration-ignore="true" onClickCapture={drag.onClickCapture} onKeyDownCapture={drag.onKeyDownCapture}>
+  return <div ref={root} data-board-id={board.id} className="kanban-workspace" role="group" tabIndex={-1} aria-label={`${board.title} board`} data-narration-ignore="true" onClickCapture={drag.onClickCapture} onKeyDownCapture={drag.onKeyDownCapture}>
     {(showSource || workspace.inference) && <div className="kanban-tools">
       {showSource && <button type="button" className="ticket-board-source text-button" onClick={() => workspace.onOpenNote?.(board.noteId)}>Open board’s note</button>}
       {workspace.inference && <button ref={inferButton} type="button" className="text-button ticket-infer-button" disabled={Boolean(workspace.inference.unavailableReason)} title={workspace.inference.unavailableReason} onClick={() => setInferring(true)}>Infer tickets from note</button>}
@@ -114,10 +120,12 @@ export function KanbanBoard({ board, workspace, showSource = false }: { board: N
               if (next && workspace.onPatch) { event.preventDefault(); move(t, next[0]); }
             }}>
             {workspace.onDelete && <TicketDeleteButton title={t.title} onDelete={() => remove(t)}/>}
+            <TicketCode id={t.id}/>
             <button type="button" className="ticket-open" disabled={!workspace.onOpenNote && !workspace.onEditTicket} title={workspace.onEditTicket ? 'Edit ticket' : undefined} onClick={() => {
-              if (!workspace.onEditTicket?.(t)) workspace.onOpenNote?.(t.noteId);
+              if(navigation.openTicket)navigation.openTicket(t.id);else setExpanded({ id: t.id, noteId: t.noteId });
             }}>{t.title}</button>
             {t.origin !== 'board' && <small>{t.noteTitle}</small>}
+            <TicketChecklistProgress ticket={t}/>
             {workspace.onPatch && <div className="kanban-card-footer">
               <DateButton value={t.dueDate} label={`Due date for ${t.title}`} onChange={dueDate => workspace.onPatch?.(t, { dueDate }) ?? false}/>
               <div className="kanban-card-options">
@@ -145,8 +153,15 @@ export function KanbanBoard({ board, workspace, showSource = false }: { board: N
     </div>
     {error && <p role="alert" className="ticket-error">{error}</p>}
     {drag.overlay}
+    {expanded && <TicketDetailsDialog selected={expanded} workspace={workspace} onClose={() => setExpanded(null)}/>}
     {inferring && workspace.inference && <TicketInferenceDialog board={board} actions={workspace.inference} onClose={() => { setInferring(false); inferButton.current?.focus({ preventScroll: true }); }}/ >}
   </div>;
+}
+
+export function TicketChecklistProgress({ ticket }: { ticket: Ticket }) {
+  if (!ticket.rawBlock?.includes('\n')) return null;
+  const details = ticketDetails(ticket);
+  return details?.checklist.length ? <span className="ticket-checklist-progress" data-narration-ignore="true">{details.completed}/{details.checklist.length} completed</span> : null;
 }
 
 export function WorkItemComposer({ kind, notes, defaultNoteId, defaultBoardId, boards = [], onCreate, onClose }: {

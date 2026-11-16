@@ -449,6 +449,8 @@ export interface ConceptStudioState {
 
 export interface AppSnapshot {
   schemaVersion: 1;
+  ticketCodes?: import('./lib/ticketCodes').TicketCodes;
+  portableImport?: import('./lib/portableOrion').PortableImportIdentity;
   workspace: WorkspaceInfo;
   notes: Note[];
   sources: Source[];

@@ -14,12 +14,14 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { notesForExportScope, type ExportScope } from "../lib/webExport";
 import type { AppSnapshot, Note } from "../types";
 import { displayNoteTitle } from "../lib/noteMetadata";
+import './PortableOrion.css';
 
-export type ExportFormat = "web" | "word" | "markdown";
+export type ExportFormat = "web" | "word" | "markdown" | "orion";
 
 export interface ExportRequest {
   format: ExportFormat;
   scope: ExportScope;
+  noteIds?: string[];
 }
 
 interface ExportDialogProps {
@@ -28,6 +30,7 @@ interface ExportDialogProps {
   activeNote: Note | null;
   onClose: () => void;
   onExport: (request: ExportRequest) => Promise<boolean>;
+  onOpenCollection?: (file?:File) => Promise<boolean>;
 }
 
 const FOCUSABLE_SELECTOR =
@@ -38,7 +41,12 @@ function trapFocus(
   container: HTMLDivElement | null,
 ) {
   if (event.key !== "Tab" || !container) return;
-  const focusable = [...container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)];
+  const focusable = [...container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)].filter(element => {
+    const style = getComputedStyle(element);
+    return element.tabIndex >= 0 && !element.matches(':disabled')
+      && !element.closest('[hidden], [aria-hidden="true"]')
+      && style.display !== 'none' && style.visibility !== 'hidden';
+  });
   if (focusable.length === 0) {
     event.preventDefault();
     container.focus();
@@ -61,10 +69,13 @@ export function ExportDialog({
   activeNote,
   onClose,
   onExport,
+  onOpenCollection,
 }: ExportDialogProps) {
   const [format, setFormat] = useState<ExportFormat>("web");
   const [scope, setScope] = useState<ExportScope>(activeNote ? "note" : "space");
   const [busy, setBusy] = useState(false);
+  const [chosenIds,setChosenIds]=useState<string[]>([]);
+  const fileInput=useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const activeNoteId = activeNote?.id ?? null;
@@ -75,6 +86,7 @@ export function ExportDialog({
     setFormat("web");
     setScope(activeNoteId ? "note" : "space");
     setBusy(false);
+    setChosenIds(activeNoteId?[activeNoteId]:[]);
     const timer = window.setTimeout(() => closeButtonRef.current?.focus(), 35);
     return () => {
       window.clearTimeout(timer);
@@ -83,8 +95,8 @@ export function ExportDialog({
   }, [activeNoteId, open]);
 
   const selectedNotes = useMemo(
-    () => notesForExportScope(snapshot, scope, activeNoteId),
-    [activeNoteId, scope, snapshot],
+    () => format==='orion'?snapshot.notes.filter(n=>chosenIds.includes(n.id)):notesForExportScope(snapshot, scope, activeNoteId),
+    [activeNoteId, scope, snapshot,format,chosenIds],
   );
 
   if (!open) return null;
@@ -96,7 +108,7 @@ export function ExportDialog({
     if (busy || noteCount === 0) return;
     setBusy(true);
     try {
-      const shouldClose = await onExport({ format, scope });
+      const shouldClose = await onExport({ format, scope, ...(format==='orion'?{noteIds:chosenIds}:{}) });
       if (shouldClose) onClose();
     } finally {
       setBusy(false);
@@ -129,7 +141,6 @@ export function ExportDialog({
       >
         <header className="export-dialog__header">
           <div>
-            <span className="export-dialog__eyebrow">A portable Orion snapshot</span>
             <h2 id="export-dialog-title">Share or export</h2>
             <p>Choose what leaves this Space and how it should travel.</p>
           </div>
@@ -152,6 +163,9 @@ export function ExportDialog({
               <span>{format === "web" ? "One offline file" : format === "word" ? "One editable document" : "Portable source files"}</span>
             </div>
             <div className="export-format-options" role="radiogroup" aria-label="Export format">
+              <button type="button" role="radio" aria-label="Orion collection" aria-checked={format==='orion'} className={format==='orion'?'active':''} onClick={()=>setFormat('orion')}>
+                <span className="export-option-icon"><BookOpen size={17}/></span><span><strong>Orion collection</strong><small>Editable .orion files with the selected notes, links, boards and images.</small></span><i>{format==='orion'?<Check size={12}/>:null}</i>
+              </button>
               <button
                 type="button"
                 role="radio"
@@ -205,7 +219,11 @@ export function ExportDialog({
               <strong>Include</strong>
               <span>{selectionLabel}</span>
             </div>
-            <div className="export-scope-options" role="radiogroup" aria-label="Export scope">
+            {format==='orion'?<div className="portable-note-selection">
+              <p>Choose exactly what to share. Each file contains this same selection and opens a different note.</p>
+              <div className="portable-selection-actions"><button type="button" className="text-button" onClick={()=>setChosenIds(snapshot.notes.map(n=>n.id))}>Select all</button><button type="button" className="text-button" onClick={()=>setChosenIds([])}>Clear selection</button></div>
+              <div className="portable-note-options" role="group" aria-label="Notes to include">{snapshot.notes.map(note=><label key={note.id}><input type="checkbox" checked={chosenIds.includes(note.id)} onChange={event=>setChosenIds(ids=>event.target.checked?[...ids,note.id]:ids.filter(id=>id!==note.id))}/><span>{displayNoteTitle(note)}</span></label>)}</div>
+            </div>:<div className="export-scope-options" role="radiogroup" aria-label="Export scope">
               <button
                 type="button"
                 role="radio"
@@ -250,7 +268,7 @@ export function ExportDialog({
                   <small>{snapshot.workspace.name} · {snapshot.notes.length} {snapshot.notes.length === 1 ? "note" : "notes"}</small>
                 </span>
               </button>
-            </div>
+            </div>}
           </section>
 
           <div className="export-privacy-note">
@@ -263,7 +281,7 @@ export function ExportDialog({
         </div>
 
         <footer className="export-dialog__footer">
-          <span>{format === "web" ? "Opens offline in any modern browser" : format === "word" ? "Each note starts a new page; free layouts flow with the text" : "One .md file per selected note"}</span>
+          <span>{format==='orion'?`${noteCount} .orion ${noteCount===1?'file':'files'} · Reopening preserves local edits`:format === "web" ? "Opens offline in any modern browser" : format === "word" ? "Each note starts a new page; free layouts flow with the text" : "One .md file per selected note"}</span>
           <button
             type="button"
             className="button primary export-dialog__submit"
@@ -275,9 +293,10 @@ export function ExportDialog({
               ? "Preparing export…"
               : format === "web"
                 ? "Export web article"
-                : format === "word" ? "Export Word document" : "Export Markdown"}
+                : format === "word" ? "Export Word document" : format==='orion'?'Export Orion files':"Export Markdown"}
           </button>
         </footer>
+        {onOpenCollection&&<div className="portable-open-file"><input ref={fileInput} type="file" accept=".orion" className="sr-only" tabIndex={-1} onChange={event=>{const file=event.target.files?.[0];event.target.value='';if(file)void onOpenCollection(file).then(done=>{if(done)onClose();});}}/><button type="button" className="text-button" disabled={busy} onClick={()=>{if('__TAURI_INTERNALS__' in window)void onOpenCollection().then(done=>{if(done)onClose();});else fileInput.current?.click();}}>Open an .orion file…</button></div>}
       </div>
     </div>
   );

@@ -152,6 +152,13 @@ describe("workflow commits alongside user edits", () => {
 
 
 describe("desktop search and Word export", () => {
+  it('exports only explicitly selected collection notes with no AI or note mutation',async()=>{
+    const space=fixture().spaces[0],deps=dependencies(),before=structuredClone(space);
+    deps.exportCollection=vi.fn(async()=>({directory:'/chosen',cancelled:false,exportedCount:1}));
+    const result=await executeAssistantWorkflow(space,{space_id:space.workspace.id,request_id:'collection',operation:'export',input:{scope:'selected',format:'orion',note_ids:['tides']}},deps);
+    expect(result.snapshot).toBeUndefined();expect(result.result).toMatchObject({format:'orion',noteIds:['tides'],providerCalls:0});expect(deps.exportCollection).toHaveBeenCalledWith(space,['tides']);expect(space).toEqual(before);expect(deps.chat).not.toHaveBeenCalled();
+    await expect(executeAssistantWorkflow(space,{space_id:space.workspace.id,request_id:'bad',operation:'export',input:{scope:'selected',format:'orion',note_ids:['missing']}},deps)).rejects.toThrow('exact notes');
+  });
   it("exports a bounded scope without AI, note writes, or a caller path", async () => {
     const space = fixture().spaces[0]; const original = structuredClone(space); const deps = dependencies();
     space.settings.assistantAccess.allowAI = false; space.settings.assistantAccess.allowWrites = false;

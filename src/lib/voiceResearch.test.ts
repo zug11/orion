@@ -847,6 +847,24 @@ describe("voice delegated work", () => {
     const resumed = JSON.parse(coordinator.context()).jobs[0];
     expect(resumed.state).toBe("failed"); expect(resumed.finding).toBeUndefined();
   });
+  it("does not advertise a pending result after a running worker's context becomes stale", async () => {
+    let finish!: () => void;
+    const config = options(async request => {
+      const answer = exactAnswer(request);
+      if (!answer.readRequests?.length) await new Promise<void>(resolve => { finish = resolve; });
+      return answer;
+    });
+    const coordinator = new VoiceResearch(config);
+    const work = coordinator.run("lookup", "Find alpha", "", "n");
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    expect(JSON.parse(coordinator.context())).toMatchObject({ runningJobs: 1, waitingForResults: true });
+    config.snapshot().notes[0].body = "The connection has been disproved.";
+    expect(coordinator.getJobs()[0].state).toBe("running");
+    expect(JSON.parse(coordinator.context())).toMatchObject({ runningJobs: 0, queuedJobs: 0, waitingForResults: false,
+      jobs: [{ id: "lookup", state: "failed", researchStatus: "failed" }] });
+    finish(); await work; coordinator.dispose();
+    expect(config.onResult).not.toHaveBeenCalled();
+  });
   it("reclaims terminal job records and keeps reconnect context bounded", async () => {
     const config = options(async () => ({ reply: "Acknowledged." }));
     const coordinator = new VoiceResearch(config);

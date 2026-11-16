@@ -323,6 +323,21 @@ A small delete button appears at a card's top right on hover or keyboard focus.
 After confirmation it removes the ticket and its contents from the source note
 and every board; deletions made in the editor can be undone with Cmd+Z.
 
+Click a ticket title on a board or in Home’s ticket list to open its expanded
+view. Edit its title, description, status and priority, or add, rename, reorder,
+delete and complete checklist items. Progress stays visible on the card and in
+the detail view. Checklist items remain nested tasks in the original note, so
+the dashboard, embedded board and note share the same changes. Completing every
+checklist item leaves the parent ticket’s status unchanged. The source-note
+button returns to rich editing; formatted descriptions remain editable there.
+
+Tickets receive a stable Space-local code such as **ORION-001** when saved.
+Codes appear on cards and in details, work in local search, and are returned by
+MCP ticket tools. Moving or completing a ticket keeps its code; deleting one
+reserves the number. A copied ticket with a fresh identity gets a new code.
+These assignments are saved with the vault. [Ticket behavior and storage](docs/tickets.md)
+describes the first milestone and the later cross-reference work.
+
 Every column has **Add ticket**: type, press Enter, and continue adding or press
 Escape to finish. The new ticket belongs to that board and column, and is saved
 in the note containing the board. In the editor, one Undo removes the insertion.
@@ -768,7 +783,7 @@ Enable **Settings → Connections → Orion workflows**, select allowed Spaces,
 and independently allow API use and workflow writes. Older libraries start with
 these workflows disabled. The existing direct read/write tools keep their access.
 
-The expanded MCP surface has **64 tools**: 39 local library tools, fourteen
+The expanded MCP surface has **66 tools**: 40 local library tools, fifteen
 workflow/capability/job tools, three edit-review tools, one active-editor-context
 reader, three existing voice work-order tools and four selected-editor-action tools. It can build local evidence packets; research,
 compare, review, find gaps, or prepare briefs using Orion's configured AI;
@@ -901,6 +916,20 @@ npm run dev
 
 Browser preview is a renderer-development convenience, not Orion's desktop security model. It uses `localStorage`, keeps entered provider keys in memory for the current tab, and cannot run native Vision OCR, offline transcription, YouTube import, native export, or Keychain-backed credential storage.
 
+For the real local macOS app with saved connections, use `npm run build:local`.
+It selects the installed Developer ID Application certificate (or the explicit
+`ORION_CODESIGN_IDENTITY`) and keeps the app's signing identity stable across
+rebuilds. Ad-hoc signing changes that identity with the code and can cause Keychain
+to request authorization again. This local build does not publish or notarize a release.
+
+On macOS, provider keys and ChatGPT sign-ins share one protected Keychain record
+and one native session cache. Parallel workers and connection checks reuse the
+unlocked record. Older entries move over when their connection is first used and
+retire only after the new record is saved and verified; their existing permissions
+may require a final approval during that migration. If a prompt is dismissed,
+Orion stops retrying until **Settings → OpenAI connection → Unlock saved connections**
+is chosen. Credentials never enter the vault, renderer, logs or MCP.
+
 ### Useful commands
 
 | Command | Purpose |
@@ -908,6 +937,7 @@ Browser preview is a renderer-development convenience, not Orion's desktop secur
 | `npm run check` | Run renderer tests, type-check, and create a production renderer build |
 | `npm run tauri dev` | Run the complete desktop application |
 | `npm run tauri build` | Perform the canonical native integration build |
+| `npm run build:local` | Build the real local macOS app with stable Developer ID signing for saved connections |
 | `npm run build:mcp` | Build, package, sign, and protocol-test the Claude connector |
 | `npm run build:codex` | Stage and contract-test the Codex plugin |
 | `npm run build:desktop` | Build native helpers, renderer, MCP connector, and Codex plugin in dependency order |
@@ -1110,7 +1140,14 @@ connected. Orion waits for you to speak rather than introducing itself or asking
 an opening question. Reconnecting or switching orbs also stays quiet, and the
 open note never becomes an unsolicited opening topic.
 Voice research now uses identifiable work orders. Ordinary conversation leaves
-them running; a new assignment can run alongside earlier work. Name a request
+them running; a new assignment can run alongside earlier work. Orion can choose
+complementary workers for ordinary research questions without asking you to request
+workers, give a count or assign each topic. This applies to both OpenAI and ElevenLabs
+voice. Whole-Space reading can divide notes among one to four readers locally;
+explicit worker counts are still respected. Scope planning uses low reasoning effort
+while research retains your chosen effort. Independent web lookups run in pairs in
+the shared Chat and voice reader, with evidence merged in the original request order.
+Name a request
 to cancel or correct it, or use its compact Cancel control. Ambiguous references
 receive one clarification question. Spoken turns are interpreted in order while
 up to ten workers research in parallel. Additional assignments queue internally
@@ -1220,3 +1257,34 @@ Passage comments can be edited locally through **Edit comment**, or removed with
 **Delete comment** or Backspace/Delete on their focused marker. Slash comments
 retain their cursor position, including between passages. MCP agents can propose
 passage comments and read their discussions; document changes still require review.
+
+Expanded voice Chat uses a Jelly glass orb with simpler Cellular research workers.
+The main orb is about 2.2 times its previous diameter, with worker spacing and
+interaction targets calculated from the larger body and fitted to narrow windows.
+It follows your existing shader colours and light/dark appearance; moving the
+mouse stirs the material without moving the sphere. Compact voice indicators
+retain their lightweight rendering and existing accessible controls.
+
+### Ticket work and portable collections
+
+Tickets now have stable Space-local codes, an expanded title/description/checklist
+view, and synchronized note/board/dashboard controls. Known codes in notes and
+Chat open the same ticket, with links back to its source and containing board.
+Change the prefix for future tickets in Settings → Data; existing codes stay put.
+The reading note's Infer tickets action reviews source-grounded work, suggests
+existing boards and flags likely duplicates. Dictation can also create a ticket's
+spoken checklist steps in the same insertion.
+
+Share or export → Orion collection selects individual notes for `.orion` files.
+Each file contains the same chosen collection and opens its named note. Open it
+from Finder or the export sheet; subsequent opens preserve edits in the imported
+Space. Unselected notes, raw source text, private metadata, settings, Chat and
+credentials are excluded. Included links, boards, tickets and referenced images
+travel together. See [the file format and privacy contract](docs/portable-orion.md).
+
+MCP can retrieve tickets by code/ID, read checklists, record implementation
+summaries and update exact child lines. Finishing an open ticket requires a
+summary, a finished checklist and reported passing verification. Orion records
+that evidence; it does not independently execute the assistant's checks. The
+`orion_export_collection` workflow exports an explicit note selection through
+Orion's native folder picker without an AI call.

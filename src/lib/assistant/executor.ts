@@ -78,6 +78,7 @@ export function startAssistantExecutor(host: ExecutorHost): () => void {
           const result = await exportWordDocument(document.fileName, document.bytes, { jobId: claim.id, sessionId });
           return { ...result, noteIds: document.noteIds, title: document.title };
         },
+        exportCollection:async(space,ids)=>{await gate();const {exportPortableFiles}=await import('../portableOrion');await gate();return exportPortableFiles(space,ids,{jobId:claim.id,sessionId});},
         previousResult: (previousJobId) => invoke("assistant_previous_result", { ...jobArgs, previousJobId }),
         readInput: async (index): Promise<ParsedImport> => {
           await gate();

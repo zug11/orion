@@ -2,6 +2,9 @@ import { dismissCalendarMention, restoreCalendarMention, type DismissCalendarMen
 import { invalidateChatSuggestionConnection } from "./components/useChatSuggestions";
 import { chatGPTCommand, type ChatGPTStatus } from "./lib/chatgpt";
 import { patchTicket, deleteTicket, boardMarker, newBoardId, newTicketMarkdown, collectWork, type Ticket, type TicketPatch } from "./lib/tickets";
+import { TicketCodesContext } from './components/TicketCode';
+import { TicketNavigationRoot, type WorkTarget } from './components/TicketNavigation';
+import { withTicketPrefix } from './lib/ticketCodes';
 import { inferBoardTickets, applyInferredTickets, validTicketTitle, type TicketInferenceActions } from "./lib/ticketInference";
 import type { CreateWorkItem } from "./components/Tickets";
 import type { HomeWorkPreferences } from "./components/HomeTickets";
@@ -288,10 +291,11 @@ type AppScreen = WorkspaceView | "note";
 function routeForScreen(
   screen: AppScreen,
   activeNoteId: EntityId | null,
+  target: WorkTarget = {},
 ): NavigationRoute {
   return screen === "note" && activeNoteId
-    ? { screen: "note", noteId: activeNoteId }
-    : { screen: screen === "note" ? "notes" : screen };
+    ? { screen: "note", noteId: activeNoteId, ...target }
+    : { screen: screen === "note" ? "notes" : screen, ...target };
 }
 
 interface ToastState {
@@ -358,6 +362,7 @@ function App() {
     [writingWindow, windowLaunch.spaceId],
   );
   const [screen, setScreen] = useState<AppScreen>("home");
+  const [workTarget,setWorkTarget] = useState<WorkTarget>({});
   const [passageChat, setPassageChat] = useState<PassageChatTarget>();
   // Conversation selection belongs to this window; message history belongs to its Space.
   const [selectedChatThreads, setSelectedChatThreads] = useState<Record<string, string>>({});
@@ -577,8 +582,11 @@ function App() {
     [connectionOriginNoteId, snapshot.notes],
   );
 
+  const previousReadingRoute=useRef<NavigationRoute|null>(null);
   useLayoutEffect(() => {
-    const route = routeForScreen(screen, snapshot.activeNoteId);
+    const route = routeForScreen(screen, snapshot.activeNoteId, workTarget);
+    const previous=previousReadingRoute.current;
+    previousReadingRoute.current=route;
     const restoration = pendingScrollRestore.current;
     pendingScrollRestore.current = null;
     if (restoration && routesMatch(restoration.route, route)) {
@@ -588,8 +596,8 @@ function App() {
       );
       return;
     }
-    resetScrollPosition(workspaceContentRef.current);
-  }, [screen, snapshot.activeNoteId]);
+    if(!previous || previous.screen!==route.screen || (previous.screen==='note' && route.screen==='note' && previous.noteId!==route.noteId)) resetScrollPosition(workspaceContentRef.current);
+  }, [screen, snapshot.activeNoteId, workTarget]);
 
   const showToast = useCallback(
     (
@@ -1447,6 +1455,7 @@ function App() {
 
   const resetSpaceNavigation = useCallback(
     () => {
+      setWorkTarget({});
       setScreen("home");
       setCommandOpen(false);
       setImportOpen(false);
@@ -1622,13 +1631,13 @@ function App() {
     [],
   );
 
-  const showNoteInLibrary = useCallback((spaceId: string, noteId: string, passages?: ExcerptLocator[]) => {
+  const showNoteInLibrary = useCallback((spaceId: string, noteId: string, passages?: ExcerptLocator[], target:WorkTarget={}) => {
     if (closingRef.current || !persistenceEnabledRef.current) return;
     const previewWindow = isTauriRuntime() ? null : window.open("about:blank", "_blank");
     void queueSnapshotSave(vaultRef.current).then(async () => {
       if (isTauriRuntime()) {
         const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("show_note_in_library", { spaceId, noteId, passages });
+        await invoke("show_note_in_library", { spaceId, noteId, passages, ticketId:target.ticketId,boardId:target.boardId });
       } else if (previewWindow) {
         previewWindow.location.replace(documentWindowUrl(window.location.href, spaceId, noteId));
       } else {
@@ -1646,18 +1655,19 @@ function App() {
       trackHistory = true,
       preserveConnections = false,
       restorePosition?: ScrollPosition,
+      target: WorkTarget = {},
     ) => {
       if (writingWindow) {
         if (noteId !== windowLaunch.noteId && windowLaunch.spaceId) {
-          showNoteInLibrary(windowLaunch.spaceId, noteId, consumeNoteExcerptNavigation(noteId)?.passages);
-        }
+          showNoteInLibrary(windowLaunch.spaceId, noteId, consumeNoteExcerptNavigation(noteId)?.passages,target);
+          setWorkTarget({});
+        }else {setWorkTarget(target);resetScrollPosition(workspaceContentRef.current);}
         return;
       }
       const now = new Date().toISOString();
-      const route: NavigationRoute = { screen: "note", noteId };
-      pendingScrollRestore.current = restorePosition
-        ? { route, position: restorePosition }
-        : null;
+      const route: NavigationRoute = { screen: "note", noteId, ...target };
+      setWorkTarget(target);
+      pendingScrollRestore.current = { route, position: restorePosition ?? {scrollTop:0,scrollLeft:0} };
       setSnapshot((current) => ({
         ...current,
         notes: current.notes.map((note) =>
@@ -1684,6 +1694,23 @@ function App() {
     },
     [closeConnections, replaceHistory, writingWindow, windowLaunch, showNoteInLibrary],
   );
+
+  const openTicketReference = useCallback((ticketId:string) => {
+    const current=snapshotRef.current;
+    if(collectWork(current.notes).tickets.filter(t=>t.durable&&t.id===ticketId).length!==1){showToast('Ticket unavailable','Its identity is missing or duplicated in this Space.');return;}
+    const target={ticketId};setWorkTarget(target);
+    const next=pushNavigationHistory(historyRef.current,historyIndexRef.current,routeForScreen(screen,current.activeNoteId,target),readScrollPosition(workspaceContentRef.current));
+    replaceHistory(next.entries,next.index);
+  },[screen,replaceHistory,showToast]);
+  const openBoardReference = useCallback((boardId:string) => {
+    const boards=collectWork(snapshotRef.current.notes).boards.filter(board=>board.id===boardId);
+    if(boards.length!==1){showToast('Board unavailable','Its identity is missing or duplicated in this Space.');return;}
+    openNote(boards[0].noteId,true,false,undefined,{boardId});
+  },[openNote,showToast]);
+  const changeTicketPrefix = useCallback(async(prefix:string) => {
+    flushSync(()=>setSnapshot(current=>({...current,ticketCodes:withTicketPrefix(current.ticketCodes,prefix),updatedAt:new Date().toISOString()})));
+    await queueSnapshotSave(vaultRef.current);
+  },[setSnapshot,queueSnapshotSave]);
 
   const openOrionCitation = useCallback(
     async (rawUrl: string, passages?: ExcerptLocator[]) => {
@@ -1750,12 +1777,13 @@ function App() {
       vaultRef.current = nextVault;
       if (passages?.length) requestNoteExcerptNavigation(noteId, passages);
       setVault(nextVault);
+      setWorkTarget({ticketId:link.ticketId,boardId:link.boardId});
       setScreen("note");
       closeConnections();
       setSelectedSourceId(null);
       setContextOpen(false);
       replaceHistory(
-        [createNavigationEntry({ screen: "note", noteId })],
+        [createNavigationEntry({ screen: "note", noteId, ticketId:link.ticketId,boardId:link.boardId })],
         0,
       );
     },
@@ -1768,10 +1796,12 @@ function App() {
     let unlisten: (() => void) | undefined;
     void Promise.all([import("@tauri-apps/api/event"), import("@tauri-apps/api/core")])
       .then(async ([{ listen }, { invoke }]) => {
-        const stop = await listen<{ spaceId: string; noteId: string; passages?: ExcerptLocator[] }>("orion-open-note", ({ payload }) => {
+        const stop = await listen<{ spaceId: string; noteId: string; passages?: ExcerptLocator[];ticketId?:string;boardId?:string }>("orion-open-note", ({ payload }) => {
           const url = new URL("orion://open");
           url.searchParams.set("space_id", payload.spaceId);
           url.searchParams.set("note_id", payload.noteId);
+          if(payload.ticketId)url.searchParams.set('ticket_id',payload.ticketId);
+          if(payload.boardId)url.searchParams.set('board_id',payload.boardId);
           void openOrionCitation(url.href, payload.passages).catch((error) =>
             showToast("Couldn’t open this note", error instanceof Error ? error.message : String(error)));
         });
@@ -1872,6 +1902,7 @@ function App() {
       );
       if (!next) return;
       const entry = next.entries[next.index];
+      setWorkTarget({ticketId:entry.route.ticketId,boardId:entry.route.boardId,revealBoard:false});
       replaceHistory(next.entries, next.index);
       pendingScrollRestore.current = {
         route: entry.route,
@@ -2374,12 +2405,13 @@ function App() {
       if (latest.workspace.id !== current.workspace.id || !note || note.body !== result.baseBody || note.title !== result.noteTitle) throw new Error("The note changed. Infer again to use its current text.");
       return result;
     },
-    apply: (board, result, titles, taskIds, urgencies) => {
+    apply: (board, result, titles, taskIds, urgencies, boardIds) => {
       const current = snapshotRef.current;
-      if (current.workspace.id !== snapshot.workspace.id || !collectWork(current.notes).boards.some(b => b.id === board.id && b.noteId === board.noteId)) return false;
+      const boards=collectWork(current.notes).boards;
+      if (current.workspace.id !== snapshot.workspace.id || (!board.fromNote && boards.filter(b => b.id === board.id && b.noteId === board.noteId).length!==1)) return false;
       const note = current.notes.find(n => n.id === board.noteId);
       if (!note) return false;
-      const body = applyInferredTickets(note, board, result, titles, taskIds, urgencies);
+      const body = applyInferredTickets(note, board, result, titles, taskIds, urgencies, boardIds, boards);
       if (body === null) return false;
       updateNote({ ...note, body, updatedAt: new Date().toISOString() });
       return true;
@@ -3852,6 +3884,7 @@ function App() {
         readScrollPosition(workspaceContentRef.current),
       );
       replaceHistory(next.entries, next.index);
+      setWorkTarget({});
       setScreen(view);
       setSelectedSourceId(null);
       setContextOpen(false);
@@ -4019,6 +4052,15 @@ function App() {
   async function handleExport(request: ExportRequest): Promise<boolean> {
     try {
       const originNoteId = screen === "note" ? activeNote?.id ?? null : null;
+      if(request.format==='orion'){
+        await queueSnapshotSave(vaultRef.current);
+        const current=vaultRef.current.spaces.find(s=>s.workspace.id===snapshot.workspace.id);
+        if(!current)throw new Error('This Space is no longer available.');
+        const {exportPortableFiles}=await import('./lib/portableOrion');
+        const result=await exportPortableFiles(current,request.noteIds??[]);
+        if(!result.cancelled)showToast('Orion collection exported',`${result.exportedCount} files saved to ${result.directory}. Every file contains the same chosen notes.`);
+        return !result.cancelled;
+      }
       if (request.format === "word") {
         const { buildWordExportDocument } = await import("./lib/wordExport");
         const document = await buildWordExportDocument(snapshot, request.scope, originNoteId);
@@ -4065,6 +4107,41 @@ function App() {
       return false;
     }
   }
+
+  async function handleOpenPortable(source?:File|string):Promise<boolean>{
+    try{
+      if(!persistenceEnabledRef.current||closingRef.current)throw new Error('Finish saving your library before opening a collection.');
+      const portable=await import('./lib/portableOrion');
+      let file:import('./lib/portableOrion').PortableFile,hash:string,images:Record<string,string>;
+      if(source instanceof File){
+        if(source.size>portable.MAX_PORTABLE_BYTES)throw new Error('This .orion file is larger than 128 MB.');
+        file=portable.parsePortableFile(await source.text());hash=await portable.portableCollectionHash(file);
+        images=Object.fromEntries(file.assets.map(asset=>[asset.id,`data:${asset.mimeType};base64,${asset.base64Data}`]));
+      }else{
+        const {invoke}=await import('@tauri-apps/api/core');
+        const opened=await invoke<{file:import('./lib/portableOrion').PortableFile;collectionHash:string;imageUrls:Record<string,string>}|null>('open_orion_file',{token:typeof source==='string'?source:null});
+        if(!opened)return false;file=portable.parsePortableFile(JSON.stringify(opened.file));hash=opened.collectionHash;images=opened.imageUrls;
+      }
+      await queueSnapshotSave(vaultRef.current);
+      const imported=portable.importPortableCollection(vaultRef.current,file,hash,images);
+      flushSync(()=>{vaultRef.current=imported.vault;setVault(imported.vault);});
+      await queueSnapshotSave(imported.vault);
+      setWorkTarget({});setScreen(imported.noteId?'note':'home');closeConnections();setSelectedSourceId(null);setContextOpen(false);
+      replaceHistory([createNavigationEntry(imported.noteId?{screen:'note',noteId:imported.noteId}:{screen:'home'})],0);
+      showToast(imported.reused?'Collection opened':'Collection imported',imported.noteId?imported.reused?'Your local edits were kept.':`${file.collection.notes.length} notes opened in their own Space.`:'This note was deleted locally. Your collection and edits were kept.');
+      return true;
+    }catch(error){showToast('Couldn’t open this collection',error instanceof Error?error.message:String(error));return false;}
+  }
+  const openPortableRef=useRef(handleOpenPortable);openPortableRef.current=handleOpenPortable;
+  useEffect(()=>{
+    if(!hydrated||!persistenceEnabled||writingWindow||!isTauriRuntime())return;
+    let disposed=false,unlisten:(()=>void)|undefined;let busy=false,again=false;
+    void Promise.all([import('@tauri-apps/api/event'),import('@tauri-apps/api/core')]).then(async([{listen},{invoke}])=>{
+      const drain=async()=>{if(busy){again=true;return;}busy=true;try{do{again=false;const tokens=await invoke<string[]>('pending_orion_files');for(const token of tokens){if(disposed)return;await openPortableRef.current(token);}}while(again&&!disposed);}finally{busy=false;}};
+      const stop=await listen('orion-portable-files',()=>void drain());if(disposed){stop();return;}unlisten=stop;await drain();
+    }).catch(error=>showToast('File opening unavailable',String(error)));
+    return ()=>{disposed=true;unlisten?.();};
+  },[hydrated,persistenceEnabled,writingWindow,showToast]);
 
   async function handleSaveKey(apiKey: string) {
     await saveApiKey(apiKey);
@@ -4487,7 +4564,9 @@ function App() {
     .join(" ");
 
   return (
-    <div
+    <TicketCodesContext.Provider value={snapshot.ticketCodes}><TicketNavigationRoot snapshot={snapshot} target={workTarget}
+      openTicket={openTicketReference} openBoard={openBoardReference} changePrefix={changeTicketPrefix} onOpenNote={openNote} onPatch={updateTicket}
+      onClose={()=>{if(historyIndexRef.current>0)navigateHistory(-1);else{setWorkTarget({});replaceHistory([createNavigationEntry(routeForScreen(screen,snapshot.activeNoteId))],0);}}}><div
       className={shellClassName}
       data-note-typeface={snapshot.settings.noteTypeface === "serif" ? "serif" : "sans"}
     >
@@ -4677,6 +4756,7 @@ function App() {
         activeNote={screen === "note" ? activeNote : null}
         onClose={() => setExportOpen(false)}
         onExport={handleExport}
+        onOpenCollection={handleOpenPortable}
       />
       </ErrorBoundary>
 
@@ -4836,7 +4916,7 @@ function App() {
           </div>
         </div>
       )}
-    </div>
+    </div></TicketNavigationRoot></TicketCodesContext.Provider>
   );
 }
 

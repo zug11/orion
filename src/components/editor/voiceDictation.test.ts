@@ -37,6 +37,19 @@ afterEach(() => {
 });
 
 describe("voice dictation insertion", () => {
+  it('inserts dictated child checklists as literal ordinary tasks, retaining the parent identity through reload and one Undo',()=>{
+    const editor=createEditor('Before'); const before=editor.state.doc;
+    const raw='Make a ticket to test export. Its checklist: select notes, reopen the file.';
+    const proposal:DictationProposal={blocks:[{kind:'ticket',text:'Test export',evidence:raw,boardName:'',dueDate:'',urgency:'',checklist:[{text:'Select notes',evidence:'select notes'},{text:'Reopen the file',evidence:'reopen the file'}]}]};
+    expect(insertStructuredVoiceTranscriptAt(editor,before.content.size,proposal,raw,[],before)).toBe(true);
+    const tasks:Array<Record<string,unknown>>=[];editor.state.doc.descendants(node=>{if(node.type.name==='taskItem')tasks.push(node.attrs);});
+    expect(tasks).toHaveLength(3);expect(tasks[0].ticketId).toBeTruthy();
+    expect(tasks.slice(1).every(task=>!task.ticketId && task.checked===false)).toBe(true);
+    const reloaded=createEditor(editor.getMarkdown());
+    expect(reloaded.getMarkdown()).toContain(tasks[0].ticketId);
+    expect(reloaded.state.doc.textContent).toBe(editor.state.doc.textContent);
+    expect(editor.commands.undo()).toBe(true);expect(editor.state.doc.eq(before)).toBe(true);
+  });
   const raw = "I think this may help. Launch work: fix <img src=x> **literal**, then test it. Make a ticket to call Jo on Launch. Remember to buy milk. Small costs ten dollars, Medium twenty dollars.";
   const mixed: DictationProposal = { blocks: [
     { kind: "paragraph", text: "I think this may help." },

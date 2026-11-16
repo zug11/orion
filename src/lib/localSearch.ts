@@ -1,4 +1,6 @@
 import type { AppSnapshot, Concept, Note, Source } from "../types";
+import { noteWork } from './tickets';
+import { ticketCode } from './ticketCodes';
 import { Lexer } from "marked";
 import { splitMarkdownFrontmatter } from "./markdown";
 import { getNoteExcerptText, type ExcerptPassage } from "./noteExcerpts";
@@ -191,7 +193,7 @@ export function searchLocalSources(sources: readonly Source[], query: string): L
 
 /** Rank across entity kinds before limiting so body hits cannot bury an exact title. */
 export function searchLocalSpace(
-  snapshot: Pick<AppSnapshot, "notes" | "concepts" | "sources">,
+  snapshot: Pick<AppSnapshot, "notes" | "concepts" | "sources" | "ticketCodes">,
   query: string,
   limit = 12,
   kind: "all" | "note" | "source" | "concept" = "all",
@@ -201,6 +203,9 @@ export function searchLocalSpace(
   const terms = localSearchTerms(query);
   const matches: SpaceSearchMatch[] = [];
   for (const note of kind === "all" || kind === "note" ? snapshot.notes : []) {
+    const codeMatch = snapshot.ticketCodes && /^[A-Z][A-Z0-9]{1,11}-\d+$/i.test(query.trim())
+      ? noteWork(note).tickets.find(ticket => ticketCode(snapshot.ticketCodes, ticket.id)?.toLowerCase() === query.trim().toLowerCase()) : undefined;
+    if (codeMatch) { matches.push({ item: note, type: 'note', score: 110, snippet: `${ticketCode(snapshot.ticketCodes, codeMatch.id)} · ${codeMatch.title}` }); continue; }
     const match = noteMatch(note, pattern) ?? wordMatch(note, [
       { text: note.title, score: 100, preview: note.summary || readableNoteBody(note) },
       ...note.aliases.map((text) => ({ text, score: 90 })),

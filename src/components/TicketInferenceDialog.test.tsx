@@ -10,6 +10,14 @@ const result:TicketInference={boardId:'b',noteId:'n',noteTitle:'Plan',baseBody:'
 beforeAll(()=>{HTMLDialogElement.prototype.showModal=function(){this.setAttribute('open','');};HTMLDialogElement.prototype.close=function(){this.removeAttribute('open');};});
 afterEach(cleanup);
 describe('reviewing inferred board tickets',()=>{
+  it('preserves review choices on interior padding and closes only outside the panel',async()=>{
+    const onClose=vi.fn();render(<TicketInferenceDialog board={board} actions={{generate:async()=>result,apply:vi.fn()}} onClose={onClose}/>);
+    const title=await screen.findByRole('textbox',{name:'Ticket 1'});fireEvent.change(title,{target:{value:'Edited choice'}});
+    const dialog=screen.getByRole('dialog',{name:'Infer tickets from note'});
+    vi.spyOn(dialog,'getBoundingClientRect').mockReturnValue({left:100,right:600,top:100,bottom:700} as DOMRect);
+    fireEvent.click(dialog,{clientX:105,clientY:105});expect(onClose).not.toHaveBeenCalled();expect(title).toHaveValue('Edited choice');
+    fireEvent.click(dialog,{clientX:20,clientY:20});expect(onClose).toHaveBeenCalledOnce();
+  });
   it('dispatches only once under StrictMode',async()=>{
     const generate=vi.fn(async()=>result);
     render(<StrictMode><TicketInferenceDialog board={board} actions={{generate,apply:vi.fn()}} onClose={vi.fn()}/></StrictMode>);

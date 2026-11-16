@@ -13463,29 +13463,30 @@ button.source-citation-marker:focus-visible {
 .chat-view:not(.chat-view--compact)[data-voice-active="true"] .chat-view__title h1 { font-size: 28px; }
 .chat-view:not(.chat-view--compact)[data-voice-active="true"] .chat-view__title p { margin-top: 3px; font-size: 12px; }
 .chat-view[data-voice-active="true"]:not([data-voice-scroll="true"]) .chat-view__stage {
-  --chat-voice-size: min(300px, 38dvh);
+  --chat-voice-size: min(360px, 42dvh);
   grid-template-rows: minmax(0, .8fr) minmax(0, 1fr) auto;
 }
 
 .chat-view[data-voice-active="true"][data-voice-empty="true"]:not([data-voice-scroll="true"]) .chat-view__stage {
-  --chat-voice-size: min(300px, 38dvh);
+  --chat-voice-size: min(360px, 42dvh);
   grid-template-rows: minmax(0, 1fr) 0 auto;
 }
 
 .chat-view__voice-scene .voice-constellation--expanded {
-  width: auto;
+  --voice-reference-size: var(--chat-voice-size);
+  width: min(100%, calc(var(--voice-body-size) * 1.5));
   height: 100%;
   min-height: 0;
   max-width: 100%;
-  max-height: var(--chat-voice-size);
+  max-height: calc(var(--voice-body-size) * 1.5);
 }
 
 .chat-view--compact[data-voice-active="true"]:not([data-voice-scroll="true"]) .chat-view__stage {
-  --chat-voice-size: min(210px, 30dvh);
+  --chat-voice-size: min(250px, 34dvh);
   grid-template-rows: minmax(0, .8fr) minmax(0, 1fr) auto;
 }
 .chat-view--compact[data-voice-active="true"][data-voice-empty="true"]:not([data-voice-scroll="true"]) .chat-view__stage {
-  --chat-voice-size: min(210px, 30dvh);
+  --chat-voice-size: min(250px, 34dvh);
   grid-template-rows: minmax(0, 1fr) 0 auto;
 }
 /* Expanded work gets the scrollable reading space in short windows. */
@@ -13504,13 +13505,15 @@ button.source-citation-marker:focus-visible {
 }
 
 .chat-welcome__voice {
-  width: min(180px, 24dvh);
+  --voice-reference-size: min(230px, 29dvh);
+  width: min(345px, 43.5dvh);
   margin: -14px auto 8px;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .chat-view--compact .chat-welcome__voice {
-  width: min(130px, 20dvh);
+  --voice-reference-size: min(165px, 24dvh);
+  width: min(247.5px, 36dvh);
   margin: -8px auto 0;
 }
 

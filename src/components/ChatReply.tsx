@@ -1,5 +1,7 @@
-import { createContext, memo, useContext, useRef, useState } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import { TicketReferenceLink, useTicketNavigation } from './TicketNavigation';
+import { remarkTicketReferences, ticketIdFromUrl } from '../lib/ticketReferences';
+import { createContext, memo, useContext, useMemo, useRef, useState } from "react";
+import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatEvidence, StudioMessage, Note, Source } from "../types";
 import { CitedPassage } from "./CitedPassage";
@@ -26,11 +28,15 @@ const ChatLink: NonNullable<Components["a"]> = ({ href, children }) => {
       aria-expanded={selectedId === citation.id} aria-controls={panelId}
       onClick={(event) => select(selectedId === citation.id ? null : citation.id, event.currentTarget)}>{children}</button>;
   }
+  const ticketId=ticketIdFromUrl(href);
+  if(ticketId)return <TicketReferenceLink id={ticketId}>{children}</TicketReferenceLink>;
   return <a href={href} target="_blank" rel="noreferrer noopener">{children}</a>;
 };
 const CHAT_COMPONENTS: Components = { a: ChatLink };
 
 export const ChatReply = memo(function ChatReply({ snapshot, message, context = "chat", onOpenNote, onOpenSource }: ChatReplyProps) {
+  const navigation=useTicketNavigation();
+  const ticketReferencePlugin=useMemo(()=>remarkTicketReferences(navigation.index),[navigation.index]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const citationTrigger = useRef<HTMLButtonElement | null>(null);
   const evidence = message.evidence ?? [];
@@ -51,7 +57,7 @@ export const ChatReply = memo(function ChatReply({ snapshot, message, context = 
         citationTrigger.current = trigger;
         setSelectedId(id);
       } }}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={CHAT_COMPONENTS}>{message.content}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm,ticketReferencePlugin]} urlTransform={url=>ticketIdFromUrl(url)?url:defaultUrlTransform(url)} components={CHAT_COMPONENTS}>{message.content}</ReactMarkdown>
       </CitationContext.Provider>
     </div>
     {selected && <CitedPassage evidence={selected} notes={snapshot.notes} sources={snapshot.sources}

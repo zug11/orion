@@ -32,6 +32,16 @@ describe("resetScrollPosition", () => {
 });
 
 describe("route history scroll restoration", () => {
+  it('preserves a ticket and a containing board as separate destinations in the same note',()=>{
+    const start=[createNavigationEntry({screen:'note',noteId:'n'},{scrollTop:120,scrollLeft:0})];
+    const detail=pushNavigationHistory(start,0,{screen:'note',noteId:'n',ticketId:'t'},{scrollTop:420,scrollLeft:0});
+    const board=pushNavigationHistory(detail.entries,detail.index,{screen:'note',noteId:'n',boardId:'b'},{scrollTop:420,scrollLeft:0});
+    expect(board.entries).toHaveLength(3);
+    const back=moveNavigationHistory(board.entries,board.index,-1,{scrollTop:900,scrollLeft:0})!;
+    expect(back.entries[back.index]).toMatchObject({route:{ticketId:'t'},scrollTop:420});
+    const forward=moveNavigationHistory(back.entries,back.index,1,{scrollTop:420,scrollLeft:0})!;
+    expect(forward.entries[forward.index]).toMatchObject({route:{boardId:'b'},scrollTop:900});
+  });
   it("records the Notes list before opening a note at the top", () => {
     const result = pushNavigationHistory(
       [createNavigationEntry({ screen: "notes" })],

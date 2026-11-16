@@ -171,6 +171,13 @@ describe("hybrid dictation proposals", () => {
     expect(parseDictationResult({ blocks: faithful, proposal: null }, transcript)).toEqual({ blocks: faithful, proposal: null });
     expect(() => parseDictationCleanup(result(), transcript)).toThrow();
   });
+  it('requires exact speech evidence and bounded literal child checklist items, falling back without losing prose',()=>{
+    const withChildren={...ticket,checklist:[{text:'Ask Jo about the venue',evidence:'ask Jo about the venue'}]};
+    expect(parseDictationProposal({blocks:[withChildren]},transcript).blocks[0]).toEqual(withChildren);
+    for(const checklist of [[{text:'Invented',evidence:'not spoken'}],[{text:'Call',evidence,completed:true}],Array.from({length:33},()=>({text:'Call Jo',evidence}))]){
+      expect(parseDictationResult({...result(),proposal:{blocks:[{...ticket,checklist}]}},transcript)).toEqual({blocks:faithful,proposal:null});
+    }
+  });
 
   it("accepts expanded native proposals and discards provider-only references without discarding faithful prose", () => {
     const value = { blocks: [proposal.blocks[0], { kind: "paragraph", text: evidence }, proposal.blocks[2]], proposal };

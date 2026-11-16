@@ -86,6 +86,10 @@ pub struct ExportInput {
     pub scope: String,
     #[serde(default)]
     pub note_id: Option<String>,
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(default)]
+    pub note_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -230,6 +234,21 @@ impl StartRequest {
             }
             Operation::Export => {
                 let input: ExportInput = parse(&self.input)?;
+                if input.format.as_deref() == Some("orion") {
+                    if input.scope != "selected"
+                        || input.note_id.is_some()
+                        || input.note_ids.is_empty()
+                    {
+                        return Err(
+                            "Orion collections require an explicit selection of note_ids.".into(),
+                        );
+                    }
+                    return identifiers(&input.note_ids, 200);
+                }
+                if input.format.as_ref().is_some_and(|f| f != "word") || !input.note_ids.is_empty()
+                {
+                    return Err("Unsupported export format or selection.".into());
+                }
                 if !matches!(input.scope.as_str(), "note" | "linked" | "space") {
                     return Err("Export scope must be note, linked, or space.".into());
                 }
@@ -397,6 +416,14 @@ mod tests {
         assert!(request.validate().is_err());
         request.input = json!({"scope":"space"});
         assert!(request.validate().is_ok());
+        request.input = json!({"scope":"selected","format":"orion","note_ids":["a","b"]});
+        assert!(request.validate().is_ok());
+        assert!(!request.uses_ai());
+        assert!(!request.writes());
+        request.input["path"] = json!("/tmp/unsolicited.orion");
+        assert!(request.validate().is_err());
+        request.input = json!({"scope":"selected","format":"orion","note_ids":[]});
+        assert!(request.validate().is_err());
     }
 
     #[test]

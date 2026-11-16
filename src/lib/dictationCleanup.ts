@@ -15,6 +15,7 @@ export interface DictationTicketBlock {
   boardName: string;
   dueDate: string;
   urgency: TicketUrgency;
+  checklist?: Array<{text:string;evidence:string}>;
 }
 
 export interface DictationProposal {
@@ -162,11 +163,12 @@ export function parseDictationProposal(proposal: unknown, original: string): Dic
   let tickets = 0;
   let boards = 0;
   let tables = 0;
+  let checklistItems = 0;
   let size = 0;
   const invalid = () => new Error("Dictation cleanup returned invalid structured content.");
-  function record(value: unknown, fields: string[]): Record<string, unknown> {
+  function record(value: unknown, fields: string[], optional: string[]=[]): Record<string, unknown> {
     if (!value || typeof value !== "object" || Array.isArray(value) ||
-        Object.keys(value).length !== fields.length || fields.some(field => !(field in value))) throw invalid();
+        Object.keys(value).some(field=>!fields.includes(field)&&!optional.includes(field)) || fields.some(field => !(field in value))) throw invalid();
     return value as Record<string, unknown>;
   }
   function literal(value: unknown, max: number, empty = false): string {
@@ -184,7 +186,14 @@ export function parseDictationProposal(proposal: unknown, original: string): Dic
     if (dueDate && !validCalendarDate(dueDate) || !["", "urgent", "high", "medium", "low"].includes(value.urgency as string)) throw invalid();
     tickets += 1;
     size += Array.from(text).length;
-    return { text, evidence: quote, dueDate, urgency: value.urgency as TicketUrgency };
+    if(value.checklist!==undefined && (!Array.isArray(value.checklist)||value.checklist.length>32))throw invalid();
+    const checklist=(value.checklist as unknown[]|undefined)?.map(item=>{
+      const child=record(item,['text','evidence']);
+      const text=literal(child.text,140),quote=evidence(child.evidence);
+      checklistItems++;size+=Array.from(text).length;
+      return {text,evidence:quote};
+    });
+    return { text, evidence: quote, dueDate, urgency: value.urgency as TicketUrgency, ...(checklist?.length?{checklist}:{}) };
   }
   const proposalBlocks: DictationProposal["blocks"] = proposal.blocks.map((block: unknown) => {
     if (!block || typeof block !== "object" || Array.isArray(block) || !("kind" in block)) {
@@ -196,7 +205,7 @@ export function parseDictationProposal(proposal: unknown, original: string): Dic
       if (!Array.isArray(value.tickets) || value.tickets.length > MAX_DICTATION_PROPOSAL_TICKETS) throw invalid();
       boards += 1; size += Array.from(text).length;
       return { kind: "kanban", text, evidence: quote, tickets: value.tickets.map(item =>
-        ticket(record(item, ["text", "evidence", "dueDate", "urgency"]))) };
+        ticket(record(item, ["text", "evidence", "dueDate", "urgency"],['checklist']))) };
     }
     if (block.kind === "table") {
       const value = record(block, ["kind", "text", "evidence", "columns", "rows"]);
@@ -218,13 +227,13 @@ export function parseDictationProposal(proposal: unknown, original: string): Dic
       size += Array.from(parsed.text).length;
       return parsed;
     }
-    const value = record(block, ["kind", "text", "evidence", "boardName", "dueDate", "urgency"]);
+    const value = record(block, ["kind", "text", "evidence", "boardName", "dueDate", "urgency"],['checklist']);
     return { kind: "ticket", ...ticket(value), boardName: literal(value.boardName, 140, true) };
   });
   // Instructions can legitimately shrink into short ticket titles. The faithful
   // text above retains the loss guard, while proposals need only an upper bound.
   if (!(tickets || boards || tables) || tickets > MAX_DICTATION_PROPOSAL_TICKETS || boards > MAX_DICTATION_BOARDS ||
-      tables > MAX_DICTATION_TABLES || size > MAX_DICTATION_OUTPUT_CHARS || size > Array.from(original).length * 2 + 120) {
+      tables > MAX_DICTATION_TABLES || checklistItems>256 || size > MAX_DICTATION_OUTPUT_CHARS || size > Array.from(original).length * 2 + 120) {
     throw new Error("Dictation cleanup returned an invalid proposal.");
   }
   return { blocks: proposalBlocks };

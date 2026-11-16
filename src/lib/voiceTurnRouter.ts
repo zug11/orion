@@ -3,7 +3,7 @@ import type { VoiceReservationClarification } from "./voiceReservations";
 import type { VoiceTurnDecision } from "./voiceWorkOrders";
 import { VOICE_TURN_SETTLE_MS } from "./voiceUtterance";
 
-export type RoutingVoiceTurn = VoiceTurn & { clarification?: VoiceReservationClarification };
+export type RoutingVoiceTurn = VoiceTurn & { clarification?: VoiceReservationClarification; uiAnswer?: boolean };
 interface Options {
   enabled: () => boolean;
   budget: (turn: RoutingVoiceTurn) => number;

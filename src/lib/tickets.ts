@@ -7,6 +7,7 @@ import { sharesTaskDerivation } from './tasks';
 import type { Note } from '../types';
 import { splitMarkdownFrontmatter } from './markdown';
 import { displayNoteTitle } from './noteMetadata';
+import { changeTicketBlock, type TicketDetailChange } from './ticketDetails';
 
 export type TicketStatus = 'todo' | 'progress' | 'done';
 export const TICKET_URGENCIES = ['urgent', 'high', 'medium', 'low'] as const;
@@ -15,7 +16,7 @@ export const validTicketUrgency = (value: unknown): value is TicketUrgency => va
 export interface TicketMeta { id: string; status: TicketStatus; boardId: string; dueDate?: string; origin?: 'board'; urgency?: TicketUrgency }
 export interface NoteBoard { id: string; title: string; noteId: string }
 export interface Ticket extends TicketMeta { noteId: string; noteTitle: string; title: string; lineIndex: number; rawLine: string; rawBlock?: string; durable: boolean; markerStart?: number }
-export type TicketPatch = Partial<Pick<TicketMeta, 'status' | 'boardId' | 'dueDate' | 'urgency'>>;
+export type TicketPatch = Partial<Pick<TicketMeta, 'status' | 'boardId' | 'dueDate' | 'urgency'>> & { detail?: TicketDetailChange };
 export const TICKET_STATUSES: readonly [TicketStatus, string][] = [['todo', 'To do'], ['progress', 'In progress'], ['done', 'Done']];
 const ID = /^[a-zA-Z0-9_-]{1,96}$/;
 const TASK = /^(\s*[-+*]\s+\[)([ xX])(\]\s+)(.*)$/;
@@ -140,6 +141,14 @@ export function collectWork(notes: readonly Note[]) {
 }
 /** Resolve durable identity on the latest body; reject ambiguous copies and stale prose. */
 export function patchTicket(markdown: string, ticket: Ticket, patch: TicketPatch): string | null {
+  if (patch.detail) {
+    if (Object.keys(patch).length !== 1 || !ticket.durable || !ticket.rawBlock) return null;
+    const scanned = scanWork(markdown);
+    const current = scanned.tickets.find(t => t.id === ticket.id);
+    if (scanned.identityCounts.get(ticket.id) !== 1 || !current || current.rawBlock !== ticket.rawBlock || current.blockStart === undefined || current.blockEnd === undefined) return null;
+    const replacement = changeTicketBlock(ticket, patch.detail);
+    return replacement === null ? null : markdown.slice(0, current.blockStart) + replacement + markdown.slice(current.blockEnd);
+  }
   if (patch.urgency !== undefined && !validTicketUrgency(patch.urgency)) return null;
   if (patch.dueDate && !validCalendarDate(patch.dueDate)) return null;
   if (patch.status !== undefined && !TICKET_STATUSES.some(([id]) => id === patch.status) || patch.boardId && !ID.test(patch.boardId)) return null;

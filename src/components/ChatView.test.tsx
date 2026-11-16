@@ -190,7 +190,7 @@ describe("ChatView", () => {
     expect(voiceSceneRef).toHaveBeenCalledWith(scene);
     expect(voiceControlsRef).toHaveBeenCalledWith(controls);
     expect(scene?.closest("form")).toBeNull();
-    expect(controls?.closest("form")).toHaveClass("chat-composer");
+    expect(controls?.closest(".chat-composer")).not.toBeNull();
     expect(controls?.parentElement).toHaveClass("chat-composer__actions");
     rerender(<ChatView {...props} voiceControl={{ active: true, toggle }} />);
     expect(container.querySelector('.chat-view__voice-scene')).toBe(scene);

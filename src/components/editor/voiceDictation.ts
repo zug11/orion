@@ -127,10 +127,12 @@ export function insertStructuredVoiceTranscriptAt(
     const previous = content[content.length - 1];
     if (previous?.type === listType) previous.content!.push(item);
     else content.push({ type: listType, content: [item] });
+    return item;
   }
   function appendTicket(ticket: DictationBoardTicket, boardId: string) {
-    appendItem(ticket.text, true, { ticketId: newTicketId(), ticketStatus: "todo", ticketBoard: boardId,
+    const item=appendItem(ticket.text, true, { ticketId: newTicketId(), ticketStatus: "todo", ticketBoard: boardId,
       ticketDueDate: ticket.dueDate, ticketUrgency: ticket.urgency });
+    if(ticket.checklist?.length)item.content.push({type:'taskList',content:ticket.checklist.map(child=>({type:'taskItem',attrs:{checked:false},content:[paragraph(child.text)]}))});
   }
   if (parsed.blocks.some(block => block.kind === "ticket" || block.kind === "kanban" && block.tickets.length) &&
       !editor.schema.nodes.taskItem?.spec.attrs?.ticketId) return false;

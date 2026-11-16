@@ -133,8 +133,8 @@ try {
   await request("initialize", { protocolVersion: "2025-06-18", clientInfo: { name: "isolated-library-harness", version: "1" }, capabilities: {} });
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   definitions = (await request("tools/list")).result.tools;
-  assert.equal(definitions.length, 64);
-  assert.equal(new Set(definitions.map((tool) => tool.name)).size, 64);
+  assert.equal(definitions.length, 66);
+  assert.equal(new Set(definitions.map((tool) => tool.name)).size, 66);
   const sources = await tool("orion_list_sources", { query: "Contract evidence" }); assert.equal(sources.sources[0].id, "knowledge-source");
   const evidence = await tool("orion_search_sources", { query: "evidence", source_ids: ["knowledge-source"] }); assert.equal(evidence.matches[0].matchStart, 3);
   const passage = await tool("orion_get_source_passage", { source_id: "knowledge-source", start: 1, max_chars: 2 }); assert.equal(passage.text, "😀 ");
@@ -442,7 +442,9 @@ try {
   const ticket = (await tool("orion_create_tickets", createTickets)).work.tickets[0];
   assert.equal(ticket.boardId, board.id); assert.equal(ticket.status, "progress");
   await tool("orion_create_tickets", createTickets, true);
-  const move = { space_id: scope, note_id: b.id, expected_version: await version(b.id), ticket_id: ticket.id, status: "done" };
+  const detail = await tool("orion_get_ticket", { ticket_code: ticket.code });
+  assert.equal(detail.ticket.id, ticket.id); assert(detail.sourceNote.body.includes("A focused search view"));
+  const move = { space_id: scope, note_id: b.id, expected_version: await version(b.id), ticket_id: ticket.id, status: "done", implementation_summary: "Reviewed search clarity.", verification: [{ label: "Fixture review", outcome: "passed", evidence: "Verified the source and generated title against the fixture." }] };
   await tool("orion_update_ticket", move);
   await tool("orion_update_ticket", move, true);
   assert.equal((await tool("orion_list_tickets", { board_id: board.id })).tickets.length, 0);
@@ -483,8 +485,8 @@ try {
   if (process.env.ORION_EDITOR_FIXTURE_OUT) {
     await writeFile(resolve(process.env.ORION_EDITOR_FIXTURE_OUT), JSON.stringify({ spaceId: scope, note: editorNote, sourceNote: updated.notes.find((note) => note.id === b.id), tableStates, inlineStates, citationStates, citationSources: updated.sources.filter(source => source.id.startsWith("citation-")) }, null, 2) + "\n");
   }
-  assert.equal(exercised.size, 30, "Not every new tool was exercised against the packaged executable.");
-  console.log("All 30 library tools verified against the exact executable: note-backed boards/tickets, guarded moves and inference evidence, working/history visibility, fresh completion reads, original versions/scalar offsets/line indices, unchanged Markdown, guarded edits, pending passage comments without prose changes, safe external links, portable paragraph/document/image/table layout, structured table edits, inline marks/unlink, source citations and atomic attachments, rejected semantic hazards, atomicity, citations, and Space isolation.");
+  assert.equal(exercised.size, 31, "Not every new tool was exercised against the packaged executable.");
+  console.log("All 31 library tools verified against the exact executable: note-backed boards/tickets, guarded moves and inference evidence, working/history visibility, fresh completion reads, original versions/scalar offsets/line indices, unchanged Markdown, guarded edits, pending passage comments without prose changes, safe external links, portable paragraph/document/image/table layout, structured table edits, inline marks/unlink, source citations and atomic attachments, rejected semantic hazards, atomicity, citations, and Space isolation.");
 } finally {
   child.kill();
   await rm(directory, { recursive: true, force: true });

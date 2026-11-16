@@ -1,6 +1,6 @@
 import type { VoiceTurn } from "./voiceConversation";
 import type { VoiceWorkOrder } from "./voiceResearch";
-import { explicitVoiceAssignment, MAX_VOICE_WORKERS_PER_REQUEST } from "./voiceWorkOrders";
+import { explicitVoiceAssignment, MAX_VOICE_WORKERS_PER_REQUEST, type VoiceClarificationChoice, type VoiceControlAction } from "./voiceWorkOrders";
 import { requestedTaskView, type TaskView } from "./taskWorkingView";
 import { voiceWorkOrderSummary } from "./voiceWorkOrderAccess";
 
@@ -8,6 +8,9 @@ export interface VoiceReservationClarification {
   readonly turn: VoiceTurn;
   readonly question: string;
   readonly workerCount?: number;
+  readonly choices?: VoiceClarificationChoice[];
+  readonly controlAction?: VoiceControlAction;
+  readonly selectedAnswer?: { id: string; answer: string };
   /** A captured answer belongs to this question in this call, not its text. */
   readonly epoch: number;
   readonly revision: number;
@@ -57,8 +60,11 @@ export class VoiceReservations {
   }
   isReplay(turn: VoiceTurn, admitted: readonly VoiceWorkOrder[]) {
     const previous = this.aliases.get(turn.key);
+    // A provider acknowledgement can arrive while the host is still planning
+    // from the transcript. Keep that route and its deadline; changed speech
+    // still replaces it because its exact prompt no longer matches.
     return previous?.prompt === turn.prompt && (admitted.some(job => previous.ids.includes(job.id))
-      || this.members(turn.key).some(job => job.phase === "clarifying"));
+      || this.members(turn.key).some(job => job.phase === "clarifying" || turn.delegated && job.phase === "routing"));
   }
 
   private remember(turn: VoiceTurn, ids: readonly string[]) {
@@ -90,11 +96,14 @@ export class VoiceReservations {
     return true;
   }
 
-  ask(turn: VoiceTurn, question: string, workerCount?: number) {
+  ask(turn: VoiceTurn, question: string, workerCount?: number,
+    details?: { choices?: VoiceClarificationChoice[]; controlAction?: VoiceControlAction }) {
     const group = this.groups.get(turn.key), revision = ++this.revision;
     const source = group?.turn ?? structuredClone(turn);
     if (group) this.groups.set(turn.key, { ...group, revision });
-    this.question = { turn: source, question, workerCount, epoch: this.epoch, revision };
+    this.question = { turn: source, question, workerCount, epoch: this.epoch, revision,
+      ...(details?.choices ? { choices: structuredClone(details.choices) } : {}),
+      ...(details?.controlAction ? { controlAction: details.controlAction } : {}) };
     return this.question;
   }
   clearClarification() { this.question = undefined; }
@@ -113,7 +122,10 @@ export class VoiceReservations {
       || this.isCancelled(turn.key) || this.isCancelled(sourceKey)) return;
     if (answer) {
       const reservedCount = group?.jobs.length ?? 0;
-      if (!this.isCurrent(answer) || (requireReservedCount || reservedCount > 0) && reservedCount !== ids.length) return;
+      // A topic question can precede all reservations. Its first one-worker
+      // answer is admitted normally; an existing group's count stays binding.
+      if (!this.isCurrent(answer) || reservedCount > 0 && reservedCount !== ids.length
+        || requireReservedCount && !group && ids.length !== 1) return;
     }
     const source = group?.turn ?? answer?.turn ?? turn;
     this.remember(source, ids); this.remember(turn, ids);

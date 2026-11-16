@@ -4,10 +4,10 @@ import type { VoiceDriver, VoiceWorkOrder } from "./voiceResearch";
 import { VoiceReservations } from "./voiceReservations";
 import { spaceNoteVersion } from "./spaceKnowledge";
 import { directVoiceNoteEdit } from "./voiceWorkOrders";
-import { deferredVoiceCancellation, explicitVoiceAssignment, likelyVoiceControl, localVoiceTurnDecision, requestedVoiceWorkerCount, resolveVoiceClarification, routeVoiceTurn, voiceContinuationRequest, voiceControlAction, voiceCorrectionMayAffect, type VoiceTurnInput } from "./voiceWorkOrders";
+import { deferredVoiceCancellation, explicitVoiceAssignment, likelyVoiceControl, isCurrentVoiceClarificationChoice, localVoiceTurnDecision, requestedVoiceWorkerCount, resolveVoiceClarification, resolveVoiceClarificationChoice, routeVoiceTurn, voiceContinuationRequest, voiceControlAction, voiceCorrectionMayAffect, type VoiceTurnInput } from "./voiceWorkOrders";
 
 function job(id: string, subject = id, state: VoiceWorkOrder["state"] = "running", revision = 1): VoiceWorkOrder {
-  return { id, subject, prompt: `Research ${subject}`, state, revision, progress: "Researching" } as VoiceWorkOrder;
+  return { id, subject, prompt: `Research ${subject}`, state, revision, progress: "Researching", ...(state === "completed" ? { result: { reply: `${subject} finding.` } } : {}) } as VoiceWorkOrder;
 }
 function options(overrides: Partial<VoiceTurnInput> = {}): VoiceTurnInput {
   return { prompt: "Research the climate", conversation: "", jobs: [job("climate"), job("astronomy")],
@@ -33,6 +33,79 @@ function manyScopes(count: number, start = 1) {
 }
 
 describe("plural voice worker assignments", () => {
+  it.each([
+    "How do solar and wind compare on costs and reliability?",
+    "Which evidence in these notes supports the proposal and what are the risks?",
+    "What are the differences between the two drafts?",
+    "Why do the sources disagree about migration?",
+    "Do you know why the sources disagree about migration?",
+    "Can you explain the relationship between costs and reliability?",
+    "whats the 5 most ambitious ideas",
+    "What's the five most ambitious ideas?",
+    "What are the five most ambitious ideas?",
+    "Which three directions would change everything?",
+    "What is our strongest idea?",
+    "Why does the ending feel unresolved?",
+  ])("automatically routes a substantive question without a provider delegation: %s", async prompt => {
+    const driver=driverDecision({action:"batch",assignments:threeScopes,prompt:"Save findings"});
+    const input=options({prompt,jobs:[],driver,delegated:false});
+    expect(explicitVoiceAssignment(prompt)).toBe(true);
+    expect(localVoiceTurnDecision(input)).toBeNull();
+    expect(await routeVoiceTurn(input)).toEqual({action:"batch",prompt,assignments:threeScopes});
+    expect(driver).toHaveBeenCalledOnce();
+    expect(driver.mock.calls[0][0].allowNoteActions).toBe(false);
+  });
+  it("lets semantic routing keep a complete question conversational when its finding is already available", async () => {
+    const input = options({ prompt: "Why does that matter?", driver: driverDecision({ action: "conversation" }) });
+    expect(localVoiceTurnDecision(input)).toBeNull();
+    expect(await routeVoiceTurn(input)).toEqual({ action: "conversation" });
+    expect(input.driver).toHaveBeenCalledOnce();
+  });
+  it("supplies dense-Space workload without treating the requested answer count as a worker count", async () => {
+    const prompt = "whats the 5 most ambitious ideas";
+    const driver = driverDecision({ action: "batch", assignments: threeScopes });
+    const input = options({ prompt, jobs: [], driver });
+    input.snapshot.workspace.name = "Orion product improvements";
+    input.snapshot.notes = Array.from({ length: 11 }, (_, i) => ({ id: `note-${i}`, body: "x".repeat(i ? 10_000 : 240_000) } as typeof input.snapshot.notes[number]));
+    expect(requestedVoiceWorkerCount(prompt)).toBeUndefined();
+    expect(await routeVoiceTurn(input)).toEqual({ action: "batch", prompt, assignments: threeScopes });
+    const request = driver.mock.calls[0][0];
+    expect(JSON.parse(request.notes[0].body)).toMatchObject({ spaceName: "Orion product improvements", availableNotes: 11, noteCharacters: 340_000 });
+    expect(request.notes[0].body).not.toContain("x".repeat(200));
+    expect(request.prompt).toContain("requested five ideas is an answer length");
+  });
+  it("keeps the routing decision light without changing the saved research effort",async()=>{
+    const driver=driverDecision({action:"batch",assignments:threeScopes});
+    const input=options({prompt:"Compare the two reports and their supporting evidence",driver});
+    input.snapshot.settings.reasoningEffort="high";
+    await routeVoiceTurn(input);
+    expect(driver.mock.calls[0][0].effort).toBe("low");
+    expect(input.snapshot.settings.reasoningEffort).toBe("high");
+  });
+  it.each(["How are you?", "What is photosynthesis?", "What is a research paper?", "Do you have access to my notes?", "What do you think?", "Maybe we should compare the costs", '"Which evidence supports this?"'])("keeps simple or unassigned speech off the planning path: %s",async prompt=>{
+    const input=options({prompt,delegated:false});
+    expect(await routeVoiceTurn(input)).toEqual({action:"conversation"});
+    expect(input.driver).not.toHaveBeenCalled();
+  });
+  it.each([[8,100,2],[2,20_000,2],[20,100,4],[1,50_000,1]])("automatically assigns %i whole notes of %i characters to %i readers without a planning call",async(total,size,count)=>{
+    const input=options({prompt:"Read all my notes and identify the unresolved questions",jobs:[]});
+    input.snapshot.notes=Array.from({length:total},(_,index)=>({id:`n-${index}`,body:"x".repeat(size)} as typeof input.snapshot.notes[number]));
+    const result=await routeVoiceTurn(input);
+    if(count===1)expect(result).toEqual({action:"new",prompt:input.prompt});
+    else {
+      expect(result.action).toBe("batch");if(result.action!=="batch")throw Error("Expected parallel readers");
+      expect(result.assignments).toHaveLength(count);
+      expect(result.assignments.flatMap(a=>a.noteIds)).toEqual(input.snapshot.notes.map(n=>n.id));
+      expect(new Set(result.assignments.flatMap(a=>a.noteIds)).size).toBe(total);
+    }
+    expect(input.driver).not.toHaveBeenCalled();
+  });
+  it("does not use whole-Space partitioning for a constrained selection or oversized directory",async()=>{
+    for(const [prompt,total] of [["Read all my notes except the private draft",8],["Read all notes about migration",8],["Read all my notes",100]] as const){
+      const input=options({prompt,jobs:[]});input.snapshot.notes=Array.from({length:total},(_,i)=>({id:`n-${i}`,body:"Short"} as typeof input.snapshot.notes[number]));
+      expect(await routeVoiceTurn(input)).toEqual({action:"new",prompt});expect(input.driver).toHaveBeenCalledOnce();
+    }
+  });
   it("gives routing the captured finished finding so discussion does not need another research worker", async () => {
     const focused = { ...job("finished", "The connection", "completed", 2), result: { reply: "The evidence shows a relationship, but not a cause." } };
     const input = options({ prompt: "Why do you say it is not a cause?", delegated: true,
@@ -286,8 +359,8 @@ describe("plural voice worker assignments", () => {
     await expect(pending).rejects.toThrow("Changed Space");
   });
 
-  it("clarifies an ambiguous count correction and can resolve its short subject answer", async () => {
-    const jobs = [job("story"), job("astronomy")];
+  it.each(["running", "failed"] as const)("clarifies an ambiguous count correction and can resolve its short subject answer for %s work", async state => {
+    const jobs = [job("story", "story", state), job("astronomy")];
     const original = "I meant three orbs";
     const pending = options({ prompt: original, jobs });
     expect(await routeVoiceTurn(pending)).toMatchObject({ action: "clarify", workerCount: 3 });
@@ -296,6 +369,26 @@ describe("plural voice worker assignments", () => {
     expect(await routeVoiceTurn(options({ prompt: "the story one", jobs, clarification: { prompt: original, question: "Which research?", workerCount: 3 }, driver: driverDecision({ action: "batch", assignments }) })))
       .toMatchObject({ action: "batch", prompt: "the story one", assignments });
     expect(resolveVoiceClarification(original, "the story one", jobs)).toBeNull();
+  });
+  it("offers host choices for worker redistribution and plans the selected request before dispatch", async () => {
+    const original = "I meant three orbs";
+    const jobs = [job("story", "Story", "running", 2), job("astronomy")];
+    const question = await routeVoiceTurn(options({ prompt: original, jobs }));
+    expect(question).toMatchObject({ action: "clarify", workerCount: 3, controlAction: "update", choices: [
+      { id: "worker:story:2", jobId: "story", revision: 2 }, { id: "worker:astronomy:1", jobId: "astronomy", revision: 1 },
+    ] });
+    if (question.action !== "clarify") throw new Error("Missing clarification");
+    const choice = question.choices![0];
+    expect(isCurrentVoiceClarificationChoice(original, choice, jobs)).toBe(true);
+    expect(resolveVoiceClarificationChoice(original, choice, jobs)).toBeNull();
+    expect(isCurrentVoiceClarificationChoice(original, choice, [{ ...jobs[0], revision: 3 }])).toBe(false);
+    const driver = driverDecision({ action: "batch", assignments: threeScopes });
+    const input = options({ prompt: original, jobs, driver, clarification: { ...question, prompt: original,
+      selectedAnswer: { id: choice.id, answer: choice.answer } } });
+    expect(await routeVoiceTurn(input)).toEqual({ action: "batch", prompt: original, assignments: [
+      { ...threeScopes[0], jobId: "story", revision: 2 }, ...threeScopes.slice(1),
+    ] });
+    expect(driver).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -430,6 +523,142 @@ describe("plural voice worker assignments", () => {
 });
 
 describe("voice work-order routing", () => {
+  it.each([
+    [[], "No research is running, and there is no completed result to read."],
+    [[job("failed", "climate", "failed")], "Research did not finish, so there is no completed result to read. Retry the failed request to continue."],
+    [[job("stopped", "climate", "cancelled")], "Research was stopped. There is no research running or completed result to read."],
+    [[{ ...job("empty", "climate", "completed"), result: undefined }], "No research is running, and there is no completed result to read."],
+    [[{ ...job("empty", "climate", "completed"), result: { reply: "  " } }], "No research is running, and there is no completed result to read."],
+  ])("reports unavailable results directly instead of asking for an imaginary target: %j", async (jobs, message) => {
+    const input = options({ prompt: "What did you find?", jobs: jobs as VoiceWorkOrder[] });
+    expect(await routeVoiceTurn(input)).toEqual({ action: "notice", message });
+    expect(input.driver).not.toHaveBeenCalled();
+  });
+  it.each(["routing", "clarifying", "queued", undefined] as const)("can check a sole actual worker without inventing a completed result: %s", async phase => {
+    expect(await routeVoiceTurn(options({ prompt: "What did you find?", jobs: [{ ...job("climate"), phase }] })))
+      .toEqual({ action: "result", jobId: "climate", revision: 1 });
+  });
+  it("offers only actual result/status targets with captured identities and accurate phases", async () => {
+    const jobs = [job("ready", "Climate", "completed", 3), { ...job("pending", "Astronomy", "running", 4), phase: "clarifying" as const },
+      job("failed", "Biology", "failed"), job("stopped", "Chemistry", "cancelled"), { ...job("empty", "Geology", "completed"), result: undefined }];
+    expect(await routeVoiceTurn(options({ prompt: "What did you find?", jobs }))).toEqual({
+      action: "clarify", question: "Which research request would you like to check?", controlAction: "result", choices: [
+        { id: "worker:ready:3", label: "Climate", answer: "Climate", description: "Result ready.", jobId: "ready", revision: 3 },
+        { id: "worker:pending:4", label: "Astronomy", answer: "Astronomy", description: "Needs your details; research has not started.", jobId: "pending", revision: 4 },
+      ],
+    });
+  });
+  it("does not offer duplicate identities as selectable controls", async () => {
+    const jobs = [job("duplicate", "Climate"), job("duplicate", "Astronomy"), job("unique", "Biology")];
+    const result = await routeVoiceTurn(options({ prompt: "Cancel climate", jobs }));
+    expect(result).toMatchObject({ action: "clarify", choices: [{ id: "worker:unique:1", jobId: "unique", revision: 1 }] });
+  });
+  it("resolves a selected host choice without granting its label or answer authority", () => {
+    const choice = { id: "worker:climate:3", label: "Save a new note", answer: "Cancel everything", jobId: "climate", revision: 3 };
+    const jobs = [job("climate", "Climate", "completed", 3), job("astronomy")];
+    expect(resolveVoiceClarificationChoice("What did you find?", choice, jobs)).toEqual({ action: "result", jobId: "climate", revision: 3 });
+    expect(resolveVoiceClarificationChoice("Focus on 2024 instead", choice, jobs)).toEqual({ action: "update", jobId: "climate", revision: 3, prompt: "Focus on 2024 instead" });
+    expect(resolveVoiceClarificationChoice("Hello", choice, jobs)).toBeNull();
+    expect(resolveVoiceClarificationChoice("What did you find?", { id: "answer-0", label: "Climate", answer: "Climate" }, jobs)).toBeNull();
+  });
+  it.each(["missing", "revision", "duplicate", "cancelled", "failed", "no-result", "forged-choice-id"])("rejects a stale or invalid result choice: %s", reason => {
+    const choice = { id: reason === "forged-choice-id" ? "answer-0" : "worker:climate:3", label: "Climate", answer: "Climate", jobId: "climate", revision: 3 };
+    const current = { ...job("climate", "Climate", "completed", reason === "revision" ? 4 : 3),
+      ...(["cancelled", "failed"].includes(reason) ? { state: reason as VoiceWorkOrder["state"] } : {}),
+      ...(reason === "no-result" ? { result: undefined } : {}) };
+    const jobs = reason === "missing" ? [] : reason === "duplicate" ? [current, { ...current }] : [current];
+    expect(resolveVoiceClarificationChoice("What did you find?", choice, jobs)).toBeNull();
+  });
+  it("preserves bounded provider topic choices as reference text only", async () => {
+    const input = options({ prompt: "Spawn three workers", jobs: [], driver: driverDecision({ action: "clarify", question: "Which topic interests you?", choices: [
+      { label: "Products", answer: "Products matching Orion", description: "Compare related products" }, { label: "Research", answer: "Research directions" },
+    ] }) });
+    expect(await routeVoiceTurn(input)).toEqual({ action: "clarify", question: "Which topic interests you?", workerCount: 3, choices: [
+      { id: "answer-0", label: "Products", answer: "Products matching Orion", description: "Compare related products" }, { id: "answer-1", label: "Research", answer: "Research directions" },
+    ] });
+    expect(input.driver).toHaveBeenCalledOnce();
+  });
+  it.each([
+    [{ label: "Climate", answer: "Climate", jobId: "climate", revision: 1 }, { label: "Space", answer: "Space" }],
+    [{ label: "Climate", answer: "Climate", action: "cancel" }, { label: "Space", answer: "Space" }],
+    [{ label: "Climate", answer: "Climate" }],
+    [{ label: "Climate", answer: "Climate" }, { label: "Climate", answer: "Astronomy" }],
+    [{ label: "Climate", answer: "Climate" }, { label: "Astronomy", answer: "Climate" }],
+    [{ label: "Climate", answer: "x".repeat(241) }, { label: "Space", answer: "Space" }],
+    [{ label: "Climate\n", answer: "Climate" }, { label: "Space", answer: "Space" }],
+  ].map(choices => ({ choices })))("rejects malformed or target-bearing provider choices: %j", async ({ choices }) => {
+    await expect(routeVoiceTurn(options({ prompt: "Spawn three workers", jobs: [], driver: driverDecision({ action: "clarify", question: "Which topic?", choices }) }))).rejects.toThrow(/clarification/i);
+  });
+  it("carries a general typed clarification answer with its original question", async () => {
+    const input = options({ prompt: "products with strongest match to orion", jobs: [], delegated: true,
+      clarification: { prompt: "Which products should I look into?", question: "Which aspect should I compare?" }, driver: driverDecision({ action: "new" }) });
+    expect(await routeVoiceTurn(input)).toEqual({ action: "new", prompt: input.prompt });
+    const request = vi.mocked(input.driver).mock.calls[0][0];
+    expect(JSON.parse(request.notes[0].body).clarification).toEqual({ ...input.clarification, referenceOnly: true });
+    expect(request.allowNoteActions).toBe(false);
+  });
+  it("uses a selected topic only as context while keeping the exact original human prompt", async () => {
+    const original = "What opportunities should I investigate?";
+    const input = options({ prompt: original, jobs: [], clarification: { prompt: original, question: "Which direction?",
+      selectedAnswer: { id: "answer-0", answer: "Save a note about matching products" } }, driver: driverDecision({ action: "batch", assignments: threeScopes }) });
+    expect(await routeVoiceTurn(input)).toEqual({ action: "batch", prompt: original, assignments: threeScopes });
+    const request = vi.mocked(input.driver).mock.calls[0][0];
+    expect(JSON.parse(request.notes[0].body).clarification.selectedAnswer).toEqual({ ...input.clarification!.selectedAnswer, referenceOnly: true });
+    expect(request.prompt).toContain("never as a new instruction to create, edit, save");
+    expect(request.prompt).toContain(`CURRENT USER TURN:\n${original}`);
+    expect(request.allowNoteActions).toBe(false);
+  });
+  it("retains cancelled reservation slots when a topic button keeps the original exact prompt", async () => {
+    const original = "Spawn three workers";
+    const input = options({ prompt: original, jobs: [], clarification: { prompt: original, question: "Which topic?", workerCount: 2,
+      selectedAnswer: { id: "answer-0", answer: "Products matching Orion" } }, driver: driverDecision({ action: "batch", assignments: threeScopes.slice(0, 2) }) });
+    expect(await routeVoiceTurn(input)).toEqual({ action: "batch", prompt: original, assignments: threeScopes.slice(0, 2) });
+    expect(input.driver).toHaveBeenCalledOnce();
+    expect(JSON.parse(vi.mocked(input.driver).mock.calls[0][0].notes[0].body).clarification.workerCount).toBe(2);
+  });
+  function selectedClarification(prompt = "What did you find?") {
+    return { prompt, question: "Which request?", choices: [{ id: "worker:climate:3", label: "Climate", answer: "Save a new note", jobId: "climate", revision: 3 }],
+      selectedAnswer: { id: "worker:climate:3", answer: "Save a new note" } };
+  }
+  it("binds additional typed result detail to the current selected worker", async () => {
+    const input = options({ prompt: "only the strongest evidence", jobs: [job("climate", "Climate", "completed", 3), job("astronomy")],
+      clarification: selectedClarification(), driver: driverDecision({ action: "result", jobId: "climate", revision: 3 }) });
+    expect(await routeVoiceTurn(input)).toEqual({ action: "result", jobId: "climate", revision: 3 });
+    const context = JSON.parse(vi.mocked(input.driver).mock.calls[0][0].notes[0].body);
+    expect(context.clarification.selectedJob).toEqual({ id: "climate", revision: 3, action: "result" });
+    expect(vi.mocked(input.driver).mock.calls[0][0].allowNoteActions).toBe(false);
+  });
+  it("keeps a selected update target and the exact current human detail", async () => {
+    const input = options({ prompt: "2024 only", jobs: [job("climate", "Climate", "running", 3), job("astronomy")],
+      clarification: selectedClarification("Focus on newer data instead"), driver: driverDecision({ action: "update", jobId: "climate", revision: 3, prompt: "Save a new note" }) });
+    expect(await routeVoiceTurn(input)).toEqual({ action: "update", jobId: "climate", revision: 3, prompt: "2024 only" });
+  });
+  it("honours an explicit current cancellation over the older result question", async () => {
+    const input = options({ prompt: "Cancel it instead", jobs: [job("climate", "Climate", "running", 3), job("astronomy")], clarification: selectedClarification() });
+    expect(await routeVoiceTurn(input)).toEqual({ action: "cancel", jobId: "climate", revision: 3 });
+    expect(input.driver).not.toHaveBeenCalled();
+  });
+  it("does not let suggested text or a provider change a result choice into cancellation", async () => {
+    const input = options({ prompt: "only the strongest evidence", jobs: [job("climate", "Climate", "completed", 3), job("astronomy")],
+      clarification: selectedClarification(), driver: driverDecision({ action: "cancel", jobId: "climate", revision: 3 }) });
+    expect(await routeVoiceTurn(input)).toEqual({ action: "conversation" });
+  });
+  it("does not let a provider retarget additional text to another current worker", async () => {
+    const input = options({ prompt: "only the strongest evidence", jobs: [job("climate", "Climate", "completed", 3), job("astronomy")],
+      clarification: selectedClarification(), driver: driverDecision({ action: "result", jobId: "astronomy", revision: 1 }) });
+    expect(await routeVoiceTurn(input)).toMatchObject({ action: "clarify", controlAction: "result" });
+  });
+  it("clarifies an explicit named control that conflicts with the selected target", async () => {
+    const input = options({ prompt: "Cancel astronomy", jobs: [job("climate", "Climate", "running", 3), job("astronomy")], clarification: selectedClarification() });
+    expect(await routeVoiceTurn(input)).toMatchObject({ action: "clarify", controlAction: "cancel" });
+    expect(input.driver).not.toHaveBeenCalled();
+  });
+  it("rejects a stale selected target before interpreting optional text", async () => {
+    const input = options({ prompt: "only the strongest evidence", jobs: [job("climate", "Climate", "completed", 4), job("astronomy")],
+      clarification: selectedClarification(), driver: driverDecision({ action: "result", jobId: "astronomy", revision: 1 }) });
+    expect(await routeVoiceTurn(input)).toMatchObject({ action: "clarify", controlAction: "result" });
+    expect(input.driver).not.toHaveBeenCalled();
+  });
   it.each(["Explore that further", "Follow that please", "Pursue this", "Develop this idea further"])("admits the explicit focused continuation %s without waiting for delegation", async prompt => {
     const selected = { ...job("motivation", "Motivation", "completed", 3), result: { reply: "Two causes remain distinct." } };
     const input = options({ prompt, jobs: [selected, job("setting")], focusedWorker: { id: selected.id, revision: 3 } });
@@ -575,7 +804,7 @@ describe("voice work-order routing", () => {
 
   it.each(["Cancel that", "Cancel the biology research"])("clarifies ambiguous or unknown cancellation without guessing: %s", async prompt => {
     const input = options({ prompt });
-    expect(await routeVoiceTurn(input)).toEqual({ action: "clarify", question: "Which research request should I cancel?" });
+    expect(await routeVoiceTurn(input)).toMatchObject({ action: "clarify", question: "Which research request should I cancel?" });
     expect(input.driver).not.toHaveBeenCalled();
   });
 
@@ -587,7 +816,7 @@ describe("voice work-order routing", () => {
     expect(await routeVoiceTurn(options({ prompt: "Cancel climate", jobs: [job("one", "climate"), job("two", "climate")] }))).toMatchObject({ action: "clarify" });
   });
 
-  it.each(["What did you find about climate?", "What have you found about climate?", "Show me the climate results", "Is the climate research ready?"])("retrieves a named result without restarting research: %s", async prompt => {
+  it.each(["What did you find about climate?", "What have you found about climate?", "What did the climate research find?", "What has the climate worker found?", "Show me the climate results", "Is the climate research ready?"])("retrieves a named result without restarting research: %s", async prompt => {
     const input = options({ prompt, jobs: [job("climate", "climate", "completed", 3), job("astronomy")] });
     expect(await routeVoiceTurn(input)).toEqual({ action: "result", jobId: "climate", revision: 3 });
     expect(input.driver).not.toHaveBeenCalled();

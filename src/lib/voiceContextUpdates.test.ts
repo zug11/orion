@@ -120,7 +120,7 @@ describe("incremental voice context", () => {
     expect(packets(send)[1].jobs).toEqual([{ id: "a", revision: 1, progress: "Checking exact passages" }]);
     input.jobs[0].state = "completed"; input.jobs[0].result = { reply: "Private completed finding" };
     updates.update(input, send);
-    expect(packets(send)[2].jobs).toEqual([{ id: "a", revision: 1, state: "completed" }]);
+    expect(packets(send)[2].jobs).toEqual([{ id: "a", revision: 1, state: "completed", researchStatus: "completed", hasFindings: true }]);
     expect(JSON.stringify(packets(send))).not.toContain("Private completed finding");
   });
 
@@ -133,7 +133,7 @@ describe("incremental voice context", () => {
     input.jobs[0].revision = 2; input.jobs[0].state = "cancelled";
     input.jobs[0].receipt = { savedNoteIds: ["saved"], savedTitles: ["Alpha"] };
     updates.update({ ...input, usageRatio: 0.82 }, send);
-    expect(packets(send)[0].jobs).toEqual([{ id: "a", revision: 2, state: "cancelled",
+    expect(packets(send)[0].jobs).toEqual([{ id: "a", revision: 2, state: "cancelled", researchStatus: "cancelled",
       receipt: { savedNoteIds: ["saved"], savedTitles: ["Alpha"] } }]);
     updates.update({ ...input, usageRatio: 0.82 }, send); expect(send).toHaveBeenCalledOnce();
     updates.update({ ...input, usageRatio: 0.7 }, send);
@@ -156,6 +156,37 @@ describe("incremental voice context", () => {
     expect(send).toHaveBeenCalledOnce();
     updates.update({ ...input, usageRatio: 0.74 }, send);
     updates.update({ ...input, usageRatio: 0.85 }, send); expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("distinguishes clarification reservations from queued and researching workers", () => {
+    const input = fixture(), updates = new VoiceContextUpdates(); updates.reset(input);
+    const send = vi.fn((_text: string) => true);
+    input.jobs = [job("planning", { phase: "routing" }), job("question", { phase: "clarifying" })];
+    updates.update(input, send);
+    expect(packets(send)[0]).toMatchObject({ jobs: [
+      { id: "planning", researchStatus: "planning", hasFindings: false },
+      { id: "question", researchStatus: "awaiting_details", hasFindings: false },
+    ], activity: { planning: 1, awaitingDetails: 1, researching: 0, queued: 0, waitingForResults: false } });
+    input.jobs.push(job("reading"), job("queued", { phase: "queued" }));
+    updates.update({ ...input, usageRatio: 0.9 }, send);
+    const checkpoint = packets(send).slice(-1)[0];
+    expect(checkpoint.activeJobs.map((item: { id: string }) => item.id)).toEqual(["reading", "queued"]);
+    expect(checkpoint.pendingRequests.map((item: { id: string }) => item.id)).toEqual(["planning", "question"]);
+    expect(checkpoint.activity).toMatchObject({ researching: 1, queued: 1, planning: 1, awaitingDetails: 1, waitingForResults: true });
+  });
+
+  it("clears pending-result context when the last real worker fails, completes, or disappears", () => {
+    const input = fixture(); input.jobs = [job()];
+    const updates = new VoiceContextUpdates(); updates.reset(input);
+    const send = vi.fn((_text: string) => true);
+    input.jobs[0].state = "failed"; updates.update(input, send);
+    expect(packets(send).slice(-1)[0].activity).toMatchObject({ researching: 0, queued: 0, readyResults: 0, waitingForResults: false });
+    input.jobs = [job("complete", { state: "completed", result: { reply: "Ready result" } })]; updates.update(input, send);
+    expect(packets(send).slice(-1)[0].activity).toMatchObject({ readyResults: 1, waitingForResults: false });
+    input.jobs = []; updates.update(input, send);
+    expect(packets(send).slice(-1)[0]).toMatchObject({ jobs: [{ id: "complete", removed: true }],
+      activity: { researching: 0, queued: 0, planning: 0, awaitingDetails: 0, readyResults: 0, waitingForResults: false } });
+    expect(packets(send).slice(-1)[0].instruction).toContain("do not say that you are waiting for research");
   });
 
   it("does not consume a checkpoint episode on failed delivery and ignores invalid ratio values", () => {

@@ -1,5 +1,10 @@
+import { TicketReferenceLink, useTicketNavigation } from './TicketNavigation';
+import { remarkTicketReferences, ticketIdFromUrl } from '../lib/ticketReferences';
 import { calendarDateFromUrl } from '../lib/calendarDate';
 import { TicketCardControls, TicketDeleteButton } from './Tickets';
+import { TicketDetailLauncher } from './TicketDetailsDialog';
+import { TicketInferenceDialog } from './TicketInferenceDialog';
+import { noteInferenceTarget } from '../lib/ticketInference';
 import { collectWork, noteWork, remarkNoteBoards } from "../lib/tickets";
 import { KanbanBoard, type TicketWorkspace, type CreateWorkItem } from "./Tickets";
 import { visibleNoteSummary } from "../lib/importSummary";
@@ -27,6 +32,7 @@ import {
   Pause,
   Play,
   Quote,
+  ListChecks,
   Search,
   Trash2,
   X,
@@ -204,6 +210,7 @@ function safeUrl(url: string) {
   if (
     isSafeNoteImageUrl(url) ||
     Boolean(calendarDateFromUrl(url)) ||
+    Boolean(ticketIdFromUrl(url)) ||
     url.startsWith("orion-note://") ||
     url.startsWith("orion-concept://") ||
     url.startsWith("orion-source://") ||
@@ -272,6 +279,11 @@ export function NoteView({
     modes.set(note.id, value);
     setEditingState(value);
   }, [modes, note.id]);
+  const ticketNavigation=useTicketNavigation();
+  const [inferringTickets,setInferringTickets]=useState(false);
+  const inferTicketsButton=useRef<HTMLButtonElement>(null);
+  useEffect(()=>setInferringTickets(false),[note.id,editing]);
+  const ticketReferencePlugin=useMemo(()=>remarkTicketReferences(ticketNavigation.index),[ticketNavigation.index]);
   const [savedPulse, setSavedPulse] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
@@ -1274,7 +1286,7 @@ export function NoteView({
       const ticket = collectWork(notes).tickets.find(t => t.noteId === note.id && t.lineIndex === task.lineIndex && t.durable);
       if (ticket && collectWork(notes).boards.some(board => board.id === ticket.boardId && board.noteId === note.id) &&
           noteWork(note).tickets.filter(t => t.id === ticket.id).length === 1) return null;
-      if (ticket) return <li className="note-ticket-card">{onDeleteTicket && <TicketDeleteButton title={ticket.title} onDelete={() => onDeleteTicket(ticket)}/>}<div className="note-ticket-prose">{taskBody}</div><TicketCardControls status={ticket.status} dueDate={ticket.dueDate} urgency={ticket.urgency} onPatch={onPatchTicket ? patch => onPatchTicket(ticket, patch) : undefined}/></li>;
+      if (ticket) return <li className="note-ticket-card">{onDeleteTicket && <TicketDeleteButton title={ticket.title} onDelete={() => onDeleteTicket(ticket)}/>}<div data-narration-ignore="true"><TicketDetailLauncher ticket={ticket} workspace={{work:collectWork(notes),onPatch:onPatchTicket,onOpenNote}}/></div><div className="note-ticket-prose">{taskBody}</div><TicketCardControls status={ticket.status} dueDate={ticket.dueDate} urgency={ticket.urgency} onPatch={onPatchTicket ? patch => onPatchTicket(ticket, patch) : undefined}/></li>;
       return (
         <li className={className}>
           <input
@@ -1320,6 +1332,8 @@ export function NoteView({
       </blockquote>
     ),
     a: ({ href, title, children }: { href?: string; title?:string; children?: ReactNode }) => {
+      const ticketId=ticketIdFromUrl(href);
+      if(ticketId)return <TicketReferenceLink id={ticketId}>{children}</TicketReferenceLink>;
       const date = calendarDateFromUrl(href);
       if (date) return <time className="note-calendar-date" dateTime={date}>{children}</time>;
       if (href?.startsWith("#orion-passage-")) {
@@ -1409,12 +1423,12 @@ export function NoteView({
   const renderedMarkdown = useMemo(() => (
     <ReadingBoardContext.Provider value={{noteId:note.id,workspace:{work:collectWork(notes),onPatch:onPatchTicket,onDelete:onDeleteTicket,onOpenNote,inference:ticketInference,
       onCreateTicket:onCreateWork ? (target,title,status,dueDate) => onCreateWork('ticket',title,target.noteId,target.id,status,dueDate) : undefined}}}>
-    <ReactMarkdown remarkPlugins={[remarkGfm, remarkNoteBoards, remarkNoteTableMetadata, remarkNoteBlocks, remarkNoteMargins, remarkNoteTextAlignment]} components={markdownComponents} urlTransform={safeUrl}>
+    <ReactMarkdown remarkPlugins={[remarkGfm, ticketReferencePlugin, remarkNoteBoards, remarkNoteTableMetadata, remarkNoteBlocks, remarkNoteMargins, remarkNoteTextAlignment]} components={markdownComponents} urlTransform={safeUrl}>
       {visibleMarkdown}
     </ReactMarkdown>
     </ReadingBoardContext.Provider>
   ), [visibleMarkdown, note, notes, concepts, sources, findQuery, selectedPassageId,
-    onOpenNote, onOpenConcept, onOpenSource, onUpdateNote, onPatchTicket, onDeleteTicket, onCreateWork, ticketInference]);
+    onOpenNote, onOpenConcept, onOpenSource, onUpdateNote, onPatchTicket, onDeleteTicket, onCreateWork, ticketInference, ticketReferencePlugin]);
 
   useLayoutEffect(() => {
     const active = narrationRef.current;
@@ -1530,6 +1544,7 @@ export function NoteView({
               {editing ? <Check size={14} /> : <Edit3 size={14} />}
               <span>{editing ? "Done" : "Edit"}</span>
             </button>
+            {!editing && ticketInference && <button ref={inferTicketsButton} type="button" className="icon-button" aria-label="Infer tickets from this note" title="Infer tickets from this note" onClick={()=>setInferringTickets(true)}><ListChecks size={16}/></button>}
             <button
               type="button"
               className={note.pinned ? "icon-button active" : "icon-button"}
@@ -1856,6 +1871,7 @@ export function NoteView({
       {narrationDownload && <span className="sr-only" role="status">Preparing narration download{narrationDownload.total ? `: ${narrationDownload.completed} of ${narrationDownload.total} passages` : ""}.</span>}
     {onThreadAction && <PassageThreads draftThread={comment.draftThread} onDraftMarker={comment.setDraftMarker} key={note.id} openThreadId={comment.openThreadId} reviewActive={!!chatEdit} note={note} root={findScopeRef} editor={editing ? threadEditor : null} onAction={onThreadAction} references={{ notes, sources, onOpenNote, onOpenSource }} />}
     {comment.ui}
+    {inferringTickets && !editing && ticketInference && <TicketInferenceDialog key={`inference-${note.id}`} board={noteInferenceTarget(note)} actions={ticketInference} onClose={()=>{setInferringTickets(false);requestAnimationFrame(()=>inferTicketsButton.current?.focus());}}/>}
       </article>
   );
 }
