@@ -45,3 +45,11 @@ vec3 skin(vec3 n,float t){
  c+=mix(uPrimary,vec3(1.),.7)*spec(n,worldLight(vec3(-.55,.7,1.4),t),180.)*.35;
  return c;
 }
+
+// Independent internal rotation; pointer phase runs against the exterior.
+uniform float uInnerTime,uInnerMouse;
+vec3 coreFrame(vec3 v){
+ vec3 axis=normalize(vec3(.72,.32,-.61));
+ float a=uInnerTime*.14+.7-uInnerMouse*.35;
+ return v*cos(a)+cross(axis,v)*sin(a)+axis*dot(axis,v)*(1.-cos(a));
+}

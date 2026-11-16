@@ -1487,6 +1487,7 @@ describe("browser persistence fallback", () => {
     delete legacy.settings.homeAtmosphere;
     delete legacy.settings.homeAtmosphereTone;
     delete legacy.settings.homeAtmosphereCustomColor;
+    delete legacy.settings.voiceOrbStyle;
     delete legacy.settings.homeAtmosphereCustomSecondaryColor;
     delete legacy.settings.homeAtmosphereMotion;
     window.localStorage.setItem("orion:vault:v1", JSON.stringify(legacy));
@@ -1610,6 +1611,7 @@ describe("browser persistence fallback", () => {
     vault.activeSpaceId = vault.spaces[0].workspace.id;
     vault.spaces[0].settings.homeAtmosphereCustomColor = "#FF6699";
     vault.spaces[0].settings.homeAtmosphereCustomSecondaryColor = "#66CFFF";
+    vault.spaces[0].settings.voiceOrbStyle = "mirage-clear";
     await saveSnapshot(vault);
     const loaded = await loadSnapshot();
     expect(loaded?.spaces[0].settings).toEqual(vault.spaces[0].settings);
@@ -2034,6 +2036,12 @@ describe("browser persistence fallback", () => {
       "unsupported atmosphere accent",
       (snapshot: MutableSnapshot) => {
         snapshot.settings.homeAtmosphereTone = "ultraviolet";
+      },
+    ],
+    [
+      "unsupported voice orb style",
+      (snapshot: MutableSnapshot) => {
+        snapshot.settings.voiceOrbStyle = "unknown-orb";
       },
     ],
     [

@@ -126,7 +126,7 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
       const live = current.status === "listening";
       function sphere(point: OrbCircle, rgb: RGB, stretch = 1, opacity = 1, glow = 0, focused = false, angle = 0, main = false) {
         if (!context) return;
-        if(glass && glassPalette && !contrast && glass.draw(context,point,glassPalette,shaderTime,shaderHover.current.phase,main,stretch,main ? 1 : opacity,glow,angle))return;
+        if(glass && glassPalette && !contrast && glass.draw(context,point,glassPalette,shaderTime,shaderHover.current.phase,main,stretch,main ? 1 : opacity,glow,angle,current.settings?.voiceOrbStyle))return;
         const { radius } = point;
         context.save(); context.translate(point.x, point.y); context.rotate(angle); context.scale(1 / Math.sqrt(stretch), Math.sqrt(stretch)); context.globalAlpha = opacity;
         // The approved gravity study has a softly illuminated volume even at

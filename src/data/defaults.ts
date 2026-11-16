@@ -60,6 +60,7 @@ export const defaultSettings: Settings = {
   homeAtmosphereCustomColor: "",
   homeAtmosphereCustomSecondaryColor: "",
   homeAtmosphereMotion: "calm",
+  voiceOrbStyle: "jelly",
 };
 
 export function normalizeSpeechVoice(value: unknown): SpeechVoice {

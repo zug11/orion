@@ -134,8 +134,8 @@ vec3 material8(vec3 p, vec3 n, float t) {
   float span = max(0.0, -2.0 * dot(p, ray));
   float count = mix(12.0, 24.0, step(0.5, uDetail));
   float ds = span / count;
-  vec3 origin = frame(p, t * 0.69 + 0.7);
-  vec3 direction = frame(ray, t * 0.69 + 0.7);
+  vec3 origin = coreFrame(p);
+  vec3 direction = coreFrame(ray);
   vec3 lightDir = normalize(vec3(-0.6, 0.75, 0.8));
   vec3 col = vec3(0.0);
   float transmission = 1.0;

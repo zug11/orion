@@ -20,7 +20,8 @@ void main(){
   vec4 worker=workerMaterial(p,n,t);
   c=worker.rgb;opacity=worker.a;
   c*=1.+uWorking*.035*sin(uTime*1.7+uSeed);
- }else if(uMaterial<5.)c=material4(p,n,t);
+ }else if(uMaterial<.5)c=mirage_glass(p,n,t);
+ else if(uMaterial<5.)c=material4(p,n,t);
  else if(uMaterial<9.)c=material8(p,n,t);
  else c=material9(p,n,t);
  c*=1.+uLevel*.12;c+=uSecondary*uReceiving*.18*pow(1.-z,1.5);

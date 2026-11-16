@@ -2733,6 +2733,7 @@ function isSettings(value: unknown): boolean {
       ])) &&
     isOptionalThemeColor(value.homeAtmosphereCustomColor) &&
     isOptionalThemeColor(value.homeAtmosphereCustomSecondaryColor) &&
+    (value.voiceOrbStyle === undefined || isOneOf(value.voiceOrbStyle, ["jelly", "mirage-clear"])) &&
     (value.homeAtmosphereMotion === undefined ||
       isOneOf(value.homeAtmosphereMotion, [
         "still",

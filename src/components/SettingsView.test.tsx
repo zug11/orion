@@ -451,6 +451,13 @@ describe("SettingsView appearance", () => {
     });
     expect(onChange).toHaveBeenLastCalledWith({ ...settings, homeAtmosphereCustomSecondaryColor: "#08AAEE" });
     refresh();
+    fireEvent.click(screen.getByRole("button", { name: "Mirage clear" }));
+    expect(onChange).toHaveBeenLastCalledWith({ ...settings, voiceOrbStyle: "mirage-clear" });
+    refresh();
+    expect(screen.getByRole("button", { name: "Mirage clear" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Jelly" }));
+    expect(onChange).toHaveBeenLastCalledWith({ ...settings, voiceOrbStyle: "jelly" });
+    refresh();
     const group = screen.getByRole("radiogroup", { name: "Home atmosphere" });
     for (const preview of group.querySelectorAll<HTMLElement>(".atmosphere-preview")) {
       expect(preview.style.getPropertyValue("--atmosphere-primary")).toBe("#E94F8A");

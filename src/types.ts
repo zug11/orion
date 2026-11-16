@@ -298,6 +298,7 @@ export interface Settings {
   /** Optional in older vaults; empty retains the existing single-colour look. */
   homeAtmosphereCustomSecondaryColor: string;
   homeAtmosphereMotion: HomeAtmosphereMotion;
+  voiceOrbStyle?: "jelly" | "mirage-clear";
 }
 
 export interface WorkspaceInfo {

@@ -1821,6 +1821,17 @@ export function SettingsView({
                     </div>
                   </div>
                   <div className="atmosphere-tuner-row">
+                    <span><strong>Voice orb</strong><small>Uses these colours · Cellular workers</small></span>
+                    <div className="atmosphere-motion-options" aria-label="Voice orb style">
+                      {(["jelly", "mirage-clear"] as const).map(style => (
+                        <button key={style} type="button" aria-pressed={(settings.voiceOrbStyle ?? "jelly") === style}
+                          onClick={() => patch({ voiceOrbStyle: style })}>
+                          {style === "jelly" ? "Jelly" : "Mirage clear"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="atmosphere-tuner-row">
                     <span>
                       <strong>Motion</strong>
                       <small>Pointer response stays on</small>
