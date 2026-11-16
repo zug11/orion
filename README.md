@@ -736,7 +736,8 @@ Local-first does not mean pretending network AI is local. Orion makes the bounda
 
 | Data or operation | Where it happens |
 | --- | --- |
-| Notes, concepts, relationships, sources, Chat history | Plaintext `vault.json` in Orion's local application-data folder |
+| Notes, concepts, relationships, source metadata, Chat history | Plaintext `vault.json` in Orion's local application-data folder |
+| Preserved source text | Local content-addressed files under `attachments/sources/` beside the vault |
 | Provider credentials | OS credential store; never written to the vault or returned to the renderer |
 | Text/PDF/DOCX parsing | On-device |
 | Image and scanned-PDF OCR | On-device through the macOS Vision framework |
@@ -938,7 +939,9 @@ The canonical desktop vault is:
 
 It is schema-versioned and stores all Spaces in one snapshot. Saves are serialized, flushed to a temporary file, and atomically replaced. Orion and its MCP server coordinate through a sibling advisory lock and revision checks so an external agent write cannot be silently overwritten by stale renderer state.
 
-An invalid or unsupported vault opens a recovery screen; Orion never silently replaces it with an empty library. A fresh installation starts completely empty—no sample notes, sources, or conversations are seeded.
+The desktop stores nonempty preserved source text separately under `attachments/sources/<sha256>.txt`, so ordinary note saves do not serialize and rewrite those imported texts. The schema-3 vault keeps references to those files; notes themselves remain in the main snapshot. Existing inline schema-2 libraries migrate automatically after the source files are safely stored, with a revision check protecting concurrent edits. Back up the application-data folder, including `attachments/`, rather than copying `vault.json` alone. Use the matching bundled MCP connector because older schema-2-only builds cannot read the new format.
+
+Desktop saves also keep rotating vault backups under `backups/`: three recent versions, seven daily representatives and four weekly representatives, with at least ten minutes between backups. Backup failures do not interrupt an ordinary save. An invalid or unsupported vault opens a recovery screen where available backups can be restored; Orion never silently replaces it with an empty library. Direct MCP writes do not create additional backups. A fresh installation starts completely empty—no sample notes, sources, or conversations are seeded.
 
 ## Repository map
 

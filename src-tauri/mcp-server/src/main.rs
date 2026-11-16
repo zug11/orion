@@ -3,14 +3,17 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::{
     cmp::Reverse,
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     env,
     ffi::{OsStr, OsString},
     fs::{self, File, OpenOptions},
     io::{self, BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
     process::ExitCode,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, OnceLock,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 use tempfile::NamedTempFile;
@@ -32,6 +35,9 @@ mod library;
 #[path = "../../shared/note_version.rs"]
 #[allow(dead_code)]
 mod note_version;
+#[path = "../../shared/source_text_ref.rs"]
+#[allow(dead_code)] // Write-side checks are used only by the native app.
+mod source_text_ref;
 #[path = "../../shared/voice_work_orders_protocol.rs"]
 #[allow(dead_code)]
 mod voice_work_orders_protocol;
@@ -41,8 +47,9 @@ mod working_view;
 const SERVER_NAME: &str = "orion";
 const LATEST_PROTOCOL_VERSION: &str = "2025-06-18";
 const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
-const VAULT_SCHEMA_VERSION: u64 = 2;
 const SPACE_SCHEMA_VERSION: u64 = 1;
+/// Preserved source text is immutable, so one process may keep what it has read.
+const MAX_CACHED_SOURCE_TEXT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_VAULT_BYTES: u64 = 256 * 1024 * 1024;
 const DEFAULT_RESULT_LIMIT: usize = 10;
 const MAX_RESULT_LIMIT: usize = 25;
@@ -180,10 +187,30 @@ struct Source {
     #[serde(default, deserialize_with = "deserialize_optional_string")]
     #[allow(dead_code)]
     import_guidance: Option<String>,
+    /// Inline text, or the preserved text loaded through `text_ref`.
     #[serde(default)]
     text: String,
+    /// `{ sha256, bytes, chars }` when the text lives beside the vault.
+    #[serde(default)]
+    text_ref: Option<Value>,
     #[serde(default)]
     note_ids: Vec<String>,
+}
+
+impl Source {
+    /// Content identity of externally stored text, known without reading it.
+    fn text_hash(&self) -> Option<&str> {
+        self.text_ref.as_ref()?.get("sha256")?.as_str()
+    }
+
+    /// Unicode-scalar length. Working-view masking preserves this count.
+    fn text_chars(&self) -> usize {
+        self.text_ref
+            .as_ref()
+            .and_then(|reference| reference.get("chars"))
+            .and_then(Value::as_u64)
+            .map_or_else(|| self.text.chars().count(), |chars| chars as usize)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1010,7 +1037,79 @@ fn read_vault(path: &Path) -> Result<Vault, ToolFailure> {
 
 fn read_vault_unlocked(path: &Path) -> Result<Vault, ToolFailure> {
     let value = read_vault_value_unlocked(path)?;
-    validate_vault_value(value)
+    let mut vault = validate_vault_value(value)?;
+    hydrate_source_texts(&mut vault, path)?;
+    Ok(vault)
+}
+
+#[derive(Default)]
+struct SourceTextCache {
+    texts: HashMap<String, Arc<str>>,
+    bytes: u64,
+}
+
+static SOURCE_TEXT_CACHE: OnceLock<Mutex<SourceTextCache>> = OnceLock::new();
+
+/// Loads preserved source text for read tools. The vault is reread for every
+/// call, but content-addressed text never changes, so it is read from disk once
+/// per process. Write tools work on raw records and never need the text.
+fn hydrate_source_texts(vault: &mut Vault, vault_path: &Path) -> Result<(), ToolFailure> {
+    if !vault
+        .spaces
+        .iter()
+        .any(|space| space.sources.iter().any(|source| source.text_ref.is_some()))
+    {
+        return Ok(());
+    }
+    let directory = source_text_ref::source_text_directory(vault_path).map_err(ToolFailure::new)?;
+    let mut cache = SOURCE_TEXT_CACHE
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut live = HashSet::new();
+    for space in &mut vault.spaces {
+        for source in &mut space.sources {
+            let Some(reference) = &source.text_ref else {
+                continue;
+            };
+            let reference =
+                source_text_ref::parse_source_text_ref(reference).map_err(ToolFailure::new)?;
+            let cached = cache
+                .texts
+                .get(&reference.sha256)
+                .filter(|text| text.len() as u64 == reference.bytes)
+                .cloned();
+            let text = match cached {
+                Some(text) => text,
+                None => {
+                    let text: Arc<str> =
+                        source_text_ref::read_source_text(&directory, &reference)
+                            .map_err(|_| {
+                                ToolFailure::new(format!(
+                                    "Orion's preserved text for the source “{}” is missing or damaged. Open Orion to check its library.",
+                                    truncate_chars(&source.title, 120).0
+                                ))
+                            })?
+                            .into();
+                    if let Some(previous) = cache
+                        .texts
+                        .insert(reference.sha256.clone(), Arc::clone(&text))
+                    {
+                        cache.bytes = cache.bytes.saturating_sub(previous.len() as u64);
+                    }
+                    cache.bytes += reference.bytes;
+                    text
+                }
+            };
+            source.text = text.to_string();
+            live.insert(reference.sha256);
+        }
+    }
+    if cache.bytes > MAX_CACHED_SOURCE_TEXT_BYTES {
+        cache.texts.retain(|hash, _| live.contains(hash));
+        cache.bytes = cache.texts.values().map(|text| text.len() as u64).sum();
+    }
+    Ok(())
 }
 
 fn read_vault_value_unlocked(path: &Path) -> Result<Value, ToolFailure> {
@@ -1045,12 +1144,17 @@ fn read_vault_value_unlocked(path: &Path) -> Result<Value, ToolFailure> {
 }
 
 fn validate_vault_value(value: Value) -> Result<Vault, ToolFailure> {
+    // Reference shape and schema invariants are checked on the raw records.
+    source_text_ref::vault_source_text_refs(&value)
+        .map_err(|error| ToolFailure::new(format!("Orion's vault JSON is invalid: {error}")))?;
     let vault: Vault = serde_json::from_value(value)
         .map_err(|error| ToolFailure::new(format!("Orion's vault JSON is invalid: {error}")))?;
-    if vault.schema_version != VAULT_SCHEMA_VERSION {
+    if !source_text_ref::supported_vault_schema(vault.schema_version) {
         return Err(ToolFailure::new(format!(
-            "Unsupported Orion vault schema {} (expected {}). Update Orion and this connector together.",
-            vault.schema_version, VAULT_SCHEMA_VERSION
+            "Unsupported Orion vault schema {} (expected {} or {}). Update Orion and this connector together.",
+            vault.schema_version,
+            source_text_ref::INLINE_VAULT_SCHEMA_VERSION,
+            source_text_ref::EXTERNAL_TEXT_VAULT_SCHEMA_VERSION
         )));
     }
     if vault

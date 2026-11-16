@@ -11,6 +11,7 @@ import { isSafeNoteImageUrl } from "../../lib/noteImages";
 import {
   defaultNoteImageLayout,
   escapeNoteImageMarkdownText,
+  unescapeNoteImageMarkdownText,
   normalizeNoteImageLayout,
   noteImageContentCss,
   noteImageContentStyle,
@@ -178,7 +179,7 @@ export const NoteImage = Image.extend({
     const parsed = parseNoteImageTitle(token.title);
     return helpers.createNode("image", {
       src: token.href,
-      alt: token.text,
+      alt: unescapeNoteImageMarkdownText(token.text),
       title: parsed.title,
       ...parsed.layout,
     });

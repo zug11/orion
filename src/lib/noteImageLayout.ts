@@ -164,3 +164,13 @@ export function noteImageContentCss(value: unknown): string {
 export function escapeNoteImageMarkdownText(value: unknown): string {
   return String(value ?? "").replace(/\\/g, "\\\\").replace(/([\[\]"])/g, "\\$1").replace(/\r?\n/g, " ");
 }
+
+/**
+ * Reverses `escapeNoteImageMarkdownText` for alt text read back from Markdown.
+ * The Markdown lexer already turns `\\[` and `\\]` back into brackets but leaves
+ * every other escape in place, so without this an alt containing a quote or a
+ * backslash gained another layer of backslashes on every save.
+ */
+export function unescapeNoteImageMarkdownText(value: unknown): string {
+  return String(value ?? "").replace(/\\([\\"])/g, "$1");
+}

@@ -70,8 +70,29 @@ export function mergeWindowVault(
       if (all.every((item) => recordId(item) !== undefined)) {
         const index = (items: unknown[]) => new Map(items.map((item) => [recordId(item)!, item]));
         const b = index(before), l = index(ours), r = index(theirs);
-        // Preserve established disk order; append only genuinely new local records.
-        const ids = [...new Set([...r.keys(), ...l.keys(), ...b.keys()])];
+        // Preserve established disk order. A record only this window has keeps
+        // its place relative to its local neighbours: a note created at the top
+        // of the list stays at the top instead of dropping to the end. Records
+        // another writer added at the same place come first, so appended chat
+        // messages keep the order in which they reached disk.
+        const inserts = new Map<string | null, string[]>();
+        let anchor: string | null = null;
+        for (const id of l.keys()) {
+          if (r.has(id)) { anchor = id; continue; }
+          const group = inserts.get(anchor);
+          if (group) group.push(id); else inserts.set(anchor, [id]);
+        }
+        const ids: string[] = [];
+        let pending = inserts.get(null) ?? [];
+        for (const id of r.keys()) {
+          const addedRemotely = !b.has(id) && !l.has(id);
+          if (!addedRemotely && pending.length) { ids.push(...pending); pending = []; }
+          ids.push(id);
+          const group = inserts.get(id);
+          if (group) pending = group;
+        }
+        ids.push(...pending);
+        for (const id of b.keys()) if (!r.has(id) && !l.has(id)) ids.push(id);
         return ids.flatMap((id) => {
           const item = l.get(id) ?? r.get(id) ?? b.get(id);
           const name = object(item) ? item.title ?? (object(item.workspace) ? item.workspace.name : undefined) ?? id : id;

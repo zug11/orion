@@ -29,6 +29,54 @@ describe('local calendar recognition', () => {
     expect(read({ ...note('Tomorrow. 2026. 3pm. Version 2.6.'), updatedAt: '' })).toEqual([]);
     expect(read(note('500 MB, version 2.6. In November, at 3pm.'))).toEqual([]);
   });
+  it.each([
+    'The Sun is a star and Mon is French for my.',
+    'He sat by the window. They wed in June.',
+    'In the 1990s the field changed, and 80s music with it.',
+    'The talk lasted 45 minutes.',
+    'Back in 45 minutes, or within 2 hours.',
+    'It takes 3 days to ship and we waited for 2 weeks.',
+    'A 5 minute walk, a 5m cable and a 10s timeout.',
+    'For the next 3 days, as in the past week.',
+    'A few days ago, or in a couple of days.',
+    'Score was 3/4 of the total.',
+    'Ratio 10/12 and 1/2 cup.',
+    'They offer 24/7 support.',
+    'We have 3 options now.',
+    'Take the lift on the 15th floor.',
+    'It worked on the 3rd attempt.',
+  ])('does not turn ordinary prose into a date: %s', (body) => {
+    expect(read(note(body))).toEqual([]);
+  });
+  it.each([
+    ['Due Mon.', '2026-11-16', 'Mon.'],
+    ['Wed 18th review.', '2026-11-18', 'Wed'],
+    ['Mon: gym', '2026-11-16', 'Mon'],
+    ['Ship in 3 days.', '2026-11-16', 'in 3 days'],
+    ['Reply in a week.', '2026-11-20', 'in a week'],
+    ['Started two weeks ago.', '2026-10-30', 'two weeks ago'],
+    ['Answer within 2 weeks.', '2026-11-27', 'within 2 weeks'],
+    ['Close the books at the end of month.', '2026-11-30', 'end of month'],
+    ['Dentist on 3/4.', '2027-04-03', '3/4'],
+    ['12/5 dentist', '2027-05-12', '12/5'],
+    ['Dentist: 3/4', '2027-04-03', '3/4'],
+    ['Pay rent on the 15th.', '2026-11-15', 'on the 15th'],
+    ['Renewal is on the 13th, so call first.', '2026-11-13', 'on the 13th'],
+    ['Send it by the 12th', '2026-12-12', 'by the 12th'],
+    ['Invoice due by the 31st.', '2026-12-31', 'by the 31st'],
+  ])('keeps a date its wording or surroundings establish: %s', (body, date, phrase) => {
+    expect(read(note(body)).map(entry => [entry.date, entry.phrase])).toEqual([[date, phrase]]);
+  });
+  it('finds a relative phrase whether or not its paragraph also contains a digit', () => {
+    expect(read(note('Reply in a week.')).map(d => d.date)).toEqual(['2026-11-20']);
+    expect(read(note('Reply to all 4 of them in a week.')).map(d => d.date)).toEqual(['2026-11-20']);
+  });
+  it('reads a phrase cut by a scan window once, with its full wording', () => {
+    const lead = 'word '.repeat(406) + 'abc '; // The year straddles the first window's end.
+    const dates = read(note(`${lead}23 November 2027 and nothing else.`));
+    expect(lead.length).toBe(2034);
+    expect(dates.map(d => [d.date, d.phrase])).toEqual([['2027-11-23', '23 November 2027']]);
+  });
   it('reuses completed immutable note scans and reads beyond a long opening', () => {
     const n = note('ordinary prose '.repeat(4000) + '\n\nMeet on 23 November 2026.');
     const dates = read(n); expect(dates[dates.length-1]?.date).toBe('2026-11-23');

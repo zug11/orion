@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PreparedDictation } from "../lib/dictationCleanup";
-import { prepareDictation } from "../lib/dictationCleanup";
+import { DictationNotInsertedError, prepareDictation } from "../lib/dictationCleanup";
 import type { Note } from "../types";
 import type { VoiceMemoButton } from "./VoiceMemoButton";
 import { RichNoteEditor } from "./RichNoteEditor";
@@ -310,6 +310,25 @@ describe("dictation cleanup in the real rich note editor", () => {
       pending.resolve({ original: "Original words.", blocks: [{ kind: "paragraph", text: "Late words." }], notice: "Cleaned" });
       await expect(completion).rejects.toThrow(/note changed/);
     });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("still archives a recording that finishes after its editor is gone", async () => {
+    const prepare = vi.fn().mockResolvedValue({ original: "Original words.", sourceId: "source-dictation-session", notice: "Original dictation inserted." });
+    const { editor, onChange, unmount } = await fixture({ onPrepareDictation: prepare });
+    await start(editor);
+    // A recording that outlives its note completes through the callback it captured.
+    const complete = memo.current!.onComplete;
+    unmount();
+    const left = new AbortController();
+    left.abort();
+    const error = await complete("dictation-session", "Original words.", { signal: left.signal, onPhase: vi.fn() }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(DictationNotInsertedError);
+    expect((error as DictationNotInsertedError).sourceId).toBe("source-dictation-session");
+    // The original is archived without AI cleanup, and nothing is inserted anywhere.
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(prepare.mock.calls[0][1]).toBe("Original words.");
+    expect(prepare.mock.calls[0][2].signal.aborted).toBe(true);
     expect(onChange).not.toHaveBeenCalled();
   });
 

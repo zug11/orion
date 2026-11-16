@@ -47,6 +47,10 @@ mod knowledge_schemas;
 mod note_version;
 mod openai_web;
 mod perplexity;
+#[path = "../shared/source_text_ref.rs"]
+mod source_text_ref;
+mod source_texts;
+mod vault_backups;
 #[path = "../shared/voice_work_orders_protocol.rs"]
 mod voice_work_orders_protocol;
 use knowledge_schemas::{
@@ -1447,6 +1451,10 @@ fn write_vault_file(path: &Path, vault: &Value) -> Result<(), String> {
         .sync_all()
         .map_err(|error| format!("Orion could not secure the vault save to disk: {error}"))?;
 
+    // Keep the version being replaced. The new file gets a new inode, so a hard
+    // link made now continues to hold the old content.
+    vault_backups::backup_before_replace(path, time::OffsetDateTime::now_utc());
+
     temporary.persist(path).map_err(|error| {
         format!(
             "Orion could not replace the local vault atomically: {}",
@@ -1479,6 +1487,13 @@ fn write_vault_file_if_current(
             "{VAULT_CONFLICT_PREFIX}: Orion changed outside this window. Reload the latest vault before saving."
         ));
     }
+
+    // Source text lives beside the vault. Never publish a vault that refers to
+    // text which is not safely on disk yet.
+    source_text_ref::verify_vault_source_texts(
+        vault,
+        &source_text_ref::source_text_directory(path)?,
+    )?;
 
     write_vault_file(path, vault)
 }
@@ -1524,7 +1539,10 @@ async fn save_vault(
         let lock = vault_lock_file(&path)?;
         lock.lock_exclusive()
             .map_err(|error| format!("Orion could not lock the vault for saving: {error}"))?;
-        write_vault_file_if_current(&path, &vault, expected_updated_at.as_deref())
+        write_vault_file_if_current(&path, &vault, expected_updated_at.as_deref())?;
+        // Still under the write lock: no other writer can add a reference now.
+        source_texts::prune_after_save(&path, &vault, &vault_backups::backup_paths(&path));
+        Ok(())
     })
     .await
     .map_err(|error| format!("The vault save task could not finish: {error}"))?;
@@ -5003,6 +5021,10 @@ pub fn run() {
             assistant_review::assistant_review_saved,
             assistant_review::assistant_review_fail,
             save_note_image,
+            source_texts::save_source_texts,
+            source_texts::load_source_texts,
+            vault_backups::list_vault_backups,
+            vault_backups::restore_vault_backup,
             generate_note_image,
             image_planning::plan_note_image,
             dictation_cleanup::cleanup_dictation,

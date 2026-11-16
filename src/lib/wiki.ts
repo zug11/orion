@@ -38,11 +38,33 @@ interface LinkCandidate {
   normalizedPhrase: string;
   concept: Concept;
   isLabel: boolean;
+  /** Position in preference order: longest phrase first, labels before aliases. */
+  rank: number;
+  /** Sticky pattern for this phrase alone, compiled the first time it is tried. */
+  pattern?: RegExp;
 }
 
+interface LinkTrieNode {
+  children: Map<string, LinkTrieNode>;
+  /** Phrases whose words end here. They may still carry punctuation. */
+  phrases?: LinkCandidate[];
+}
+
+/**
+ * Phrases indexed by their words, so matching costs the same however large the
+ * vocabulary is and however many phrases share an opening word. One alternation
+ * of every phrase was simple, but a JavaScript engine stops compiling a pattern
+ * natively once it is large enough: past a few hundred concepts every
+ * decoration pass became hundreds of times slower.
+ *
+ * The index only proposes candidates. Each phrase's own pattern still decides
+ * what matches, so whitespace, dash, apostrophe and case rules are unchanged.
+ */
 interface CompiledLinkMatcher {
-  byNormalizedPhrase: Map<string, LinkCandidate[]>;
-  pattern: RegExp | null;
+  /** Phrases that begin with a word character, as a trie of folded words. */
+  words: LinkTrieNode;
+  /** Phrases that begin with anything else, by their first character. */
+  byFirstSymbol: Map<string, LinkCandidate[]>;
 }
 
 const WORD_CHARACTER = /[\p{L}\p{N}_]/u;
@@ -73,48 +95,85 @@ export function decorateAutoLinks(
     options.excludeConceptIds,
     options.excludeNoteIdFromTargets,
   );
-  if (!matcher.pattern) {
+  if (matcher.words.children.size === 0 && matcher.byFirstSymbol.size === 0) {
     return [{ type: "text", text, start: 0, end: text.length }];
   }
   const segments: AutoLinkSegment[] = [];
   let textStart = 0;
   let protectedIndex = 0;
-  matcher.pattern.lastIndex = 0;
-  let match: RegExpExecArray | null;
+  let index = 0;
 
-  while ((match = matcher.pattern.exec(text)) !== null) {
-    const start = match.index;
-    const end = start + match[0].length;
+  // A phrase that begins with a word character can only start at the start of
+  // a word, so whole words are stepped over and looked up once each.
+  while (index < text.length) {
     while (
       protectedIndex < protectedRanges.length &&
-      protectedRanges[protectedIndex].end <= start
+      protectedRanges[protectedIndex].end <= index
     ) {
       protectedIndex += 1;
     }
-
     const protectedRange = protectedRanges[protectedIndex];
-    if (
-      protectedRange &&
-      start < protectedRange.end &&
-      end > protectedRange.start
-    ) {
+    if (protectedRange && index >= protectedRange.start) {
+      index = protectedRange.end;
       continue;
     }
 
-    const phraseCandidates =
-      matcher.byNormalizedPhrase.get(normalize(match[0])) ?? [];
-    const candidate = phraseCandidates.find(
-      (item) =>
-        candidateMatchesValue(text, start, end, item) &&
-        (!options.excludeNoteIdFromTargets ||
-          item.concept.noteIds.some(
+    const code = text.codePointAt(index)!;
+    const size = code > 0xffff ? 2 : 1;
+    let wordEnd = index;
+    let bucket: LinkCandidate[] | undefined;
+    if (isWordCode(code)) {
+      wordEnd = wordRunEnd(text, index);
+      // Follow the text's words down the trie. Every phrase met on the way
+      // has the same words as the text here; nothing else can match.
+      let node = matcher.words.children.get(foldKey(text.slice(index, wordEnd)));
+      let cursor = wordEnd;
+      while (node) {
+        if (node.phrases) bucket = bucket ? [...bucket, ...node.phrases] : node.phrases;
+        if (node.children.size === 0) break;
+        const nextStart = nextWordStart(text, cursor);
+        if (nextStart >= text.length) break;
+        cursor = wordRunEnd(text, nextStart);
+        node = node.children.get(foldKey(text.slice(nextStart, cursor)));
+      }
+      if (bucket && bucket.length > 1) {
+        bucket = [...bucket].sort((left, right) => left.rank - right.rank);
+      }
+    } else if (matcher.byFirstSymbol.size > 0) {
+      bucket = matcher.byFirstSymbol.get(symbolKey(text.slice(index, index + size)));
+    }
+
+    let matched: { candidate: LinkCandidate; end: number } | undefined;
+    for (const candidate of bucket ?? []) {
+      const pattern = (candidate.pattern ??= new RegExp(
+        linkPhrasePattern(candidate.phrase),
+        "iuy",
+      ));
+      pattern.lastIndex = index;
+      const found = pattern.exec(text);
+      if (!found) continue;
+      const end = index + found[0].length;
+      if (
+        (protectedRange && end > protectedRange.start) ||
+        !candidateMatchesValue(text, index, end, candidate) ||
+        (options.excludeNoteIdFromTargets &&
+          !candidate.concept.noteIds.some(
             (noteId) => noteId !== options.excludeNoteIdFromTargets,
-          )),
-    );
+          ))
+      ) {
+        // A longer phrase that fails here must not hide a shorter one.
+        continue;
+      }
+      matched = { candidate, end };
+      break;
+    }
 
-    if (!candidate) {
+    if (!matched) {
+      index = wordEnd > index ? wordEnd : index + size;
       continue;
     }
+    const { candidate, end } = matched;
+    const start = index;
 
     if (textStart < start) {
       segments.push({
@@ -145,6 +204,7 @@ export function decorateAutoLinks(
     });
 
     textStart = end;
+    index = end;
   }
 
   if (textStart < text.length) {
@@ -693,6 +753,7 @@ function getCompiledLinkMatcher(
         normalizedPhrase,
         concept,
         isLabel: index === 0,
+        rank: 0,
       });
     }
   }
@@ -703,21 +764,35 @@ function getCompiledLinkMatcher(
       Number(b.isLabel) - Number(a.isLabel) ||
       a.phrase.localeCompare(b.phrase),
   );
-  const byNormalizedPhrase = new Map<string, LinkCandidate[]>();
-  const patterns = new Set<string>();
-  for (const candidate of candidates) {
-    const matching = byNormalizedPhrase.get(candidate.normalizedPhrase) ?? [];
-    matching.push(candidate);
-    byNormalizedPhrase.set(candidate.normalizedPhrase, matching);
-    patterns.add(linkPhrasePattern(candidate.phrase));
-  }
   const compiled: CompiledLinkMatcher = {
-    byNormalizedPhrase,
-    pattern:
-      patterns.size > 0
-        ? new RegExp(`(?:${[...patterns].join("|")})`, "giu")
-        : null,
+    words: { children: new Map() },
+    byFirstSymbol: new Map(),
   };
+  for (const [rank, candidate] of candidates.entries()) {
+    candidate.rank = rank;
+    const phrase = candidate.phrase;
+    const first = phrase.codePointAt(0)!;
+    if (!isWordCode(first)) {
+      const key = symbolKey(phrase.slice(0, first > 0xffff ? 2 : 1));
+      const bucket = compiled.byFirstSymbol.get(key);
+      if (bucket) bucket.push(candidate);
+      else compiled.byFirstSymbol.set(key, [candidate]);
+      continue;
+    }
+    let node = compiled.words;
+    for (let start = 0; start < phrase.length; start = nextWordStart(phrase, start)) {
+      const end = wordRunEnd(phrase, start);
+      const key = foldKey(phrase.slice(start, end));
+      let child = node.children.get(key);
+      if (!child) {
+        child = { children: new Map() };
+        node.children.set(key, child);
+      }
+      node = child;
+      start = end;
+    }
+    (node.phrases ??= []).push(candidate);
+  }
   if (!excluded) {
     const cacheKey = excludedTargetNoteId ?? "";
     const cache = compiledMatcherCache.get(concepts) ?? new Map();
@@ -753,6 +828,64 @@ function candidateMatchesValue(
     (beginsWithWord && before && WORD_CHARACTER.test(before)) ||
     (endsWithWord && after && WORD_CHARACTER.test(after))
   );
+}
+
+function isWordCode(code: number): boolean {
+  if (code < 128) {
+    return (
+      (code >= 97 && code <= 122) ||
+      (code >= 65 && code <= 90) ||
+      (code >= 48 && code <= 57) ||
+      code === 95
+    );
+  }
+  return WORD_CHARACTER.test(String.fromCodePoint(code));
+}
+
+/** End of the run of word characters that starts at `start`. */
+function wordRunEnd(text: string, start: number): number {
+  let end = start;
+  while (end < text.length) {
+    const code = text.codePointAt(end)!;
+    if (!isWordCode(code)) break;
+    end += code > 0xffff ? 2 : 1;
+  }
+  return end;
+}
+
+/** Start of the next word at or after `from`, or the text's length. */
+function nextWordStart(text: string, from: number): number {
+  let start = from;
+  while (start < text.length) {
+    const code = text.codePointAt(start)!;
+    if (isWordCode(code)) break;
+    start += code > 0xffff ? 2 : 1;
+  }
+  return start;
+}
+
+// Characters whose case-insensitive match is not their lower-case form.
+const FOLD_VARIANTS: Record<string, string> = {
+  "ſ": "s", "ς": "σ", "ϐ": "β", "ϑ": "θ", "ϕ": "φ", "ϖ": "π",
+  "ϰ": "κ", "ϱ": "ρ", "ϵ": "ε", "ẛ": "ṡ", "\u1fbe": "ι",
+};
+
+/**
+ * Index key for a run of word characters. Two runs that a case-insensitive
+ * Unicode pattern would match always share a key; the phrase's own pattern
+ * then decides, so a shared key never creates a match by itself.
+ */
+function foldKey(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[ſςϐϑϕϖϰϱϵẛ\u1fbe]/gu, (character) => FOLD_VARIANTS[character]);
+}
+
+/** Index key for a phrase's first character when it is not a word character. */
+function symbolKey(character: string): string {
+  if (/[‐‑‒–—−-]/u.test(character)) return "-";
+  if (/['‘’]/u.test(character)) return "'";
+  return foldKey(character);
 }
 
 function linkPhrasePattern(phrase: string): string {

@@ -121,6 +121,12 @@ These product decisions are intentional:
   prevents a late insertion into another/replaced note. The completed original
   remains in its originating Space. Each audio recording is discarded after its
   transcription command finishes; cleanup never sends audio to a provider.
+  Leaving a note during recording stops capture and lets its existing session
+  finish pending transcription and preserve the original in the originating
+  Space. The detached session never inserts into another note. Its outcome is
+  reported through the App-owned dictation outcome listener, including failure.
+  Native Whisper sessions have separate worker locks and bounded startup/request
+  waits; never hold the global session-map lock over blocking worker I/O.
   After Stop, show processing only in the existing microphone button; do not
   display transcription, recovery-saving, cleanup or success status bubbles.
   Keep the recording timer and actionable errors visible. During AI cleanup the
@@ -437,6 +443,7 @@ src/lib/aiImagePlanningProtocol.json shared read-only image planning instruction
 src-tauri/src/image_planning.rs     cancellable provider transport for illustration plans
 src/lib/studio.ts                   dormant Studio-state normalization
 src/lib/storage.ts                  validated IPC and browser-preview fallbacks
+src/lib/sourceTextStore.ts          source-text externalization, hydration and cache
 src/lib/transcription.ts            transcript-to-source normalization
 src/lib/tasks.ts                    Space task extraction and persisted toggles
 src/lib/tickets.ts                  cached note-backed tickets and board markers
@@ -449,6 +456,9 @@ src/components/Tickets.tsx         shared board, inline ticket entry and creatio
 src/lib/webExport.tsx               offline HTML scope, rendering, and privacy
 src-tauri/src/lib.rs                native commands and trust boundaries
 src-tauri/src/local_transcription.rs offline media/dictation, Whisper runtime and speech alignment
+src-tauri/src/source_texts.rs       content-addressed source files and guarded pruning
+src-tauri/shared/source_text_ref.rs shared desktop/MCP source-reference validation
+src-tauri/src/vault_backups.rs      rotating vault backups and guarded restoration
 src-tauri/src/knowledge_schemas.rs  pure organizer/knowledge JSON schemas and provider schema adapters
 src-tauri/src/connector_installation.rs bundled connector validation and native install-page openers
 src-tauri/src/chat_reading.rs       bounded reading schemas, requests, checkpoints and parser tests
@@ -585,6 +595,32 @@ The canonical desktop vault is `vault.json` in Tauri's application data folder
 for `app.orion.knowledge`. It is a schema-versioned `OrionVault` containing one
 or more schema-versioned `AppSnapshot` Spaces. Saves are serialized and use a
 flushed temporary file plus atomic replacement.
+
+Desktop vaults with external source text use on-disk schema 3. Nonempty source
+text is stored at `attachments/sources/<sha256>.txt`; the source record carries
+`textRef: { sha256, bytes, chars }` instead of `text`. The renderer's in-memory
+model and browser preview remain schema 2 with ordinary `Source.text` strings.
+`sourceTextStore.ts` hydrates desktop loads and externalizes saves, including
+assistant workflow commits, with cached text and bounded host requests. Existing
+inline schema-2 vaults remain readable; background migration stores source files
+first and guards the vault replacement with the captured revision. Notes remain
+in `vault.json`; this is source-text separation, not per-note persistence.
+
+The native host validates content hashes and lengths when loading source text,
+and rejects a vault write if a referenced file is missing or has the wrong size.
+Source cleanup is throttled and preserves references from the live vault and
+retained backups, with a seven-day grace period for unreferenced files. Package
+the app and MCP connector together: older schema-2-only binaries reject schema 3
+rather than reading its source records as empty.
+
+Desktop vault replacement makes best-effort rotating backups under `backups/`,
+using hard links where possible. Retain three recent versions, seven daily and
+four weekly representatives, at least ten minutes apart. A failed-load screen
+offers retained backups; restoration uses the ordinary vault write locks and
+sets the replaced file aside before writing the chosen backup. Failed backup
+creation must not prevent an ordinary save. Backup rotation currently belongs
+to the desktop host; direct MCP writes preserve source references but do not
+create an additional backup.
 
 - Never silently replace an invalid vault with an empty one.
 - Never persist either provider key in the vault, browser storage, logs,
@@ -804,8 +840,11 @@ ordinary Claude user to configure a filesystem path.
 Preserve these trust boundaries:
 
 - Reread `vault.json` for every tool call so Claude sees current Orion data.
-- Validate vault schema 2 and Space schema 1; never interpret an invalid file as
-  an empty atlas.
+- Validate vault schema 2 or 3 and Space schema 1; never interpret an invalid
+  file as an empty atlas. Schema 3 source references use the shared
+  `source_text_ref` module. Read tools hydrate preserved text with a process
+  cache; write tools operate on raw records and retain references without
+  re-inlining source text.
 - Browse, search, note lookup, source lookup, and the living Space overview
   default only to `activeSpaceId` when `space_id` is omitted and must never
   implicitly span every Space. An ID in another Space must not resolve.

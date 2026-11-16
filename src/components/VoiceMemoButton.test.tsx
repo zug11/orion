@@ -326,3 +326,130 @@ describe("VoiceMemoButton", () => {
     expect(screen.getByRole("button", { name: "Start dictation" })).toBeEnabled();
   });
 });
+
+describe("VoiceMemoButton leaving its note", () => {
+  function microphone() {
+    const stopTrack = vi.fn();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
+      getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: stopTrack }] }),
+    } });
+    vi.stubGlobal("MediaRecorder", FakeMediaRecorder);
+    return stopTrack;
+  }
+
+  async function outcomes() {
+    const { onDetachedDictation } = await import("../lib/dictationOutcome");
+    const seen: unknown[] = [];
+    const stop = onDetachedDictation((outcome) => seen.push(outcome));
+    return { seen, stop };
+  }
+
+  it("finishes transcribing and archives the original instead of discarding the recording", async () => {
+    const { DictationNotInsertedError } = await import("../lib/dictationCleanup");
+    const stopTrack = microphone();
+    const { seen, stop } = await outcomes();
+    const onTranscribe = vi.fn().mockResolvedValue("Ten minutes of thinking aloud.");
+    // The editor archives the original, then refuses to insert into a note that is gone.
+    const onComplete = vi.fn(async (_id: string, _text: string, _options: { signal: AbortSignal }) => { throw new DictationNotInsertedError("This note changed, so dictation was not inserted. Its original is saved in Sources.", "source-dictation-1"); });
+    const onSessionEnd = vi.fn();
+    const view = render(<VoiceMemoButton noteId="note-one" onTranscribe={onTranscribe} onComplete={onComplete} onSessionEnd={onSessionEnd}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Start dictation" }));
+    await screen.findByRole("button", { name: /Stop dictation/ });
+
+    view.unmount();
+
+    await waitFor(() => expect(onSessionEnd).toHaveBeenCalledTimes(1));
+    // The microphone is released at once and the audio recorded so far is kept.
+    expect(stopTrack).toHaveBeenCalledTimes(1);
+    expect(onTranscribe).toHaveBeenCalledTimes(1);
+    expect(onTranscribe.mock.calls[0][0]).toMatchObject({ size: 3, type: "audio/mp4" });
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[0][1]).toBe("Ten minutes of thinking aloud.");
+    // Nothing will be inserted, so no AI cleanup is requested either.
+    expect(onComplete.mock.calls[0][2].signal.aborted).toBe(true);
+    expect(seen).toEqual([{ saved: true }]);
+    stop();
+  });
+
+  it("keeps the leaving note's callbacks and gives the next note a clean, independent button", async () => {
+    vi.useFakeTimers();
+    microphone();
+    const { seen, stop } = await outcomes();
+    let finishFirst!: (text: string) => void;
+    const first = {
+      onTranscribe: vi.fn()
+        .mockImplementationOnce(() => new Promise<string>((resolve) => { finishFirst = resolve; }))
+        .mockResolvedValueOnce("and the rest."),
+      onComplete: vi.fn().mockResolvedValue(undefined),
+      onSessionEnd: vi.fn(),
+    };
+    const second = { onTranscribe: vi.fn().mockResolvedValue("Second note."), onComplete: vi.fn().mockResolvedValue(undefined), onSessionEnd: vi.fn() };
+    const view = render(<VoiceMemoButton noteId="note-one" {...first}/>);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start dictation" })); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(VOICE_MEMO_SEGMENT_MS); });
+    expect(first.onTranscribe).toHaveBeenCalledTimes(1);
+
+    // The same editor now shows another note, with that note's callbacks.
+    await act(async () => { view.rerender(<VoiceMemoButton noteId="note-two" {...second}/>); });
+    const start = screen.getByRole("button", { name: "Start dictation" });
+    expect(start).toBeEnabled();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    // The new note can record while the first recording is still finishing.
+    await act(async () => { fireEvent.click(start); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Stop dictation/ })); });
+    expect(second.onComplete).toHaveBeenCalledTimes(1);
+    expect(second.onComplete.mock.calls[0][1]).toBe("Second note.");
+    expect(second.onComplete.mock.calls[0][2].signal.aborted).toBe(false);
+    expect(first.onComplete).not.toHaveBeenCalled();
+
+    await act(async () => { finishFirst("The first half,"); });
+    expect(first.onTranscribe).toHaveBeenCalledTimes(2);
+    expect(second.onTranscribe).toHaveBeenCalledTimes(1);
+    expect(first.onComplete).toHaveBeenCalledTimes(1);
+    expect(first.onComplete.mock.calls[0][1]).toBe("The first half, and the rest.");
+    expect(first.onSessionEnd).toHaveBeenCalledTimes(1);
+    expect(second.onSessionEnd).toHaveBeenCalledTimes(1);
+    expect(seen).toEqual([{ saved: true }]);
+    expect(screen.getByRole("button", { name: "Start dictation" })).toBeEnabled();
+    stop();
+  });
+
+  it("reports a recording that could not be saved after its note was left", async () => {
+    microphone();
+    const { seen, stop } = await outcomes();
+    const onSessionEnd = vi.fn();
+    const view = render(<VoiceMemoButton noteId="note-one" onTranscribe={vi.fn().mockRejectedValue(new Error("Whisper worker stopped."))} onComplete={vi.fn()} onSessionEnd={onSessionEnd}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Start dictation" }));
+    await screen.findByRole("button", { name: /Stop dictation/ });
+    view.unmount();
+    await waitFor(() => expect(onSessionEnd).toHaveBeenCalledTimes(1));
+    expect(seen).toEqual([{ saved: false, message: "Whisper worker stopped." }]);
+
+    // An archive that fails is reported too, never swallowed.
+    const failing = render(<VoiceMemoButton noteId="note-two" onTranscribe={vi.fn().mockResolvedValue("Spoken.")} onComplete={vi.fn().mockRejectedValue(new Error("This note changed before dictation could be inserted."))}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Start dictation" }));
+    await screen.findByRole("button", { name: /Stop dictation/ });
+    failing.unmount();
+    await waitFor(() => expect(seen).toHaveLength(2));
+    expect(seen[1]).toEqual({ saved: false, message: "This note changed before dictation could be inserted." });
+    stop();
+  });
+
+  it("releases a microphone that is granted only after the note was left", async () => {
+    const stopTrack = vi.fn();
+    let grant!: (stream: unknown) => void;
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
+      getUserMedia: vi.fn(() => new Promise((resolve) => { grant = resolve; })),
+    } });
+    vi.stubGlobal("MediaRecorder", FakeMediaRecorder);
+    const onSessionStart = vi.fn();
+    const view = render(<VoiceMemoButton noteId="note-one" onSessionStart={onSessionStart} onTranscribe={vi.fn()} onComplete={vi.fn()}/>);
+    fireEvent.click(screen.getByRole("button", { name: "Start dictation" }));
+    view.unmount();
+    await act(async () => { grant({ getTracks: () => [{ stop: stopTrack }] }); });
+    expect(stopTrack).toHaveBeenCalledTimes(1);
+    expect(onSessionStart).not.toHaveBeenCalled();
+    expect(FakeMediaRecorder.instances).toHaveLength(0);
+  });
+});

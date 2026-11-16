@@ -314,7 +314,10 @@ impl EditorActionsStore {
         FileExt::lock_shared(&file).map_err(|_| "The library is busy.")?;
         let v =
             crate::read_vault_file(&self.path)?.ok_or("Open Orion once to create its library.")?;
-        if v["schemaVersion"] != json!(2) {
+        if !v["schemaVersion"]
+            .as_u64()
+            .is_some_and(crate::source_text_ref::supported_vault_schema)
+        {
             return Err("Invalid library schema.".into());
         }
         sweep(&mut s, &v);

@@ -11,8 +11,11 @@ use std::{
     fs,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-    sync::{Arc, Mutex},
+    process::{Child, ChildStdin, Command, Stdio},
+    sync::{
+        mpsc::{self, Receiver, RecvTimeoutError},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 use tauri::{AppHandle, Manager, State};
@@ -29,6 +32,12 @@ const BUNDLED_WHISPER_MODEL_NAME: &str = "ggml-model.bin";
 const BUNDLED_YT_DLP_NAME: &str = "yt-dlp";
 const BUNDLED_DENO_NAME: &str = "deno";
 const MIN_BUNDLED_MODEL_BYTES: u64 = 400 * 1024 * 1024;
+/// A dictation worker that has not answered by then is treated as hung. Each
+/// window is at most 32 seconds of audio, so these are far above normal work.
+const VOICE_MEMO_WORKER_START_TIMEOUT: Duration = Duration::from_secs(120);
+const VOICE_MEMO_WORKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+/// One independent two-minute dictation segment in the Small edition.
+const VOICE_MEMO_SEGMENT_TIMEOUT: Duration = Duration::from_secs(240);
 const MEDIA_EXTENSIONS: &[&str] = &[
     "flac", "m4a", "mp3", "mp4", "mpeg", "mpga", "ogg", "wav", "webm",
 ];
@@ -64,24 +73,54 @@ pub(super) struct TranscriptionRuntime {
     deno: PathBuf,
 }
 
-struct VoiceMemoWorker {
-    child: Child,
+/// One request at a time talks to a worker through this.
+struct VoiceMemoWorkerIo {
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    /// Lines from the worker. A reader thread forwards them so a request can
+    /// time out; a blocking read on the pipe could not.
+    responses: Receiver<std::io::Result<String>>,
     next_request_id: u64,
+}
+
+struct VoiceMemoWorker {
+    /// Never held across blocking work, so a worker can always be stopped,
+    /// including while a request is waiting on it.
+    child: Mutex<Child>,
+    io: Mutex<VoiceMemoWorkerIo>,
+}
+
+impl VoiceMemoWorker {
+    /// Ends the process. Its output pipe closes, which ends the reader thread
+    /// and fails any request still waiting.
+    fn stop(&self) {
+        let mut child = self
+            .child
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }
 
 impl Drop for VoiceMemoWorker {
     fn drop(&mut self) {
-        let _ = self.stdin.write_all(b"{\"quit\":true}\n");
-        let _ = self.stdin.flush();
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.stop();
     }
 }
 
+/// The map lock is held only to look a session up, insert it or remove it,
+/// never while a worker loads its model or transcribes. One slow or hung
+/// worker therefore cannot block dictation in another window, or its own stop.
 #[derive(Clone, Default)]
-pub(super) struct VoiceMemoWorkers(Arc<Mutex<HashMap<String, VoiceMemoWorker>>>);
+pub(super) struct VoiceMemoWorkers(Arc<Mutex<HashMap<String, Arc<VoiceMemoWorker>>>>);
+
+impl VoiceMemoWorkers {
+    fn sessions(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<VoiceMemoWorker>>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
 
 #[derive(Serialize)]
 struct VoiceMemoWorkerRequest<'a> {
@@ -277,6 +316,7 @@ fn launch_voice_memo_worker(
     runtime: &TranscriptionRuntime,
     language: Option<&str>,
     use_cpu: bool,
+    start_timeout: Duration,
 ) -> Result<VoiceMemoWorker, String> {
     let mut command = Command::new(&runtime.whisper);
     command
@@ -295,25 +335,64 @@ fn launch_voice_memo_worker(
     let mut child = command
         .spawn()
         .map_err(|error| format!("Orion could not start its persistent Whisper worker: {error}"))?;
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "The persistent Whisper worker has no input channel.".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "The persistent Whisper worker has no output channel.".to_string())?;
-    let mut worker = VoiceMemoWorker {
-        child,
-        stdin,
-        stdout: BufReader::new(stdout),
-        next_request_id: 1,
+    let stdin = child.stdin.take();
+    let stdout = child.stdout.take();
+    // From here the worker owns the process: any early return stops it.
+    let (sender, responses) = mpsc::channel();
+    let worker = VoiceMemoWorker {
+        child: Mutex::new(child),
+        io: Mutex::new(VoiceMemoWorkerIo {
+            stdin: stdin
+                .ok_or_else(|| "The persistent Whisper worker has no input channel.".to_string())?,
+            responses,
+            next_request_id: 1,
+        }),
     };
-    let mut ready_line = String::new();
-    worker
-        .stdout
-        .read_line(&mut ready_line)
-        .map_err(|error| format!("The persistent Whisper worker could not initialize: {error}"))?;
+    let stdout =
+        stdout.ok_or_else(|| "The persistent Whisper worker has no output channel.".to_string())?;
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                // End of output. Dropping the sender tells the waiting request.
+                Ok(0) => break,
+                Ok(_) => {
+                    if sender.send(Ok(line)).is_err() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    let _ = sender.send(Err(error));
+                    break;
+                }
+            }
+        }
+    });
+    let ready = worker
+        .io
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .responses
+        .recv_timeout(start_timeout);
+    let ready_line = match ready {
+        Ok(Ok(line)) => line,
+        Ok(Err(error)) => {
+            return Err(format!(
+                "The persistent Whisper worker could not initialize: {error}"
+            ))
+        }
+        Err(RecvTimeoutError::Timeout) => {
+            return Err(
+                "The persistent Whisper worker took too long to load its model.".to_string(),
+            )
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            return Err(
+                "The persistent Whisper worker stopped while loading its model.".to_string(),
+            )
+        }
+    };
     let response: VoiceMemoWorkerResponse =
         serde_json::from_str(ready_line.trim()).map_err(|_| {
             "The persistent Whisper worker returned an invalid startup response.".to_string()
@@ -331,9 +410,10 @@ fn start_voice_memo_worker(
     language: Option<String>,
 ) -> Result<VoiceMemoWorker, String> {
     validate_whisper_runtime(runtime)?;
-    match launch_voice_memo_worker(runtime, language.as_deref(), false) {
+    let timeout = VOICE_MEMO_WORKER_START_TIMEOUT;
+    match launch_voice_memo_worker(runtime, language.as_deref(), false, timeout) {
         Ok(worker) => Ok(worker),
-        Err(gpu_error) => launch_voice_memo_worker(runtime, language.as_deref(), true).map_err(
+        Err(gpu_error) => launch_voice_memo_worker(runtime, language.as_deref(), true, timeout).map_err(
             |cpu_error| {
                 format!(
                     "The persistent Whisper worker could not load on GPU ({gpu_error}) or CPU ({cpu_error})."
@@ -347,48 +427,109 @@ fn transcribe_voice_memo_with_worker(
     workers: &VoiceMemoWorkers,
     session_id: &str,
     media_path: &Path,
+    timeout: Duration,
 ) -> Result<String, String> {
     let input = media_path
         .to_str()
         .ok_or_else(|| "The voice memo temporary path is not valid Unicode.".to_string())?;
-    let mut sessions = workers
-        .0
+    // Take the worker out from under the map lock before talking to it.
+    let worker = workers
+        .sessions()
+        .get(session_id)
+        .cloned()
+        .ok_or_else(|| "The persistent dictation session is no longer active.".to_string())?;
+    let outcome = request_voice_memo_worker(&worker, input, timeout);
+    if matches!(outcome, Err(WorkerFailure::Unresponsive(_))) {
+        // A worker that stalled or died cannot take the next segment. Stop it
+        // and retire the session, unless it was already replaced.
+        let mut sessions = workers.sessions();
+        if sessions
+            .get(session_id)
+            .is_some_and(|current| Arc::ptr_eq(current, &worker))
+        {
+            sessions.remove(session_id);
+        }
+        drop(sessions);
+        worker.stop();
+    }
+    outcome.map_err(WorkerFailure::message)
+}
+
+enum WorkerFailure {
+    /// The worker answered: this segment failed, the worker is still usable.
+    Reported(String),
+    /// No usable answer: the worker stalled, died or lost protocol sync.
+    Unresponsive(String),
+}
+
+impl WorkerFailure {
+    fn message(self) -> String {
+        match self {
+            Self::Reported(message) | Self::Unresponsive(message) => message,
+        }
+    }
+}
+
+fn request_voice_memo_worker(
+    worker: &VoiceMemoWorker,
+    input: &str,
+    timeout: Duration,
+) -> Result<String, WorkerFailure> {
+    let unresponsive = |message: String| WorkerFailure::Unresponsive(message);
+    let mut io = worker
+        .io
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let worker = sessions
-        .get_mut(session_id)
-        .ok_or_else(|| "The persistent dictation session is no longer active.".to_string())?;
-    let request_id = worker.next_request_id;
-    worker.next_request_id = worker.next_request_id.saturating_add(1);
+    let request_id = io.next_request_id;
+    io.next_request_id = io.next_request_id.saturating_add(1);
     let encoded = serde_json::to_vec(&VoiceMemoWorkerRequest {
         id: request_id,
         input,
     })
-    .map_err(|error| format!("Orion could not prepare the transcription request: {error}"))?;
-    worker
-        .stdin
+    .map_err(|error| {
+        WorkerFailure::Reported(format!(
+            "Orion could not prepare the transcription request: {error}"
+        ))
+    })?;
+    io.stdin
         .write_all(&encoded)
-        .and_then(|_| worker.stdin.write_all(b"\n"))
-        .and_then(|_| worker.stdin.flush())
+        .and_then(|_| io.stdin.write_all(b"\n"))
+        .and_then(|_| io.stdin.flush())
         .map_err(|error| {
-            format!("The persistent Whisper worker stopped accepting audio: {error}")
+            unresponsive(format!(
+                "The persistent Whisper worker stopped accepting audio: {error}"
+            ))
         })?;
 
-    let mut response_line = String::new();
-    worker
-        .stdout
-        .read_line(&mut response_line)
-        .map_err(|error| format!("The persistent Whisper worker stopped unexpectedly: {error}"))?;
-    if response_line.is_empty() {
-        return Err("The persistent Whisper worker stopped unexpectedly.".to_string());
-    }
-    let response: VoiceMemoWorkerResponse = serde_json::from_str(response_line.trim())
-        .map_err(|_| "The persistent Whisper worker returned invalid text.".to_string())?;
+    let response_line = match io.responses.recv_timeout(timeout) {
+        Ok(Ok(line)) => line,
+        Ok(Err(error)) => {
+            return Err(unresponsive(format!(
+                "The persistent Whisper worker stopped unexpectedly: {error}"
+            )))
+        }
+        Err(RecvTimeoutError::Timeout) => {
+            return Err(unresponsive(
+                "Speech recognition took too long on this part of the recording, so dictation was stopped. What was already transcribed has been kept.".to_string(),
+            ))
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            return Err(unresponsive(
+                "The persistent Whisper worker stopped unexpectedly.".to_string(),
+            ))
+        }
+    };
+    let response: VoiceMemoWorkerResponse =
+        serde_json::from_str(response_line.trim()).map_err(|_| {
+            unresponsive("The persistent Whisper worker returned invalid text.".to_string())
+        })?;
     if response.id != Some(request_id) {
-        return Err("The persistent Whisper worker returned an out-of-order response.".to_string());
+        return Err(unresponsive(
+            "The persistent Whisper worker returned an out-of-order response.".to_string(),
+        ));
     }
     if let Some(error) = response.error.filter(|error| !error.trim().is_empty()) {
-        return Err(error.chars().take(900).collect());
+        return Err(WorkerFailure::Reported(error.chars().take(900).collect()));
     }
     Ok(response.text.unwrap_or_default().trim().to_string())
 }
@@ -529,20 +670,22 @@ fn decode_voice_memo(
     ))
 }
 
+/// Transcribes one file outside a media job, bounded by `timeout`.
 async fn transcribe_path(
     runtime: &TranscriptionRuntime,
     config: &WhisperConfig,
     path: &Path,
     title_override: Option<String>,
-    source_url: Option<String>,
+    timeout: Duration,
 ) -> Result<TranscribedMedia, String> {
-    transcribe_path_controlled(
+    transcribe_path_within(
         runtime,
         config,
         path,
         title_override,
-        source_url,
+        None,
         &media_jobs::Control::default(),
+        timeout,
     )
     .await
 }
@@ -554,6 +697,27 @@ pub(super) async fn transcribe_path_controlled(
     title_override: Option<String>,
     source_url: Option<String>,
     control: &media_jobs::Control,
+) -> Result<TranscribedMedia, String> {
+    transcribe_path_within(
+        runtime,
+        config,
+        path,
+        title_override,
+        source_url,
+        control,
+        media_jobs::TRANSCRIPTION_TIMEOUT,
+    )
+    .await
+}
+
+async fn transcribe_path_within(
+    runtime: &TranscriptionRuntime,
+    config: &WhisperConfig,
+    path: &Path,
+    title_override: Option<String>,
+    source_url: Option<String>,
+    control: &media_jobs::Control,
+    timeout: Duration,
 ) -> Result<TranscribedMedia, String> {
     control.check()?;
     let extension = media_extension(path)
@@ -589,7 +753,7 @@ pub(super) async fn transcribe_path_controlled(
             if let Some(language) = language.as_ref() {
                 command.arg("--language").arg(language);
             }
-            process_control.run(&mut command, media_jobs::TRANSCRIPTION_TIMEOUT)
+            process_control.run(&mut command, timeout)
         };
         let first = run(false)?;
         let gpu_allocation_failed = !first.status.success()
@@ -778,24 +942,16 @@ pub(super) async fn start_voice_memo_session(
     let language = normalize_transcription_language(config)?;
     let shared_workers = workers.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        {
-            let sessions = shared_workers
-                .0
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if sessions.contains_key(&session_id) {
-                return Err("That dictation session is already active.".to_string());
-            }
+        if shared_workers.sessions().contains_key(&session_id) {
+            return Err("That dictation session is already active.".to_string());
         }
+        // Loading the model can take seconds. The map is not locked meanwhile.
         let worker = start_voice_memo_worker(&runtime, language)?;
-        let mut sessions = shared_workers
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut sessions = shared_workers.sessions();
         if sessions.contains_key(&session_id) {
             return Err("That dictation session is already active.".to_string());
         }
-        sessions.insert(session_id, worker);
+        sessions.insert(session_id, Arc::new(worker));
         Ok(())
     })
     .await
@@ -812,12 +968,12 @@ pub(super) async fn finish_voice_memo_session(
     }
     let shared_workers = workers.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let worker = shared_workers
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(&session_id);
-        drop(worker);
+        let worker = shared_workers.sessions().remove(&session_id);
+        // Stop it explicitly: a request still waiting on this worker holds its
+        // own reference, and must be released rather than waited for.
+        if let Some(worker) = worker {
+            worker.stop();
+        }
     })
     .await
     .map_err(|error| format!("The persistent Whisper worker could not stop: {error}"))?;
@@ -850,7 +1006,12 @@ pub(super) async fn transcribe_voice_memo(
         let shared_workers = workers.inner().clone();
         let text = tauri::async_runtime::spawn_blocking(move || {
             let path = temporary.path().to_path_buf();
-            transcribe_voice_memo_with_worker(&shared_workers, &session_id, &path)
+            transcribe_voice_memo_with_worker(
+                &shared_workers,
+                &session_id,
+                &path,
+                VOICE_MEMO_WORKER_REQUEST_TIMEOUT,
+            )
         })
         .await
         .map_err(|error| format!("The dictation segment could not finish: {error}"))??;
@@ -866,12 +1027,14 @@ pub(super) async fn transcribe_voice_memo(
     }
 
     let runtime = bundled_transcription_runtime(&app)?;
+    // An independent segment is two minutes of audio at most. Importing media
+    // may take an hour; a dictation button must not wait that long.
     let mut transcript = transcribe_path(
         &runtime,
         &config,
         temporary.path(),
         Some("Voice memo".to_string()),
-        None,
+        VOICE_MEMO_SEGMENT_TIMEOUT,
     )
     .await?;
     transcript.file_name = file_name;
@@ -1182,9 +1345,14 @@ mod tests {
             language: Some("en".to_string()),
         };
 
-        let transcript =
-            tauri::async_runtime::block_on(transcribe_path(&runtime, &config, &media, None, None))
-                .unwrap();
+        let transcript = tauri::async_runtime::block_on(transcribe_path(
+            &runtime,
+            &config,
+            &media,
+            None,
+            media_jobs::TRANSCRIPTION_TIMEOUT,
+        ))
+        .unwrap();
 
         assert_eq!(transcript.text, "A local offline transcript.");
         assert_eq!(transcript.file_name, "field-recording.mp3");
@@ -1326,5 +1494,197 @@ mod tests {
 
         assert!(error.contains("bundled Whisper engine"));
         assert!(!marker.exists());
+    }
+
+    // --- Persistent dictation worker -----------------------------------------
+
+    /// Answers every request, like the real `orion-whisper --server`.
+    #[cfg(unix)]
+    const ANSWERING_WORKER: &str = r#"#!/bin/sh
+echo '{"ready":true}'
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  echo "{\"id\":$id,\"text\":\" heard segment $id \"}"
+done
+"#;
+    /// Loads, then never answers: a stalled model.
+    #[cfg(unix)]
+    const HUNG_WORKER: &str = "#!/bin/sh\necho '{\"ready\":true}'\nexec sleep 600\n";
+    /// Never finishes loading.
+    #[cfg(unix)]
+    const NEVER_READY_WORKER: &str = "#!/bin/sh\nexec sleep 600\n";
+
+    /// Tests write their fake worker and run it at once. If another test thread
+    /// forks in between, its child briefly holds the script open for writing and
+    /// the kernel refuses to execute it. Only a freshly written test script can
+    /// hit this, so only the tests retry.
+    #[cfg(unix)]
+    fn launch_test_worker(
+        runtime: &TranscriptionRuntime,
+        start_timeout: Duration,
+    ) -> Result<VoiceMemoWorker, String> {
+        for _ in 0..200 {
+            match launch_voice_memo_worker(runtime, None, false, start_timeout) {
+                Err(error) if error.contains("Text file busy") => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                outcome => return outcome,
+            }
+        }
+        panic!("the fake worker script stayed busy");
+    }
+
+    #[cfg(unix)]
+    fn worker_session(
+        directory: &TempDir,
+        script: &str,
+        workers: &VoiceMemoWorkers,
+        session: &str,
+    ) -> Arc<VoiceMemoWorker> {
+        let runtime = fake_transcription_runtime(directory, script, "#!/bin/sh\n");
+        let worker = Arc::new(launch_test_worker(&runtime, Duration::from_secs(10)).unwrap());
+        workers
+            .sessions()
+            .insert(session.to_string(), Arc::clone(&worker));
+        worker
+    }
+
+    #[cfg(unix)]
+    fn exited(worker: &VoiceMemoWorker) -> bool {
+        worker.child.lock().unwrap().try_wait().unwrap().is_some()
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_dictation_worker_answers_sequential_segments() {
+        let directory = TempDir::new().unwrap();
+        let workers = VoiceMemoWorkers::default();
+        let worker = worker_session(&directory, ANSWERING_WORKER, &workers, "session-a");
+        let media = directory.path().join("segment.m4a");
+        let timeout = Duration::from_secs(10);
+        assert_eq!(
+            transcribe_voice_memo_with_worker(&workers, "session-a", &media, timeout).unwrap(),
+            "heard segment 1"
+        );
+        assert_eq!(
+            transcribe_voice_memo_with_worker(&workers, "session-a", &media, timeout).unwrap(),
+            "heard segment 2"
+        );
+        assert!(
+            transcribe_voice_memo_with_worker(&workers, "missing", &media, timeout)
+                .unwrap_err()
+                .contains("no longer active")
+        );
+        assert!(!exited(&worker));
+        workers.sessions().remove("session-a").unwrap().stop();
+        assert!(exited(&worker));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_hung_worker_times_out_is_stopped_and_blocks_no_other_session() {
+        let hung_directory = TempDir::new().unwrap();
+        let healthy_directory = TempDir::new().unwrap();
+        let workers = VoiceMemoWorkers::default();
+        let hung = worker_session(&hung_directory, HUNG_WORKER, &workers, "hung");
+        let media = hung_directory.path().join("segment.m4a");
+
+        // While one session waits on its stalled worker, another window can
+        // still start, use and finish its own dictation.
+        let waiting_workers = workers.clone();
+        let waiting_media = media.clone();
+        let waiting = std::thread::spawn(move || {
+            transcribe_voice_memo_with_worker(
+                &waiting_workers,
+                "hung",
+                &waiting_media,
+                Duration::from_millis(1_500),
+            )
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        let started = std::time::Instant::now();
+        let healthy = worker_session(&healthy_directory, ANSWERING_WORKER, &workers, "healthy");
+        assert_eq!(
+            transcribe_voice_memo_with_worker(&workers, "healthy", &media, Duration::from_secs(10))
+                .unwrap(),
+            "heard segment 1"
+        );
+        workers.sessions().remove("healthy").unwrap().stop();
+        assert!(
+            started.elapsed() < Duration::from_millis(1_200),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(exited(&healthy));
+
+        let error = waiting.join().unwrap().unwrap_err();
+        assert!(error.contains("took too long"), "{error}");
+        assert!(
+            error.contains("already transcribed has been kept"),
+            "{error}"
+        );
+        // The stalled worker is gone and its session retired.
+        assert!(exited(&hung));
+        assert!(!workers.sessions().contains_key("hung"));
+        assert!(transcribe_voice_memo_with_worker(
+            &workers,
+            "hung",
+            &media,
+            Duration::from_secs(1)
+        )
+        .unwrap_err()
+        .contains("no longer active"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn finishing_a_session_releases_a_request_waiting_on_a_hung_worker() {
+        let directory = TempDir::new().unwrap();
+        let workers = VoiceMemoWorkers::default();
+        let hung = worker_session(&directory, HUNG_WORKER, &workers, "hung");
+        let media = directory.path().join("segment.m4a");
+        let waiting_workers = workers.clone();
+        let waiting = std::thread::spawn(move || {
+            transcribe_voice_memo_with_worker(
+                &waiting_workers,
+                "hung",
+                &media,
+                Duration::from_secs(60),
+            )
+        });
+        std::thread::sleep(Duration::from_millis(200));
+
+        // What `finish_voice_memo_session` does. It must not wait for the request.
+        let started = std::time::Instant::now();
+        let worker = workers.sessions().remove("hung").unwrap();
+        worker.stop();
+        let error = waiting.join().unwrap().unwrap_err();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(error.contains("stopped unexpectedly"), "{error}");
+        assert!(exited(&hung));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_worker_that_never_loads_is_stopped_after_its_start_timeout() {
+        let directory = TempDir::new().unwrap();
+        let runtime = fake_transcription_runtime(&directory, NEVER_READY_WORKER, "#!/bin/sh\n");
+        let started = std::time::Instant::now();
+        let error = launch_test_worker(&runtime, Duration::from_millis(300))
+            .err()
+            .unwrap();
+        assert!(error.contains("took too long to load"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        // A worker that exits while loading is reported as such, not as a timeout.
+        let exiting = TempDir::new().unwrap();
+        let runtime = fake_transcription_runtime(&exiting, "#!/bin/sh\nexit 3\n", "#!/bin/sh\n");
+        let error = launch_test_worker(&runtime, Duration::from_secs(10))
+            .err()
+            .unwrap();
+        assert!(error.contains("stopped while loading"), "{error}");
     }
 }

@@ -4,7 +4,8 @@ import {
   useState,
 } from "react";
 import { LoaderCircle, Mic2, Square } from "../lib/icons";
-import type { DictationCompletionOptions } from "../lib/dictationCleanup";
+import { DictationNotInsertedError, type DictationCompletionOptions } from "../lib/dictationCleanup";
+import { reportDetachedDictation } from "../lib/dictationOutcome";
 import {
   MAX_VOICE_MEMO_BYTES,
   mergeVoiceTranscriptParts,
@@ -27,6 +28,34 @@ interface VoiceMemoButtonProps {
   onSessionEnd?: (sessionId: string) => Promise<void> | void;
   onTranscribe: (audio: Blob, sessionId: string) => Promise<string>;
   onComplete: (sessionId: string, transcript: string, options: DictationCompletionOptions) => Promise<string | void>;
+}
+
+type SessionCallbacks = Pick<VoiceMemoButtonProps, "onSessionEnd" | "onTranscribe" | "onComplete">;
+
+/**
+ * One recording, from microphone to archived transcript. Its state lives here
+ * rather than on the component, so a recording can outlive the note it was
+ * started in: leaving the note detaches the session, which then finishes
+ * transcribing and archives its original without a button to report through.
+ */
+interface Session {
+  id: string;
+  stream: MediaStream;
+  mimeType: string;
+  recorder: MediaRecorder | null;
+  segmentTimer: number | null;
+  sequence: number;
+  stopRequested: boolean;
+  finishing: boolean;
+  ended: boolean;
+  failure: unknown;
+  transcripts: string[];
+  chain: Promise<void>;
+  pending: number;
+  preparation: Promise<void>;
+  completion: AbortController | null;
+  /** The callbacks of the note it started in, frozen when it leaves that note. */
+  detached: SessionCallbacks | null;
 }
 
 function supportedMimeType(): string | null {
@@ -61,30 +90,24 @@ export function VoiceMemoButton({
   const [elapsedMs, setElapsedMs] = useState(0);
   const [pendingSegments, setPendingSegments] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const completionControllerRef = useRef<AbortController | null>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const sessionIdRef = useRef<string | null>(null);
-  const sessionPreparationRef = useRef<Promise<void>>(Promise.resolve());
+  /** The session this button currently shows. Detached sessions are not here. */
+  const sessionRef = useRef<Session | null>(null);
+  /** Invalidates a microphone request that resolves after the note was left. */
   const generationRef = useRef(0);
-  const sequenceRef = useRef(0);
-  const stopRequestedRef = useRef(false);
-  const finishingRef = useRef(false);
-  const sessionEndedRef = useRef(false);
-  const failureRef = useRef<unknown>(null);
-  const transcriptsRef = useRef<string[]>([]);
-  const transcriptionChainRef = useRef<Promise<void>>(Promise.resolve());
-  const pendingSegmentsRef = useRef(0);
   const elapsedTimerRef = useRef<number | null>(null);
-  const segmentTimerRef = useRef<number | null>(null);
   const onSessionStartRef = useRef(onSessionStart);
-  const onSessionEndRef = useRef(onSessionEnd);
-  const onTranscribeRef = useRef(onTranscribe);
-  const onCompleteRef = useRef(onComplete);
+  const callbacksRef = useRef<SessionCallbacks>({ onSessionEnd, onTranscribe, onComplete });
   onSessionStartRef.current = onSessionStart;
-  onSessionEndRef.current = onSessionEnd;
-  onTranscribeRef.current = onTranscribe;
-  onCompleteRef.current = onComplete;
+  // Updated after commit, not during render: when the note changes, the cleanup
+  // below must still see the callbacks of the note being left. React runs every
+  // cleanup of a commit before any effect of that commit.
+  useEffect(() => {
+    callbacksRef.current = { onSessionEnd, onTranscribe, onComplete };
+  });
+
+  const attached = (session: Session) => sessionRef.current === session;
+  /** Attached sessions follow the latest props; detached ones keep their note's. */
+  const callbacks = (session: Session) => session.detached ?? callbacksRef.current;
 
   function clearElapsedTimer() {
     if (elapsedTimerRef.current !== null) {
@@ -93,223 +116,208 @@ export function VoiceMemoButton({
     }
   }
 
-  function clearSegmentTimer() {
-    if (segmentTimerRef.current !== null) {
-      window.clearTimeout(segmentTimerRef.current);
-      segmentTimerRef.current = null;
+  function clearSegmentTimer(session: Session) {
+    if (session.segmentTimer !== null) {
+      window.clearTimeout(session.segmentTimer);
+      session.segmentTimer = null;
     }
   }
 
-  function clearTimers() {
-    clearElapsedTimer();
-    clearSegmentTimer();
+  function updatePendingSegments(session: Session, delta: number) {
+    session.pending = Math.max(0, session.pending + delta);
+    if (attached(session)) setPendingSegments(session.pending);
   }
 
-  function releaseStream() {
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
+  function requestStop(session: Session) {
+    session.stopRequested = true;
+    clearSegmentTimer(session);
+    if (session.recorder?.state === "recording") session.recorder.stop();
   }
 
-  function updatePendingSegments(delta: number, generation: number) {
-    pendingSegmentsRef.current = Math.max(0, pendingSegmentsRef.current + delta);
-    if (generationRef.current === generation) {
-      setPendingSegments(pendingSegmentsRef.current);
-    }
-  }
-
-  function requestStop() {
-    stopRequestedRef.current = true;
-    clearSegmentTimer();
-    const recorder = recorderRef.current;
-    if (recorder?.state === "recording") recorder.stop();
-  }
-
-  function endSession() {
-    if (sessionEndedRef.current) return;
-    sessionEndedRef.current = true;
-    const sessionId = sessionIdRef.current;
-    sessionIdRef.current = null;
-    if (!sessionId) return;
-    void sessionPreparationRef.current
+  function endSession(session: Session) {
+    if (session.ended) return;
+    session.ended = true;
+    void session.preparation
       .catch(() => undefined)
-      .then(() => onSessionEndRef.current?.(sessionId))
+      .then(() => callbacks(session).onSessionEnd?.(session.id))
       .catch(() => undefined);
   }
 
-  function queueSegment(audio: Blob, generation: number) {
-    const sequence = sequenceRef.current;
-    sequenceRef.current += 1;
-    updatePendingSegments(1, generation);
+  function queueSegment(session: Session, audio: Blob) {
+    const sequence = session.sequence;
+    session.sequence += 1;
+    updatePendingSegments(session, 1);
 
-    transcriptionChainRef.current = transcriptionChainRef.current
+    session.chain = session.chain
       .then(async () => {
-        if (generationRef.current !== generation) return;
-        const sessionId = sessionIdRef.current;
-        if (!sessionId) throw new Error("The dictation session is no longer active.");
-        await sessionPreparationRef.current;
-        if (generationRef.current !== generation) return;
-        transcriptsRef.current[sequence] = await onTranscribeRef.current(
-          audio,
-          sessionId,
-        );
+        await session.preparation;
+        session.transcripts[sequence] = await callbacks(session).onTranscribe(audio, session.id);
       })
       .catch((caught) => {
-        if (generationRef.current !== generation) return;
-        failureRef.current ??= caught;
-        requestStop();
+        session.failure ??= caught;
+        requestStop(session);
       })
-      .finally(() => updatePendingSegments(-1, generation));
+      .finally(() => updatePendingSegments(session, -1));
   }
 
-  async function finishSession(generation: number) {
-    if (finishingRef.current) return;
-    finishingRef.current = true;
-    clearElapsedTimer();
-    clearSegmentTimer();
-    releaseStream();
-    setPhase("transcribing");
+  async function finishSession(session: Session) {
+    if (session.finishing) return;
+    session.finishing = true;
+    if (attached(session)) clearElapsedTimer();
+    clearSegmentTimer(session);
+    session.stream.getTracks().forEach((track) => track.stop());
+    if (attached(session)) setPhase("transcribing");
 
-    await transcriptionChainRef.current;
-    if (generationRef.current !== generation) return;
+    await session.chain;
 
-    const failure = failureRef.current;
-    const transcript = mergeVoiceTranscriptParts(transcriptsRef.current);
-    if (failure && !transcript) {
-      endSession();
-      setPhase("idle");
-      setError(recordingErrorMessage(failure));
+    const failure = session.failure;
+    const transcript = mergeVoiceTranscriptParts(session.transcripts);
+    const release = () => {
+      session.completion = null;
+      endSession(session);
+      if (attached(session)) sessionRef.current = null;
+    };
+    if (!transcript) {
+      const message = failure
+        ? recordingErrorMessage(failure)
+        : "Whisper finished without detecting any speech.";
+      if (attached(session)) {
+        setPhase("idle");
+        setError(message);
+      } else if (failure) {
+        reportDetachedDictation({ saved: false, message });
+      }
+      release();
       return;
     }
 
-    const sessionId = sessionIdRef.current;
+    let outcome: { error?: unknown } = {};
     try {
-      if (!sessionId) {
-        throw new Error("The dictation session ended before its text was ready.");
-      }
-      if (!transcript) {
-        throw new Error("Whisper finished without detecting any speech.");
-      }
       const controller = new AbortController();
       // Preserve already-transcribed speech through the ordinary original-source
       // archive and insertion path. Missing speech could contain a correction or
       // cancellation, so incomplete recordings must never create AI work items.
+      // A recording that has left its note is archived but never cleaned up or
+      // inserted, so it needs no provider call either.
       if (failure) controller.abort(failure);
-      completionControllerRef.current = controller;
-      await onCompleteRef.current(sessionId, transcript, {
+      else if (session.detached) controller.abort(new DOMException("The note was closed.", "AbortError"));
+      session.completion = controller;
+      await callbacks(session).onComplete(session.id, transcript, {
         signal: controller.signal,
-        onPhase: next => { if (generationRef.current === generation) setPhase(next); },
+        onPhase: (next) => { if (attached(session)) setPhase(next); },
       });
-      if (generationRef.current !== generation) return;
-      setPhase("idle");
-      if (failure) setError(`Recording incomplete. The transcribed portion was kept, but some speech could not be recovered. ${recordingErrorMessage(failure)}`);
     } catch (caught) {
-      if (generationRef.current !== generation) return;
-      setPhase("idle");
-      setError(recordingErrorMessage(caught));
-    } finally {
-      completionControllerRef.current = null;
-      endSession();
+      outcome = { error: caught };
     }
+
+    if (attached(session)) {
+      setPhase("idle");
+      if (outcome.error !== undefined) setError(recordingErrorMessage(outcome.error));
+      else if (failure) setError(`Recording incomplete. The transcribed portion was kept, but some speech could not be recovered. ${recordingErrorMessage(failure)}`);
+    } else {
+      // The editor refuses to insert into a note that is gone, after archiving.
+      const archived = outcome.error instanceof DictationNotInsertedError && Boolean(outcome.error.sourceId);
+      reportDetachedDictation(archived || outcome.error === undefined
+        ? { saved: true }
+        : { saved: false, message: recordingErrorMessage(outcome.error) });
+    }
+    release();
   }
 
-  function startSegment(stream: MediaStream, generation: number, mimeType: string) {
-    if (generationRef.current !== generation || stopRequestedRef.current) return;
+  function startSegment(session: Session) {
+    if (session.stopRequested) return;
 
-    const recorder = new MediaRecorder(stream, {
-      mimeType,
+    const recorder = new MediaRecorder(session.stream, {
+      mimeType: session.mimeType,
       audioBitsPerSecond: 64_000,
     });
     const chunks: Blob[] = [];
-    recorderRef.current = recorder;
+    session.recorder = recorder;
     recorder.ondataavailable = (event) => {
       if (event.data.size > 0) chunks.push(event.data);
     };
     recorder.onerror = () => {
-      if (generationRef.current !== generation) return;
-      failureRef.current ??= new Error(
+      session.failure ??= new Error(
         "The microphone recording stopped unexpectedly.",
       );
-      requestStop();
+      requestStop(session);
     };
     recorder.onstop = () => {
-      if (recorderRef.current === recorder) recorderRef.current = null;
-      clearSegmentTimer();
-      if (generationRef.current !== generation) return;
+      if (session.recorder === recorder) session.recorder = null;
+      clearSegmentTimer(session);
 
-      const isFinal = stopRequestedRef.current;
+      const isFinal = session.stopRequested;
       const audio = new Blob(chunks, { type: "audio/mp4" });
       if (audio.size === 0) {
-        if (sequenceRef.current === 0) {
-          failureRef.current ??= new Error(
+        if (session.sequence === 0) {
+          session.failure ??= new Error(
             "The voice memo was empty. Try recording again.",
           );
         }
-        stopRequestedRef.current = true;
-        void finishSession(generation);
+        session.stopRequested = true;
+        void finishSession(session);
         return;
       }
       if (audio.size > MAX_VOICE_MEMO_BYTES) {
-        failureRef.current ??= new Error(
+        session.failure ??= new Error(
           "A dictation segment exceeded 64 MB and could not be transcribed.",
         );
-        stopRequestedRef.current = true;
-        void finishSession(generation);
+        session.stopRequested = true;
+        void finishSession(session);
         return;
       }
 
-      queueSegment(audio, generation);
+      queueSegment(session, audio);
       if (isFinal) {
-        void finishSession(generation);
+        void finishSession(session);
       } else {
-        startSegment(stream, generation, mimeType);
+        startSegment(session);
       }
     };
     recorder.start(1_000);
-    segmentTimerRef.current = window.setTimeout(() => {
-      if (
-        generationRef.current === generation &&
-        !stopRequestedRef.current &&
-        recorder.state === "recording"
-      ) {
+    session.segmentTimer = window.setTimeout(() => {
+      if (!session.stopRequested && recorder.state === "recording") {
         recorder.stop();
       }
     }, VOICE_MEMO_SEGMENT_MS);
   }
 
   useEffect(() => {
+    // A new note starts with a clean button, whatever the last one was doing.
+    setPhase("idle");
+    setElapsedMs(0);
+    setPendingSegments(0);
+    setError(null);
     return () => {
-      completionControllerRef.current?.abort();
-      endSession();
       generationRef.current += 1;
-      clearTimers();
-      const recorder = recorderRef.current;
-      recorderRef.current = null;
-      if (recorder?.state === "recording") recorder.stop();
-      releaseStream();
+      clearElapsedTimer();
+      const session = sessionRef.current;
+      sessionRef.current = null;
+      if (!session) return;
+      // Leaving the note must not lose what was said. The session keeps the
+      // callbacks of the note it belongs to, stops the microphone, and finishes
+      // on its own: remaining audio is transcribed and the original archived.
+      session.detached = callbacksRef.current;
+      session.completion?.abort(new DOMException("The note was closed.", "AbortError"));
+      requestStop(session);
     };
   }, [noteId]);
 
   async function startRecording() {
     const generation = generationRef.current + 1;
     generationRef.current = generation;
-    sequenceRef.current = 0;
-    stopRequestedRef.current = false;
-    finishingRef.current = false;
-    sessionEndedRef.current = false;
-    failureRef.current = null;
-    transcriptsRef.current = [];
-    transcriptionChainRef.current = Promise.resolve();
-    pendingSegmentsRef.current = 0;
     setPendingSegments(0);
     setError(null);
-    clearTimers();
+    clearElapsedTimer();
 
+    let stream: MediaStream | undefined;
+    let session: Session | undefined;
     try {
       const mimeType = supportedMimeType();
       if (!mimeType || !navigator.mediaDevices?.getUserMedia) {
         throw new Error("Voice memos are not supported by this Mac's recording engine.");
       }
-      const stream = await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
           echoCancellation: true,
@@ -323,39 +331,59 @@ export function VoiceMemoButton({
       }
 
       const startedAt = Date.now();
-      streamRef.current = stream;
       const randomId = globalThis.crypto?.randomUUID?.();
-      const sessionId = randomId ?? `voice-${Date.now()}-${generation}`;
-      sessionIdRef.current = sessionId;
+      const id = randomId ?? `voice-${Date.now()}-${generation}`;
+      let preparation: Promise<void>;
       try {
-        sessionPreparationRef.current = Promise.resolve(
-          onSessionStartRef.current?.(sessionId),
-        );
+        preparation = Promise.resolve(onSessionStartRef.current?.(id));
       } catch (caught) {
-        sessionPreparationRef.current = Promise.reject(caught);
+        preparation = Promise.reject(caught);
       }
-      void sessionPreparationRef.current.catch(() => undefined);
-      startSegment(stream, generation, mimeType);
+      void preparation.catch(() => undefined);
+      session = {
+        id,
+        stream,
+        mimeType,
+        recorder: null,
+        segmentTimer: null,
+        sequence: 0,
+        stopRequested: false,
+        finishing: false,
+        ended: false,
+        failure: null,
+        transcripts: [],
+        chain: Promise.resolve(),
+        pending: 0,
+        preparation,
+        completion: null,
+        detached: null,
+      };
+      sessionRef.current = session;
+      startSegment(session);
       setElapsedMs(0);
       setPhase("recording");
       elapsedTimerRef.current = window.setInterval(() => {
         setElapsedMs(Date.now() - startedAt);
       }, 250);
     } catch (caught) {
-      releaseStream();
-      endSession();
+      stream?.getTracks().forEach((track) => track.stop());
+      if (session) {
+        endSession(session);
+        if (attached(session)) sessionRef.current = null;
+      }
       setPhase("idle");
       setError(recordingErrorMessage(caught));
     }
   }
 
   function toggleRecording() {
+    const session = sessionRef.current;
     if (phase === "cleaning") {
-      completionControllerRef.current?.abort();
+      session?.completion?.abort();
       return;
     }
     if (phase === "recording") {
-      requestStop();
+      if (session) requestStop(session);
       return;
     }
     if (phase === "idle" && !disabled) void startRecording();

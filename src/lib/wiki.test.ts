@@ -468,3 +468,109 @@ function makeConcept(
     canonicalNoteId: overrides.canonicalNoteId,
   };
 }
+
+describe("automatic link matching at scale", () => {
+  const linkConcept = (id: string, label: string, extra: Partial<Concept> = {}): Concept => ({
+    id, label, aliases: [], description: "", noteIds: [`note-${id}`], canonicalNoteId: `note-${id}`,
+    color: "#000", autoLink: true, ...extra,
+  });
+  const links = (text: string, concepts: readonly Concept[]) =>
+    decorateAutoLinks(text, concepts)
+      .filter((segment) => segment.type === "concept")
+      .map((segment) => `${segment.start}-${segment.end}:${segment.conceptId}`);
+
+  // The rules, stated directly and without any index: at each position, the
+  // first phrase in preference order whose own pattern matches there, respects
+  // word boundaries and case, and stays out of protected Markdown.
+  const WORD = /[\p{L}\p{N}_]/u;
+  const PROTECTED = [/```[\s\S]*?```/g, /`[^`\n]*`/g, /!?\[[^\]\n]*\]\([^)\n]+\)/g, /\[\[[^\]\n]+\]\]/g, /\b(?:https?:\/\/|mailto:)[^\s<]+/gi];
+  const normalized = (value: string) => value.normalize("NFKC").replace(/[‐‑‒–—−]/g, "-").replace(/[‘’]/g, "'").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  const phrasePattern = (phrase: string) => [...phrase.trim()].map((character, index, all) =>
+    /\s/u.test(character) ? (index > 0 && /\s/u.test(all[index - 1]) ? "" : "\\s+")
+      : /[‐‑‒–—−-]/u.test(character) ? "[‐‑‒–—−-]"
+      : /['‘’]/u.test(character) ? "['‘’]"
+      : character.replace(/[\\^$.*+?()[\]{}|/]/g, "\\$&")).join("");
+  function oracle(text: string, concepts: readonly Concept[]): string[] {
+    const candidates = concepts.filter((item) => item.autoLink).flatMap((item) => {
+      const seen = new Set<string>();
+      return [item.label, ...item.aliases].flatMap((raw, index) => {
+        const phrase = raw.trim();
+        if (!phrase || seen.has(normalized(phrase))) return [];
+        seen.add(normalized(phrase));
+        return [{ phrase, concept: item, isLabel: index === 0, pattern: new RegExp(phrasePattern(phrase), "iuy") }];
+      });
+    }).sort((a, b) => b.phrase.length - a.phrase.length || Number(b.isLabel) - Number(a.isLabel) || a.phrase.localeCompare(b.phrase));
+    const ranges = PROTECTED.flatMap((pattern) => [...text.matchAll(pattern)].map((match) => [match.index, match.index + match[0].length] as const));
+    const found: string[] = [];
+    for (let index = 0; index < text.length;) {
+      const inside = ranges.find(([start, end]) => index >= start && index < end);
+      if (inside) { index = inside[1]; continue; }
+      const match = candidates.map((candidate) => {
+        candidate.pattern.lastIndex = index;
+        const hit = candidate.pattern.exec(text);
+        if (!hit) return null;
+        const end = index + hit[0].length;
+        const value = text.slice(index, end);
+        if (ranges.some(([start, stop]) => index < stop && end > start)) return null;
+        if (candidate.concept.matchCase ? value !== candidate.phrase : normalized(value) !== normalized(candidate.phrase)) return null;
+        const before = index > 0 ? text[index - 1] : "", after = end < text.length ? text[end] : "";
+        if (WORD.test(candidate.phrase[0]) && before && WORD.test(before)) return null;
+        if (WORD.test(candidate.phrase[candidate.phrase.length - 1]) && after && WORD.test(after)) return null;
+        return { end, id: candidate.concept.id };
+      }).find(Boolean);
+      if (match) { found.push(`${index}-${match.end}:${match.id}`); index = match.end; } else index += 1;
+    }
+    return found;
+  }
+
+  it("falls back to a shorter phrase when a longer one fails its word boundary", () => {
+    const concepts = [linkConcept("soa", "state of the art"), linkConcept("state", "state")];
+    expect(links("The state of the artist matters.", concepts)).toEqual(["4-9:state"]);
+    expect(links("The state of the art matters.", concepts)).toEqual(["4-20:soa"]);
+  });
+
+  it("matches phrases that begin or end with symbols and shares opening words", () => {
+    const concepts = [
+      linkConcept("cpp", "C++"), linkConcept("net", ".NET"), linkConcept("us", "U.S. policy"),
+      linkConcept("ny", "New York"), linkConcept("nyu", "New York University"), linkConcept("yu", "York University"),
+    ];
+    expect(links("Vitamin C, then C++ and .NET.", concepts)).toEqual(["16-19:cpp", "24-28:net"]);
+    expect(links("u.s.   POLICY on New\nYork University and New York.", concepts)).toEqual(["0-13:us", "17-36:nyu", "41-49:ny"]);
+    expect(links("Old York University", concepts)).toEqual(["4-19:yu"]);
+  });
+
+  it("agrees with the plain rules on thousands of generated notes", () => {
+    let seed = 20261115;
+    const random = () => { seed = (seed + 0x6d2b79f5) | 0; let value = Math.imul(seed ^ (seed >>> 15), 1 | seed); value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value; return ((value ^ (value >>> 14)) >>> 0) / 4294967296; };
+    const pick = <T,>(items: readonly T[]) => items[Math.floor(random() * items.length)];
+    const words = ["state", "of", "the", "art", "New", "York", "University", "e-mail", "rock'n'roll", "C++", ".NET", "U.S.", "policy", "naïve", "Bayes", "Ω", "point", "résumé", "dialectic", "Über", "form", "a", "x_1", "42"];
+    const separators = [" ", " ", " ", "  ", "\n", "-", "–", "'", "’", ", ", ". ", "/", "(", ")", ""];
+    const wrappers = [(value: string) => value, (value: string) => value, (value: string) => value.toUpperCase(), (value: string) => value.toLowerCase(),
+      (value: string) => `\`${value}\``, (value: string) => `[${value}](https://example.com/${value})`, (value: string) => `[[${value}]]`, (value: string) => `https://example.com/${value}`];
+    const phrase = () => Array.from({ length: 1 + Math.floor(random() * 3) }, () => pick(words)).join(pick([" ", " ", "-", "'"]));
+    let compared = 0;
+    for (let round = 0; round < 1200; round += 1) {
+      const concepts = Array.from({ length: 1 + Math.floor(random() * 14) }, (_, index) => linkConcept(`c${index}`, phrase(), {
+        aliases: random() < 0.4 ? [phrase()] : [], matchCase: random() < 0.15, autoLink: random() > 0.1,
+      }));
+      const text = Array.from({ length: 4 + Math.floor(random() * 30) }, () => pick(wrappers)(random() < 0.5 ? phrase() : pick(words)) + pick(separators)).join("");
+      expect(links(text, concepts), JSON.stringify({ text, concepts: concepts.map((item) => [item.label, item.aliases, item.matchCase, item.autoLink]) })).toEqual(oracle(text, concepts));
+      compared += links(text, concepts).length;
+    }
+    // The generator really does produce links to compare.
+    expect(compared).toBeGreaterThan(1200);
+  });
+
+  it("does not slow down as the vocabulary grows", () => {
+    const vocabulary = "recognition dialectic consciousness freedom spirit negation sublation ethical life civil society state history reason absolute knowing master servant labour desire".split(" ");
+    const concepts = Array.from({ length: 2_000 }, (_, index) => linkConcept(`c${index}`, `${vocabulary[index % vocabulary.length]} ${vocabulary[(index * 7) % vocabulary.length]} ${index}`));
+    const paragraphs = Array.from({ length: 250 }, (_, index) => `The ${vocabulary[index % vocabulary.length]} of ${concepts[(index * 13) % concepts.length].label} returns here, as ${vocabulary[(index + 5) % vocabulary.length]} suggests.`);
+    const pass = () => paragraphs.reduce((total, paragraph) => total + links(paragraph, concepts).length, 0);
+    expect(pass()).toBe(250);
+    const started = performance.now();
+    for (let round = 0; round < 5; round += 1) pass();
+    // One pass over a 20,000-character note. A single alternation of every
+    // phrase took about 1,400 ms here; the indexed matcher takes a few.
+    expect((performance.now() - started) / 5).toBeLessThan(150);
+  });
+});
