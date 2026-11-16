@@ -93,7 +93,9 @@ describe("problem diagnostics", () => {
       "rejection: The provider timed out.",
     ]);
     remove();
-    window.dispatchEvent(new ErrorEvent("error", { error: new Error("after removal") }));
+    // No error object: with no listener left, the test runner would otherwise
+    // report a real one as an uncaught exception of the run.
+    window.dispatchEvent(new ErrorEvent("error", { message: "after removal" }));
     expect(recentProblems()).toHaveLength(2);
   });
 });

@@ -3,6 +3,10 @@ import { createEmptyVault } from "../data/defaults";
 import type { OrionVault, Source } from "../types";
 import { createSourceTextStore, isSourceTextRef, SOURCE_TEXT_MISSING, type SourceTextHost, type SourceTextRef } from "./sourceTextStore";
 
+// The storage boundary below talks to the native host through this command bridge.
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+
 const NOW = "2026-11-01T00:00:00.000Z";
 
 function source(id: string, text: string): Source {
@@ -212,9 +216,6 @@ describe("source text store", () => {
 });
 
 describe("desktop vault storage boundary", () => {
-  const invoke = vi.hoisted(() => vi.fn());
-  vi.mock("@tauri-apps/api/core", () => ({ invoke }));
-
   let disk: unknown = null;
   let files: Map<string, string>;
   let counter: number;
