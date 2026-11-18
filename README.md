@@ -13,9 +13,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zug11/orion/releases/download/v0.6.3/Orion-0.6.3.m-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/zug11/orion/releases/download/v0.6.4/Orion-0.6.4.m-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
   ·
-  <a href="https://github.com/zug11/orion/releases/tag/v0.6.3">Release notes · Whisper Medium edition</a>
+  <a href="https://github.com/zug11/orion/releases/tag/v0.6.4">Release notes · Whisper Medium edition</a>
   ·
   <a href="#the-orchestration-topology">How it works</a>
   ·
@@ -24,7 +24,7 @@
   <a href="#local-first-by-construction">Privacy</a>
 </p>
 
-> Orion 0.6.3 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
+> Orion 0.6.4 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
 
 ## ChatGPT plan access and voice choices
 
@@ -856,12 +856,12 @@ See [all 21 tools and their contracts](docs/mcp-library-tools.md).
 
 ## Download
 
-[**Download Orion 0.6.3 for Apple Silicon — Whisper Medium**](https://github.com/zug11/orion/releases/download/v0.6.3/Orion-0.6.3.m-Apple-Silicon.dmg)
+[**Download Orion 0.6.4 for Apple Silicon — Whisper Medium**](https://github.com/zug11/orion/releases/download/v0.6.4/Orion-0.6.4.m-Apple-Silicon.dmg)
 
 This release includes Whisper Medium and its persistent dictation worker, the
 Claude connector and the Codex plugin. It is Developer ID signed,
 Apple-notarized, stapled and Gatekeeper-accepted. Verify the installer with the
-[SHA-256 checksums](https://github.com/zug11/orion/releases/download/v0.6.3/Orion-0.6.3-SHA256SUMS.txt). Small edition builds are available
+[SHA-256 checksums](https://github.com/zug11/orion/releases/download/v0.6.4/Orion-0.6.4-SHA256SUMS.txt). Small edition builds are available
 in [earlier releases](https://github.com/zug11/orion/releases).
 
 Requirements:
@@ -1273,7 +1273,8 @@ Expanded voice Chat offers Jelly and Mirage clear glass orbs, with simpler
 Cellular research workers for both. Choose Voice orb in Appearance settings.
 Move the mouse sideways to turn the orb or vertically to tip it. A diagonal
 sweep combines both, and the orb coasts around that same axis as it slows.
-The interior turns more slowly in the opposite direction to the shell.
+The inner cloud rolls against the shell as the orb turns on its own. It also
+counter-rotates more slowly when you move the mouse.
 The main orb is about 2.2 times its previous diameter, with worker spacing and
 interaction targets calculated from the larger body and fitted to narrow windows.
 It follows your existing shader colours and light/dark appearance. Compact

@@ -27,7 +27,7 @@ export function createVoiceGlass() {
  }
  context.linkProgram(program);if(!context.getProgramParameter(program,context.LINK_STATUS)){dispose();return null;}
  const position=context.getAttribLocation(program,'aPosition');
- const names=['ShellRotation','InteriorRotation','InnerTime','Resolution','Center','Radius','Stretch','Angle','Dpr','Time','RotationTime','Material','Detail','Seed','Level','Receiving','Working','Opacity','Amount','Gloss','WorkerStyle','WorkerSheen','WorkerSoftness','Light','Primary','Secondary','Tertiary','Background'];
+ const names=['ShellRotation','InteriorRotation','Resolution','Center','Radius','Stretch','Angle','Dpr','Time','RotationTime','Material','Detail','Seed','Level','Receiving','Working','Opacity','Amount','Gloss','WorkerStyle','WorkerSheen','WorkerSoftness','Light','Primary','Secondary','Tertiary','Background'];
  const u=Object.fromEntries(names.map(n=>[n,context.getUniformLocation(program,'u'+n)]));
  context.bindBuffer(context.ARRAY_BUFFER,buffer);context.bufferData(context.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),context.STATIC_DRAW);
  context.enable(context.BLEND);context.blendFuncSeparate(context.SRC_ALPHA,context.ONE_MINUS_SRC_ALPHA,context.ONE,context.ONE_MINUS_SRC_ALPHA);
@@ -41,7 +41,6 @@ export function createVoiceGlass() {
   const one=(name:string,value:number)=>context.uniform1f(u[name],value);
   context.uniform2f(u.Resolution,size,size);context.uniform2f(u.Center,size/2,size/2);
   one('Radius',point.radius);one('Dpr',dpr);one('Stretch',stretch);one('Angle',angle);one('Time',time);one('RotationTime',time*.35);one('Seed',isMain?0:point.slot+1);
-  one('InnerTime',time);
   if (isMain) {
    context.uniformMatrix3fv(u.ShellRotation, false, rotation.shell);
    context.uniformMatrix3fv(u.InteriorRotation, false, rotation.interior);

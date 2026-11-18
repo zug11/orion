@@ -218,7 +218,8 @@ retain the lightweight 2D renderer, also used for unavailable/lost WebGL and
 increased contrast.
 
 Horizontal mouse movement turns the main material, vertical movement tips it,
-and diagonal sweeps combine both. The shell and the slower interior turn in
+and diagonal sweeps combine both. At rest, the inner cloud tracks the shell's
+animated pitch and yaw in reverse. During a sweep the shell and the slower interior turn in
 opposite directions around the same view-space axis and coast as the mouse
 stops or leaves the scene. The rotations apply to material shading. Reduced
 motion freezes material animation. Each expanded scene owns one low-power offscreen

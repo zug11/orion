@@ -47,11 +47,17 @@ vec3 skin(vec3 n,float t){
  return c;
 }
 
-// The interior combines its ambient drift with its own pointer rotation.
-uniform float uInnerTime;
-vec3 coreFrame(vec3 v){
+// Mirroring the depth axis on both sides of the shell's light frame reverses
+// its view-space pitch and yaw, including after the light rig has turned.
+vec3 interiorFrame(vec3 v){
  v=uInteriorRotation*v;
+ v.z=-v.z;
+ v=frame(v,uRotationTime);
+ return vec3(v.xy,-v.z);
+}
+vec3 coreFrame(vec3 v){
+ v=interiorFrame(v);
  vec3 axis=normalize(vec3(.72,.32,-.61));
- float a=uInnerTime*.14+.7;
+ float a=.7;
  return v*cos(a)+cross(axis,v)*sin(a)+axis*dot(axis,v)*(1.-cos(a));
 }

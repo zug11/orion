@@ -24,6 +24,8 @@ export interface VoiceConstellationProps {
   size?: "pill" | "expanded" | "sidebar";
   palette?: IconPalette;
   interactive?: boolean;
+  /** A paused demonstration can hold ambient time while controls remain interactive. */
+  ambientPaused?: boolean;
   /** Keep the visible scene's motion when its UI moves between Chat and the pill. */
   motion?: VoiceOrbMotion;
   /** Opens the conversation when the scene cannot offer clear targets. */
@@ -116,7 +118,7 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
       const current = latest.current;
       const dt = shaderAt ? Math.min(.06, (now - shaderAt) / 1000) : 0;
       shaderAt = now;
-      if (!reduced) shaderTime += dt;
+      if (!reduced && !current.ambientPaused) shaderTime += dt;
       const settings=current.settings;
       const mode=settings ? resolveThemeMode(settings.theme,matchMedia('(prefers-color-scheme: light)').matches) : 'dark';
       if(settings && (settings!==paletteSettings || mode!==paletteMode)){
