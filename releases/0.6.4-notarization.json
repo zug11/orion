@@ -1,0 +1,84 @@
+{
+  "version": "0.6.4",
+  "source_commit": "bf6a5a2b390a21c928264f08863d0d45541de4cc",
+  "bundle_id": "app.orion.knowledge",
+  "edition": "Whisper Medium",
+  "platform": "darwin-aarch64",
+  "artifacts": [
+    {
+      "artifact": "Orion-0.6.4.m-Apple-Silicon.dmg",
+      "bytes": 1508842985,
+      "sha256": "c1316436ff30e4c16ebbed130610f0a7f35523e70fc830cc329d93d4537b914f"
+    },
+    {
+      "artifact": "Orion-0.6.4-Apple-Silicon.app.tar.gz",
+      "bytes": 1506823094,
+      "sha256": "87c62f30d3a510b477cc55c3c63e1fb261ce3d793a7a24c34063569cbf6f809c"
+    },
+    {
+      "artifact": "Orion-0.6.4-Apple-Silicon.app.tar.gz.sig",
+      "bytes": 448,
+      "sha256": "d34018b40bc17650b51387797f6e78ecdbaa71eeb0928a8cfc0e090747601e8c"
+    },
+    {
+      "artifact": "latest.json",
+      "bytes": 1800,
+      "sha256": "57e941818907e8fd125a8b04ee7052fc83bd559640de25c15bc22f7c02ad2111"
+    }
+  ],
+  "notarization": {
+    "app": {
+      "status": "Accepted",
+      "message": "Processing complete",
+      "id": "8876c0b6-4a45-4013-81bb-e66698f285d7"
+    },
+    "dmg": {
+      "message": "Processing complete",
+      "id": "5e880e69-f6ee-4328-8127-3105c8e9474c",
+      "status": "Accepted"
+    }
+  },
+  "app_and_dmg_stapled": true,
+  "app_and_dmg_gatekeeper": "accepted",
+  "copied_app_deep_strict_signature": "passed",
+  "main_executable_sha256": "bf408276c7d36506d265a83047590d7b439fbffffdb17bad922bebbf85a106ae",
+  "stamps": {
+    "orion-source.sha256": "362613cb0205d105b1647aca6d483a175d6d17798f14db67a2a2f801a7fbd72f",
+    "orion-renderer.sha256": "6e9c920a0ede4e08ba3f41dfbfb0cea08a20a6bd9a4a4967f939cfb09862be50"
+  },
+  "updater": {
+    "signature": "verified",
+    "signed_version": "0.6.4",
+    "extracted_archive_identity_signature_ticket_gatekeeper": "passed",
+    "installed_over_user_app": false,
+    "endpoint": "https://github.com/zug11/orion/releases/latest/download/latest.json"
+  },
+  "verification": {
+    "renderer_tests_passed": 3775,
+    "renderer_tests_skipped": 1,
+    "native_tests_passed": 360,
+    "native_tests_ignored": 8,
+    "mcp_tests_passed": 136,
+    "updater_signing_tests_passed": 8,
+    "orb_pixel_motion": {
+      "styles": [
+        "Jelly",
+        "Mirage Clear"
+      ],
+      "idle_seconds": [
+        0,
+        2,
+        6,
+        12,
+        25,
+        40
+      ],
+      "mouse_sweeps": [
+        "right",
+        "down",
+        "diagonal"
+      ],
+      "opposing_samples": 18
+    }
+  }
+}
