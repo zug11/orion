@@ -106,7 +106,7 @@ function setup() {
 function event(value: unknown, connection = mock.options) { act(() => connection.onEvent(value)); }
 function speak(text: string, start = 0, delegation?: string, itemId?: string) {
   event({ type: "session.input_transcript.delta", event_id: crypto.randomUUID(), item_id: itemId, delta: text, start_ms: start, end_ms: start + 200 });
-  if (delegation) event({ type: "session.delegation.created", delegation: { id: delegation, target: "client" }, offset_ms: start + 200 });
+  if (delegation) event({ type: "session.delegation.created", item_id: itemId, delegation: { id: delegation, target: "client" }, offset_ms: start + 200 });
 }
 async function settle(ms = 1_000) { await act(() => vi.advanceTimersByTimeAsync(ms)); }
 function publish(jobs: VoiceWorkOrder[]) { act(() => { mock.jobs = jobs; mock.engine.onJobs(jobs); }); }
@@ -333,6 +333,35 @@ describe("Space voice work-order integration", () => {
     await settle(3_000);
     expect(mock.run).not.toHaveBeenCalled();
     expect(screen.getByRole("alert")).toHaveTextContent("could not be matched to where you started speaking");
+  });
+
+  it("accepts an unmarked final on a stable call and clears only the stale matching alert", async () => {
+    const snapshot = createEmptySnapshot("Eleven voice", "2026-11-18", "eleven-space");
+    snapshot.settings.liveVoiceProvider = "elevenlabs";
+    snapshot.settings.elevenLabsApiKeyConfigured = true;
+    render(<SpaceVoice snapshot={snapshot} enabled toggleRequest={1} focusNoteId="original-note" commit={vi.fn()}
+      onProposal={vi.fn()} onOpenNote={vi.fn()} onOpenSettings={vi.fn()} />);
+    event({ type: "session.input_transcript.delta", uncertain_onset: true, delta: "Research the wrong topic.", start_ms: 0, end_ms: 50 });
+    expect(screen.getByRole("alert")).toHaveTextContent("could not be matched");
+    speak("Research the themes in this note.", 200);
+    await settle(3_000);
+    expect(mock.run).toHaveBeenCalledOnce();
+    expect(mock.run.mock.calls[0][3]).toBe("original-note");
+    expect(screen.queryByText(/could not be matched/)).toBeNull();
+  });
+
+  it("rejects an unmarked final after navigating away and back during the same call", async () => {
+    const snapshot = createEmptySnapshot("Eleven voice", "2026-11-18", "eleven-space");
+    snapshot.settings.liveVoiceProvider = "elevenlabs";
+    snapshot.settings.elevenLabsApiKeyConfigured = true;
+    const props = { snapshot, enabled: true, toggleRequest: 1, commit: vi.fn(), onProposal: vi.fn(), onOpenNote: vi.fn(), onOpenSettings: vi.fn() };
+    const { rerender } = render(<SpaceVoice {...props} focusNoteId="first" />);
+    rerender(<SpaceVoice {...props} focusNoteId="second" />);
+    rerender(<SpaceVoice {...props} focusNoteId="first" />);
+    speak("Research the themes in this note.");
+    await settle(3_000);
+    expect(mock.run).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent("could not be matched");
   });
 
   it("keeps main Chat voice workers silent on screen while preserving orbs, spoken findings and typed chat", async () => {

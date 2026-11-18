@@ -3438,8 +3438,13 @@ evidence. Checkpoints retain cumulative attempts/completions separately from
 the bounded result cache and read journal. A normalized 128-entry lookup journal
 prevents silently paying again for recent evicted results or failed queries;
 2,048 evidence fingerprints track novelty separately from citation retention.
-An explicit resumed retry/continuation may retry a prior failure and starts a
-fresh no-progress streak. Source evidence and citation counts remain bounded.
+Each dispatch and each validated return updates the session checkpoint, even
+while another lookup is pending. A correction can reuse a received result in
+the same scope. Keep unfinished questions across local rediscovery. Only an
+explicit retry or continuation may repeat an unresolved submission. A successful
+retry clears errors for its question up to the depth it answered. Keep other
+questions' errors and cumulative attempt counts. Source evidence and citation
+counts remain bounded.
 Legacy retained results are treated as quick. Native admission/polling remains
 bounded to the selected profile plus best-effort remote cancellation. Cancellation is
 window/request scoped, including cancel-before-admission; late output cannot
@@ -4529,6 +4534,13 @@ from useful findings, which still use the shared scheduler and commentary.
 Only completed ElevenLabs user transcriptions enter that coordinator, once per
 utterance. Capture the note, selected passage and focused worker at speech onset;
 use that same target when its transcript arrives, rejecting an unmatched target.
+Allow up to the managed 30-second turn timeout for a final after one clear onset.
+If no onset signal arrived, accept the final only against the target captured
+when the call opened and held continuously since. A change of note, selection,
+worker, conversation or mute invalidates that fallback, even on returning.
+An unknown capture ID, conflicting speech bursts or expired capture still fail.
+Match ElevenLabs delegation by capture ID and keep distinct finalized utterances
+separate across targets.
 Late transcription must not retarget a spoken edit to a newly opened note.
 Keep audio storage off, input/output lifecycle bounded, and the selected Intelligence model
 for research. Voice receives compact context and cited assignment results, not an
@@ -4580,6 +4592,21 @@ output. Native reading offsets accept integral JSON numbers such as 0.0 and 1e3
 within the same bound as browser validation. Static CHAT_* error categories
 distinguish JSON, structure, reads, checkpoints, reply and edit failures without
 logging or echoing raw provider output or note contents.
+Start each child’s local discovery from its subject and focus, with the exact user
+transcript retained as the request. The existing router may also supply one
+standalone public question for an external evidence need on a newly assigned
+worker. Use the captured web capability and ordinary reader transport. Never
+send the focus or transcript as a fallback web query, and never automatically
+repeat that starting lookup on resume. Keep sibling job inventories out of the
+child’s conversation context. Its provider-facing journal carries read requests,
+evidence IDs and paging receipts alongside cited findings, decisions and open
+questions. Full operation results remain in the bounded local checkpoint.
+Prioritize the exact passages supporting published findings when trimming a
+worker’s context. Permit a local range to be reopened after its evidence
+leaves the packet, including when its detailed read operation has aged out.
+Busy routing requests compact sibling descriptions and send
+intact reference records within native Chat’s per-field character limits. Keep
+the full current human turn in the routing prompt, including during plan repair.
 Only the current user transcript or explicit Keep action grants creation authority;
 edit proposals retain their captured target and existing Accept/Discard/Undo flow.
 An explicit request for assigned workers to write notes uses host-owned saving of
@@ -4641,7 +4668,8 @@ The reader checkpoint does not contain its final answer. Same-scope continuation
 and retry also retain a separate public completed-answer reference (at most 3 KB),
 with exact opening/conclusion fragments, source identities, coverage and explicit
 omissions. Recheck evidence, focus, settings and task-view before reuse; a changed
-scope or selection drops it. This reference cannot grant writes or citation
+scope or selection drops it. Changing the originating note or selection also
+drops that worker's read checkpoint. This reference cannot grant writes or citation
 authority. A fresh revision-guarded continuation may repeat an earlier phrase even
 after Keep, while the per-worker save reservation still prevents duplicate saves.
 Interpret turns in order; direct local cancellation also reaches pending routing
@@ -4662,8 +4690,9 @@ go through the planner. Both OpenAI and ElevenLabs submit the whole original req
 once; the shared host owns admission and rejects late duplicate delegation. ElevenLabs
 keeps its pinned asynchronous tool schema and refreshes/verifies policy on explicit
 call startup. Shared Chat/voice web reading overlaps independent requests in bounded
-pairs, committing evidence/cache/checkpoints in request order and checking cancellation
-before publication. Dependent reads remain sequential.
+pairs. Retain each received response immediately in the worker's checkpoint.
+Commit citations in request order and recheck cancellation before publication.
+Dependent reads remain sequential.
 
 The host reserves one stable orb identity per requested worker while routing or
 clarifying; a topic answer consumes those same identities and the original note

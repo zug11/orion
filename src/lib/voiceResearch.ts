@@ -95,7 +95,7 @@ function lookupResult(snapshot: AppSnapshot, query: string, prompt: string, focu
 }
 
 /** A generated division of research, never additional user authority. */
-export interface VoiceResearchAssignment { subject: string; focus: string; noteIds?: string[] }
+export interface VoiceResearchAssignment { subject: string; focus: string; noteIds?: string[]; publicQuery?: string }
 /** A fresh host-routed turn may continue this exact completed revision once. */
 export interface VoiceResearchContinuation { expectedRevision: number }
 export interface VoiceFindingTarget { id: string; revision: number }
@@ -120,7 +120,7 @@ function requestedFindingCount(prompt: string, workers: number): number | undefi
 }
 
 function sameAssignment(left?: VoiceResearchAssignment, right?: VoiceResearchAssignment): boolean {
-  return left?.subject === right?.subject && left?.focus === right?.focus && JSON.stringify(left?.noteIds) === JSON.stringify(right?.noteIds);
+  return left?.subject === right?.subject && left?.focus === right?.focus && left?.publicQuery === right?.publicQuery && JSON.stringify(left?.noteIds) === JSON.stringify(right?.noteIds);
 }
 
 function validateAssignment(assignment: VoiceResearchAssignment) {
@@ -574,8 +574,9 @@ export class VoiceResearch {
     const taskView = execution?.authority.taskView ?? requestedTaskView(prompt);
     const historyDerived = taskView === "history" || ((!execution || execution.retainScope) && previous?.job.taskView === "history");
     const readOnly = !!execution || previous?.readOnly;
-    const continuesScope = (!execution || execution.retainScope) && previous && previous.job.focusNoteId === focusNoteId && previous.job.selection?.id === selection?.id && sameAssignment(previous.job.assignment, assignment) &&
-      (explicitRetry || continuation || voiceContinuationRequest(prompt));
+    const sameScope = (!execution || execution.retainScope) && previous && previous.job.focusNoteId === focusNoteId &&
+      previous.job.selection?.id === selection?.id && sameAssignment(previous.job.assignment, assignment);
+    const continuesScope = sameScope && (explicitRetry || continuation || voiceContinuationRequest(prompt));
     const previousReference = continuesScope && (previous.job.state === "completed" && this.isCurrent(id, previous.job.revision)
       ? completedWorkerReference(previous) : previous.completedReference);
     const completedReference = previousReference && completedReferenceIsCurrent(previousReference, snapshot, taskView) ? previousReference : undefined;
@@ -588,16 +589,16 @@ export class VoiceResearch {
       focusVersion: spaceNoteVersionOrUndefined(snapshot, focusNoteId), dependencies: [], strict: !readOnly && !assignment && chatPromptAllowsNoteCreation(prompt), delegationId,
       readOnly, taskView, ...(execution ? { external: { ...execution.authority } } : {}),
       ...(completedReference ? { completedReference } : {}),
-      // Reuse only the previous completed read boundary. The old in-flight
-      // transport may finish physically but can no longer publish or save.
-      checkpoint: (!execution || execution.retainScope) && previous?.checkpoint && previous.checkpoint.taskView === taskView && sameAssignment(previous.job.assignment, assignment) ? structuredClone(previous.checkpoint) : undefined };
+      // Keep received results and pending requests only for their captured scope.
+      // A late response from the old revision can no longer publish or save.
+      checkpoint: sameScope && previous.checkpoint?.taskView === taskView ? structuredClone(previous.checkpoint) : undefined };
     this.jobs.set(id, record);
     this.publish();
     let dispatched: Promise<void> | undefined;
     record.promise = this.workers.run(() => {
       delete record.job.phase;
       this.progress(record, "Considering your request");
-      dispatched = this.execute(record, conversation);
+      dispatched = this.execute(record, conversation, Boolean(continuesScope));
       return dispatched;
     }, { signal: record.controller.signal, queueKey: id }).catch(async error => {
       // Queued cancellation finishes immediately. Once dispatched, preserve the
@@ -608,7 +609,7 @@ export class VoiceResearch {
     return record.promise;
   }
 
-  private async execute(record: WorkRecord, conversation: string) {
+  private async execute(record: WorkRecord, conversation: string, retryPreviousWebLookups: boolean) {
     const snapshot = structuredClone(this.options.snapshot());
     const { id, prompt, focusNoteId, assignment } = record.job;
     const controller = record.controller;
@@ -674,9 +675,10 @@ export class VoiceResearch {
         signal: controller.signal, focusNoteId: assignment?.noteIds ? undefined : focusNoteId, taskView, freshness: "evidence",
         ...(assignment?.noteIds ? { referenceTargets: assignment.noteIds.map(id => ({ kind: "note" as const, id })) } : {}),
         ...(readOnly ? { purpose: "search" as const, requireSupportedFinding: true } : {}),
+        ...(assignment ? { searchFocus: `${assignment.subject} ${assignment.focus}`, initialPublicQuery: assignment.noteIds ? undefined : assignment.publicQuery } : {}),
         conversationContext: conversation,
         referenceContext: voiceSelectionReference(record.job.selection, snapshot, selectionView),
-        resume: record.checkpoint,
+        resume: record.checkpoint, retryPreviousWebLookups,
         webResearch: createWebResearch(snapshot.settings),
         onDeadlineChanged: deadlineAt => {
           clearTimeout(deadline);

@@ -1016,6 +1016,7 @@ pub async fn error(response: Response) -> String {
         status,
         data.pointer("/error/code")
             .and_then(Value::as_str)
+            .or_else(|| data.pointer("/error/type").and_then(Value::as_str))
             .unwrap_or_default(),
     )
 }
@@ -1025,10 +1026,18 @@ fn plan_error(status: u16, code: &str) -> String {
         "subscription_sharing_usage_unavailable" | "subscription_sharing_user_unavailable" => "ChatGPT plan usage is temporarily unavailable. Try again later.",
         "subscription_sharing_user_not_eligible" => "This ChatGPT account or workspace is not eligible for plan usage. Check ChatGPT Settings → Usage.",
         "subscription_sharing_unsupported_capability" | "subscription_sharing_route_not_supported" => "This request uses a capability unavailable with ChatGPT plan access.",
+        "context_length_exceeded" => "This request exceeded the ChatGPT model's context window. Narrow the research question and retry.",
+        "rate_limit_exceeded" | "rate_limit_error" => "ChatGPT is limiting requests. Wait a moment before retrying this worker.",
+        "insufficient_quota" => "ChatGPT reported a usage limit. Check ChatGPT Settings → Usage before retrying.",
+        "server_error" | "service_unavailable" | "overloaded_error" => "ChatGPT reported a temporary service error. Retry when the service is available.",
+        "model_not_found" => "The selected ChatGPT model is unavailable for this account. Check the model in Orion Settings.",
+        "invalid_request_error" | "invalid_json_schema" => "ChatGPT rejected the request format. Check the selected model and its supported capabilities.",
         _ if status == 401 => "ChatGPT authorization expired or was revoked. Continue with ChatGPT again.",
         _ if status == 429 => "ChatGPT rate or usage limit reached. Manage usage in ChatGPT Settings → Usage.",
         _ if status == 403 => "ChatGPT plan access was denied. Check the account and permissions in ChatGPT Settings → Usage.",
-        _ => "ChatGPT could not complete this request. Your saved connection was kept.",
+        _ if (500..600).contains(&status) => return format!("ChatGPT returned a service error (HTTP {status}). Retry when the service is available."),
+        _ if status > 0 => return format!("ChatGPT declined this request (HTTP {status}). Your saved connection was kept."),
+        _ => "ChatGPT reported a failed response without a recognized reason. Your saved connection was kept. You can retry this request.",
     }.to_string()
 }
 /// Retain finalized output items, but publish nothing until response.completed.
@@ -1214,18 +1223,29 @@ impl Events {
                 Some("response.failed" | "error") => {
                     return Err(plan_error(
                         0,
-                        event
-                            .pointer("/response/error/code")
-                            .or_else(|| event.pointer("/error/code"))
-                            .or_else(|| event.get("code"))
-                            .and_then(Value::as_str)
-                            .unwrap_or_default(),
+                        [
+                            "/response/error/code",
+                            "/error/code",
+                            "/code",
+                            "/response/error/type",
+                            "/error/type",
+                        ]
+                        .iter()
+                        .find_map(|path| event.pointer(path).and_then(Value::as_str))
+                        .unwrap_or_default(),
                     ))
                 }
                 Some("response.incomplete") => {
+                    if event
+                        .pointer("/response/incomplete_details/reason")
+                        .and_then(Value::as_str)
+                        == Some("max_output_tokens")
+                    {
+                        return Err("ChatGPT reached the output limit before finishing. Retry with a shorter answer or a narrower research question.".into());
+                    }
                     return Err(
                         "ChatGPT returned an incomplete response. Try a smaller request.".into(),
-                    )
+                    );
                 }
                 _ => {}
             }
@@ -1233,7 +1253,16 @@ impl Events {
     }
 }
 pub async fn read_for_model(response: Response, model: &str) -> Result<Value, String> {
-    read_response(response, 16 * 1024 * 1024, is_model(model)).await
+    let plan = is_model(model);
+    read_response(response, 16 * 1024 * 1024, plan)
+        .await
+        .map_err(|message| {
+            if plan {
+                message
+            } else {
+                format!("Orion could not read OpenAI's response: {message}")
+            }
+        })
 }
 /// ChatGPT plan requests require an SSE terminal event, including bounded callers.
 pub async fn read_with_limit(response: Response, limit: usize) -> Result<Value, String> {
@@ -2059,6 +2088,40 @@ mod tests {
         let mut events = Events::default();
         assert!(events.feed(b"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"subscription_sharing_usage_limit_exceeded\"}}}\n\n").unwrap_err().contains("Manage usage"));
     }
+    #[test]
+    fn plan_failure_frames_show_actionable_categories_and_keep_provider_text_private() {
+        for (event, expected) in [
+            (
+                json!({"type":"response.failed","response":{"error":{"code":"context_length_exceeded","message":"private note"}}}),
+                "context window",
+            ),
+            (
+                json!({"type":"error","error":{"code":null,"type":"rate_limit_error"}}),
+                "limiting requests",
+            ),
+            (
+                json!({"type":"error","code":"server_error"}),
+                "temporary service error",
+            ),
+            (
+                json!({"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}),
+                "output limit",
+            ),
+            (
+                json!({"type":"error","code":"private note","message":"private note"}),
+                "without a recognized reason",
+            ),
+        ] {
+            let message = Events::default()
+                .feed(format!("data: {event}\n\n").as_bytes())
+                .unwrap_err();
+            assert!(message.contains(expected), "{message}");
+            assert!(!message.contains("private note"));
+        }
+        assert!(plan_error(503, "").contains("HTTP 503"));
+        assert!(plan_error(400, "private note").contains("HTTP 400"));
+    }
+
     #[test]
     fn stream_boundaries_preserve_utf8_and_never_accept_failed_or_incomplete_output() {
         let frame = "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output_text\":\"Héllo 🫠\"}}\r\n\r\n";

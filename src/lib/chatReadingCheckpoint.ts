@@ -20,7 +20,9 @@ export interface ChatReadingCheckpoint {
   webEvidenceKeys?: string[];
   webUnproductiveLookups?: number;
   /** Complete provider results stay local; model packets contain exact pages. */
-  webResults?: Array<{ query: string; depth?: WebResearchDepth; result: WebResearchResult }>;
+  webResults?: Array<{ query: string; depth?: WebResearchDepth; result: WebResearchResult;
+    /** Received before an independent sibling finished. Allocate citations in read order. */
+    awaitingRead?: true }>;
   nextEvidence: number;
   evidence: ChatEvidence[];
   dependencies: Array<{ kind: "note" | "source"; id: string; version: string }>;

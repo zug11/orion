@@ -3324,9 +3324,7 @@ async fn organize_content(
         });
     }
 
-    let response = chatgpt::read_for_model(response, &model)
-        .await
-        .map_err(|error| format!("Orion could not read OpenAI's response: {error}"))?;
+    let response = chatgpt::read_for_model(response, &model).await?;
     let output_text = extract_output_text(&response, "organize this material")?;
     let result = serde_json::from_str::<OrganizeResult>(&output_text).map_err(|_| {
         "OpenAI returned notes Orion could not read. Try the import again.".to_string()
@@ -3673,8 +3671,7 @@ async fn run_knowledge_assignment(
         });
     }
     let response = tokio::select! {
-        response = chatgpt::read_for_model(response, &model) => response
-            .map_err(|error| format!("Orion could not read OpenAI's response: {error}")),
+        response = chatgpt::read_for_model(response, &model) => response,
         changed = cancelled.changed() => {
             let _ = changed;
             return Err("The knowledge assignment was cancelled.".to_string());
@@ -4134,9 +4131,7 @@ async fn chat(
         });
     }
 
-    let response = chatgpt::read_for_model(response, &model)
-        .await
-        .map_err(|error| format!("Orion could not read OpenAI's response: {error}"))?;
+    let response = chatgpt::read_for_model(response, &model).await?;
     authorize()?;
     let output_text = extract_output_text(&response, operation)?;
     if let Some(context) = &synthesis_context {

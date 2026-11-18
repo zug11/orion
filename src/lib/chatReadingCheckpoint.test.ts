@@ -93,6 +93,26 @@ describe("incremental reader checkpoints", () => {
     expect(engine.getJobs()[0]).toMatchObject({ revision: 2, state: "completed" });
   });
 
+  it("starts clean when the same worker is redirected to a different note", async () => {
+    const firstPackets: ChatRequest[] = [];
+    const settings = config(async request => {
+      const context = packet(request);
+      const note = request.prompt.includes("Beta") ? "beta" : "alpha";
+      if (note === "beta") firstPackets.push(request);
+      const evidence = context.evidence.find((item: { entityId: string }) => item.entityId === note);
+      if (!evidence) return { reply: "", readRequests: [read(note)] };
+      return { reply: `The stated cost is supported [[${evidence.id}]].` };
+    });
+    const engine = new VoiceResearch(settings);
+    await engine.run("cost", "Check Alpha's cost", "", "alpha");
+    await engine.run("cost", "Check Beta's cost", "", "beta");
+    const first = packet(firstPackets[0]);
+    expect(first.evidence).toEqual([]);
+    expect(first.workerContinuity.completedOperations.some((op: { request: ChatReadRequest }) => op.request.id === "alpha")).toBe(false);
+    expect(engine.getJobs()[0]).toMatchObject({ revision: 2, state: "completed", result: { evidence: [{ entityId: "beta" }] } });
+    engine.dispose();
+  });
+
   it("suppresses duplicate findings across continued reads and a corrected revision", async () => {
     let old!: (result: ChatResult) => void;
     let count = 0;

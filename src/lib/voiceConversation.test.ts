@@ -28,6 +28,16 @@ describe("voice conversation assembly", () => {
     expect(history.takeTurns()).toEqual([{ key: 1, prompt: "Compare alpha and beta", delegated: true, delegationId: "d", focusNoteId: "first-note" }]);
     expect(history.takeTurns()).toEqual([]);
   });
+  it("keeps close finalized utterances on their own notes and matches delayed delegation by audio item", () => {
+    const history = new VoiceConversation();
+    history.receive({ ...speech("Research the first theme.", 0, 200), item_id: "first" }, "A", undefined, undefined, true);
+    history.receive({ ...speech("Research the second theme.", 180, 320), item_id: "second" }, "B", undefined, undefined, true);
+    history.receive({ type: "session.delegation.created", delegation: { id: "later" }, offset_ms: 300, item_id: "first" }, undefined, undefined, undefined, true);
+    expect(history.takeTurns()).toMatchObject([
+      { prompt: "Research the first theme.", focusNoteId: "A", delegationId: "later" },
+      { prompt: "Research the second theme.", focusNoteId: "B", delegationId: null },
+    ]);
+  });
   it("binds a follow-up to its opening worker revision across fragments and delayed delegation", () => {
     const history = new VoiceConversation(), worker = { id: "motivation", revision: 2 };
     history.receive(speech("Follow that", 0, 100), "original-note", undefined, worker);

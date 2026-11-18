@@ -110,15 +110,24 @@ describe("ElevenLabs managed conversational transport", () => {
     expect(sdk.setVolume).toHaveBeenLastCalledWith({ volume: 1 });
   });
 
+  it("matches a delayed final after an uninterrupted target's patient turn timeout", async () => {
+    const { connection, events } = setup(); await connection.start();
+    vad(0.8); vad(0.1); vi.advanceTimersByTime(27_000); user("Research Foucault", 2);
+    expect(events[1]).toMatchObject({ type: "session.input_transcript.delta", item_id: events[0].item_id });
+  });
+
   it("never reconstructs a missing, expired or ambiguous target at final-transcript time", async () => {
     const { connection, events } = setup(); await connection.start();
     user("Uncaptured command", 1);
     expect(events[0]).toMatchObject({ type: "session.input_transcript.delta" });
     expect(events[0].item_id).toBeUndefined();
+    expect(events[0].uncertain_onset).toBeUndefined();
     vad(0.8); vad(0.1); vi.advanceTimersByTime(8_001); vad(0.9); user("Ambiguous delayed command", 2);
     expect(events[events.length - 1]?.item_id).toBeUndefined();
+    expect(events[events.length - 1]?.uncertain_onset).toBe(true);
     vad(0.1); vad(0.8); vi.advanceTimersByTime(120_001); user("Expired capture", 3);
     expect(events[events.length - 1]?.item_id).toBeUndefined();
+    expect(events[events.length - 1]?.uncertain_onset).toBe(true);
     tool();
     expect(events.filter(item => item.type === "session.delegation.created")).toEqual([]);
   });

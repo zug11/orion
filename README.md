@@ -1147,6 +1147,17 @@ voice. Whole-Space reading can divide notes among one to four readers locally;
 explicit worker counts are still respected. Scope planning uses low reasoning effort
 while research retains your chosen effort. Independent web lookups run in pairs in
 the shared Chat and voice reader, with evidence merged in the original request order.
+Each voice worker starts by searching the Space for its own subject. When the plan
+calls for public evidence, that worker can start with its own public question.
+If you stop a worker while two lookups are running, **Retry** can use a source
+that already came back and continue with the unanswered question. Correcting the
+same assignment keeps that source without automatically submitting an interrupted
+lookup again. A successful retry clears the warning for the question it resolved.
+This recovery lasts for the current session and stays with the original note,
+selection and assignment.
+As the investigation grows, Orion carries a shorter record of completed reads,
+cited findings and open questions. The worker can reopen an earlier local passage
+to check its exact wording.
 Name a request
 to cancel or correct it, or use its compact Cancel control. Ambiguous references
 receive one clarification question. Spoken turns are interpreted in order while

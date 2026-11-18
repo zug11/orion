@@ -101,11 +101,18 @@ describe("evidence-driven web continuation", () => {
       return { reply: "", readRequests: [read(++turns % 2 ? "Question" : " QUESTION ")] };
     }, { webResearch: research, onCheckpoint: value => { checkpoint = value; } });
     expect(research).toHaveBeenCalledTimes(1);
+    let automaticTurns = 0;
+    await runChatReading(snapshot(), "Research", async () => !automaticTurns++
+      ? { reply: "", readRequests: [read("Question")] } : { reply: "The lookup is unresolved." },
+    { webResearch: research, resume: checkpoint });
+    expect(research).toHaveBeenCalledTimes(1);
     let retryTurn = 0;
     const retried = await runChatReading(snapshot(), "Research", async request => !retryTurn++
-      ? { reply: "", readRequests: [read("Question")] } : answer(request), { webResearch: research, resume: checkpoint });
+      ? { reply: "", readRequests: [read("Question")] } : answer(request),
+    { webResearch: research, resume: checkpoint, retryPreviousWebLookups: true });
     expect(research).toHaveBeenCalledTimes(2);
-    expect(retried.webResearch).toMatchObject({ attempted: 2, completed: 1 });
+    expect(retried.webResearch).toEqual({ attempted: 2, completed: 1 });
+    expect(retried.reply).not.toContain("timed out");
   });
 
   it("cancels a seventh in-flight lookup without publishing its late result", async () => {
@@ -118,6 +125,55 @@ describe("evidence-driven web continuation", () => {
     controller.abort(new Error("Worker cancelled")); complete(result(7));
     await expect(running).rejects.toThrow("Worker cancelled");
     expect(driver).toHaveBeenCalledTimes(7);
+  });
+
+  it("keeps another question's warning when one of two failed lookups recovers", async () => {
+    let saved: ChatReadingCheckpoint | undefined;
+    const failure = "The provider is busy.";
+    const research = vi.fn(async (_query: string) => result(1))
+      .mockRejectedValueOnce(new Error(failure)).mockRejectedValueOnce(new Error(failure));
+    let first = true;
+    await runChatReading(snapshot(), "Compare", async () => {
+      if (!first) return { reply: "Neither source was available." };
+      first = false;
+      return { reply: "", readRequests: [read("First"), read("Second")] };
+    }, { webResearch: research, onCheckpoint: value => { saved = value; } });
+    async function retry(query: string) {
+      let started = false;
+      return runChatReading(snapshot(), "Compare", async request => {
+        if (started) return answer(request);
+        started = true; return { reply: "", readRequests: [read(query)] };
+      }, { webResearch: research, resume: saved, retryPreviousWebLookups: true, onCheckpoint: value => { saved = value; } });
+    }
+    const one = await retry("First");
+    expect(one.webResearch).toEqual({ attempted: 3, completed: 1, issue: failure });
+    expect(saved?.webLookups?.filter(receipt => receipt.error).map(receipt => receipt.query)).toEqual(["second"]);
+    const both = await retry("Second");
+    expect(both.webResearch).toEqual({ attempted: 4, completed: 2 });
+    expect(both.reply).not.toContain(failure);
+  });
+
+  it("can reopen a local passage after both its evidence and detailed read record have been compacted", async () => {
+    const state = snapshot(), text = "界".repeat(3_000), now = "2026-11-18";
+    state.notes.push({ id: "long-note", slug: "long-note", title: "Long note", body: text.repeat(44), summary: "", aliases: [], tags: [], sourceIds: [], conceptIds: [], kind: "article", status: "ready", createdAt: now, updatedAt: now });
+    const page = (index: number): ChatReadRequest => ({ kind: "note", id: "long-note", query: "", start: index * text.length });
+    let next = 0, reopened = false;
+    const web = vi.fn(async () => result(1));
+    const final = await runChatReading(state, "Read the long note and revisit the opening", async request => {
+      const context = JSON.parse(request.readingContext!);
+      if (!context.webResearch.completedSearches) return { reply: "", readRequests: [read("Public context")] };
+      if (next < 44) return { reply: "", readRequests: Array.from({ length: 4 }, () => page(next++)) };
+      const opening = context.evidence.find((item: { entityId: string; start: number }) => item.entityId === "long-note" && item.start === 0);
+      if (!reopened) {
+        expect(opening).toBeUndefined();
+        expect(context.workerContinuity.completedOperations.some((item: { request: ChatReadRequest }) => item.request.kind === "note" && item.request.start === 0)).toBe(false);
+        reopened = true; return { reply: "", readRequests: [page(0)] };
+      }
+      expect(opening?.text).toBe(text);
+      return { reply: `The note opens here [[${opening.id}]].` };
+    }, { webResearch: web, onCheckpoint: () => {}, focusNoteId: "long-note" });
+    expect(web).toHaveBeenCalledOnce();
+    expect(final.evidence?.[0]).toMatchObject({ kind: "note", entityId: "long-note", start: 0, end: 3_000 });
   });
 
   it("still times out one stalled lookup after its depth allowance and answer grace", async () => {

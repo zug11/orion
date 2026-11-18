@@ -12,6 +12,29 @@ const result = (index: number): WebResearchResult => ({ responseId: `response_${
 const packet = (request: ChatRequest) => JSON.parse(request.readingContext!);
 
 describe("automatic bounded parallel research reads", () => {
+  it("compacts long web pages into read receipts while keeping exact evidence and the locally resumable pages", async () => {
+    let checkpoint: ChatReadingCheckpoint | undefined;
+    const research = vi.fn(async (query: string) => ({ ...result(Number(query)), answer: ("Long synthesis " + query + " ").repeat(1000) }));
+    let turns = 0;
+    const answer = await runChatReading(state(), "Compare four sources", async request => {
+      if (!turns++) return { reply: "", readRequests: ["1", "2", "3", "4"].map(read) };
+      const context = packet(request), memory = context.workerContinuity;
+      expect(memory.completedOperationsOmitted).toBe(0);
+      expect(memory.completedOperations.map((entry: { result: { responseId?: string } }) => entry.result.responseId).slice(1))
+        .toEqual(["response_1", "response_2", "response_3", "response_4"]);
+      expect(JSON.stringify(memory)).not.toContain("Long synthesis");
+      expect(JSON.stringify(memory).length).toBeLessThan(2_000);
+      expect(context.evidence[0]).toMatchObject({ id: "e1", text: "Evidence 1.", web: { url: "https://example.org/1" } });
+      return { reply: "First [[e1]]. Fourth [[e4]]." };
+    }, { webResearch: research, onCheckpoint: value => { checkpoint = value; } });
+    expect(answer.evidence).toHaveLength(2);
+    expect((checkpoint!.completedOperations[1].result as { synthesis: string }).synthesis.length).toBeGreaterThan(9_000);
+    await runChatReading(state(), "Compare four sources", async () => ({ reply: "Fourth [[e4]]." }), {
+      purpose: "search", webResearch: research, resume: checkpoint, initialPublicQuery: "4",
+    });
+    expect(research).toHaveBeenCalledTimes(4);
+  });
+
   it("overlaps two independent requests at a time and merges reverse finishes in input order", async () => {
     const pending = new Map<string, (value: WebResearchResult) => void>();
     const research = vi.fn((query: string) => new Promise<WebResearchResult>(resolve => pending.set(query, resolve)));
@@ -35,6 +58,29 @@ describe("automatic bounded parallel research reads", () => {
     const finished = await running;
     expect(finished.webResearch).toEqual({ attempted: 4, completed: 4 });
     expect(driver).toHaveBeenCalledTimes(2); // no additional decomposition/planner request
+  });
+
+  it("keeps the exact passage supporting an early checkpoint through later count and byte compaction", async () => {
+    const research = async (query: string) => ({ ...result(Number(query)), sources: Array.from({ length: 12 }, (_, i) => ({
+      id: i + 1, title: `Study ${query}-${i}`, url: `https://example.org/${query}/${i}`, snippet: `Passage ${query}-${i} ` + "界".repeat(2_000),
+    })) });
+    let turn = 0;
+    const finished = await runChatReading(state(), "Compare the studies", async request => {
+      switch (++turn) {
+        case 1: return { reply: "", readRequests: [read("1")] };
+        case 2: return { reply: "", checkpoint: { finding: "The first study [[e1]].", decisions: [], openQuestions: [] },
+          readRequests: ["2", "3", "4", "5"].map(read) };
+        case 3: return { reply: "", readRequests: ["6", "7", "8", "9"].map(read) };
+        default: {
+          const context = packet(request);
+          expect(new TextEncoder().encode(request.readingContext!).length).toBeLessThanOrEqual(320_000);
+          expect(context.evidence.length).toBeLessThan(96);
+          expect(context.evidence.find((e: { id: string }) => e.id === "e1")).toMatchObject({ title: "Study 1-0", web: { url: "https://example.org/1/0" } });
+          return { reply: "The first study [[e1]]." };
+        }
+      }
+    }, { webResearch: research, onCheckpoint: () => {} });
+    expect(finished.evidence?.[0].text).toBe("Passage 1-0 " + "界".repeat(2_000));
   });
 
   it("retains successful evidence when an independent sibling fails", async () => {
@@ -71,6 +117,38 @@ describe("automatic bounded parallel research reads", () => {
     await expect(running).rejects.toThrow("Request cancelled");
     expect(driver).toHaveBeenCalledTimes(1);
     expect(checkpoint).toHaveBeenCalledTimes(count);
+  });
+
+  it.each([0, 1])("recovers the lookup that finished first (slot %i) without another paid request", async ready => {
+    let saved: ChatReadingCheckpoint | undefined;
+    const pending: Array<(value: WebResearchResult) => void> = [];
+    const research = vi.fn(() => new Promise<WebResearchResult>(resolve => pending.push(resolve)));
+    const abort = new AbortController();
+    const initial = runChatReading(state(), "Compare the sources", async () => ({
+      reply: "", readRequests: [read("First"), read("Second")],
+    }), { webResearch: research, signal: abort.signal, onCheckpoint: value => { saved = value; } }).catch(error => error);
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    pending[ready](result(ready + 1));
+    try {
+      await vi.waitFor(() => expect(saved?.webResults?.map(page => page.result.responseId)).toContain(`response_${ready + 1}`));
+      expect(saved?.webAttempts).toBe(2);
+    } finally {
+      abort.abort(new Error("Stopped by user")); pending[1 - ready](result(99));
+      expect((await initial).message).toBe("Stopped by user");
+    }
+    // A corrected question refreshes local discovery and still needs the
+    // unanswered sibling from the interrupted research plan.
+    const question = ready === 0 ? "Compare the sources" : "Compare the sources more closely";
+    const resumed = await runChatReading(state(), question, async request => {
+      const context = packet(request);
+      expect(context.evidence).toHaveLength(1);
+      expect(context.evidence[0].web.url).toBe(`https://example.org/${ready + 1}`);
+      expect(context.workerContinuity.pendingReads.map((r: ChatReadRequest) => r.query)).toEqual([ready === 0 ? "Second" : "First"]);
+      return { reply: `One source was recovered [[${context.evidence[0].id}]].` };
+    }, { webResearch: research, resume: saved, onCheckpoint: () => {} });
+    expect(research).toHaveBeenCalledTimes(2);
+    expect(resumed.webResearch).toMatchObject({ attempted: 2, completed: 1, issue: expect.stringContaining("interrupted") });
+    expect(resumed.evidence?.[0].title).toBe(`Study ${ready + 1}`);
   });
 
   it("does not pay for normalized duplicate questions in one batch", async () => {

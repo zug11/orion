@@ -42,4 +42,31 @@ describe("OpenAI web research in voice workers", () => {
     snapshot.settings.chatgptAccountId = "account-b"; finish(response()); await work;
     expect(engine.getJobs()[0].state).toBe("failed"); expect(onResult).not.toHaveBeenCalled(); expect(commit).not.toHaveBeenCalled(); engine.dispose();
   });
+
+  it("blocks a second submission on an amended utterance and allows the worker's explicit Retry", async () => {
+    const snapshot = createEmptySnapshot("Research", "2026-11-18", "research");
+    Object.assign(snapshot.settings, { model: "chatgpt:gpt-6.1-sol", chatgptConfigured: true, chatgptAccountId: "account-a" });
+    let finish!: (value: ReturnType<typeof response>) => void;
+    native.search.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const commit = vi.fn(), onResult = vi.fn();
+    const engine = new VoiceResearch({ snapshot: () => snapshot, commit, onResult, deliver: vi.fn(), onProgress: vi.fn(),
+      driver: async request => {
+        const packet = JSON.parse(request.readingContext!);
+        if (!packet.evidence.length && (packet.finalizing || packet.results.some((r: { error?: string }) => r.error))) return { reply: "No confirmed source yet." };
+        return driver(request);
+      } });
+    const assignment = { subject: "Public research", focus: "Investigate the public topic.", publicQuery: "A public research question" };
+    const old = engine.run("worker", "Research the public topic", "", undefined, null, false, undefined, assignment);
+    await vi.waitFor(() => expect(native.search).toHaveBeenCalledOnce());
+    await engine.run("worker", "Research the public topic, especially its origins.", "", undefined, null, false, undefined, assignment);
+    expect(engine.getJobs()[0]).toMatchObject({ state: "failed", revision: 2 });
+    expect(native.search).toHaveBeenCalledOnce();
+    finish(response()); await old;
+    expect(onResult).not.toHaveBeenCalled();
+    await engine.retry("worker", "");
+    expect(native.search).toHaveBeenCalledTimes(2);
+    expect(engine.getJobs()[0]).toMatchObject({ state: "completed", revision: 3, result: { webResearch: { attempted: 2, completed: 1 } } });
+    expect(engine.getJobs()[0].result?.webResearch?.issue).toBeUndefined();
+    expect(onResult).toHaveBeenCalledOnce(); expect(commit).not.toHaveBeenCalled(); engine.dispose();
+  });
 });

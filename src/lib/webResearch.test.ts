@@ -220,6 +220,39 @@ describe("bounded web research in the shared reader", () => {
     expect(deliver.mock.calls.some(call => String(call[1]).includes("did not complete a web lookup"))).toBe(true);
   });
 
+  it("starts five independently scoped public lookups and gives each worker its own citable result", async () => {
+    const state = snapshot(); state.settings.apiKeyConfigured = true; state.settings.perplexityApiKeyConfigured = true;
+    const names = ["Marx", "Heidegger", "Wittgenstein", "Arendt", "Foucault"];
+    const prompt = "Compare the five candidates from my private seminar notes.";
+    const pending = new Map<string, (result: WebResearchResult) => void>();
+    vi.mocked(researchWithPerplexity).mockReset().mockImplementation(query => new Promise(resolve => pending.set(query, resolve)));
+    const driver = vi.fn(async (request: ChatRequest) => {
+      expect(request.prompt).toBe(prompt);
+      expect(request.allowNoteActions).toBe(false);
+      const packet = JSON.parse(request.readingContext!);
+      const source = packet.evidence[0];
+      expect(packet.results[0].query).toBe(`${source.title} Investigate the work of ${source.title}.`);
+      const receipt = packet.workerContinuity.completedOperations[1].result;
+      expect(receipt).toMatchObject({ responseId: `response-${source.title}`, evidenceIds: [source.id] });
+      expect(receipt).not.toHaveProperty("synthesis");
+      return { reply: `The finding about ${source.title} [[${source.id}]].` };
+    });
+    const engine = new VoiceResearch({ snapshot: () => state, driver, onProgress: vi.fn(), onResult: vi.fn(), deliver: vi.fn(), commit: vi.fn() });
+    const jobs = names.map(subject => engine.run(subject, prompt, "A private seminar conversation", undefined, null, false, undefined,
+      { subject, focus: `Investigate the work of ${subject}.`, publicQuery: `What did ${subject} publish?` }));
+    await vi.waitFor(() => expect([...pending.keys()].sort()).toEqual(names.map(name => `What did ${name} publish?`).sort()));
+    expect(driver).not.toHaveBeenCalled();
+    for (const name of [...names].reverse()) {
+      pending.get(`What did ${name} publish?`)!({ ...response(), responseId: `response-${name}`,
+        sources: [{ id: 1, title: name, snippet: `Supported claim about ${name}.`, url: `https://example.org/${name}` }] });
+    }
+    await Promise.all(jobs);
+    expect(driver).toHaveBeenCalledTimes(5);
+    for (const job of engine.getJobs()) {
+      expect(job).toMatchObject({ state: "completed", result: { evidence: [{ title: job.id, web: { url: `https://example.org/${job.id}` } }], webResearch: { attempted: 1, completed: 1 } } });
+    }
+  });
+
   it("corrects a local-only evidence gap by offering web reads inside the same worker", async () => {
     let turn = 0;
     const research = vi.fn(async () => response());

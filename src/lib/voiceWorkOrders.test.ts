@@ -138,6 +138,28 @@ describe("plural voice worker assignments", () => {
     expect(input.driver).toHaveBeenCalledOnce();
   });
 
+  it("repairs malformed nested JSON once and admits only a fully valid plan", async () => {
+    const driver = driverDecision({ action: "batch", assignments: threeScopes });
+    const malformed = { reply: '{"action":"batch","revision":1.,"assignments":[]}' };
+    const input = options({ prompt: "Start three workers to research the story", jobs: [], driver });
+    driver.mockResolvedValueOnce(malformed);
+    expect(await routeVoiceTurn(input)).toMatchObject({ action: "batch", assignments: threeScopes });
+    expect(driver).toHaveBeenCalledTimes(2);
+    expect(driver.mock.calls[1][0].prompt).toContain("invalid JSON");
+    driver.mockClear().mockResolvedValue(malformed);
+    await expect(routeVoiceTurn(input)).rejects.toThrow(/after retrying.*invalid JSON/);
+    expect(driver).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains a planned public question only with a configured research connection", async () => {
+    const assignments = threeScopes.map((scope, index) => index === 2 ? { ...scope, publicQuery: "When did Victorian London build its sewers?" } : scope);
+    const input = options({ prompt: "Start three workers to research the story", jobs: [], driver: driverDecision({ action: "batch", assignments }) });
+    expect(await routeVoiceTurn(input)).toMatchObject({ assignments: threeScopes });
+    expect(JSON.stringify(await routeVoiceTurn(input))).not.toContain("publicQuery");
+    input.snapshot.settings.apiKeyConfigured = true;
+    expect(await routeVoiceTurn(input)).toMatchObject({ assignments });
+  });
+
   it("repairs a missing worker internally instead of asking the user for topics", async () => {
     const driver = driverDecision({ action: "batch", assignments: threeScopes });
     driver.mockResolvedValueOnce({ reply: JSON.stringify({ action: "batch", assignments: threeScopes.slice(0, 2) }) });
@@ -949,6 +971,26 @@ describe("voice work-order routing", () => {
     const input = options({ prompt: "What about climate?", delegated: true, driver, conversation: "x".repeat(20_000), jobs: [{ ...job("climate"), prompt: "x".repeat(10_000), result: { reply: "secret body" } }] });
     input.snapshot.settings.model = "gpt-6-astra";
     expect(await routeVoiceTurn(input)).toEqual({ action: "conversation" });
+  });
+
+  it("fits a full spoken request, repair and busy worker directory into intact native Chat fields", async () => {
+    const text = "Start three workers for this comparison. " + "Detailed context. ".repeat(219);
+    const jobs = Array.from({ length: 24 }, (_, i) => ({ ...job(`worker-${i}`, `Subject ${i}`),
+      prompt: text, assignment: { subject: `Subject ${i}`, focus: "Research " + String(i) + " " + "scope ".repeat(44) } }));
+    const driver = driverDecision({ action: "batch", assignments: threeScopes });
+    driver.mockResolvedValueOnce({ reply: '{"action":"batch","revision":1.}' });
+    await expect(routeVoiceTurn(options({ prompt: text, conversation: "recent reference ".repeat(340), jobs, driver }))).resolves.toMatchObject({ action: "batch", prompt: text });
+    expect(driver).toHaveBeenCalledTimes(2);
+    for (const [request] of driver.mock.calls) {
+      expect([...request.prompt].length).toBeLessThanOrEqual(8_000);
+      expect(request.prompt).toContain(text);
+      expect(request.notes.every(note => note.body.length <= 8_000)).toBe(true);
+      expect(JSON.parse(request.notes[0].body)).toMatchObject({ compacted: true, totalKnownJobs: 24 });
+      const workers = request.notes.filter(note => note.title === "Current workers").flatMap(note => JSON.parse(note.body).jobs);
+      expect(workers.map(worker => worker.id)).toEqual(jobs.map(worker => worker.id));
+      expect(workers[23].focus).toContain("Research 23");
+      expect(JSON.stringify(workers)).not.toContain(text);
+    }
   });
 
   it("captures revisions before model completion so caller can reject an intervening update", async () => {

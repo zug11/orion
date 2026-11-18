@@ -16,6 +16,8 @@ const MAX_CONTEXT_CHARS = 24_000;
 const MAX_TRANSCRIPT_CHARS = 100_000;
 const MAX_CAPTURE_MS = 120_000;
 const MAX_SILENT_CAPTURE_MS = 8_000;
+// The managed agent permits a 30-second pause before finalizing a turn.
+const FINAL_TRANSCRIPT_GRACE_MS = 30_000;
 const object = (value: unknown): Record<string, unknown> | undefined => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 const finiteLevel = (value: number) => Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
 const normalizedRequest = (value: string) => value.trim().replace(/\s+/gu, " ").toLowerCase();
@@ -158,15 +160,15 @@ export class ElevenLabsLiveVoiceConnection implements VoiceConnection {
       const capture = this.capture;
       this.capture = undefined;
       this.vadSpeaking = false;
-      const matched = capture && !capture.ambiguous && now - capture.start <= MAX_CAPTURE_MS && now - capture.end <= MAX_SILENT_CAPTURE_MS;
+      const matched = capture && !capture.ambiguous && now - capture.start <= MAX_CAPTURE_MS && now - capture.end <= FINAL_TRANSCRIPT_GRACE_MS;
       this.humanHasSpoken = true;
       this.hostDeliveryInFlight = false;
       this.conversation?.setVolume({ volume: this.outputSilent ? 0 : 1 });
-      // A missing/ambiguous VAD target is deliberately not reconstructed from
-      // current focus. SpaceVoice rejects unmatched finals and asks to repeat.
+      // Distinguish an absent VAD signal from conflicting or expired onset
+      // evidence. Only the former can use a target held for the entire call.
       const itemId = matched ? capture.id : undefined;
       const end = matched ? Math.max(capture.start, capture.end) : now;
-      this.emit({ type: "session.input_transcript.delta", event_id: `eleven-user-${eventId}`, ...(itemId ? { item_id: itemId } : {}), delta: `${text.trim()} `, start_ms: matched ? capture.start : now, end_ms: end });
+      this.emit({ type: "session.input_transcript.delta", event_id: `eleven-user-${eventId}`, ...(itemId ? { item_id: itemId } : capture ? { uncertain_onset: true } : {}), delta: `${text.trim()} `, start_ms: matched ? capture.start : now, end_ms: end });
       this.lastUser = itemId ? { itemId, end, receivedAt: now, text: normalizedRequest(text) } : undefined;
       for (const [toolId, pending] of this.pendingTools) if (pending.captureId === itemId && pending.request === normalizedRequest(text)) this.delegate(toolId, itemId!, end);
       this.pendingTools.clear();
