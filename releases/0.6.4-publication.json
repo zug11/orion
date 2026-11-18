@@ -1,0 +1,86 @@
+{
+  "version": "0.6.4",
+  "release_id": 449613658,
+  "release_url": "https://github.com/zug11/orion/releases/tag/v0.6.4",
+  "published_at": "2026-11-18T07:27:11Z",
+  "release_tag_commit": "73cecb8e7f06564df3df242ab5d89628b5181a9c",
+  "assets": [
+    {
+      "name": "Orion-0.6.4.m-Apple-Silicon.dmg",
+      "bytes": 1508842985,
+      "sha256": "c1316436ff30e4c16ebbed130610f0a7f35523e70fc830cc329d93d4537b914f",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.4/Orion-0.6.4.m-Apple-Silicon.dmg"
+    },
+    {
+      "name": "Orion-0.6.4-Apple-Silicon.app.tar.gz",
+      "bytes": 1506823094,
+      "sha256": "87c62f30d3a510b477cc55c3c63e1fb261ce3d793a7a24c34063569cbf6f809c",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.4/Orion-0.6.4-Apple-Silicon.app.tar.gz"
+    },
+    {
+      "name": "Orion-0.6.4-Apple-Silicon.app.tar.gz.sig",
+      "bytes": 448,
+      "sha256": "d34018b40bc17650b51387797f6e78ecdbaa71eeb0928a8cfc0e090747601e8c",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.4/Orion-0.6.4-Apple-Silicon.app.tar.gz.sig"
+    },
+    {
+      "name": "latest.json",
+      "bytes": 1800,
+      "sha256": "57e941818907e8fd125a8b04ee7052fc83bd559640de25c15bc22f7c02ad2111",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.4/latest.json"
+    },
+    {
+      "name": "Orion-0.6.4-SHA256SUMS.txt",
+      "bytes": 386,
+      "sha256": "2286187a13911f54e169cdfbde9107dc8a7017679c5431dfd9a410134b4828d6",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.4/Orion-0.6.4-SHA256SUMS.txt"
+    }
+  ],
+  "all_github_asset_digests_match": true,
+  "public_updater": {
+    "endpoint": "https://github.com/zug11/orion/releases/latest/download/latest.json",
+    "version": "0.6.4",
+    "platform": "darwin-aarch64",
+    "url": "https://github.com/zug11/orion/releases/download/v0.6.4/Orion-0.6.4-Apple-Silicon.app.tar.gz",
+    "bytes": 1506823094,
+    "sha256": "87c62f30d3a510b477cc55c3c63e1fb261ce3d793a7a24c34063569cbf6f809c",
+    "exact_manifest_match": true,
+    "public_archive_and_signed_version_verified": true,
+    "public_detached_signature_matches_manifest": true,
+    "installed_over_user_app": false,
+    "existing_version": "0.6.3",
+    "signed_release": "0.6.4",
+    "verified_with_previous_release_key": true,
+    "same_feed": true
+  },
+  "website": {
+    "url": "https://www.itsorion.app",
+    "deployment_id": "dpl_HdQZVYc7EfZ3bLcKxMCursGtyxtZ",
+    "deployment_url": "https://orion-fzx4qjazr-zug11s-projects.vercel.app",
+    "status": "READY",
+    "environment": "production",
+    "source_commit": "ed65467eec2cd9fff4ea1dc0ab28bdf54283175a",
+    "aliases": [
+      "www.itsorion.app",
+      "itsorion.app",
+      "orion-xi-three.vercel.app",
+      "orion-zug11s-projects.vercel.app"
+    ],
+    "live_checks": {
+      "release_download_checksum_links_and_structured_metadata": true,
+      "desktop_width": 1340,
+      "mobile_width": 390,
+      "example_spaces": [
+        "business",
+        "research",
+        "film"
+      ],
+      "opposing_orb_hover": true,
+      "reduced_motion_freezes_shader": true,
+      "keyboard_pause_resume": true,
+      "article_history": true
+    },
+    "staged_response_verified_before_promotion": true,
+    "temporary_staging_access_revoked": true
+  }
+}
