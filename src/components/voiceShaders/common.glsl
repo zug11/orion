@@ -2,7 +2,7 @@ precision highp float;
 varying vec2 vLocal;
 uniform float uTime,uRotationTime,uMaterial,uRadius,uDpr,uLevel,uReceiving,uSeed;
 uniform float uLight,uWorking,uOpacity,uDetail,uAmount,uGloss;
-uniform vec2 uPointer;
+uniform mat3 uShellRotation,uInteriorRotation;
 uniform vec3 uPrimary,uSecondary,uTertiary,uBackground;
 mat2 turn(float a){float s=sin(a),c=cos(a);return mat2(c,-s,s,c);}
 float hash(vec3 p){p=fract(p*.3183099+vec3(.13,.27,.41));p*=17.;return fract(p.x*p.y*p.z*(p.x+p.y+p.z));}
@@ -40,16 +40,18 @@ vec3 env(vec3 r,float t){
 }
 vec3 skin(vec3 n,float t){
  float edge=pow(1.-max(n.z,0.),3.);
- vec3 c=env(reflect(vec3(0,0,-1),n),t)*(.07+edge*.6);
- c+=dye(.5+.3*n.y-.2*n.x)*edge*.25;
- c+=mix(uPrimary,vec3(1.),.7)*spec(n,worldLight(vec3(-.55,.7,1.4),t),180.)*.35;
+ vec3 c=env(uShellRotation*reflect(vec3(0,0,-1),n),t)*(.07+edge*.6);
+ vec3 shellNormal=uShellRotation*n;
+ c+=dye(.5+.3*shellNormal.y-.2*shellNormal.x)*edge*.25;
+ c+=mix(uPrimary,vec3(1.),.7)*spec(n,worldLight(vec3(-.55,.7,1.4),t)*uShellRotation,180.)*.35;
  return c;
 }
 
-// Independent internal rotation; pointer phase runs against the exterior.
-uniform float uInnerTime,uInnerMouse;
+// The interior combines its ambient drift with its own pointer rotation.
+uniform float uInnerTime;
 vec3 coreFrame(vec3 v){
+ v=uInteriorRotation*v;
  vec3 axis=normalize(vec3(.72,.32,-.61));
- float a=uInnerTime*.14+.7-uInnerMouse*.35;
+ float a=uInnerTime*.14+.7;
  return v*cos(a)+cross(axis,v)*sin(a)+axis*dot(axis,v)*(1.-cos(a));
 }

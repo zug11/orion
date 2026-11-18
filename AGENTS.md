@@ -5206,12 +5206,14 @@ Expanded VoiceConstellation scenes offer Jelly or Mirage clear main orbs with
 Cellular Material echo workers for either choice. The optional `voiceOrbStyle`
 setting accepts `jelly` (legacy/default) or `mirage-clear`; Appearance exposes
 the choice beside the shared shader colours. Both main materials have a slower
-inner frame that responds against the pointer-driven outer frame; Mirage clear
+inner frame that turns against the pointer-driven outer frame. Mirage clear
 also reverses its ambient middle rotation. These shaders live in `src/components/voiceShaders`. Resolve colours from existing Home
 shader settings and the current theme. Light mode lifts colour 7% toward white
 and reduces material alpha 12%; dark mode retains the original material. Mouse
-velocity changes only the material clock with bounded decaying momentum, never
-surface normals, audio activity or research state. Preserve worker targets,
+hover drives pitch and yaw in view space, with bounded momentum that decays
+along the last axis of motion, including after pointer exit. Integrate opposite
+increments for the shell and the slower interior. Apply the two rotations only
+to the main orb's material coordinates. Preserve worker targets,
 drag/cancel, focus, PCM gestures and shared motion ownership. Reduced motion
 freezes shader animation. Keep Canvas2D for tiny pill/sidebar views, increased
 contrast and WebGL failure/loss, and release GPU resources on unmount.

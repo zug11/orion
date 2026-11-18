@@ -80,24 +80,26 @@ vec3 mirage_glass(vec3 p,vec3 n,float t) {
   vec3 exitPoint=p+ray*(-2.*dot(p,ray));
   vec3 exitRay=refract(ray,-normalize(exitPoint),1./eta);
   vec2 q=p.xy*.85+exitPoint.xy*.45+exitRay.xy*.18;
-  q=mirage_turn(-.38+uPointer.x*.06)*q;
-  // The refracted interior turns in 3D at a slower rate than the front skin.
-  // Retaining its depth coordinate creates parallax across the sphere.
-  vec3 interior=mirage_lightFrame(vec3(q,exitPoint.z*.6),-uInnerTime*.14-uInnerMouse*.35+1.3);
+  // Mirror the far-side depth during hover so the projected pigment moves
+  // against the front reflections. The fixed tilt is in material space.
+  vec3 samplePoint=uInteriorRotation*vec3(q,-exitPoint.z*.6);
+  samplePoint=vec3(mirage_turn(-.38)*samplePoint.xy,-samplePoint.z);
+  float innerTime=-uInnerTime*.14;
+  vec3 interior=mirage_lightFrame(samplePoint,innerTime+1.3);
   float phase=interior.x*5.4+interior.y*3.1+interior.z*1.35+sin(interior.x*2.4-uInnerTime*.05)*.86;
   float thickness=2.*n.z;
   vec3 pigment=mirage_dye(phase*.39+n.z*2.2+uSeed*.8);
   vec3 absorb=exp(-(vec3(1.)-pigment)*thickness*1.3);
   vec3 inside=mix(uBackground*.7,pigment*.2,.8)*absorb;
   vec3 transmitted=dot(exitRay,exitRay)>.0001?normalize(exitRay):reflect(ray,-normalize(exitPoint));
-  inside+=mirage_room(transmitted,-uInnerTime*.14-uInnerMouse*.35)*.12;
+  inside+=mirage_room(uInteriorRotation*transmitted,innerTime)*.12;
   float edge=pow(1.-n.z,2.8);
   float fresnel=.065+.935*pow(1.-n.z,4.8);
-  vec3 reflection=mirage_room(reflect(vec3(0,0,-1),n),t);
+  vec3 reflection=mirage_room(uShellRotation*reflect(vec3(0,0,-1),n),t);
   vec3 c=mix(inside,reflection,clamp(fresnel*.88+.12,0.,1.));
   c+=mirage_film(n,phase*.12)*edge*.5;
-  c+=vec3(1.)*mirage_softLight(n,mirage_movingLight(vec3(-.55,.7,1.4),t),180.)*(.3+.55*uGloss);
-  c+=uPrimary*mirage_softLight(n,mirage_movingLight(vec3(.7,-.55,.5),t),72.)*.8;
+  c+=vec3(1.)*mirage_softLight(n,mirage_movingLight(vec3(-.55,.7,1.4),t)*uShellRotation,180.)*(.3+.55*uGloss);
+  c+=uPrimary*mirage_softLight(n,mirage_movingLight(vec3(.7,-.55,.5),t)*uShellRotation,72.)*.8;
   if(uLight>.5) c=mix(c,uBackground*.7+pigment*.23,.22)+reflection*.08;
   return c;
 }

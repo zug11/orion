@@ -9,7 +9,6 @@ void main(){
  }
  float z=sqrt(max(0.,1.-dot(xy,xy)));
  vec3 p=vec3(xy,z),n=normalize(p);
- n.xy+=uPointer*vec2(.025,.018)*z;n=normalize(n);
  float t=uRotationTime+uSeed*2.7;
  vec3 c;
  float opacity=1.;

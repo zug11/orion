@@ -1,6 +1,7 @@
 // Original bounded volume studies. ES 1.00: fixed loop bounds, no textures.
 // All positions live inside the actual refracted sphere chord. `frame` turns
-// both the entry position and ray through depth; t is the only motion clock.
+// both the entry position and ray through depth. Jelly uses the independent
+// interior rotation in coreFrame.
 
 float volSat(float x) { return clamp(x, 0.0, 1.0); }
 
@@ -13,7 +14,7 @@ vec3 volBack(vec3 p, vec3 ray, float span, float t, float tint) {
   vec3 outgoing = refract(ray, -normalize(end), 1.22);
   if (dot(outgoing, outgoing) < 0.001) outgoing = reflect(ray, -normalize(end));
   return uBackground * 0.16 + dye(tint) * 0.028
-       + env(normalize(outgoing), t) * 0.065;
+       + env(uShellRotation * normalize(outgoing), t) * 0.065;
 }
 
 float volCloud(vec3 q) {
@@ -160,7 +161,7 @@ vec3 material8(vec3 p, vec3 n, float t) {
   col += transmission * volBack(p, ray, span, t, 0.71);
   // A broad damp highlight distinguishes gelatin from the clear cell glass.
   vec3 lamp = frame(normalize(vec3(-0.6, 0.8, 1.2)), -t * 0.35);
-  col += uPrimary * spec(n, lamp, 42.0) * (0.10 + uGloss * 0.16);
+  col += uPrimary * spec(n, lamp * uShellRotation, 42.0) * (0.10 + uGloss * 0.16);
   col += skin(n, t) * (0.48 + uGloss * 0.29);
   return col;
 }

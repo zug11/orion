@@ -1258,12 +1258,15 @@ Passage comments can be edited locally through **Edit comment**, or removed with
 retain their cursor position, including between passages. MCP agents can propose
 passage comments and read their discussions; document changes still require review.
 
-Expanded voice Chat offers Jelly and Mirage clear glass orbs, with simpler Cellular research workers for both. Choose Voice orb in Appearance settings. The inner material turns more slowly against the mouse-driven outer reflections.
+Expanded voice Chat offers Jelly and Mirage clear glass orbs, with simpler
+Cellular research workers for both. Choose Voice orb in Appearance settings.
+Move the mouse sideways to turn the orb or vertically to tip it. A diagonal
+sweep combines both, and the orb coasts around that same axis as it slows.
+The interior turns more slowly in the opposite direction to the shell.
 The main orb is about 2.2 times its previous diameter, with worker spacing and
 interaction targets calculated from the larger body and fitted to narrow windows.
-It follows your existing shader colours and light/dark appearance; moving the
-mouse stirs the material without moving the sphere. Compact voice indicators
-retain their lightweight rendering and existing accessible controls.
+It follows your existing shader colours and light/dark appearance. Compact
+voice indicators retain their lightweight rendering and accessible controls.
 
 ### Ticket work and portable collections
 

@@ -208,17 +208,18 @@ provider and simulated voice, with no external requests or page errors. Evidence
 `outputs/voice-constellation-qa/multiple-workers/20261011-clarification/`;
 runner: `outputs/voice-constellation-qa/multiple-workers/clarification-smoke.mjs`.
 
-### Jelly and Cellular glass
+### Expanded glass materials
 
-Expanded Chat scenes and the idle Chat welcome use the prototype's Jelly main
-material and simple Cellular Material echo workers. Their two colours resolve
-from the existing Home shader tone/custom-colour settings and active theme, with
-no additional persisted settings. Light mode gently lifts colour and transmits
-12% more of the background. Sidebar and pill icons retain the lightweight 2D
-renderer, also used for unavailable/lost WebGL and increased contrast.
+Expanded Chat scenes and the idle Chat welcome offer Jelly or Mirage clear for
+the main orb, with simple Cellular echo workers. Their colours resolve from the
+existing Home shader tone, custom colours and active theme. Light mode gently
+lifts colour and transmits 12% more of the background. Sidebar and pill icons
+retain the lightweight 2D renderer, also used for unavailable/lost WebGL and
+increased contrast.
 
-Mouse speed adds a bounded, decaying offset to the material clock only. It never
-rotates surface normals, synthesizes speech, or changes job state. Worker drag,
-keyboard controls and actual PCM motion remain authoritative. Reduced motion
-freezes material animation. Each expanded scene owns one low-power offscreen
+Horizontal mouse movement turns the main material, vertical movement tips it,
+and diagonal sweeps combine both. The shell and the slower interior turn in
+opposite directions around the same view-space axis and coast as the mouse
+stops or leaves the scene. The rotations apply to material shading. Reduced
+motion freezes material animation. Each expanded scene owns one low-power offscreen
 WebGL context, released on unmount; offscreen/hidden scenes skip rendering.
