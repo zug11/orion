@@ -3624,7 +3624,7 @@ kbd {
 
 /* Floating AI controls own this space while composing, generating or reviewing.
    Keep the badge's place so dismissing them does not move the document. */
-.note-view:has(.ai-writing-dock, .ai-writing-selection.is-open, .chat-note-review) > .note-word-count {
+.note-view:has(.visualise-composer, .ai-writing-dock, .ai-writing-selection.is-open, .chat-note-review) > .note-word-count {
   visibility: hidden;
 }
 
@@ -5212,7 +5212,7 @@ kbd {
   font: 600 11px/1 var(--ui-font);
 }
 .ai-writing-link-button:hover { background: var(--surface-3); color: var(--text); }
-.ai-writing-selection-actions { width: max-content; max-width: calc(100vw - 24px); gap: 5px; }
+.ai-writing-selection-actions { flex-wrap: wrap; width: max-content; max-width: calc(100vw - 24px); gap: 5px; }
 .ai-writing-selection-actions [aria-disabled="true"] { color: var(--muted); }
 .ai-writing-selection-actions button:focus-visible { outline: 2px solid var(--periwinkle); outline-offset: 2px; }
 .ai-writing-unavailable-notice {

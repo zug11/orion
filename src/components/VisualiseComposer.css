@@ -1,0 +1,45 @@
+.visualise-composer {
+  box-sizing: border-box;
+  width: min(390px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  margin: auto;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font: 14px/1.45 var(--ui-font);
+  box-shadow: 0 14px 50px #0003;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.visualise-composer[data-anchored] { inset: auto; margin: 0; position: fixed; }
+.visualise-composer::backdrop { background: rgb(0 0 0 / 12%); }
+.visualise-composer form { display: grid; gap: 15px; }
+.visualise-composer header, .visualise-composer footer { display: flex; align-items: center; }
+.visualise-composer header { justify-content: space-between; }
+.visualise-composer h2 { margin: 0; font: 600 18px/1.4 var(--ui-font); }
+.visualise-composer blockquote {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+  margin: 0; padding-left: 10px; border-left: 2px solid var(--line-strong); color: var(--muted);
+  white-space: pre-line; overflow-wrap: anywhere;
+}
+.visualise-composer label { display: block; font-weight: 500; }
+.visualise-composer label span { color: var(--muted); font-weight: 400; }
+.visualise-composer textarea, .visualise-composer select {
+  display: block; box-sizing: border-box; width: 100%; margin-top: 5px; padding: 8px 10px;
+  border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface-1);
+  color: var(--text); font: 400 14px/1.5 var(--ui-font);
+}
+.visualise-composer textarea { resize: vertical; }
+.visualise-composer p { margin: 0; color: var(--muted); }
+.visualise-composer [role=alert] { color: var(--danger); }
+.visualise-composer footer { justify-content: flex-end; gap: 10px; }
+.visualise-composer .visualise-submit { border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px 14px;
+  background: var(--periwinkle-wash); color: var(--text); font-weight: 600; }
+.visualise-composer .visualise-submit:disabled { opacity: .55; }
+.visualise-location-error { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  z-index: 70; box-sizing: border-box; width: max-content; max-width: calc(100vw - 32px); padding: 12px 16px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--surface-raised); color: var(--text);
+  font: 14px/1.5 var(--ui-font); box-shadow: 0 8px 28px #0002; }
+.visualise-location-error button { margin-left: 8px; }

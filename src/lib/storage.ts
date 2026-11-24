@@ -80,6 +80,9 @@ import {
 
 import { CHAT_SUGGESTIONS_INSTRUCTIONS, CHAT_SUGGESTIONS_SCHEMA, parseChatSuggestionContext, parseChatSuggestionResult } from "./chatSuggestionsProtocol";
 
+import { parseArtifactGenerationInput } from "./visualArtifacts";
+import visualArtifactInstructions from "./visualArtifactInstructions.txt?raw";
+
 const VAULT_STORAGE_KEY = "orion:vault:v2";
 const LEGACY_SNAPSHOT_STORAGE_KEY = "orion:vault:v1";
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
@@ -1473,7 +1476,8 @@ export async function chatWithOrion(
   }
   const suggestionContext = request.mode === "chat-suggestions" ? parseChatSuggestionContext(request.suggestionContext) : undefined;
   const synthesisContext = request.mode === "voice-synthesis" ? parseVoiceSynthesisContext(request.synthesisContext) : undefined;
-  const queueKey = synthesisContext ? "voice-synthesis" : suggestionContext ? "chat-suggestions" : "chat";
+  const queueKey = request.mode === "visual-artifact" ? "visual-artifact" : synthesisContext ? "voice-synthesis" : suggestionContext ? "chat-suggestions" : "chat";
+  const visualSignal = request.mode === "visual-artifact" ? signal : undefined;
   let result: ChatResult;
   if (isTauriRuntime()) {
     const value = await invokeTauri<unknown>(
@@ -1491,13 +1495,13 @@ export async function chatWithOrion(
   } else if (aiProviderForModel(request.model) === "anthropic") {
     result = await runBrowserProviderCall(
       "anthropic",
-      () => chatInBrowserWithAnthropic(request, requireBrowserAnthropicApiKey()),
+      () => chatInBrowserWithAnthropic(request, requireBrowserAnthropicApiKey(), visualSignal),
       { queueKey, signal },
     );
   } else {
     result = await runBrowserProviderCall(
       "openai",
-      () => chatInBrowser(request, requireBrowserApiKey()),
+      () => chatInBrowser(request, requireBrowserApiKey(), visualSignal),
       { queueKey, signal },
     );
   }
@@ -1874,6 +1878,7 @@ async function organizeContentInBrowser(
 async function chatInBrowser(
   request: ChatRequest,
   apiKey: string,
+  signal?: AbortSignal,
 ): Promise<ChatResult> {
   const inlineWriting = request.mode === "inline-writing";
   const allowNoteActions = chatRequestAllowsNoteActions(request);
@@ -1883,7 +1888,7 @@ async function chatInBrowser(
   const body: Record<string, unknown> = {
     model: request.model || "gpt-5.6-sol",
     store: false,
-    max_output_tokens: request.mode === "voice-synthesis" || request.mode === "chat-suggestions" ? 6_000 : inlineWriting || allowNoteActions || chatRequestAllowsEdits(request) ? 12_000 : 6_000,
+    max_output_tokens: request.mode === "voice-synthesis" || request.mode === "chat-suggestions" ? 6_000 : inlineWriting || request.mode === "visual-artifact" || allowNoteActions || chatRequestAllowsEdits(request) ? 12_000 : 6_000,
     instructions: chatProviderInstructions(request),
     input: JSON.stringify(chatProviderPayload(request)),
     text: {
@@ -1902,6 +1907,7 @@ async function chatInBrowser(
 
   const response = await fetch(OPENAI_RESPONSES_URL, {
     method: "POST",
+    signal,
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
@@ -1997,6 +2003,7 @@ async function organizeContentInBrowserWithAnthropic(
 async function chatInBrowserWithAnthropic(
   request: ChatRequest,
   apiKey: string,
+  signal?: AbortSignal,
 ): Promise<ChatResult> {
   const inlineWriting = request.mode === "inline-writing";
   const allowNoteActions = chatRequestAllowsNoteActions(request);
@@ -2014,7 +2021,7 @@ async function chatInBrowserWithAnthropic(
   }
   const body = {
     model: request.model || "claude-sonnet-5",
-    max_tokens: request.mode === "voice-synthesis" || request.mode === "chat-suggestions" ? 6_000 : inlineWriting || allowNoteActions || chatRequestAllowsEdits(request) ? 12_000 : 6_000,
+    max_tokens: request.mode === "voice-synthesis" || request.mode === "chat-suggestions" ? 6_000 : inlineWriting || request.mode === "visual-artifact" || allowNoteActions || chatRequestAllowsEdits(request) ? 12_000 : 6_000,
     system: chatProviderInstructions(request),
     messages: [
       {
@@ -2029,6 +2036,7 @@ async function chatInBrowserWithAnthropic(
     apiKey,
     undefined,
     operation,
+    signal,
   );
   const outputText = extractAnthropicOutputText(
     response,
@@ -2057,6 +2065,7 @@ async function fetchAnthropic(
   apiKey: string,
   requestedTimeoutMs: number | undefined,
   operation: string,
+  signal?: AbortSignal,
 ): Promise<AnthropicResponse> {
   const timeoutMs =
     typeof requestedTimeoutMs === "number" &&
@@ -2065,9 +2074,11 @@ async function fetchAnthropic(
       : 240_000;
   const controller = new AbortController();
   const timeout = globalThis.setTimeout(() => controller.abort(), timeoutMs);
-  let response: Response;
+  const cancel = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", cancel, { once: true });
+  if (signal?.aborted) cancel();
   try {
-    response = await fetch(ANTHROPIC_MESSAGES_URL, {
+    const response = await fetch(ANTHROPIC_MESSAGES_URL, {
       method: "POST",
       headers: {
         "anthropic-version": "2023-06-01",
@@ -2076,25 +2087,19 @@ async function fetchAnthropic(
       },
       body: JSON.stringify(body),
       signal: controller.signal,
+    }).catch((error: unknown) => {
+      if (signal?.aborted) throw signal.reason;
+      if (controller.signal.aborted) {
+        throw new Error(`Anthropic did not respond within ${Math.round(timeoutMs / 1_000)} seconds.`);
+      }
+      throw new Error(`Orion could not ask Anthropic to ${operation}: ${error instanceof Error ? error.message : String(error)}`);
     });
-  } catch (error) {
-    if (controller.signal.aborted) {
-      throw new Error(
-        `Anthropic did not respond within ${Math.round(timeoutMs / 1_000)} seconds.`,
-      );
-    }
-    throw new Error(
-      `Orion could not ask Anthropic to ${operation}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
+    if (!response.ok) throw new Error(await readProviderApiError(response, "Anthropic"));
+    return (await response.json()) as AnthropicResponse;
   } finally {
+    signal?.removeEventListener("abort", cancel);
     globalThis.clearTimeout(timeout);
   }
-  if (!response.ok) {
-    throw new Error(await readProviderApiError(response, "Anthropic"));
-  }
-  return (await response.json()) as AnthropicResponse;
 }
 
 function extractAnthropicOutputText(
@@ -3313,6 +3318,7 @@ const INLINE_WRITING_RESULT_SCHEMA = {
 function chatRequestAllowsNoteActions(request: ChatRequest): boolean {
   return (
     request.mode !== "voice-synthesis" &&
+    request.mode !== "visual-artifact" &&
     request.mode !== "inline-writing" &&
     request.mode !== "chat-suggestions" &&
     request.allowNoteActions === true &&
@@ -3330,6 +3336,7 @@ function chatInstructions(allowNoteActions: boolean): string {
 }
 
 function chatProviderInstructions(request: ChatRequest): string {
+  if (request.mode === "visual-artifact") return visualArtifactInstructions;
   if (request.mode === "voice-synthesis") return VOICE_SYNTHESIS_INSTRUCTIONS;
   if (request.mode === "chat-suggestions") return CHAT_SUGGESTIONS_INSTRUCTIONS;
   if (request.mode === "inline-writing") return INLINE_WRITING_INSTRUCTIONS;
@@ -3346,7 +3353,7 @@ function chatProviderInstructions(request: ChatRequest): string {
 function chatResponseSchema(request: ChatRequest): Record<string, unknown> {
   if (request.mode === "voice-synthesis") return VOICE_SYNTHESIS_SCHEMA;
   if (request.mode === "chat-suggestions") return CHAT_SUGGESTIONS_SCHEMA;
-  if (request.mode === "inline-writing") return INLINE_WRITING_RESULT_SCHEMA;
+  if (request.mode === "inline-writing" || request.mode === "visual-artifact") return INLINE_WRITING_RESULT_SCHEMA;
   const base = chatRequestAllowsNoteActions(request) ? CHAT_RESULT_SCHEMA : CHAT_REPLY_ONLY_RESULT_SCHEMA;
   const schema = { ...base, required: [...base.required] as string[], properties: { ...base.properties } as Record<string, unknown> };
   if (request.mode === "chat-reading") {
@@ -3368,6 +3375,7 @@ function chatResponseSchema(request: ChatRequest): Record<string, unknown> {
 function chatProviderPayload(request: ChatRequest): Record<string, unknown> {
   if (request.mode === "voice-synthesis") return { synthesisContext: parseVoiceSynthesisContext(request.synthesisContext) };
   if (request.mode === "chat-suggestions") return { suggestionContext: parseChatSuggestionContext(request.suggestionContext) };
+  if (request.mode === "visual-artifact") return parseArtifactGenerationInput(JSON.parse(request.prompt));
   const base = { question: request.prompt, workspaceName: request.workspaceName, conversation: request.history };
   return request.mode === "chat-reading"
     ? { ...base, readingContext: parseChatReadingContext(request.readingContext) }

@@ -403,6 +403,29 @@ These product decisions are intentional:
   bounded focused replacements or a full rewrite for the attached note. Accept rechecks its
   Space and original body and uses the normal rich editor and autosave, with
   one Undo. Never silently apply an edit or allow the model to choose a target.
+- Visualise turns highlighted note text into a durable, interactive illustration.
+  Reading and editing selections and the editor's `/visualise` command open
+  the same composer. With no chosen format or guidance the action is Generate
+  for me. A chosen format or typed guidance changes it to Generate. Enter
+  in the guidance field submits; Shift+Enter adds a line. Cmd/Ctrl+Enter
+  submits from the form. Opening the composer spends no provider call.
+  The six formats are Timeline, Explainer, Quiz, Comparison, Flashcards and
+  Calculator. Their blocks can be combined. A scene can draw new subjects from
+  bounded paths, rectangles and circles, with frame-specific values, fills and
+  directed connections. Arithmetic uses a bounded expression tree.
+  `visual-artifact` uses the selected saved text connection and sends only
+  the selected/entered source, format and optional guidance. Native and browser
+  transports share `visualArtifactInstructions.txt`. Validate all provider
+  output and saved payloads with `parseVisualArtifact`. Render text as text
+  and graphics with Orion's own components. Interactions run locally.
+  A successful generation inserts one atom after the selection's last block.
+  A standalone slash command can supply its passage in the composer. Preserve
+  the source, reject stale captures and keep insertion in one Undo group.
+  An artifact-only save skips the whole-note wiki refresh. Store validated
+  v1 JSON as UTF-8 base64 in a standalone `<!-- orion-artifact:v1 … -->`
+  Markdown comment. The editor and reading view render it interactively,
+  portable Orion exports retain it, and readable web exports include static
+  content for each stage. Selections and interaction state stay window-local.
 - AI is optional. Writing, local imports, on-device OCR and transcription,
   source provenance, links, search, Spaces, and web/Markdown export must remain
   useful without an OpenAI or Anthropic key.

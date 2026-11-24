@@ -693,7 +693,7 @@ export interface ChatHistoryItem {
 }
 
 export interface ChatRequest {
-  mode?: "chat" | "inline-writing" | "chat-reading" | "chat-suggestions" | "voice-synthesis";
+  mode?: "chat" | "visual-artifact" | "inline-writing" | "chat-reading" | "chat-suggestions" | "voice-synthesis";
   prompt: string;
   workspaceName: string;
   notes: ChatNoteContext[];

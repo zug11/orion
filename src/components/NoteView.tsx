@@ -11,6 +11,8 @@ import { visibleNoteSummary } from "../lib/importSummary";
 import { NoteWordCount } from "./NoteWordCount";
 import type { Editor } from "@tiptap/core";
 import { PassageThreads } from "./PassageThreads";
+import { NoteAISettingsContext } from "./NoteAISettingsContext";
+import type { ReadingArtifactPassage } from "../lib/readingArtifactPassage";
 import { usePassageComment } from "./PassageCommentComposer";
 import type { PassageCommentHandler } from "../lib/passageThreads";
 import type { PassageThreadHandler } from "../lib/passageThreads";
@@ -18,6 +20,8 @@ import { chatProposalBody, type ChatEditApplication, type ChatEditorChange } fro
 import { parseNoteExcerptTitle } from "../lib/noteExcerpts";
 import { requestNoteExcerptNavigation, consumeNoteExcerptNavigation, revealNoteExcerptPassage, clearNoteExcerptHighlight, NOTE_PASSAGE_NAVIGATION_EVENT } from "../lib/noteExcerptNavigation";
 import { noteTableHeaderInfo, noteTableLayoutAtLine, remarkNoteTableMetadata } from "../lib/noteTables";
+import { SavedVisualArtifact } from "./SavedVisualArtifact";
+import { remarkVisualArtifacts } from "../lib/visualArtifactMarkdown";
 import { remarkNoteBlocks } from "../lib/noteBlocks";
 import { remarkNoteTextAlignment } from "../lib/noteTextAlignment";
 import { splitDocumentMargins, noteMarginsStyle, remarkNoteMargins } from "../lib/noteMargins";
@@ -77,6 +81,7 @@ import {
   splitMarkdownFrontmatter,
   stripDuplicateTitleHeading,
   stripOrionNoteMarkers,
+  stripVisualArtifactMarkers,
 } from "../lib/markdown";
 import { collectTasksFromNote, setTaskChecked } from "../lib/tasks";
 import { findTextMatches, wrapMatchIndex } from "../lib/noteFind";
@@ -118,6 +123,12 @@ const RichNoteEditor = lazy(() =>
     default: module.RichNoteEditor,
   })),
 );
+
+function ReadingVisualArtifact({ node }: { node?: MarkdownElement }) {
+  return <div data-narration-ignore="true"><SavedVisualArtifact marker={node?.properties["data-orion-artifact"]}/></div>;
+}
+
+const ReadingVisualise = lazy(() => import("./ReadingVisualise").then(module => ({ default: module.ReadingVisualise })));
 
 const EMPTY_SOURCES: readonly Source[] = [];
 
@@ -399,9 +410,18 @@ export function NoteView({
     }
     pendingHeadingFocus.current = null;
   }, [note.id, editing, headingVisibility.title, headingVisibility.subtitle, threadEditor]);
+  const settings = useContext(NoteAISettingsContext);
+  const [readingArtifact, setReadingArtifact] = useState<{ passage: ReadingArtifactPassage; noteId: string; body: string; spaceId?: string }>();
+  const startReadingVisualise = useCallback((passage: ReadingArtifactPassage) => {
+    setReadingArtifact({ passage, noteId: note.id, body: note.body, spaceId: voiceSelection?.spaceId });
+    setEditing(true);
+  }, [note.id, note.body, voiceSelection?.spaceId, setEditing]);
+  const readingArtifactActive = !!readingArtifact && editing && !chatEdit &&
+    readingArtifact.noteId === note.id && readingArtifact.body === note.body && readingArtifact.spaceId === voiceSelection?.spaceId;
+  useEffect(() => { if (!readingArtifactActive) setReadingArtifact(undefined); }, [readingArtifactActive, readingArtifact]);
   const comment = usePassageComment({ note, getNote: displayedNote, root: findScopeRef, store: voiceSelection,
-    editing, available: () => captureState().available, onCreate: onCreateComment });
-  const dirtyEditingRef = useRef(false);
+    editing, available: () => captureState().available, onCreate: onCreateComment, onVisualise: settings ? startReadingVisualise : undefined });
+  const dirtyEditingRef = useRef<{ original: Note; latestBody: string; bodyOnly: boolean } | null>(null);
   const [selectedPassageId, setSelectedPassageId] = useState<string | null>(null);
   const passageTriggerRef = useRef<HTMLButtonElement | null>(null);
   const restorePassageFocusRef = useRef<string | null>(null);
@@ -539,7 +559,7 @@ export function NoteView({
   );
 
   useEffect(() => {
-    dirtyEditingRef.current = false;
+    dirtyEditingRef.current = null;
     setEditing(modes.get(note.id) ?? (initialEditing || !editableNoteTitle(note).trim()));
     setFindOpen(false);
     setFindQuery("");
@@ -603,8 +623,11 @@ export function NoteView({
   }, []);
 
   const flushDirtyEditing = useCallback(() => {
-    if (!dirtyEditingRef.current) return;
-    dirtyEditingRef.current = false;
+    const dirty = dirtyEditingRef.current;
+    if (!dirty) return;
+    dirtyEditingRef.current = null;
+    // Saving an illustration alone must not start a second, whole-note AI job.
+    if (dirty.bodyOnly && stripVisualArtifactMarkers(dirty.original.body).trimEnd() === stripVisualArtifactMarkers(dirty.latestBody).trimEnd()) return;
     onFinishEditing?.(note.id);
   }, [note.id, onFinishEditing]);
 
@@ -934,7 +957,11 @@ export function NoteView({
 
   function update(patch: Partial<Note>) {
     if (editing) {
-      dirtyEditingRef.current = true;
+      dirtyEditingRef.current = {
+        original: dirtyEditingRef.current?.original ?? currentNoteRef.current,
+        latestBody: patch.body ?? currentNoteRef.current.body,
+        bodyOnly: (dirtyEditingRef.current?.bodyOnly ?? true) && Object.keys(patch).every(key => key === "body"),
+      };
     }
     const next = { ...currentNoteRef.current, ...patch, updatedAt: new Date().toISOString() };
     // Selection capture can run before React delivers the updated note prop.
@@ -1266,6 +1293,7 @@ export function NoteView({
     p: ({ children, node, ...props }: { children?: ReactNode; node?: MarkdownElement }) => (
       <p {...props} style={paragraphMarginStyle(node)}>{renderLinkedChildren(children)}</p>
     ),
+    aside: ReadingVisualArtifact,
     section: ReadingBoard,
     li: ({
       children,
@@ -1425,7 +1453,7 @@ export function NoteView({
   const renderedMarkdown = useMemo(() => (
     <ReadingBoardContext.Provider value={{noteId:note.id,workspace:{work:collectWork(notes),onChangeBoard,onPatch:onPatchTicket,onDelete:onDeleteTicket,onOpenNote,inference:ticketInference,
       onCreateTicket:onCreateWork ? (target,title,status,dueDate) => onCreateWork('ticket',title,target.noteId,target.id,status,dueDate) : undefined}}}>
-    <ReactMarkdown remarkPlugins={[remarkGfm, ticketReferencePlugin, remarkNoteBoards, remarkNoteTableMetadata, remarkNoteBlocks, remarkNoteMargins, remarkNoteTextAlignment]} components={markdownComponents} urlTransform={safeUrl}>
+    <ReactMarkdown remarkPlugins={[remarkGfm, ticketReferencePlugin, remarkVisualArtifacts, remarkNoteBoards, remarkNoteTableMetadata, remarkNoteBlocks, remarkNoteMargins, remarkNoteTextAlignment]} components={markdownComponents} urlTransform={safeUrl}>
       {visibleMarkdown}
     </ReactMarkdown>
     </ReadingBoardContext.Provider>
@@ -1454,7 +1482,7 @@ export function NoteView({
       onClickCapture={(event) => {
         if (!narrationActive || !narrationRef.current || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.detail === 0) return;
         const target = event.target as HTMLElement;
-        if (!target.closest("[data-narration-text]") || target.closest("input,textarea,[data-passage-thread],.source-citation-marker,.chat-citation")) return;
+        if (!target.closest("[data-narration-text]") || target.closest("input,textarea,[data-passage-thread],[data-visual-artifact],.source-citation-marker,.chat-citation")) return;
         if (window.getSelection()?.isCollapsed === false) return;
         const index = narrationCharacterAtPoint(narrationRef.current, event.clientX, event.clientY);
         if (index === null) return;
@@ -1538,7 +1566,7 @@ export function NoteView({
                   );
                 } else {
                   stopPlayback();
-                  dirtyEditingRef.current = false;
+                  dirtyEditingRef.current = null;
                   setEditing(true);
                 }
               }}
@@ -1655,6 +1683,8 @@ export function NoteView({
             }
           >
             <RichNoteEditor
+              readingVisualiseActive={readingArtifactActive}
+              settings={settings}
               documentHeading={<NoteDocumentHeading
                 key={note.id}
                 title={shownTitle}
@@ -1773,7 +1803,7 @@ export function NoteView({
           </span>
         </footer>
       </div>
-      {editing && !showSlideshow && <NoteWordCount key={`word-count-${note.id}`} root={findScopeRef}
+      {editing && !showSlideshow && !readingArtifactActive && <NoteWordCount key={`word-count-${note.id}`} root={findScopeRef}
         editor={editing ? threadEditor : null} editing={editing}
         title={shownTitle} subtitle={shownSummary} body={markdown} />}
       {showPlayhead ? (
@@ -1874,6 +1904,11 @@ export function NoteView({
       {narrationDownload && <span className="sr-only" role="status">Preparing narration download{narrationDownload.total ? `: ${narrationDownload.completed} of ${narrationDownload.total} passages` : ""}.</span>}
     {onThreadAction && <PassageThreads draftThread={comment.draftThread} onDraftMarker={comment.setDraftMarker} key={note.id} openThreadId={comment.openThreadId} reviewActive={!!chatEdit} note={note} root={findScopeRef} editor={editing ? threadEditor : null} onAction={onThreadAction} references={{ notes, sources, onOpenNote, onOpenSource }} />}
     {comment.ui}
+    {readingArtifactActive && threadEditor && settings && <Suspense fallback={null}><ReadingVisualise
+      key={readingArtifact.noteId} editor={threadEditor} passage={readingArtifact.passage} settings={settings}
+      current={() => currentNoteRef.current.id === readingArtifact.noteId && currentNoteRef.current.body === readingArtifact.body && !threadEditor.isDestroyed}
+      onClose={keepEditing => { setReadingArtifact(undefined); if (!keepEditing) setEditing(false); }}
+    /></Suspense>}
     {inferringTickets && !editing && ticketInference && <TicketInferenceDialog key={`inference-${note.id}`} board={noteInferenceTarget(note)} actions={ticketInference} onClose={()=>{setInferringTickets(false);requestAnimationFrame(()=>inferTicketsButton.current?.focus());}}/>}
       </article>
   );

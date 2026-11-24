@@ -1,3 +1,4 @@
+import { stripVisualArtifactMarkers } from "./markdown";
 import { nanoid } from "nanoid";
 import { slugifyTitle } from "../data/defaults";
 import type {
@@ -84,10 +85,11 @@ export function buildWikiEnrichmentRequest(
   snapshot: AppSnapshot,
   note: Note,
 ): OrganizeContentRequest {
+  const body = stripVisualArtifactMarkers(note.body);
   const existingNotes = buildCompactOrganizerContext(snapshot, {
     focusNoteIds: [note.id],
     excludeNoteIds: [note.id],
-    matchText: [note.title, note.summary, note.body].join("\n"),
+    matchText: [note.title, note.summary, body].join("\n"),
   });
   const task = [
     "Knowledge-refresh task: this is an already-saved project note, so return an empty notes array.",
@@ -100,7 +102,7 @@ export function buildWikiEnrichmentRequest(
     content: [
       `New note title: ${note.title}`,
       note.summary ? `New note summary: ${note.summary}` : "",
-      `New note body:\n${note.body.slice(0, MAX_NOTE_CHARS)}`,
+      `New note body:\n${body.slice(0, MAX_NOTE_CHARS)}`,
     ]
       .filter(Boolean)
       .join("\n\n"),

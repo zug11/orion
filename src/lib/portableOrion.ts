@@ -8,6 +8,7 @@ import { expandOrionWikiLinks, splitMarkdownFrontmatter } from './markdown';
 import { decorateAutoLinks, resolveConceptDestination } from './wiki';
 import { boardMarker, collectWork, parseBoardMarker, parseTicketMarker, ticketMarker } from './tickets';
 import { isTicketCodes, type TicketCodes } from './ticketCodes';
+import { readVisualArtifactMarker, visualArtifactMarker } from './visualArtifactMarkdown';
 import { parseNoteTableMetadata } from './noteTables';
 import { noteImageAssetId } from './noteImages';
 import { parseNoteImageTitle, serializeNoteImageTitle } from './noteImageLayout';
@@ -56,10 +57,14 @@ function portableBody(note:Note,snapshot:AppSnapshot,included:Set<string>,source
     const margin=value.match(/^<!-- orion-(document|paragraph)-margins:v1 (\d{1,2}) (\d{1,2}) -->$/);
     return margin&&Number(margin[2])<=25&&Number(margin[3])<=25?value:'';
   }
-  const visit=(node:MdNode,inLink=false)=>{
+  const visit=(node:MdNode,inLink=false,topLevel=false)=>{
     const range=node.position&&{start:node.position.start.offset,end:node.position.end.offset};
     if(node.type==='code'||node.type==='inlineCode')return;
     if(range&&node.type==='definition'){edits.push({...range,text:''});return;}
+    if(range&&topLevel&&node.type==='html'){
+      const artifact=readVisualArtifactMarker(node.value);
+      if(artifact){edits.push({...range,text:visualArtifactMarker(artifact)});return;}
+    }
     if(range&&node.type==='html'){edits.push({...range,text:[...(node.value??'').matchAll(/<!--[\s\S]*?-->/g)].map(match=>metadata(match[0])).filter(Boolean).join('\n')});return;}
     if(range&&['link','linkReference','image','imageReference'].includes(node.type)){
       const definition=node.type.endsWith('Reference')?definitions.get(node.identifier??''):node;
@@ -83,7 +88,7 @@ function portableBody(note:Note,snapshot:AppSnapshot,included:Set<string>,source
       }
       return;
     }
-    node.children?.forEach(child=>visit(child,inLink));
+    node.children?.forEach(child=>visit(child,inLink,node===tree));
   };visit(tree);
   let body=input;for(const edit of edits.sort((a,b)=>b.start-a.start))body=body.slice(0,edit.start)+edit.text+body.slice(edit.end);
   return body;

@@ -77,7 +77,7 @@
 .passage-chat .chat-view__title { min-width:0; }
 .passage-thread__author { display:block; color:var(--muted); font:500 11px/1.5 var(--ui-font,sans-serif); margin-bottom:6px; }
 .passage-comment-selection { position:fixed; z-index:70; display:flex; align-items:center; gap:6px; padding:8px 12px; border:1px solid var(--line-strong); border-radius:99px; background:var(--surface-raised); color:var(--text); box-shadow:0 5px 20px #0002; font:500 12px var(--ui-font,sans-serif); cursor:pointer; }
-.passage-comment-selection:focus-visible { outline:2px solid var(--periwinkle); outline-offset:3px; }
+.passage-comment-selection button:focus-visible { outline:2px solid var(--periwinkle); outline-offset:3px; }
 .passage-thread-modal .passage-comment-create { padding:8px 14px 14px; }
 .passage-comment-create .passage-thread__input { display:block; border-radius:20px; padding:8px; }
 .passage-comment-create .passage-thread__input textarea { width:100%; min-height:66px; max-height:160px; }
@@ -89,3 +89,7 @@
 .passage-thread__delete { float:right; border:0; background:transparent; padding:4px; color:var(--muted); border-radius:6px; }
 .passage-thread__delete:hover { color:var(--text); background:var(--periwinkle-wash); }
 .passage-thread__edit textarea { box-sizing:border-box; width:100%; min-height:90px; resize:vertical; padding:9px; font:inherit; color:var(--text); background:color-mix(in srgb,var(--surface-raised) 40%,transparent); border:1px solid var(--line-strong); border-radius:12px; }
+
+.passage-comment-selection { padding: 3px; gap: 0; }
+.passage-comment-selection button { display: flex; align-items: center; gap: 6px; padding: 5px 9px; border-radius: 99px; font: inherit; color: inherit; background: transparent; }
+.passage-comment-selection button:hover { background: var(--periwinkle-wash); }

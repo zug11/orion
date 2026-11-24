@@ -1,0 +1,73 @@
+import { describe, expect, it } from "vitest";
+import { evaluateArtifactExpression, parseVisualArtifact, type ArtifactBlock } from "./visualArtifacts";
+
+const mark = { kind: "path", d: "M 10,80 L 50 10 90 80 Z", fill: "cool", stroke: "ink" };
+const rect = { kind: "rect", x: 10, y: 20, width: 75, height: 60, fill: "accent", stroke: "ink", level: true };
+const scene = {
+  kind: "scene",
+  nodes: [
+    { label: "Solar panel", alt: "Cells on a tilted panel", x: 18, y: 45, shapes: [
+      { ...mark, d: "M 8 65 L 20 25 L 94 35 L 82 75 Z" },
+      { ...mark, d: "M 17 45 L 88 55 M 48 29 L 36 69", fill: "none" }] },
+    { label: "Battery", alt: "Storage cells", x: 50, y: 45, shapes: [rect] },
+    { label: "Homes", alt: "A roof over a doorway", x: 82, y: 45, shapes: [mark] },
+  ],
+  frames: [
+    { label: "Daylight", caption: "Panels power homes and charge the battery.", values: ["8 kW", "Charging · 2 kW", "6 kW"],
+      levels: [null, 0.25, null], flows: [{ from: 0, to: 1, label: "2 kW" }, { from: 0, to: 2, label: "6 kW" }] },
+    { label: "After sunset", caption: "Stored energy supplies the homes.", values: ["0 kW", "Discharging", "4 kW"],
+      levels: [null, 0.15, null], flows: [{ from: 1, to: 2, label: "4 kW" }] },
+  ],
+};
+const calculator = { kind: "calculator",
+  inputs: [{ label: "Loaves", min: 1, max: 10, step: 1, initial: 2, unit: "" }],
+  outputs: [{ label: "Flour", unit: "g", expression: { op: "multiply", left: { input: 0 }, right: 450 } }] };
+const document = (block: unknown, format = "explainer") => ({ version: 1, format, title: "From the note", blocks: [block] });
+
+describe("versioned visual documents", () => {
+  it("round-trips original solar illustrations and changing flows", () => {
+    const saved = document(scene);
+    expect(parseVisualArtifact(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
+  });
+  it.each([
+    ["timeline", { kind: "steps", items: [{ label: "Second draft", heading: "Change viewpoint", text: "Mara narrates the final scene." }] }],
+    ["comparison", { kind: "table", columns: ["Perspective", "First person", "Third person"], rows: [["Pronoun", "I", "She"]] }],
+    ["quiz", { kind: "quiz", items: [{ question: "Which pigment did Mira mix?", choices: ["Ochre", "Indigo"], answer: 0, explanation: "She mixed ochre for the study." }] }],
+    ["flashcards", { kind: "cards", items: [{ front: "Meaning of lento?", back: "Slowly." }] }],
+    ["calculator", calculator],
+    ["explainer", { kind: "text", text: "The refrain changes meaning on its second appearance." }],
+  ])("supports a source-specific %s", (format, block) => {
+    expect(parseVisualArtifact(document(block, format as string)).blocks).toEqual([block]);
+  });
+  it("computes quantities from a bounded formula and handles a zero denominator after adjustment", () => {
+    const block = parseVisualArtifact(document(calculator, "calculator")).blocks[0] as Extract<ArtifactBlock, { kind: "calculator" }>;
+    expect(evaluateArtifactExpression(block.outputs[0].expression, [3])).toBe(1350);
+    expect(evaluateArtifactExpression({ op: "divide", left: 3, right: { input: 0 } }, [0])).toBeNull();
+  });
+  it.each([
+    { ...rect, onclick: "handler" }, { ...rect, fill: "url(asset)" }, { ...rect, height: 100 }, { ...rect, level: 42 },
+    { ...mark, d: "M -20 20" }, { ...mark, d: "M 18 18 C 20 40" }, { ...mark, d: "M 20 10 L" },
+    { ...mark, d: "M 100 101" }, { ...mark, d: "M 12,,20" }, { ...mark, d: "M 12 20 <use>" },
+    { ...mark, d: "M 1 1" + " L 2 2".repeat(66) }, { kind: "image", href: "external" },
+  ])("rejects geometry outside the drawing vocabulary", shape => {
+    expect(() => parseVisualArtifact(document({ ...scene, nodes: scene.nodes.map(node => ({ ...node, shapes: [shape] })) }))).toThrow();
+  });
+  it.each([
+    { ...scene.frames[0], levels: [null] }, { ...scene.frames[0], values: ["one", "two"] },
+    { ...scene.frames[0], flows: [{ from: 0, to: 99, label: "" }] }, { ...scene.frames[0], levels: [null, 100, null] },
+  ])("rejects frames that cannot bind to their diagram", frame => {
+    expect(() => parseVisualArtifact(document({ ...scene, frames: [frame] }))).toThrow();
+  });
+  it("rejects an unknown block, a mismatched primary interaction, excessive size and deep formulas", () => {
+    expect(() => parseVisualArtifact(document({ kind: "html", text: "..." }))).toThrow();
+    expect(() => parseVisualArtifact(document({ kind: "text", text: "A recipe" }, "quiz"))).toThrow();
+    const large = { kind: "table", columns: ["A","B","C"], rows: Array.from({ length: 24 }, () => Array(3).fill("字".repeat(400))) };
+    expect(() => parseVisualArtifact(document(large))).toThrow();
+    let expr: unknown = 2;
+    for (let i = 0; i < 12; i++) expr = { op: "add", left: expr, right: 0 };
+    for (const bad of [expr, { input: 1 }, { op: "arbitrary", left: 4, right: 2 }, NaN]) {
+      expect(() => parseVisualArtifact(document({ ...calculator, outputs: [{ label: "Result", unit: "", expression: bad }] }))).toThrow();
+    }
+    expect(() => parseVisualArtifact(document({ ...calculator, inputs: [{ ...calculator.inputs[0], initial: 1.25 }] }))).toThrow();
+  });
+});

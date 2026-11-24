@@ -1,5 +1,5 @@
 import type { EditorState } from "@tiptap/pm/state";
-export type SlashCommand = "write" | "comment" | "heading" | "block" | "todo" | "ticket" | "kanban" | "calendar" | "bullet" | "numbered" | "divider" | "image" | "code" | "link" | "excerpt" | "table" | "delete-row" | "delete-column" | "delete-table" | `h${1|2|3|4|5|6}`;
+export type SlashCommand = "write" | "visualise" | "comment" | "heading" | "block" | "todo" | "ticket" | "kanban" | "calendar" | "bullet" | "numbered" | "divider" | "image" | "code" | "link" | "excerpt" | "table" | "delete-row" | "delete-column" | "delete-table" | `h${1|2|3|4|5|6}`;
 export interface SlashMatch { from: number; to: number; query: string; inTable: boolean }
 export function getSlashMatch(state: EditorState): SlashMatch | null {
   const { $from, empty } = state.selection;
@@ -14,6 +14,7 @@ export function getSlashMatch(state: EditorState): SlashMatch | null {
 }
 export const SLASH_ITEMS: { id: SlashCommand; title: string; description: string; keywords?: string }[] = [
   {id:"write", title:"Write with AI", description:"Write from your cursor, with optional direction", keywords:"continue generate ai"},
+  {id:"visualise", title:"Visualise", description:"Turn this passage into a visual", keywords:"visualize artifact timeline explainer quiz comparison flashcards calculator simulator"},
   {id:"comment", title:"Comment", description:"Leave a comment on this passage or note", keywords:"annotate annotation discuss"},
   {id:"heading", title:"Heading", description:"Choose a heading size", keywords:"title h1 h2 h3 h4 h5 h6"},
   {id:"block", title:"Block", description:"Create a movable writing block", keywords:"group movable"},

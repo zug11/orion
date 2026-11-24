@@ -16,6 +16,7 @@ import {
   Check,
   ChevronDown,
   Image,
+  GalleryVerticalEnd,
   LoaderCircle,
   Link2,
   MessageCircle,
@@ -39,6 +40,7 @@ interface AIWritingControlsProps {
   onCloseWriteComposer?: (restoreFocus?: boolean) => void;
   onComposerActiveChange?: (active: boolean) => void;
   onOpenLink?: () => void;
+  onVisualise?: (anchor: DOMRect) => void;
   onAddComment?: () => void;
   writingUnavailableReason?: string;
   imageUnavailableReason?: string;
@@ -118,6 +120,7 @@ export function AIWritingControls({
   onCloseWriteComposer,
   onComposerActiveChange,
   onOpenLink,
+  onVisualise,
   onAddComment,
   writingUnavailableReason = "Add a key for the selected writing provider in Settings to write and rewrite.",
   imageUnavailableReason = "Add an OpenAI key and configure the selected planning provider in Settings to generate images.",
@@ -567,6 +570,10 @@ export function AIWritingControls({
                   <ChevronDown size={13} />
                 </button> : null}
               </div>
+              {onVisualise && <button type="button" className="ai-writing-link-button" aria-label="Visualise selected text"
+                aria-haspopup="dialog" onMouseDown={preserveEditorSelection} onClick={event => onVisualise(event.currentTarget.getBoundingClientRect())}>
+                <GalleryVerticalEnd size={13}/><span>Visualise</span>
+              </button>}
               <button
                 ref={imageButtonRef}
                 type="button"

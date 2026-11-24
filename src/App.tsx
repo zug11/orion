@@ -64,6 +64,7 @@ import {
   type ImportStudioApplyPayload,
 } from "./components/ImportStudio";
 import { NoteView } from "./components/NoteView";
+import { NoteAISettingsContext } from "./components/NoteAISettingsContext";
 import { VaultBackupRestore } from "./components/VaultBackupRestore";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { onDetachedDictation } from "./lib/dictationOutcome";
@@ -4596,6 +4597,7 @@ function App() {
     .join(" ");
 
   return (
+    <NoteAISettingsContext.Provider value={snapshot.settings}>
     <TicketCodesContext.Provider value={snapshot.ticketCodes}><TicketNavigationRoot snapshot={snapshot} target={workTarget}
       openTicket={openTicketReference} openBoard={openBoardReference} changePrefix={changeTicketPrefix} onOpenNote={openNote} onPatch={updateTicket}
       onClose={()=>{if(historyIndexRef.current>0)navigateHistory(-1);else{setWorkTarget({});replaceHistory([createNavigationEntry(routeForScreen(screen,snapshot.activeNoteId))],0);}}}><div
@@ -4949,6 +4951,7 @@ function App() {
         </div>
       )}
     </div></TicketNavigationRoot></TicketCodesContext.Provider>
+    </NoteAISettingsContext.Provider>
   );
 }
 

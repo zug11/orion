@@ -10,6 +10,7 @@ interface RectLike {
 export function resolveAIWritingSelectionPosition(input: {
   workspace: RectLike;
   toolbarBottom: number;
+  actionsWidth?: number;
   start: RectLike;
   end: RectLike;
 }): AIWritingControlPosition {
@@ -34,12 +35,13 @@ export function resolveAIWritingSelectionPosition(input: {
           workspace.bottom - 32,
         );
 
-  const halfWidth = Math.min(176, Math.max(0, (workspace.right - workspace.left - 24) / 2));
+  const desiredHalfWidth = (input.actionsWidth ?? 352) / 2;
+  const halfWidth = Math.min(desiredHalfWidth, Math.max(0, (workspace.right - workspace.left - 24) / 2));
   return {
     left: clamp(
       Math.abs(start.top - end.top) < 4 ? (start.left + end.right) / 2 : anchor.left + halfWidth,
-      workspace.left + halfWidth + (halfWidth < 176 ? 12 : 0),
-      workspace.right - halfWidth - (halfWidth < 176 ? 12 : 0),
+      workspace.left + halfWidth + (halfWidth < desiredHalfWidth ? 12 : 0),
+      workspace.right - halfWidth - (halfWidth < desiredHalfWidth ? 12 : 0),
     ),
     top,
     visible: true,

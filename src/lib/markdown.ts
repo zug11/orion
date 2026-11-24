@@ -39,6 +39,17 @@ export function stripMarkdownComments(markdown: string): string {
   });
 }
 
+/** Exclude standalone document data from prose-only operations. Fenced examples remain authored text. */
+export function stripVisualArtifactMarkers(markdown: string): string {
+  if (!markdown.includes("<!-- orion-artifact:v")) return markdown;
+  const ranges = markdownCodeRanges(markdown);
+  let rangeIndex = 0;
+  return markdown.replace(/^<!-- orion-artifact:v\d+ [^<>\r\n]* -->[ \t]*(?:\r?\n(?:\r?\n)?|$)/gm, (marker, start: number) => {
+    while (rangeIndex < ranges.length && ranges[rangeIndex].end <= start) rangeIndex++;
+    return ranges[rangeIndex]?.start <= start ? marker : "";
+  });
+}
+
 export function stripOrionNoteMarkers(markdown: string): string {
   const stripped = markdown.replace(
     /^[ \t]*(?:\\?<!--|&lt;!--)[ \t]*orion-note:[^ \t\r\n>]+:(?:start|end)[ \t]*(?:-->|--&gt;)[ \t]*(?:\r?\n)?/gim,

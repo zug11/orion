@@ -11,6 +11,7 @@ import {
   stripOrionLinksToTargets,
   stripOrionNoteMarkers,
   stripMarkdownComments,
+  stripVisualArtifactMarkers,
   stripDuplicateTitleHeading,
 } from "./markdown";
 import type { Concept, Note } from "../types";
@@ -25,6 +26,12 @@ it("strips hidden comments while preserving inline and fenced code examples", ()
   expect(visible).toContain(`\`${comment}\``);
   expect(visible).toContain(`\`\`\`md\n${comment}\n\`\`\``);
   expect(visible).toContain("Actual words.");
+});
+
+it("omits standalone artifact data from prose while keeping code examples and subsequent paragraphs", () => {
+  const marker = "<!-- orion-artifact:v1 abc -->";
+  const code = ["```md", marker, "```"].join("\n");
+  expect(stripVisualArtifactMarkers(["First.", marker, code, "Last."].join("\n\n"))).toBe(["First.", code, "Last."].join("\n\n"));
 });
 
 describe("Markdown frontmatter preservation", () => {

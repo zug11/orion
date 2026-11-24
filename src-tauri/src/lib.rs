@@ -3799,6 +3799,47 @@ fn chat_prompt_allows_note_creation(prompt: &str) -> bool {
     false
 }
 
+// Visual generation uses the selected text alone, even if the caller supplies Chat context.
+fn visual_artifact_input(raw: &str) -> Result<Value, String> {
+    let error = || "Orion received invalid visual generation input.".to_owned();
+    if raw.len() > 80_000 {
+        return Err(error());
+    }
+    let packet: Value = serde_json::from_str(raw).map_err(|_| error())?;
+    let fields = packet.as_object().ok_or_else(error)?;
+    let clean_text = |value: &str| {
+        !value
+            .chars()
+            .any(|ch| ch.is_ascii_control() && !matches!(ch, '\r' | '\n' | '\t'))
+    };
+    let source = fields
+        .get("source")
+        .and_then(Value::as_str)
+        .ok_or_else(error)?;
+    let guidance = fields
+        .get("guidance")
+        .and_then(Value::as_str)
+        .ok_or_else(error)?;
+    let format = fields
+        .get("format")
+        .and_then(Value::as_str)
+        .ok_or_else(error)?;
+    if fields.len() != 3
+        || source.trim().is_empty()
+        || source.encode_utf16().count() > 12_000
+        || guidance.encode_utf16().count() > 800
+        || !clean_text(source)
+        || !clean_text(guidance)
+        || !matches!(
+            format,
+            "auto" | "timeline" | "explainer" | "quiz" | "comparison" | "flashcards" | "calculator"
+        )
+    {
+        return Err(error());
+    }
+    Ok(packet)
+}
+
 #[tauri::command]
 async fn chat(
     window: tauri::WebviewWindow,
@@ -3837,7 +3878,13 @@ async fn chat(
     if prompt.is_empty() {
         return Err("Ask Orion a question first.".to_string());
     }
-    if prompt.chars().count() > 8_000 {
+    let visual = request.mode.as_deref() == Some("visual-artifact");
+    let visual_input = if visual {
+        Some(visual_artifact_input(&prompt)?)
+    } else {
+        None
+    };
+    if !visual && prompt.chars().count() > 8_000 {
         return Err("Keep a Chat message below 8,000 characters.".to_string());
     }
 
@@ -3846,7 +3893,8 @@ async fn chat(
         | Some("chat")
         | Some("chat-reading")
         | Some("chat-suggestions")
-        | Some("voice-synthesis") => false,
+        | Some("voice-synthesis")
+        | Some("visual-artifact") => false,
         Some("inline-writing") => true,
         Some(_) => return Err("Orion received an unsupported AI request mode.".to_string()),
     };
@@ -3866,7 +3914,8 @@ async fn chat(
     } else {
         None
     };
-    let allow_note_actions = !synthesis
+    let allow_note_actions = !visual
+        && !synthesis
         && !suggestions
         && !inline_writing
         && request.allow_note_actions
@@ -3885,7 +3934,9 @@ async fn chat(
     } else {
         None
     };
-    let mut provider_instructions = if synthesis {
+    let mut provider_instructions = if visual {
+        include_str!("../../src/lib/visualArtifactInstructions.txt").to_owned()
+    } else if synthesis {
         voice_synthesis::protocol()["instructions"]
             .as_str()
             .unwrap()
@@ -3928,12 +3979,14 @@ async fn chat(
     }
     let max_output_tokens = if synthesis || suggestions {
         6_000
-    } else if inline_writing || allow_note_actions || allow_edits {
+    } else if visual || inline_writing || allow_note_actions || allow_edits {
         12_000
     } else {
         6_000
     };
-    let operation = if inline_writing {
+    let operation = if visual {
+        "generate this visual"
+    } else if inline_writing {
         "complete this writing proposal"
     } else {
         "complete this Chat response"
@@ -4003,7 +4056,9 @@ async fn chat(
             })
         })
         .collect::<Vec<_>>();
-    let chat_payload = if let Some(context) = &synthesis_context {
+    let chat_payload = if let Some(packet) = visual_input {
+        packet
+    } else if let Some(context) = &synthesis_context {
         json!({ "synthesisContext": context })
     } else if let Some(context) = &suggestion_context {
         json!({ "suggestionContext": context })
@@ -5173,6 +5228,32 @@ pub fn run() {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn visual_artifact_input_only_accepts_selected_text_and_bounded_guidance() {
+        let packet = json!({ "source": "☀".repeat(12_000), "guidance": "Compare states.", "format": "auto" });
+        assert_eq!(visual_artifact_input(&packet.to_string()).unwrap(), packet);
+        for (key, value) in [
+            ("format", json!("html")),
+            ("source", json!("🪴".repeat(6001))),
+            ("guidance", json!("x".repeat(801))),
+            ("history", json!(["unrelated"])),
+            ("source", json!("  ")),
+        ] {
+            let mut invalid = packet.clone();
+            invalid[key] = value;
+            assert!(visual_artifact_input(&invalid.to_string()).is_err());
+        }
+        let result = parse_chat_edit_response(
+            &json!({ "reply": "a".repeat(8000) }).to_string(),
+            true,
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(result.reply.len(), 8000);
+        assert!(result.note_actions.is_empty());
+    }
 
     #[test]
     fn elevenlabs_connection_check_distinguishes_permissions_from_invalid_keys() {

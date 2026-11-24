@@ -3,7 +3,10 @@
 import type { Editor } from "@tiptap/core";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { Note } from "../types";
+import type { Note, Settings } from "../types";
+import { defaultSettings } from "../data/defaults";
+import * as visualGeneration from "../lib/visualArtifactGeneration";
+import type { VisualArtifact } from "../lib/visualArtifacts";
 import { RichNoteEditor } from "./RichNoteEditor";
 
 beforeAll(() => {
@@ -15,8 +18,8 @@ beforeAll(() => {
 });
 afterEach(cleanup);
 
-function fixture(markdown: string, notes: Note[] = []) {
-  const view = render(<RichNoteEditor noteId="origin" markdown={markdown} notes={notes} concepts={[]} sources={[]} attachedSourceIds={[]} onChange={vi.fn()} onAttachSource={vi.fn()} onRegisterConcept={vi.fn()} onDisableConceptAutoLink={vi.fn()} />);
+function fixture(markdown: string, notes: Note[] = [], settings?: Settings) {
+  const view = render(<RichNoteEditor settings={settings} noteId="origin" markdown={markdown} notes={notes} concepts={[]} sources={[]} attachedSourceIds={[]} onChange={vi.fn()} onAttachSource={vi.fn()} onRegisterConcept={vi.fn()} onDisableConceptAutoLink={vi.fn()} />);
   const element = view.container.querySelector(".tiptap") as HTMLElement & { editor: Editor };
   return { ...view, element, editor: element.editor };
 }
@@ -32,6 +35,52 @@ async function chooseInlineCommand(editor: Editor, original: string, token: stri
 }
 
 describe("inline slash commands in the real note editor", () => {
+  it("chooses /visualise by keyboard, keeps cancellation local, then saves a generated artifact in one Undo", async () => {
+    HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
+    HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    const generated: VisualArtifact = { version: 1, format: "explainer", title: "Capacity",
+      blocks: [{ kind: "text", text: "A battery stores excess power." }] };
+    const generate = vi.spyOn(visualGeneration, "generateVisualArtifact").mockResolvedValue(generated);
+    const original = "The battery stores excess power. /vis";
+    const { element, editor } = fixture(original + "\n\nPrivate follow-up.", [], { ...defaultSettings, apiKeyConfigured: true });
+    vi.spyOn(editor.view, "coordsAtPos").mockReturnValue({ left: 10, right: 11, top: 25, bottom: 40 });
+    async function chooseWithKeyboard() {
+      act(() => { editor.commands.focus(undefined, { scrollIntoView: false }); });
+      await waitFor(() => expect(editor.isFocused).toBe(true));
+      act(() => { editor.commands.setTextSelection(original.length + 1); });
+      const option = await screen.findByRole("option", { name: "Visualise" });
+      expect(option).toHaveAttribute("aria-selected", "true");
+      fireEvent.keyDown(element, { key: "Enter" });
+      return screen.findByRole("dialog", { name: "Visualise" });
+    }
+    try {
+      const cancelDialog = await chooseWithKeyboard();
+      expect(within(cancelDialog).getByRole("blockquote")).toHaveTextContent("The battery stores excess power.");
+      expect(generate).not.toHaveBeenCalled();
+      // Native Escape on a modal dispatches cancel. jsdom has no dialog default action.
+      fireEvent(cancelDialog, new Event("cancel", { cancelable: true }));
+      expect(editor.getMarkdown()).toBe(original + "\n\nPrivate follow-up.");
+      expect(generate).not.toHaveBeenCalled();
+      act(() => { editor.commands.setTextSelection(1); });
+      const dialog = await chooseWithKeyboard();
+      fireEvent.change(within(dialog).getByLabelText("Format"), { target: { value: "explainer" } });
+      const guidance = within(dialog).getByLabelText(/Guidance/);
+      expect(guidance).toHaveFocus();
+      fireEvent.keyDown(guidance, { key: "Enter" });
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Visualise" })).toBeNull());
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(generate).toHaveBeenCalledWith("The battery stores excess power.", "explainer", "", expect.any(Object), expect.any(AbortSignal));
+      expect(editor.state.doc.child(1).type.name).toBe("noteVisualArtifact");
+      expect(screen.getByRole("heading", { name: "Capacity" })).toBeInTheDocument();
+      act(() => { editor.commands.undo(); });
+      expect(editor.getMarkdown()).toBe(original + "\n\nPrivate follow-up.");
+    } finally {
+      generate.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it.each(["/block", "Before /block after."])("creates a persistent block from %s with the caret ready to write", async original => {
     const { editor } = fixture(original);
     await chooseInlineCommand(editor, original, "/block", "Block");

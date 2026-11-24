@@ -6,7 +6,8 @@ import { captureVoiceSelection, type VoiceSelectionStore } from "../lib/voiceSel
 import { passageAnchorFromSelection, type PassageCommentHandler, type PassageCommentTarget } from "../lib/passageThreads";
 import { createEmptySnapshot } from "../data/defaults";
 import { spaceNoteVersion } from "../lib/spaceKnowledge";
-import { MessageCircle } from "../lib/icons";
+import { captureReadingArtifactPassage, type ReadingArtifactPassage } from "../lib/readingArtifactPassage";
+import { Layers3, MessageCircle } from "../lib/icons";
 import { PassageThreadModal } from "./PassageThreadModal";
 import "./PassageThreads.css";
 
@@ -20,30 +21,35 @@ function selectionRect(root: HTMLElement | null): DOMRect | undefined {
   if (root.contains(range.startContainer) && root.contains(range.endContainer)) return range.getBoundingClientRect();
 }
 
-function ReadingCommentButton({ root, store, onOpen, fallback }: {
-  root: RefObject<HTMLElement | null>; store: VoiceSelectionStore; onOpen: () => void; fallback?: Anchor;
+function ReadingCommentButton({ root, store, onOpen, onVisualise, fallback }: {
+  root: RefObject<HTMLElement | null>; store: VoiceSelectionStore; onOpen?: () => void; onVisualise?: (passage: ReadingArtifactPassage) => void; fallback?: Anchor;
 }) {
   const selection = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [position, setPosition] = useState<Anchor>();
+  const [passage, setPassage] = useState<ReadingArtifactPassage>();
   useLayoutEffect(() => {
     if (!selection) { setPosition(undefined); return; }
+    const body = root.current?.querySelector<HTMLElement>('[data-voice-note-body="reading"]');
+    const native = window.getSelection();
+    setPassage(body && native && onVisualise ? captureReadingArtifactPassage(body, native) : undefined);
     const place = () => {
       const rect = selectionRect(root.current) ?? fallback;
-      if (rect) setPosition({ left: Math.max(16, Math.min(rect.left, window.innerWidth - 112)), bottom: Math.max(16, Math.min(rect.bottom + 8, window.innerHeight - 48)) });
+      if (rect) setPosition({ left: Math.max(16, Math.min(rect.left, window.innerWidth - (onVisualise ? 220 : 112))), bottom: Math.max(16, Math.min(rect.bottom + 8, window.innerHeight - 48)) });
     };
     place(); window.addEventListener("resize", place); window.addEventListener("scroll", place, true);
     return () => { window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
-  }, [selection, root, fallback]);
-  return selection && position ? <button className="passage-comment-selection" type="button" aria-label="Comment on selected text"
-    style={{ left: position.left, top: position.bottom }} onMouseDown={event => event.preventDefault()} onClick={onOpen}>
-    <MessageCircle size={14} />Comment
-  </button> : null;
+  }, [selection, root, fallback, onVisualise]);
+  return selection && position && (onOpen || (onVisualise && passage)) ? <div className="passage-comment-selection" role="group" aria-label="Selected passage actions"
+    style={{ left: position.left, top: position.bottom }} onMouseDown={event => event.preventDefault()}>
+    {onOpen && <button type="button" aria-label="Comment on selected text" onClick={onOpen}><MessageCircle size={14} />Comment</button>}
+    {onVisualise && passage && <button type="button" aria-haspopup="dialog" onClick={() => onVisualise(passage)}><Layers3 size={14} />Visualise</button>}
+  </div> : null;
 }
 
 /** The local draft never becomes a Chat prompt. Only Save comment persists it. */
-export function usePassageComment({ note, getNote, root, store, editing, available, onCreate }: {
+export function usePassageComment({ note, getNote, root, store, editing, available, onCreate, onVisualise }: {
   note: Note; getNote: () => Note; root: RefObject<HTMLElement | null>; store?: VoiceSelectionStore;
-  editing: boolean; available: () => boolean; onCreate?: PassageCommentHandler;
+  editing: boolean; available: () => boolean; onCreate?: PassageCommentHandler; onVisualise?: (passage: ReadingArtifactPassage) => void;
 }) {
   const [draft, setDraft] = useState<Draft>();
   const [draftMarker, setDraftMarker] = useState<HTMLElement | null>(null);
@@ -95,7 +101,7 @@ export function usePassageComment({ note, getNote, root, store, editing, availab
   const draftThread = draft?.open ? draft.thread : undefined;
   return { draftThread, setDraftMarker, openComment: onCreate && store ? openComment : undefined, openThreadId, active: !!draft?.open,
     ui: <>
-      {onCreate && store && !editing && !draft?.open && available() && <ReadingCommentButton root={root} store={store} onOpen={openComment} fallback={draft?.anchor} />}
+      {(onCreate || onVisualise) && store && !editing && !draft?.open && available() && <ReadingCommentButton root={root} store={store} onOpen={onCreate ? openComment : undefined} onVisualise={onVisualise} fallback={draft?.anchor} />}
       {draft?.open && draftMarker?.isConnected && <PassageThreadModal anchor={draftMarker} owner={root.current} title="Add comment" passage={"scope" in draft.selection ? "About this note" : draft.selection.text} onClose={close}>
         <form className="chat-composer passage-comment-create" onSubmit={event => { event.preventDefault(); void save(); }}>
           <label className="passage-thread__author" htmlFor={draft.id}>You</label>

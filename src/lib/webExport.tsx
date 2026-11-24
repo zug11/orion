@@ -1,6 +1,8 @@
 import { calendarDateFromUrl } from './calendarDate';
 import { collectWork, remarkNoteBoards, boardColumns } from './tickets';
 import { noteTableHeaderInfo, noteTableLayoutAtLine, remarkNoteTableMetadata } from "./noteTables";
+import { remarkVisualArtifacts } from "./visualArtifactMarkdown";
+import { ExportVisualArtifact } from "./visualArtifactExport";
 import { remarkNoteBlocks } from "./noteBlocks";
 import { remarkNoteTextAlignment } from "./noteTextAlignment";
 import { noteMarginsStyle, remarkNoteMargins, splitDocumentMargins } from "./noteMargins";
@@ -599,6 +601,7 @@ function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
   }
 
   const components: Components = {
+    aside: ({ node }) => <ExportVisualArtifact marker={node?.properties["data-orion-artifact"]}/>,
     section: ({ children, node }) => {
       const work = collectWork(includedNotes);
       const board = work.boards.find(board => board.id === node?.properties?.['data-orion-board'] && board.noteId === note.id);
@@ -770,7 +773,7 @@ function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
           <div className="export-prose" data-orion-margin-left={margins.left} data-orion-margin-right={margins.right} style={noteMarginsStyle(margins)}>
             {citations.body.trim() ? (
               <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkNoteBoards, remarkNoteTableMetadata, remarkNoteBlocks, remarkNoteMargins, remarkNoteTextAlignment]}
+                remarkPlugins={[remarkGfm, remarkVisualArtifacts, remarkNoteBoards, remarkNoteTableMetadata, remarkNoteBlocks, remarkNoteMargins, remarkNoteTextAlignment]}
                 components={components}
                 skipHtml
                 urlTransform={(url) => url}
