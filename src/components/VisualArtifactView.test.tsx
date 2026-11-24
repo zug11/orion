@@ -2,6 +2,8 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ArtifactBlock, ArtifactFormat, VisualArtifact } from '../lib/visualArtifacts';
 import { VisualArtifactView } from './VisualArtifactView';
+import { ExportVisualArtifact } from '../lib/visualArtifactExport';
+import { visualArtifactMarker } from '../lib/visualArtifactMarkdown';
 
 afterEach(cleanup);
 
@@ -183,5 +185,18 @@ describe('VisualArtifactView', () => {
     expect(within(table).getByRole('columnheader', { name: 'Volume' })).toBeVisible();
     expect(within(table).getByRole('rowheader', { name: 'Upper' })).toBeVisible();
     expect(screen.getByText('<b>Field note</b>')).toBeVisible();
+  });
+
+  it('preserves the unlabeled corner and row headings in notes and readable exports', () => {
+    const comparison = artifact('comparison', { kind: 'table', columns: ['', 'First reading', 'Rereading'],
+      rows: [['Promise', 'Reassurance', 'Evasion']] });
+    render(<><VisualArtifactView artifact={comparison} /><ExportVisualArtifact marker={visualArtifactMarker(comparison)} /></>);
+    const tables = screen.getAllByRole('table');
+    expect(tables).toHaveLength(2);
+    for (const table of tables) {
+      expect(table.querySelector('thead tr')?.firstElementChild?.tagName).toBe('TD');
+      expect(within(table).getAllByRole('columnheader').map(cell => cell.textContent)).toEqual(['First reading', 'Rereading']);
+      expect(within(table).getByRole('rowheader', { name: 'Promise' })).toHaveAttribute('scope', 'row');
+    }
   });
 });

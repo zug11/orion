@@ -8,6 +8,7 @@ import {
   type VisualArtifact,
 } from '../lib/visualArtifacts';
 import { layoutVisualScene } from '../lib/visualSceneLayout';
+import { VisualArtifactTable } from './VisualArtifactTable';
 import './VisualArtifactView.css';
 
 type Block<K extends ArtifactBlock['kind']> = Extract<ArtifactBlock, { kind: K }>;
@@ -265,12 +266,7 @@ function RenderBlock({ block, title }: { block: ArtifactBlock; title: string }) 
     case 'calculator': return <Calculator block={block} />;
     case 'table': return (
       <div className="visual-artifact__table" tabIndex={0} role="region" aria-label={`${title} table`}>
-        <table aria-label={title}>
-          <thead><tr>{block.columns.map((column, i) => <th key={i} scope="col">{column}</th>)}</tr></thead>
-          <tbody>{block.rows.map((row, i) => <tr key={i}>
-            {row.map((cell, j) => j === 0 ? <th key={j} scope="row">{cell}</th> : <td key={j}>{cell}</td>)}
-          </tr>)}</tbody>
-        </table>
+        <VisualArtifactTable block={block} title={title} />
       </div>
     );
     case 'text': return <div className="visual-artifact__text">

@@ -1,3 +1,4 @@
+import { VisualArtifactTable } from "../components/VisualArtifactTable";
 import { evaluateArtifactExpression, type ArtifactBlock } from "./visualArtifacts";
 import { readVisualArtifactMarker, unavailableVisualArtifact } from "./visualArtifactMarkdown";
 
@@ -6,8 +7,7 @@ function StaticBlock({ block }: { block: ArtifactBlock }) {
     case "text": return <div>{block.heading && <h4>{block.heading}</h4>}<p>{block.text}</p></div>;
     case "steps": return <ol>{block.items.map((step, i) =>
       <li key={i}><strong>{step.label} · {step.heading}</strong><p>{step.text}</p></li>)}</ol>;
-    case "table": return <table><thead><tr>{block.columns.map((name, i) => <th key={i}>{name}</th>)}</tr></thead>
-      <tbody>{block.rows.map((row, i) => <tr key={i}>{row.map((value, j) => <td key={j}>{value}</td>)}</tr>)}</tbody></table>;
+    case "table": return <VisualArtifactTable block={block} />;
     case "cards": return <div>{block.items.map((card, i) =>
       <div key={i}><h4>{card.front}</h4><p>{card.back}</p></div>)}</div>;
     case "quiz": return <ol>{block.items.map((item, i) =>

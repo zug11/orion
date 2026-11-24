@@ -418,7 +418,9 @@ These product decisions are intentional:
   below the diagram. Narrow views, crowded layouts and cycles retain the
   complete directed connection list. Scenes with no flows can still show the
   authored spatial arrangement. Use the same renderer for saved and newly
-  generated scenes. Arithmetic uses a bounded expression tree.
+  generated scenes. Comparison tables can leave their top-left corner empty
+  when every body row has a label. Reading, editing and readable exports
+  preserve those row and column headings. Arithmetic uses a bounded expression tree.
   `visual-artifact` uses the selected saved text connection and sends only
   the selected/entered source, format and optional guidance. Native and browser
   transports share `visualArtifactInstructions.txt`. Validate all provider

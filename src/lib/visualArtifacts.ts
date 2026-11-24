@@ -57,7 +57,7 @@ function object(value: unknown, keys: string[]): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function list<T>(value: unknown, min: number, max: number, read: (item: unknown) => T): T[] {
+function list<T>(value: unknown, min: number, max: number, read: (item: unknown, index: number) => T): T[] {
   if (!Array.isArray(value) || value.length < min || value.length > max) return invalid();
   return Array.from(value, read);
 }
@@ -244,9 +244,11 @@ function block(value: unknown): ArtifactBlock {
     }
     case "table": {
       const obj = object(value, ["kind", "columns", "rows"]);
-      const columns = list(obj.columns, 2, 6, value => literal(value, 100));
+      const columns = list(obj.columns, 2, 6, (value, column) =>
+        literal(value, 100, column === 0 && value === ""));
       const rows = list(obj.rows, 1, 24, row =>
-        list(row, columns.length, columns.length, value => literal(value, 400, true)));
+        list(row, columns.length, columns.length, (value, column) =>
+          literal(value, 400, column !== 0 || columns[0] !== "")));
       return { kind: "table", columns, rows };
     }
     case "quiz": {

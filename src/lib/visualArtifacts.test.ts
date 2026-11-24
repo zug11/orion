@@ -39,6 +39,17 @@ describe("versioned visual documents", () => {
   ])("supports a source-specific %s", (format, block) => {
     expect(parseVisualArtifact(document(block, format as string)).blocks).toEqual([block]);
   });
+  it("accepts a comparison with an empty corner and populated row headings", () => {
+    const table = { kind: "table", columns: ["", "First reading", "Rereading"],
+      rows: [["Promise", "Reassurance", "Evasion"], ["Tone", "Tender", ""]] };
+    expect(parseVisualArtifact(document(table, "comparison")).blocks).toEqual([table]);
+    for (const header of ["", " "]) {
+      expect(() => parseVisualArtifact(document({ ...table, columns: ["Aspect", header, "Rereading"] }))).toThrow();
+      expect(() => parseVisualArtifact(document({ ...table, rows: [table.rows[0], [header, "Tender", ""]] }))).toThrow();
+    }
+    const named = { ...table, columns: ["Aspect", "First reading", "Rereading"], rows: [["", "Tender", ""]] };
+    expect(parseVisualArtifact(document(named)).blocks).toEqual([named]);
+  });
   it("computes quantities from a bounded formula and handles a zero denominator after adjustment", () => {
     const block = parseVisualArtifact(document(calculator, "calculator")).blocks[0] as Extract<ArtifactBlock, { kind: "calculator" }>;
     expect(evaluateArtifactExpression(block.outputs[0].expression, [3])).toBe(1350);
