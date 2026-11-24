@@ -7,6 +7,7 @@ import {
   type ArtifactShape,
   type VisualArtifact,
 } from '../lib/visualArtifacts';
+import { layoutVisualScene } from '../lib/visualSceneLayout';
 import './VisualArtifactView.css';
 
 type Block<K extends ArtifactBlock['kind']> = Extract<ArtifactBlock, { kind: K }>;
@@ -165,124 +166,11 @@ function DrawShape({ shape, level }: { shape: ArtifactShape; level: number | nul
   }
 }
 
-const diagramWidth = 640;
-function sceneLayout(nodes: Block<'scene'>['nodes']) {
-  const columns = Math.min(nodes.length, 4);
-  const rows = Math.ceil(nodes.length / columns);
-  const spreadY = Math.max(...nodes.map(node => node.y)) - Math.min(...nodes.map(node => node.y));
-  const height = Math.max(rows * 150 + 44, spreadY < 20 ? 206 : 314);
-  const size = nodes.length > 4 ? 62 : 78;
-  const insetX = 73, top = 50, bottom = 78;
-  const points = nodes.map(node => ({
-    x: insetX + (diagramWidth - 2 * insetX) * node.x / 100,
-    y: top + (height - top - bottom) * node.y / 100,
-  }));
-  const overlap = points.some((p, i) => points.slice(i + 1).some(q =>
-    Math.abs(p.x - q.x) < size + 25 && Math.abs(p.y - q.y) < size + 39));
-  // Closely placed generated subjects still need distinct, readable labels.
-  if (overlap) {
-    points.forEach((p, i) => {
-      const row = Math.floor(i / columns);
-      const rowCount = Math.min(columns, nodes.length - row * columns);
-      p.x = diagramWidth * ((i % columns) + 0.5) / rowCount;
-      p.y = (row + 0.5) * height / rows - 17;
-    });
-  }
-  return { points, size, height };
-}
-
-type Point = { x: number; y: number };
-type Obstacle = { left: number; top: number; right: number; bottom: number; subject?: Point };
-
-function crossesBox(a: Point, b: Point, box: Obstacle) {
-  // Clipping against the open interior lets a line skirt a box at its corner.
-  let first = 0, last = 1;
-  for (const [origin, delta, low, high] of [
-    [a.x, b.x - a.x, box.left + 0.01, box.right - 0.01],
-    [a.y, b.y - a.y, box.top + 0.01, box.bottom - 0.01],
-  ]) {
-    if (delta === 0) {
-      if (origin <= low || origin >= high) return false;
-      continue;
-    }
-    const t1 = (low - origin) / delta, t2 = (high - origin) / delta;
-    first = Math.max(first, Math.min(t1, t2));
-    last = Math.min(last, Math.max(t1, t2));
-    if (first >= last) return false;
-  }
-  return true;
-}
-
-function sceneRoutes(layout: ReturnType<typeof sceneLayout>, flows: Block<'scene'>['frames'][number]['flows']) {
-  const radius = layout.size / 2 + 6;
-  const obstacles: Obstacle[] = layout.points.flatMap(p => [
-    { left: p.x - radius, top: p.y - radius, right: p.x + radius, bottom: p.y + radius, subject: p },
-    { left: p.x - layout.size * .82, top: p.y + layout.size / 2,
-      right: p.x + layout.size * .82, bottom: p.y + layout.size / 2 + 36 },
-  ]);
-  const clear = (a: Point, b: Point) => !obstacles.some(box =>
-    box.subject !== a && box.subject !== b && crossesBox(a, b, box));
-  const corners = obstacles.flatMap(box => [
-    { x: box.left, y: box.top }, { x: box.right, y: box.top },
-    { x: box.left, y: box.bottom }, { x: box.right, y: box.bottom },
-  ]);
-  const coordinate = (p: Point) => `${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
-  function edge(p: Point, toward: Point): Point {
-    const dx = toward.x - p.x, dy = toward.y - p.y;
-    const ratio = radius / Math.max(Math.abs(dx), Math.abs(dy));
-    return { x: p.x + dx * ratio, y: p.y + dy * ratio };
-  }
-  return flows.map(flow => {
-    const start = layout.points[flow.from], end = layout.points[flow.to];
-    if (clear(start, end)) {
-      const a = edge(start, end), b = edge(end, start);
-      if (!flows.some(other => other.from === flow.to && other.to === flow.from)) {
-        return `M ${coordinate(a)} L ${coordinate(b)}`;
-      }
-      const dx = b.x - a.x, dy = b.y - a.y, length = Math.hypot(dx, dy);
-      const control = { x: (a.x + b.x) / 2 - 16 * dy / length, y: (a.y + b.y) / 2 + 16 * dx / length };
-      if (clear(start, control) && clear(control, end)) return `M ${coordinate(a)} Q ${coordinate(control)} ${coordinate(b)}`;
-    }
-    // Shortest visible route via the corners of subject drawings and captions.
-    // With eight subjects at most, this graph is small and local to the frame.
-    const points = [start, end, ...corners];
-    const distances = points.map(() => Infinity);
-    const previous = points.map(() => -1);
-    const visited = new Set<number>();
-    distances[0] = 0;
-    while (!visited.has(1)) {
-      let nearest = -1;
-      for (let i = 0; i < points.length; i++) {
-        if (!visited.has(i) && distances[i] < (nearest < 0 ? Infinity : distances[nearest])) nearest = i;
-      }
-      if (nearest < 0) return null;
-      visited.add(nearest);
-      if (nearest === 1) break;
-      const a = points[nearest];
-      for (let j = 1; j < points.length; j++) {
-        if (visited.has(j)) continue;
-        const b = points[j];
-        const length = distances[nearest] + Math.hypot(b.x - a.x, b.y - a.y);
-        if (length < distances[j] && clear(a, b)) {
-          distances[j] = length;
-          previous[j] = nearest;
-        }
-      }
-    }
-    const route = [end];
-    for (let i = previous[1]; i >= 0; i = previous[i]) route.unshift(points[i]);
-    route[0] = edge(start, route[1]);
-    route[route.length - 1] = edge(end, route[route.length - 2]);
-    return route.map((p, i) => `${i === 0 ? 'M' : 'L'} ${coordinate(p)}`).join(' ');
-  });
-}
-
 function Scene({ block }: { block: Block<'scene'> }) {
   const [index, setIndex] = useState(0);
   const id = useId();
   const frame = block.frames[index];
-  const layout = useMemo(() => sceneLayout(block.nodes), [block.nodes]);
-  const routes = useMemo(() => sceneRoutes(layout, frame.flows), [layout, frame.flows]);
+  const layout = useMemo(() => layoutVisualScene(block, index), [block, index]);
   function selectWithKeys(event: KeyboardEvent<HTMLButtonElement>, current: number) {
     let next: number;
     switch (event.key) {
@@ -307,24 +195,33 @@ function Scene({ block }: { block: Block<'scene'> }) {
       <div id={`${id}-diagram`} role={block.frames.length > 1 ? 'tabpanel' : 'group'}
         aria-labelledby={block.frames.length > 1 ? `${id}-stage-${index}` : undefined}
         aria-label={block.frames.length === 1 ? frame.label : undefined}>
-        <div className="visual-artifact__plot" data-list={block.nodes.some((node, i) => node.label.length > 32 || frame.values[i].length > 28)}
-          style={{ "--va-aspect": `${diagramWidth} / ${layout.height}` } as CSSProperties}>
-          <svg className="visual-artifact__connections" viewBox={`0 0 ${diagramWidth} ${layout.height}`}
-            aria-hidden="true" focusable="false">
-            <defs><marker id={`${id}-tip`} viewBox="0 0 9 9" refX="8" refY="4.5"
-              markerWidth="6" markerHeight="6" orient="auto">
-              <path d="M1 1 L8 4.5 L1 8" fill="none" stroke="var(--va-accent)" strokeWidth="1.5" />
-            </marker></defs>
-            {routes.map((d, i) => d && (
-              <path key={i} d={d} fill="none" stroke="var(--va-accent)" strokeWidth="2"
-                strokeLinejoin="round" markerEnd={`url(#${id}-tip)`} />
+        <div className="visual-artifact__plot" data-mode={layout.mode}
+          style={{ '--va-aspect': `${layout.width} / ${layout.height}` } as CSSProperties}>
+          {layout.connections.length > 0 && <svg className="visual-artifact__connections"
+            viewBox={`0 0 ${layout.width} ${layout.height}`} aria-hidden="true" focusable="false">
+            <defs>
+              <marker id={`${id}-tip`} viewBox="0 0 10 10" refX="9" refY="5"
+                markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" orient="auto">
+                <path d="M 1 1.2 L 9 5 L 1 8.8 L 3.2 5 Z" fill="var(--va-trace)" />
+              </marker>
+            </defs>
+            {layout.connections.map(route => <path key={route.index} d={route.d} fill="none"
+              stroke="var(--va-trace)" strokeWidth={1.75} strokeLinecap="round"
+              markerEnd={`url(#${id}-tip)`} />)}
+            {layout.connections.map(route => frame.flows[route.index].label && (
+              <text key={route.index} x={route.labelX} y={route.labelY} dy=".32em"
+                textAnchor="middle" className="visual-artifact__edge-label">
+                {frame.flows[route.index].label}
+              </text>
             ))}
-          </svg>
-          {block.nodes.map((node, i) => {
-            const point = layout.points[i];
+          </svg>}
+          {layout.subjects.map(subject => {
+            const i = subject.index;
+            const node = block.nodes[i];
             const style = {
-              left: `${100 * point.x / diagramWidth}%`, top: `${100 * point.y / layout.height}%`,
-              "--va-subject-width": `${100 * layout.size / diagramWidth}%`,
+              '--va-left': `${100 * subject.x / layout.width}%`, '--va-top': `${100 * subject.y / layout.height}%`,
+              '--va-art-width': `${100 * subject.artSize / layout.width}%`,
+              '--va-caption-width': `${100 * subject.width / subject.artSize}%`,
             } as CSSProperties;
             return <figure key={i} className="visual-artifact__subject" style={style}>
               <svg viewBox="0 0 100 100" role="img" aria-label={node.alt} focusable="false">
@@ -336,10 +233,23 @@ function Scene({ block }: { block: Block<'scene'> }) {
         </div>
         {frame.flows.length > 0 && <ul aria-label="Connections" className="visual-artifact__flows">
           {frame.flows.map((flow, i) => <li key={i}>
-            {block.nodes[flow.from].label} <ArrowRight size={13} aria-label="to" role="img" /> {block.nodes[flow.to].label}
+            <span className="visual-artifact__flow-from">{block.nodes[flow.from].label}</span>
+            <svg className="visual-artifact__flow-direction" viewBox="0 0 48 12"
+              role="img" aria-label="to" focusable="false">
+              <path d="M1 6 H46 M40 1.5 L46 6 L40 10.5" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <span className="visual-artifact__flow-to">{block.nodes[flow.to].label}</span>
             {flow.label && <strong>{flow.label}</strong>}
           </li>)}
         </ul>}
+        {layout.context.length > 0 && <dl aria-label="Other readings" className="visual-artifact__context">
+          {layout.context.map(i => <div key={i}>
+            <dt>{block.nodes[i].label}</dt>
+            <dd>{frame.values[i]}{frame.levels[i] !== null &&
+              <meter min={0} max={1} value={frame.levels[i]!} aria-label={`${block.nodes[i].label} level`} />}</dd>
+          </div>)}
+        </dl>}
         <p className="visual-artifact__caption">{frame.caption}</p>
       </div>
     </div>

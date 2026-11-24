@@ -2,6 +2,7 @@
   --va-ink: var(--text);
   --va-muted: var(--muted);
   --va-accent: var(--periwinkle-strong);
+  --va-trace: color-mix(in srgb, var(--va-accent) 78%, var(--text-soft));
   --va-warm: var(--gold);
   --va-cool: var(--mint);
   --va-surface: var(--surface-2);
@@ -117,83 +118,123 @@
 
 .visual-artifact .visual-artifact__tabs {
   display: flex;
-  gap: 3px;
-  padding: 4px;
-  border-radius: 9px;
-  overflow-x: auto;
-  background: var(--surface-2);
-  scrollbar-width: thin;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 3px 5px;
+  padding: 0 0 9px;
+  border-bottom: 1px solid var(--line);
 }
 .visual-artifact .visual-artifact__tabs button {
-  flex: 1 0 auto;
+  flex: 0 1 auto;
   max-width: 100%;
-  padding: 6px 10px;
-  background: transparent;
+  padding: 7px 12px;
+  text-align: start;
   color: var(--text-soft);
-  font-size: 13px;
+  background: transparent;
+  font: 500 13px/1.35 var(--ui-font);
+  overflow-wrap: anywhere;
 }
+.visual-artifact .visual-artifact__tabs button:hover { background: var(--surface-2); }
 .visual-artifact .visual-artifact__tabs button[aria-selected="true"] {
-  background: var(--surface-raised);
   color: var(--text);
-  box-shadow: 0 0 0 1px var(--line-strong);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
 }
+
 .visual-artifact .visual-artifact__plot {
   position: relative;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 122px), 1fr));
-  align-items: start;
-  gap: 14px 8px;
-  min-width: 0;
-  margin-block: 11px 4px;
-  padding-block: 12px;
-  background: radial-gradient(circle at center, var(--line) .85px, transparent 1px) 0 0 / 17px 17px;
-}
-.visual-artifact__connections { display: none; }
-.visual-artifact .visual-artifact__subject {
-  display: grid;
-  justify-items: center;
-  gap: 4px;
-  padding: 0;
-  margin: 0;
-}
-.visual-artifact .visual-artifact__subject > svg { display: block; width: 62px; height: auto; }
-.visual-artifact .visual-artifact__subject figcaption {
-  display: grid;
-  justify-items: center;
-  margin: 0;
-  color: var(--text-soft);
-  font: 400 12px/1.25 var(--ui-font);
-  text-align: center;
-}
-.visual-artifact .visual-artifact__subject figcaption > * {
-  padding-inline: 3px;
-  background: var(--surface-1);
-}
-.visual-artifact .visual-artifact__subject figcaption strong { color: var(--text); font-weight: 650; }
-.visual-artifact .visual-artifact__flows {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px 15px;
-  padding: 4px 0;
-  margin: 0;
-  list-style: none;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 26px 16px;
+  min-width: 0;
+  margin: 8px 0;
+  padding: 16px 0;
 }
-.visual-artifact .visual-artifact__flows li {
-  display: inline;
+.visual-artifact__plot::before {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle, var(--line-strong) .7px, transparent .9px) center / 20px 20px;
+  opacity: .44;
+  pointer-events: none;
+  content: '';
+}
+.visual-artifact__connections { display: none; }
+.visual-artifact__edge-label {
+  fill: var(--text-soft);
+  stroke: var(--surface-1);
+  stroke-width: 8px;
+  stroke-linejoin: round;
+  paint-order: stroke;
+  font: 550 16px var(--ui-font);
+}
+.visual-artifact .visual-artifact__subject {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 9px;
+  width: clamp(126px, calc((100% - 32px) / 3), 200px);
+  max-width: 100%;
+  min-width: 0;
   padding: 0;
   margin: 0;
+}
+.visual-artifact .visual-artifact__subject > svg { display: block; width: 78px; max-width: 100%; height: auto; }
+.visual-artifact .visual-artifact__subject figcaption {
+  display: grid;
+  gap: 3px;
+  margin: 0;
   color: var(--text-soft);
-  font-size: 12px;
+  font: 400 13px/1.3 var(--ui-font);
+  text-align: center;
+}
+.visual-artifact .visual-artifact__subject figcaption strong { color: var(--text); font-size: 14px; font-weight: 600; }
+.visual-artifact .visual-artifact__flows {
+  display: grid;
+  list-style: none;
+  margin: 0;
+  padding: 0 0 12px;
+}
+.visual-artifact .visual-artifact__flows li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(42px, .75fr) minmax(0, 1fr);
+  grid-template-areas: "source relationship target" "source arrow target";
+  align-items: center;
+  gap: 2px 8px;
+  padding: 7px 0;
+  margin: 0;
+  color: var(--text);
+  font: 500 13px/1.4 var(--ui-font);
   list-style: none;
 }
-.visual-artifact__flows svg { display: inline-block; color: var(--va-accent); vertical-align: -.15em; }
-.visual-artifact .visual-artifact__flows strong {
-  padding-inline-start: 6px;
-  color: var(--text);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
+.visual-artifact__flows li + li { border-top: 1px solid var(--line); }
+.visual-artifact__flow-from { grid-area: source; text-align: end; }
+.visual-artifact__flow-to { grid-area: target; }
+.visual-artifact__flow-direction { grid-area: arrow; justify-self: center; width: 38px; height: 12px; color: var(--va-trace); }
+.visual-artifact__flows strong { grid-area: relationship; text-align: center; color: var(--text-soft); font: 400 12px/1.4 var(--ui-font); }
+.visual-artifact__context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  padding: 0;
+  margin: 0 0 12px;
+  color: var(--text-soft);
+  font: 400 13px/1.5 var(--ui-font);
 }
-.visual-artifact p.visual-artifact__caption, .visual-artifact p.visual-artifact__feedback {
+.visual-artifact__context > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 7px; }
+.visual-artifact .visual-artifact__context dt { font-weight: 550; }
+.visual-artifact .visual-artifact__context dd { display: flex; align-items: center; gap: 6px; margin: 0; }
+.visual-artifact__context meter { width: 42px; }
+.visual-artifact p.visual-artifact__caption {
+  margin: 0;
+  padding: 14px 0 0;
+  border-top: 1px solid var(--line);
+  color: var(--text);
+  font: 400 15px/1.55 var(--ui-font);
+  white-space: pre-line;
+}
+.visual-artifact p.visual-artifact__feedback {
   margin: 10px 0 0;
   padding: 12px 14px;
   border-radius: 8px;
@@ -321,35 +362,27 @@
   font: 550 22px/1.15 var(--ui-font);
   font-variant-numeric: tabular-nums;
 }
-/* Narrow notes and long captions use the labelled subjects and connection
-   list. A larger canvas adds spatial positioning and directed arrows. */
-@container (min-width: 461px) {
-  .visual-artifact .visual-artifact__plot[data-list="false"] {
+/* Text connections double as the accessible equivalent of the spatial arrows. */
+@container (min-width: 540px) {
+  .visual-artifact .visual-artifact__plot[data-mode="diagram"] {
     display: block;
-    padding: 0;
     aspect-ratio: var(--va-aspect);
+    padding: 0;
   }
-  .visual-artifact__plot[data-list="false"] .visual-artifact__connections {
-    position: absolute;
-    display: block;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    pointer-events: none;
+  .visual-artifact__plot[data-mode="diagram"] .visual-artifact__connections {
+    position: absolute; display: block; inset: 0; width: 100%; height: 100%; pointer-events: none;
   }
-  .visual-artifact__plot[data-list="false"] .visual-artifact__subject {
-    position: absolute;
-    display: block;
-    width: var(--va-subject-width);
-    transform: translate(-50%, -50%);
+  .visual-artifact__plot[data-mode="diagram"] .visual-artifact__subject {
+    position: absolute; left: var(--va-left); top: var(--va-top); display: block;
+    width: var(--va-art-width); transform: translate(-50%, -50%);
   }
-  .visual-artifact__plot[data-list="false"] .visual-artifact__subject > svg { width: 100%; }
-  .visual-artifact__plot[data-list="false"] .visual-artifact__subject figcaption {
-    position: absolute;
-    top: calc(100% + 2px);
-    left: 50%;
-    width: 165%;
-    transform: translateX(-50%);
+  .visual-artifact__plot[data-mode="diagram"] .visual-artifact__subject > svg { width: 100%; }
+  .visual-artifact__plot[data-mode="diagram"] .visual-artifact__subject figcaption {
+    position: absolute; top: calc(100% + 7px); left: 50%; width: var(--va-caption-width); transform: translateX(-50%);
+  }
+  .visual-artifact__plot[data-mode="diagram"] + .visual-artifact__flows {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+    margin: 0; padding: 0; white-space: nowrap;
   }
 }
 @media (prefers-contrast: more), (forced-colors: active) {

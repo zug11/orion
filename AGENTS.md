@@ -412,7 +412,13 @@ These product decisions are intentional:
   The six formats are Timeline, Explainer, Quiz, Comparison, Flashcards and
   Calculator. Their blocks can be combined. A scene can draw new subjects from
   bounded paths, rectangles and circles, with frame-specific values, fills and
-  directed connections. Arithmetic uses a bounded expression tree.
+  directed connections. The renderer lays out each stage around the objects
+  participating in its flows. Place sources to the left of their destinations,
+  with a separate labelled route for each transfer. Show other stated readings
+  below the diagram. Narrow views, crowded layouts and cycles retain the
+  complete directed connection list. Scenes with no flows can still show the
+  authored spatial arrangement. Use the same renderer for saved and newly
+  generated scenes. Arithmetic uses a bounded expression tree.
   `visual-artifact` uses the selected saved text connection and sends only
   the selected/entered source, format and optional guidance. Native and browser
   transports share `visualArtifactInstructions.txt`. Validate all provider

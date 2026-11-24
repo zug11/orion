@@ -25,48 +25,97 @@ const scene: ArtifactBlock = {
 };
 
 describe('VisualArtifactView', () => {
-  it('renders authored vector shapes and updates directed flows, captions, and levels on keyboard stage changes', () => {
+  it('keeps the author’s graphics and level values when navigating stages by keyboard', () => {
     render(<VisualArtifactView artifact={artifact('explainer', scene)} />);
     const card = screen.getByRole('region', { name: 'Catchment notebook' });
     expect(card).toHaveAttribute('contenteditable', 'false');
     expect(card).toHaveAttribute('data-narration-ignore', 'true');
     expect(card).toHaveAttribute('data-visual-artifact');
-    const tank = screen.getByRole('img', { name: 'Upright tank' });
-    expect(tank.querySelector('rect')).toHaveAttribute('height', '20');
-    expect(screen.getByRole('img', { name: 'Mountain ridge' }).querySelector('path')).toHaveAttribute('d', 'M5 90 L45 12 L95 90 Z');
-    fireEvent.keyDown(screen.getByRole('tab', { name: 'Winter' }), { key: 'ArrowRight' });
-    expect(screen.getByRole('tab', { name: 'Spring' })).toHaveFocus();
-    expect(screen.getByRole('tabpanel', { name: 'Spring' })).toHaveTextContent('Meltwater reaches the reservoir.');
-    expect(tank.querySelector('rect')).toHaveAttribute('height', '60');
-    expect(tank.querySelector('rect')).toHaveAttribute('y', '30');
-    expect(screen.getByRole('list', { name: 'Connections' })).toHaveTextContent('Runoff');
-    expect(card.querySelectorAll('path[marker-end]')).toHaveLength(1);
-    fireEvent.keyDown(screen.getByRole('tab', { name: 'Spring' }), { key: 'Home' });
+    const winterTab = screen.getByRole('tab', { name: 'Winter' });
+    const springTab = screen.getByRole('tab', { name: 'Spring' });
+    const winter = screen.getByRole('tabpanel', { name: 'Winter' });
+    expect(winterTab).toHaveAttribute('aria-selected', 'true');
+    expect(winterTab).toHaveAttribute('aria-controls', winter.id);
+    expect(within(winter).getByRole('img', { name: 'Mountain ridge' }).querySelector('path'))
+      .toHaveAttribute('d', 'M5 90 L45 12 L95 90 Z');
+    expect(within(winter).getByRole('img', { name: 'Upright tank' }).querySelector('rect'))
+      .toHaveAttribute('height', '20');
+
+    fireEvent.keyDown(winterTab, { key: 'ArrowRight' });
+    const spring = screen.getByRole('tabpanel', { name: 'Spring' });
+    expect(springTab).toHaveFocus();
+    expect(springTab).toHaveAttribute('aria-selected', 'true');
+    expect(winterTab).toHaveAttribute('aria-selected', 'false');
+    expect(spring).toHaveTextContent('Meltwater reaches the reservoir.');
+    const springTank = within(spring).getByRole('img', { name: 'Upright tank' });
+    expect(springTank.querySelector('rect')).toHaveAttribute('height', '60');
+    expect(springTank.querySelector('rect')).toHaveAttribute('y', '30');
+    expect(spring.querySelectorAll('path[marker-end]')).toHaveLength(1);
+    expect(within(spring).getByRole('list', { name: 'Connections' })).toHaveTextContent('Runoff');
+
+    fireEvent.keyDown(springTab, { key: 'Home' });
+    expect(winterTab).toHaveFocus();
     expect(screen.queryByRole('list', { name: 'Connections' })).toBeNull();
   });
 
-  it('routes a direct flow around an intervening subject while keeping adjacent connections straight', () => {
-    const subjects = ['Panels', 'Storage', 'Home'];
-    const { container } = render(<VisualArtifactView artifact={artifact('explainer', {
+  it('focuses the drawings on the current flow and keeps other reported values in the stage', () => {
+    const names = ['Panels', 'Storage', 'Home', 'Grid'];
+    render(<VisualArtifactView artifact={artifact('explainer', {
       kind: 'scene',
-      nodes: subjects.map((name, i) => ({ label: name, alt: name, x: i * 40 + 10, y: 50,
-        shapes: [{ kind: 'rect', x: 0, y: 0, width: 100, height: 100, stroke: 'ink', fill: 'surface' }] })),
-      frames: [{ label: 'Day', caption: 'Two direct connections.', values: ['', '', ''], levels: [null, null, null],
-        flows: [{ from: 0, to: 2, label: '6 kW' }, { from: 0, to: 1, label: '2 kW' }] }],
+      nodes: names.map((label, index) => ({ label, alt: label + ' drawing', x: index * 20, y: 50,
+        shapes: [{ kind: 'rect', x: 4, y: 4, width: 92, height: 92, stroke: 'ink', fill: 'surface' }] })),
+      frames: [
+        { label: 'Day', caption: 'Solar supplies the home and charges storage.', values: ['8 kW', 'Charging', '6 kW', ''],
+          levels: [null, null, null, null], flows: [{ from: 0, to: 2, label: '6 kW' }, { from: 0, to: 1, label: '2 kW' }] },
+        { label: 'Night', caption: 'Storage supplies the home.', values: ['Idle', 'Discharging', '2 kW', ''],
+          levels: [null, null, null, null], flows: [{ from: 1, to: 2, label: '2 kW' }] },
+      ],
     })} />);
-    const [bypass, adjacent] = Array.from(container.querySelectorAll('path[marker-end]'), path =>
-      Array.from(path.getAttribute('d')!.matchAll(/([ML]) ([\d.]+) ([\d.]+)/g),
-        match => ({ x: Number(match[2]), y: Number(match[3]) })));
-    expect(adjacent).toHaveLength(2);
-    const row = adjacent[0].y;
-    expect(adjacent[1].y).toBe(row);
-    // Halfway across this row is the centre of Storage. Interpolate the
-    // bypass there: its line must clear the full 78-unit symbol.
-    const segment = bypass.findIndex((point, i) => i > 0 && point.x >= 320 && bypass[i - 1].x <= 320);
-    expect(segment).toBeGreaterThan(0);
-    const a = bypass[segment - 1], b = bypass[segment];
-    const yAtStorage = a.y + (320 - a.x) * (b.y - a.y) / (b.x - a.x);
-    expect(Math.abs(yAtStorage - row)).toBeGreaterThan(39);
+    const day = screen.getByRole('tabpanel', { name: 'Day' });
+    for (const name of ['Panels', 'Storage', 'Home']) expect(within(day).getByRole('img', { name: name + ' drawing' })).toBeInTheDocument();
+    expect(within(day).queryByRole('img', { name: 'Grid drawing' })).toBeNull();
+    const flows = within(within(day).getByRole('list', { name: 'Connections' })).getAllByRole('listitem');
+    expect(flows).toHaveLength(2);
+    expect(flows[0]).toHaveTextContent(/Panels.*Home/);
+    expect(flows[0]).toHaveTextContent('6 kW');
+    expect(flows[1]).toHaveTextContent(/Panels.*Storage/);
+    expect(flows[1]).toHaveTextContent('2 kW');
+    const diagram = day.querySelector<SVGSVGElement>('svg.visual-artifact__connections')!;
+    const tip = diagram.querySelector('marker')!;
+    const arrows = diagram.querySelectorAll('path[marker-end]');
+    expect(arrows).toHaveLength(2);
+    for (const arrow of arrows) expect(arrow).toHaveAttribute('marker-end', `url(#${tip.id})`);
+    expect(Array.from(diagram.querySelectorAll('text'), label => label.textContent)).toEqual(['6 kW', '2 kW']);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Night' }));
+    const night = screen.getByRole('tabpanel', { name: 'Night' });
+    expect(within(night).queryByRole('img', { name: 'Panels drawing' })).toBeNull();
+    expect(within(night).queryByRole('img', { name: 'Grid drawing' })).toBeNull();
+    for (const name of ['Storage', 'Home']) expect(within(night).getByRole('img', { name: name + ' drawing' })).toBeInTheDocument();
+    const readings = within(night).getByLabelText('Other readings');
+    expect(readings).toHaveTextContent('Panels');
+    expect(readings).toHaveTextContent('Idle');
+    expect(night).toHaveTextContent('Storage supplies the home.');
+    const remaining = within(within(night).getByRole('list', { name: 'Connections' })).getAllByRole('listitem');
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]).toHaveTextContent(/Storage.*Home/);
+  });
+
+  it('preserves every directed relation in a cyclic scene', () => {
+    const nodes = scene.nodes;
+    const flows = [{ from: 0, to: 1, label: 'Runoff' }, { from: 1, to: 0, label: 'Evaporation' }];
+    render(<VisualArtifactView artifact={artifact('explainer', { kind: 'scene', nodes,
+      frames: [{ label: 'Water cycle', caption: 'Water moves between the two reservoirs.', values: ['', ''],
+        levels: [null, null], flows }],
+    })} />);
+    const stage = screen.getByRole('group', { name: 'Water cycle' });
+    const relations = within(within(stage).getByRole('list', { name: 'Connections' })).getAllByRole('listitem');
+    expect(relations).toHaveLength(2);
+    expect(relations[0]).toHaveTextContent(/Snowpack.*Reservoir/);
+    expect(relations[0]).toHaveTextContent('Runoff');
+    expect(relations[1]).toHaveTextContent(/Reservoir.*Snowpack/);
+    expect(relations[1]).toHaveTextContent('Evaporation');
+    expect(stage.querySelector('path[marker-end]')).toBeNull();
   });
 
   it('shows chronological labels together and discloses the selected explanation', () => {
