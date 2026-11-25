@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { VoiceConversation, VoiceDeliveryQueue, type VoiceDelivery, type VoiceTurn } from "./voiceConversation";
 
 describe("voice conversation assembly", () => {
+  it("keeps the ticket from the first fragment when the user opens another card mid-sentence", () => {
+    const history = new VoiceConversation();
+    history.receive(speech("Move this ticket", 0, 100), undefined, undefined, undefined, false, "first");
+    history.receive(speech(" to done", 150, 280), undefined, undefined, undefined, false, "second");
+    expect(history.takeTurns()).toMatchObject([{ prompt: "Move this ticket to done", focusedTicketId: "first" }]);
+  });
   const speech = (delta: string, start_ms: number, end_ms: number, role = "input") => ({ type: "session." + role + "_transcript.delta", delta, start_ms, end_ms });
   it("claims an opening only once per fresh conversation, including an empty reconnect", () => {
     const history = new VoiceConversation();

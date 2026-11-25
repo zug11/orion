@@ -1,6 +1,8 @@
 import type { Editor } from "@tiptap/core";
 import { Fragment, Node } from "@tiptap/pm/model";
 import { closeHistory } from "@tiptap/pm/history";
+import type { WritingOrigin } from "../../types";
+import { recordWritingOrigin } from "./writingOriginHistory";
 
 /** Apply through the live document, keeping native rich content and one Undo. */
 export interface PreparedChatChange { original: Node; replacement: Node }
@@ -30,7 +32,7 @@ export function prepareChatEditorChange(editor: Editor, base: string, next: stri
   return { original, replacement };
 }
 
-export function applyPreparedChatChange(editor: Editor, { original, replacement }: PreparedChatChange): void {
+export function applyPreparedChatChange(editor: Editor, { original, replacement }: PreparedChatChange, origin?: WritingOrigin): void {
   if (editor.isDestroyed || !editor.state.doc.eq(original)) throw new Error("The note changed while reviewing. Regenerate the edits.");
   const start = original.content.findDiffStart(replacement.content);
   if (start === null) throw new Error("The proposed edit does not change the visible note.");
@@ -41,7 +43,7 @@ export function applyPreparedChatChange(editor: Editor, { original, replacement 
   const transaction = closeHistory(editor.state.tr).replace(start, oldEnd, replacement.slice(start, newEnd));
   transaction.doc.check();
   if (!transaction.doc.eq(replacement)) throw new Error("This change could not preserve the note's formatting.");
-  editor.view.dispatch(transaction);
+  editor.view.dispatch(recordWritingOrigin(transaction, origin));
   editor.view.dispatch(closeHistory(editor.state.tr));
 }
 

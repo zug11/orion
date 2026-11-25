@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { paintNativeMenu, paintNativeToolbar, type ToolbarPaint } from "./nativeToolbarPaint";
+import { useDictationNavigation } from "../DictationNavigation";
 
 type Side = "left" | "right" | null;
 type Color = [number, number, number, number];
@@ -167,13 +168,14 @@ function measure(track: HTMLDivElement, options: NativeRulerOptions, opaque: boo
 
 /** Native draws only; the DOM sliders retain pointer, keyboard and AX ownership. */
 export function useNativeRulerGlass(trackRef: RefObject<HTMLDivElement | null>, options?: NativeRulerOptions): boolean {
+  const { background } = useDictationNavigation();
   const optionsRef = useRef(options);
   optionsRef.current = options;
   const scheduleRef = useRef<() => void>(() => undefined);
   const [active, setActive] = useState(false);
 
   useLayoutEffect(() => {
-    if (!isTauri() || !/Macintosh|Mac OS X/.test(navigator.userAgent)) return;
+    if (background || !isTauri() || !/Macintosh|Mac OS X/.test(navigator.userAgent)) return;
     let mounted = true;
     let frame = 0;
     let paintPending = false;
@@ -325,7 +327,7 @@ export function useNativeRulerGlass(trackRef: RefObject<HTMLDivElement | null>, 
       systemTheme?.removeEventListener("change", schedule);
       if (owner === identity) enqueue({ owner: identity, request: { visible: false }, complete: () => undefined });
     };
-  }, [trackRef]);
+  }, [trackRef, background]);
   useLayoutEffect(() => { scheduleRef.current(); }, [options?.enabled, options?.left, options?.right, options?.leftPosition, options?.rightPosition, options?.activeSide, options?.focusedSide, options?.disabled]);
-  return (options?.enabled ?? true) && active;
+  return !background && (options?.enabled ?? true) && active;
 }

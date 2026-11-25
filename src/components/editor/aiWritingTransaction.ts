@@ -10,7 +10,8 @@ import { Transform } from "@tiptap/pm/transform";
 import type { AIWritingLength } from "../../lib/aiWriting";
 import type { EditorAIWorkingContext } from "../../lib/editorAIWorkingContext";
 import type { AIImageProposal } from "../../lib/aiImages";
-import type { NoteImageAttachment } from "../../types";
+import type { NoteImageAttachment, WritingOrigin } from "../../types";
+import { recordWritingOrigin } from "./writingOriginHistory";
 import {
   aiWritingPreviewPluginKey,
   type AIWritingPreviewState,
@@ -367,6 +368,7 @@ export function acceptAIWritingPreview(
   editor: Editor,
   capture: AIWritingCapture,
   proposal: AIWritingParsedProposal,
+  origin?: WritingOrigin,
 ): { from: number; to: number } | null {
   if (!isAIWritingCaptureCurrent(editor, capture)) return null;
 
@@ -406,7 +408,7 @@ export function acceptAIWritingPreview(
     .setMeta("orionAIWritingAccept", true)
     .setSelection(selectionNear(transaction.doc, to))
     .scrollIntoView();
-  editor.view.dispatch(transaction);
+  editor.view.dispatch(recordWritingOrigin(transaction, origin));
   editor.view.dispatch(closeHistory(editor.state.tr));
   return { from, to };
 }

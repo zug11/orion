@@ -9,6 +9,7 @@ import {
 import { markdownToPlainText } from "../lib/wiki";
 import type { AppSnapshot, Note, Relationship } from "../types";
 import { displayNoteTitle, editableNoteSubtitle } from "../lib/noteMetadata";
+import { writingCredit } from "../lib/writingOrigins";
 import { useEffect, useRef } from "react";
 
 interface ContextPanelProps {
@@ -97,6 +98,7 @@ export function ContextPanel({
   const concepts = snapshot.concepts.filter((concept) =>
     note.conceptIds.includes(concept.id),
   );
+  const credit = writingCredit(note);
   const terms = [note.title, ...note.aliases, ...concepts.flatMap((item) => [item.label, ...item.aliases])].filter((term) => term.trim());
   const argumentConnections = new Map<string, Set<string>>();
   for (const relationship of snapshot.relationships) {
@@ -158,6 +160,10 @@ export function ContextPanel({
         </button>
       </header>
 
+      {credit && <section className="context-section" aria-label="Writing contributions">
+        <h3><FileText size={14}/>Writing contributions</h3>
+        <p>{credit}</p>
+      </section>}
       <section className="context-section">
         <h3>
           <Link2 size={14} />

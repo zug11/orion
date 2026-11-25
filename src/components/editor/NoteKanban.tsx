@@ -132,47 +132,54 @@ export function patchEditorTicket(editor: Editor, ticket: Ticket, patch: TicketP
   editor.view.dispatch(closeHistory(editor.state.tr));return true;
 }
 
-/** A detail operation replaces only this exact, unchanged task node, in one Undo. */
-function patchEditorTicketDetails(editor: Editor, ticket: Ticket, change: NonNullable<TicketPatch['detail']>): boolean {
-  if (editor.isDestroyed || !editor.isEditable || !editor.markdown || !ticket.rawBlock || !ticket.durable) return false;
-  const replacement = changeTicketBlock(ticket, change);
-  if (replacement === null) return false;
-  const normalize = (value: string) => {
-    const indent = value.match(/^[ \t]*/)?.[0] ?? '';
-    return value.split(/\r?\n/).map(line => line.startsWith(indent) ? line.slice(indent.length) : line).join('\n');
-  };
+function parseEditorTicket(editor: Editor, ticketId: string, markdown: string) {
+  const indent = markdown.match(/^[ \t]*/)?.[0] ?? '';
+  const block = markdown.split(/\r?\n/).map(line => line.startsWith(indent) ? line.slice(indent.length) : line).join('\n');
+  const doc = ProseMirrorNode.fromJSON(editor.schema, editor.markdown!.parse(block));
+  const nodes: ProseMirrorNode[] = [];
+  doc.descendants(node => { if (node.type.name === 'taskItem' && node.attrs.ticketId === ticketId) nodes.push(node); });
+  return nodes.length === 1 ? nodes[0] : undefined;
+}
+
+// Markdown trims whitespace immediately before the ticket marker. Ignore only
+// that serialization difference when comparing the complete captured task.
+function savedTitleForm(node: ProseMirrorNode) {
+  const title = node.firstChild;
+  if (!title || title.type.name !== 'paragraph') return node;
+  const last = title.lastChild;
+  if (!last?.isText || !last.text) return node;
+  const trailing = last.text.length - last.text.trimEnd().length;
+  if (!trailing) return node;
+  const normalized = title.copy(title.content.cut(0, title.content.size - trailing));
+  return node.copy(node.content.replaceChild(0, normalized));
+}
+
+export function matchEditorTicket(editor: Editor, ticket: Ticket) {
+  if (editor.isDestroyed || !editor.isEditable || !editor.markdown || !ticket.rawBlock || !ticket.durable) return;
   try {
-    const read = (markdown: string) => {
-      const doc = ProseMirrorNode.fromJSON(editor.schema, editor.markdown!.parse(normalize(markdown)));
-      const nodes: ProseMirrorNode[] = [];
-      doc.descendants(node => { if (node.type.name === 'taskItem' && node.attrs.ticketId === ticket.id) nodes.push(node); });
-      return nodes.length === 1 ? nodes[0] : undefined;
-    };
-    const before = read(ticket.rawBlock), after = read(replacement);
-    if (!before || !after) return false;
+    const before = parseEditorTicket(editor, ticket.id, ticket.rawBlock);
+    if (!before) return;
     const positions: number[] = [];
     editor.state.doc.descendants((node, pos) => {
       if (node.type.name === 'taskItem' && node.attrs.ticketId === ticket.id) positions.push(pos);
       if (Array.isArray(node.attrs.ticketUnresolvedMarkers)) for (const marker of node.attrs.ticketUnresolvedMarkers) if (parseTicketMarker(marker)?.id === ticket.id) positions.push(pos);
     });
-    if (positions.length !== 1) return false;
+    if (positions.length !== 1) return;
     const pos = positions[0], current = editor.state.doc.nodeAt(pos);
-    if (!current) return false;
-    // The ticket serializer trims whitespace before its metadata marker. A title
-    // typed in the live editor can therefore differ from its saved form without
-    // any competing edit. Normalize only that known boundary, not other content
-    // or attributes: genuinely stale descriptions/checklists still fail closed.
-    const savedTitleForm = (node: ProseMirrorNode) => {
-      const title = node.firstChild;
-      if (!title || title.type.name !== 'paragraph') return node;
-      const last = title.lastChild;
-      if (!last?.isText || !last.text) return node;
-      const trailing = last.text.length - last.text.trimEnd().length;
-      if (!trailing) return node;
-      const normalized = title.copy(title.content.cut(0, title.content.size - trailing));
-      return node.copy(node.content.replaceChild(0, normalized));
-    };
-    if (!savedTitleForm(current).eq(savedTitleForm(before))) return false;
+    if (current && savedTitleForm(current).eq(savedTitleForm(before))) return { pos, current };
+  } catch { return; }
+}
+
+/** A detail operation replaces only this exact, unchanged task node, in one Undo. */
+function patchEditorTicketDetails(editor: Editor, ticket: Ticket, change: NonNullable<TicketPatch['detail']>): boolean {
+  const match = matchEditorTicket(editor, ticket);
+  if (!match) return false;
+  const replacement = changeTicketBlock(ticket, change);
+  if (replacement === null) return false;
+  try {
+    const { pos, current } = match;
+    const after = parseEditorTicket(editor, ticket.id, replacement);
+    if (!after) return false;
     // Preserve the actual authored title (including its marks and whitespace)
     // when the user is changing a different field.
     const updated = change.kind === 'title' ? after

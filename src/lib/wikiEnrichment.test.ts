@@ -108,6 +108,8 @@ describe("automatic wiki enrichment", () => {
       (note) => note.id === positivism.id,
     );
     expect(updated?.body.startsWith(positivism.body)).toBe(false);
+    expect(updated?.writingOrigins).toEqual(["orion-ai"]);
+    expect(applied.snapshot.notes.find(note => note.id === origin.id)?.writingOrigins).toBeUndefined();
     expect(updated?.body).not.toContain("Context from");
     expect(updated?.body).toContain(
       "The lecture presents positivism as an approach to society.",
@@ -122,6 +124,7 @@ describe("automatic wiki enrichment", () => {
     );
     expect(created).toMatchObject({
       kind: "wiki",
+      writingOrigins: ["orion-ai"],
       sourceIds: ["source-week-four"],
     });
     expect(created?.body).toContain("## In this Space");

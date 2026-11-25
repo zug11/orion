@@ -10,6 +10,7 @@ mod editor;
 mod editor_citations;
 mod editor_inline;
 mod editor_layout;
+pub(crate) use editor_layout::image_caption;
 mod editor_table;
 mod read;
 #[cfg(test)]
@@ -388,7 +389,7 @@ pub(super) fn source_version(source: &Source) -> String {
 }
 fn citation(space: &Space, note: &Note) -> Value {
     let title = truncate_chars(&note.title, 300).0;
-    json!({"id":note.id,"title":title,"version":note_version(note),"orionUrl":orion_note_url(&space.workspace.id,&note.id),"citation":citation_markdown(&title,&space.workspace.id,&note.id)})
+    note.with_writing_origins(json!({"id":note.id,"title":title,"version":note_version(note),"orionUrl":orion_note_url(&space.workspace.id,&note.id),"citation":citation_markdown(&title,&space.workspace.id,&note.id)}))
 }
 fn source_ref(source: &Source) -> Value {
     json!({"id":source.id,"title":truncate_chars(&source.title,300).0,"kind":source.kind,"version":source_version(source),"importedAt":source.imported_at,"sourceUrl":source.source_url.as_ref().map(|url|truncate_chars(url,4096).0),"textLength":source.text_chars()})

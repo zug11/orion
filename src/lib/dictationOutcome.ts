@@ -1,9 +1,9 @@
 /**
  * A dictation that outlives its note has no button left to report through.
  *
- * Leaving a note while recording used to discard the recording. The session now
- * finishes transcribing in the background and archives the original to Sources
- * without inserting it. The window listens here to tell the user what happened.
+ * Switching Spaces or closing the editor stops capture, finishes transcription
+ * and archives the original to Sources without insertion. Same-Space navigation
+ * retains the editor and its floating control instead.
  */
 export interface DetachedDictationOutcome {
   /** True when the original transcript was archived to Sources. */

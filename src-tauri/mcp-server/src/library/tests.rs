@@ -51,6 +51,114 @@ fn version(server: &Server, id: &str) -> String {
         .into()
 }
 
+#[test]
+fn external_writing_origins_follow_saved_prose_and_survive_other_edits() {
+    let mut vault = fixture();
+    vault["spaces"][0]["notes"][0]["body"] = json!("Compare both drafts.\n\n- [ ] Read the letter");
+    vault["spaces"][0]["notes"][0]["writingOrigins"] = json!(["orion-ai"]);
+    let (_dir, server) = server(&vault);
+    let note = || {
+        run(
+            &server,
+            "orion_get_note",
+            json!({"space_id":"a","note_id":"n1"}),
+        )["note"]
+            .clone()
+    };
+
+    run(
+        &server,
+        "orion_batch_update_metadata",
+        json!({"space_id":"a","tags":["fresh"],"notes":[{"note_id":"n1","expected_version":version(&server,"n1")}]}),
+    );
+    run(
+        &server,
+        "orion_apply_note_command",
+        editor_command(
+            &server,
+            json!({"command":"inline_format","anchor":"both drafts.","mark":"bold","enabled":true}),
+        ),
+    );
+    run(
+        &server,
+        "orion_set_task_completion",
+        json!({"space_id":"a","note_id":"n1","expected_version":version(&server,"n1"),"line_index":2,"expected_text":"Read the letter","completed":true}),
+    );
+    assert_eq!(note()["writingOrigins"], json!(["orion-ai"]));
+
+    let stale = json!({"space_id":"a","note_id":"n1","expected_version":"outdated","text":"This should never save."});
+    assert!(server
+        .call_tool("orion_append_to_note", stale.as_object().unwrap())
+        .is_err());
+    assert_eq!(note()["writingOrigins"], json!(["orion-ai"]));
+
+    run(
+        &server,
+        "orion_append_to_note",
+        json!({"space_id":"a","note_id":"n1","expected_version":version(&server,"n1"),"text":"\n\nThe external comparison."}),
+    );
+    run(
+        &server,
+        "orion_edit_note_text",
+        json!({"space_id":"a","note_id":"n1","expected_version":version(&server,"n1"),"old_text":"external comparison","new_text":"revised comparison"}),
+    );
+    assert_eq!(note()["writingOrigins"], json!(["orion-ai", "mcp"]));
+    run(
+        &server,
+        "orion_update_note",
+        json!({"space_id":"a","note_id":"n1","pinned":true}),
+    );
+    assert_eq!(
+        run(
+            &server,
+            "orion_get_notes",
+            json!({"space_id":"a","note_ids":["n1"]})
+        )["notes"][0]["writingOrigins"],
+        json!(["orion-ai", "mcp"])
+    );
+}
+
+#[test]
+fn mcp_creation_and_updates_distinguish_authored_text_from_formatting_and_deletions() {
+    let mut vault = fixture();
+    vault["spaces"][0]["notes"][0]["body"] = json!("Compare both original drafts.");
+    let (_dir, server) = server(&vault);
+    let create = run(
+        &server,
+        "orion_create_note",
+        json!({"space_id":"a","title":"New document","body":"External author."}),
+    );
+    assert_eq!(create["note"]["writingOrigins"], json!(["mcp"]));
+    for body in [
+        "Compare **both** original drafts.",
+        "Compare **both** drafts.",
+        "Compare **both** rafts.",
+    ] {
+        let update = run(
+            &server,
+            "orion_update_note",
+            json!({"space_id":"a","note_id":"n1","body":body}),
+        );
+        assert!(update["note"].get("writingOrigins").is_none());
+    }
+    let stale =
+        json!({"space_id":"a","note_id":"n1","expected_version":"outdated","summary":"Unsaved"});
+    assert!(server
+        .call_tool("orion_update_note", stale.as_object().unwrap())
+        .is_err());
+    let change = run(
+        &server,
+        "orion_update_note",
+        json!({"space_id":"a","note_id":"n1","summary":"A new finding."}),
+    );
+    assert_eq!(change["note"]["writingOrigins"], json!(["mcp"]));
+    let args = json!({"space_id":"a","note_id":"n3","expected_version":version(&server,"n3"),"command":"todo","items":[{"text":"Inspect the awning"}]});
+    assert_eq!(
+        run(&server, "orion_apply_note_command", args)["notes"][0]["writingOrigins"],
+        json!(["mcp"])
+    );
+}
+
 fn editor_command(server: &Server, fields: Value) -> Value {
     let mut args = json!({"space_id":"a","note_id":"n1","expected_version":version(server,"n1")});
     args.as_object_mut()
@@ -1282,6 +1390,10 @@ fn image_layout_preserves_asset_alt_title_unknown_metadata_and_explicit_resets()
     );
     let result = saved_body(&server);
     let parsed = image_metadata(&result);
+    assert_eq!(
+        run(&server, "orion_get_note", json!({"note_id":"n1"}))["note"]["writingOrigins"],
+        json!(["mcp"])
+    );
     assert_eq!(parsed["futureOptics"], metadata["futureOptics"]);
     assert_eq!(parsed["title"], metadata["title"]);
     assert_eq!(parsed["widthPercent"], 37);
@@ -2764,6 +2876,7 @@ fn board_tools_round_trip_portable_work_with_versions_and_space_isolation() {
     assert_eq!(listed["boards"][0]["id"], board);
     let read = run(&server, "orion_get_board", json!({"board_id":board}));
     assert_eq!(read["sourceNote"]["version"], version(&server, "n1"));
+    assert!(read["sourceNote"].get("writingOrigins").is_none());
     assert!(read["sourceNote"]["body"]
         .as_str()
         .unwrap()
@@ -2779,6 +2892,7 @@ fn board_tools_round_trip_portable_work_with_versions_and_space_isolation() {
         ),
     );
     assert_eq!(tickets["work"]["tickets"].as_array().unwrap().len(), 1);
+    assert_eq!(tickets["notes"][0]["writingOrigins"], json!(["mcp"]));
     let ticket = tickets["work"]["tickets"][0]["id"].as_str().unwrap();
     assert_eq!(
         tickets["work"]["tickets"][0]["title"],

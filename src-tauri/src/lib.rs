@@ -36,6 +36,8 @@ mod assistant_review;
 mod assistant_review_protocol;
 mod assistant_voice_work_orders;
 mod connector_installation;
+#[path = "../shared/contact.rs"]
+mod contact;
 mod desktop_windows;
 mod dictation_cleanup;
 #[path = "../shared/editor_actions_protocol.rs"]
@@ -61,6 +63,9 @@ mod ticket_codes;
 mod vault_backups;
 #[path = "../shared/voice_work_orders_protocol.rs"]
 mod voice_work_orders_protocol;
+#[path = "../shared/writing_origins.rs"]
+#[allow(dead_code)]
+mod writing_origins;
 use knowledge_schemas::{
     anthropic_knowledge_response_schema, anthropic_organizer_schema, knowledge_response_schema,
     organizer_schema, strip_anthropic_unsupported_schema_keywords,
@@ -1436,6 +1441,8 @@ fn read_vault_file(path: &Path) -> Result<Option<Value>, String> {
 }
 
 fn write_vault_file(path: &Path, vault: &Value) -> Result<(), String> {
+    contact::validate_vault(vault)?;
+    writing_origins::validate_vault(vault)?;
     let directory = path
         .parent()
         .ok_or_else(|| "Orion could not resolve the vault folder.".to_string())?;
@@ -1531,6 +1538,33 @@ async fn load_vault(app: AppHandle) -> Result<Option<Value>, String> {
     })
     .await
     .map_err(|error| format!("The vault read task could not finish: {error}"))?
+}
+
+#[tauri::command]
+async fn load_vault_revision(app: AppHandle) -> Result<Option<String>, String> {
+    let path = vault_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || read_vault_revision(&path))
+        .await
+        .map_err(|error| format!("The vault revision check could not finish: {error}"))?
+}
+
+fn read_vault_revision(path: &Path) -> Result<Option<String>, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Revision {
+        updated_at: String,
+    }
+
+    // Writers replace this path atomically. A reader sees one complete revision
+    // without waiting for the writer to finish syncing or pruning older sources.
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("Orion could not read the vault revision: {error}")),
+    };
+    serde_json::from_slice::<Revision>(&bytes)
+        .map(|revision| Some(revision.updated_at))
+        .map_err(|error| format!("The local vault has an invalid revision: {error}"))
 }
 
 #[tauri::command]
@@ -5055,6 +5089,7 @@ pub fn run() {
             live_voice::create_live_voice_session,
             elevenlabs_live::create_elevenlabs_live_session,
             load_vault,
+            load_vault_revision,
             window_glass::set_window_glass,
             ruler_glass::set_ruler_glass,
             ruler_glass::move_ruler_glass,
@@ -5158,6 +5193,7 @@ pub fn run() {
             export_web_page,
             portable_orion::export_orion_files,
             portable_orion::open_orion_file,
+            portable_orion::pick_orion_file_for_library,
             portable_orion::pending_orion_files,
             word_export::export_word_document,
             word_export::read_word_export_image,
@@ -6495,6 +6531,23 @@ mod tests {
 
         write_vault_file(&path, &vault).unwrap();
         assert_eq!(read_vault_file(&path).unwrap(), Some(vault));
+    }
+
+    #[test]
+    fn reads_the_current_atomic_vault_revision() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(VAULT_FILENAME);
+        assert_eq!(read_vault_revision(&path).unwrap(), None);
+        for revision in ["revision-one", "revision-two"] {
+            let vault = json!({"spaces": [{"updatedAt": "nested"}], "updatedAt": revision});
+            write_vault_file(&path, &vault).unwrap();
+            assert_eq!(
+                read_vault_revision(&path).unwrap().as_deref(),
+                Some(revision)
+            );
+        }
+        fs::write(&path, br#"{"updatedAt":4}"#).unwrap();
+        assert!(read_vault_revision(&path).is_err());
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import { isCalendarDismissalList } from "./calendarDismissal";
+import { writingOrigins } from "./writingOrigins";
 import { allocateTicketCodes } from './ticketCodes';
 import type { ConceptStudioState, ChatThread, StudioMessage, OrionVault } from "../types";
 import { messageChatThreadId } from "./chatThreads";
@@ -43,6 +44,14 @@ export function mergeWindowVault(
     // Optional metadata did not exist in older vaults. Two windows may each
     // create their first independent chat without conflicting on the array.
     if (before === undefined && (path.endsWith(".studio.threads") || path.endsWith(".dismissedCalendarMentions")) && Array.isArray(ours) && Array.isArray(theirs)) before = [];
+    if (path.endsWith(".writingOrigins")) {
+      // Each window can add an origin independently. Undo removes only an
+      // origin that was present in the shared base; new additions survive.
+      const original = writingOrigins(before), left = writingOrigins(ours), right = writingOrigins(theirs);
+      const merged = writingOrigins([...left, ...right]).filter(origin =>
+        !original.includes(origin) || left.includes(origin) && right.includes(origin));
+      return merged.length ? merged : undefined;
+    }
     if (same(ours, before)) return theirs;
     if (same(theirs, before) || same(ours, theirs)) return ours;
     const parts = path.split(".");

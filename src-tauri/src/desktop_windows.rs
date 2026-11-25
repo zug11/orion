@@ -387,7 +387,7 @@ fn window_url(space_id: &str, note_id: Option<&str>, writing: bool) -> tauri::We
 fn create_window(
     app: &AppHandle,
     origin: Option<&WebviewWindow>,
-    space_id: &str,
+    space_id: Option<&str>,
     note_id: Option<&str>,
     writing: bool,
     pending_navigation: Option<NoteNavigation>,
@@ -403,7 +403,10 @@ fn create_window(
     let state = app.state::<DesktopWindows>();
     let sequence = state.next_id.fetch_add(1, Ordering::SeqCst) + 1;
     config.label = format!("orion-window-{sequence}");
-    config.url = window_url(space_id, note_id, writing);
+    config.url = match space_id {
+        Some(space) => window_url(space, note_id, writing),
+        None => tauri::WebviewUrl::App("index.html".into()),
+    };
     if writing {
         config.width = 900.0;
         config.height = 820.0;
@@ -418,7 +421,7 @@ fn create_window(
             .insert(
                 config.label.clone(),
                 NoteTarget {
-                    space_id: space_id.into(),
+                    space_id: space_id.ok_or("A writing window needs a Space.")?.into(),
                     note_id: note_id.ok_or("A writing window needs a note.")?.into(),
                 },
             );
@@ -472,7 +475,7 @@ pub async fn new_orion_window(
     validate_id(&space_id)?;
     let state = app.state::<DesktopWindows>();
     let _creation = state.creation.lock().await;
-    create_window(&app, Some(&window), &space_id, None, false, None).map(|_| ())
+    create_window(&app, Some(&window), Some(&space_id), None, false, None).map(|_| ())
 }
 
 pub(crate) async fn ensure_library_window(app: AppHandle) -> Result<(), String> {
@@ -481,13 +484,9 @@ pub(crate) async fn ensure_library_window(app: AppHandle) -> Result<(), String> 
     if let Some(window) = preferred_library_window(&app) {
         return reveal_window(&window);
     }
-    let vault = crate::load_vault(app.clone())
-        .await?
-        .ok_or("Open Orion before opening a collection.")?;
-    let space_id = vault["activeSpaceId"]
-        .as_str()
-        .ok_or("The active Space is unavailable.")?;
-    create_window(&app, None, space_id, None, false, None).map(|_| ())
+    // The new library window reads its vault and queued Finder destination at
+    // startup. Loading the entire vault here would make the same read twice.
+    create_window(&app, None, None, None, false, None).map(|_| ())
 }
 
 #[tauri::command]
@@ -516,7 +515,7 @@ pub async fn open_writing_window(
     create_window(
         &app,
         Some(&window),
-        &target.space_id,
+        Some(&target.space_id),
         Some(&target.note_id),
         true,
         None,
@@ -565,7 +564,7 @@ async fn show_target_in_library(app: AppHandle, navigation: NoteNavigation) -> R
         create_window(
             &app,
             None,
-            &navigation.target.space_id,
+            Some(&navigation.target.space_id),
             Some(&navigation.target.note_id),
             false,
             pending,

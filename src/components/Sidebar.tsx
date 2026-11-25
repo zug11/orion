@@ -1,6 +1,7 @@
 import {
   BookOpen,
   ChevronDown,
+  Contact,
   GalleryVerticalEnd,
   Home,
   PanelLeft,
@@ -34,12 +35,14 @@ import type { IconPalette } from "../lib/themeIcon";
 export type WorkspaceView =
   | "home"
   | "notes"
+  | "contacts"
   | "sources"
   | "chat"
   | "settings";
 
 interface SidebarProps {
   brandMarkSrc?: string;
+  showContacts?: boolean;
   view: WorkspaceView;
   notes: Note[];
   spaces: readonly AppSnapshot[];
@@ -70,6 +73,7 @@ interface SidebarProps {
 const navigation = [
   { id: "home", label: "Home", icon: Home },
   { id: "notes", label: "Notes", icon: BookOpen },
+  { id: "contacts", label: "Contacts", icon: Contact },
   { id: "sources", label: "Sources", icon: GalleryVerticalEnd },
   { id: "chat", label: "Chat", icon: ChatVoiceMark },
 ] satisfies Array<{
@@ -120,6 +124,7 @@ function SidebarNoteRow({
 
 export function Sidebar({
   brandMarkSrc,
+  showContacts = false,
   view,
   notes,
   spaces,
@@ -294,7 +299,7 @@ export function Sidebar({
       </div>
 
       <nav className="primary-nav" aria-label="Workspace">
-        {navigation.map(({ id, label, icon: Icon }) => (
+        {navigation.filter(item => item.id !== "contacts" || showContacts).map(({ id, label, icon: Icon }) => (
           <div key={id} className="sidebar-nav-row">
           <button
             className={view === id ? "nav-item active" : "nav-item"}

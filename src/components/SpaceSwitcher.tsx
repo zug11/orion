@@ -2,6 +2,7 @@ import {
   Check,
   ChevronDown,
   Edit3,
+  FileText,
   Layers3,
   Plus,
   Search,
@@ -9,8 +10,10 @@ import {
   X,
 } from "../lib/icons";
 import {
+  useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -19,6 +22,7 @@ import {
 } from "react";
 import type { AppSnapshot } from "../types";
 import { MAX_SPACE_NAME_LENGTH, normalizeSpaceName, spaceNameError } from "../lib/spaceNames";
+import { useSpacePickerSearch } from "./useSpacePickerSearch";
 import "./SpaceSwitcher.css";
 
 interface SpaceSwitcherProps {
@@ -65,8 +69,23 @@ export function SpaceSwitcher({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
-  const visibleSpaces = spaces.filter(space => space.workspace.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
-  useEffect(() => { if (open) searchRef.current?.focus(); else setQuery(""); }, [open]);
+  const listRef = useRef<HTMLDivElement>(null);
+  const unfilteredScrollTop = useRef<number | null>(null);
+  const filtered = Boolean(query.trim());
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!open || !list) return;
+    const previous = filtered ? 0 : unfilteredScrollTop.current;
+    if (previous !== null) {
+      list.scrollTop = previous;
+      return;
+    }
+    const active = list.querySelector<HTMLButtonElement>('.space-option[aria-current="true"]');
+    if (active && active.getBoundingClientRect().bottom > list.getBoundingClientRect().bottom) {
+      list.scrollTop = active.getBoundingClientRect().top - list.getBoundingClientRect().top - (list.clientHeight - active.offsetHeight) / 2;
+    }
+  }, [open, query, filtered]);
+  useEffect(() => { if (open) searchRef.current?.focus({ preventScroll: true }); }, [open]);
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState<{ id: string; originalName: string } | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -74,6 +93,22 @@ export function SpaceSwitcher({
   const activeSpace =
     spaces.find((space) => space.workspace.id === activeSpaceId) ??
     spaces[0];
+  const discovery = useSpacePickerSearch(open, query, spaces, activeSpace);
+  const needle = query.trim().toLocaleLowerCase();
+  const visibleSpaces = useMemo(() => {
+    const named = spaces.filter(space => space.workspace.name.toLocaleLowerCase().includes(needle));
+    if (needle) named.sort((a, b) => Number(b.workspace.name.toLocaleLowerCase() === needle) - Number(a.workspace.name.toLocaleLowerCase() === needle));
+    if (!discovery.matches.length) return named;
+    const byId = new Map(spaces.map(space => [space.workspace.id, space]));
+    for (const space of named) byId.delete(space.workspace.id);
+    for (const match of discovery.matches) {
+      const space = byId.get(match.spaceId);
+      if (space) { named.push(space); byId.delete(match.spaceId); }
+    }
+    return named;
+  }, [spaces, needle, discovery.matches]);
+  const evidence = useMemo(() => new Map(discovery.matches.map(match => [match.spaceId, match])), [discovery.matches]);
+  const expanding = discovery.meaningState === 'loading';
   const normalizedName = normalizeSpaceName(name);
   const duplicateName = useMemo(
     () =>
@@ -93,19 +128,31 @@ export function SpaceSwitcher({
         : spaceNameError(name, spaces, renaming.id)
     : null;
 
+  const rememberListPosition = useCallback(() => {
+    // A click or keystroke can arrive before the browser dispatches scroll.
+    if (!filtered && listRef.current) unfilteredScrollTop.current = listRef.current.scrollTop;
+  }, [filtered]);
+
+  const closePopover = useCallback((restoreFocus = false) => {
+    rememberListPosition();
+    setOpen(false);
+    setQuery("");
+    closeCreator();
+    if (restoreFocus) triggerRef.current?.focus({ preventScroll: true });
+  }, [rememberListPosition]);
+
   useEffect(() => {
     if (!open) {
       return undefined;
     }
     const closeOutside = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-        closeCreator();
+        closePopover();
       }
     };
     document.addEventListener("pointerdown", closeOutside);
     return () => document.removeEventListener("pointerdown", closeOutside);
-  }, [open]);
+  }, [open, closePopover]);
 
   useEffect(() => {
     if (!creating && !renaming) {
@@ -143,12 +190,18 @@ export function SpaceSwitcher({
     setName("");
   }
 
-  function closePopover(restoreFocus = false) {
-    setOpen(false);
-    closeCreator();
-    if (restoreFocus) {
-      triggerRef.current?.focus();
-    }
+  function selectSpace(spaceId: string) {
+    closePopover(true);
+    if (spaceId !== activeSpaceId) onSwitchSpace(spaceId);
+  }
+
+  function focusVisibleOption() {
+    const list = listRef.current;
+    if (!list) return;
+    const options = Array.from(list.querySelectorAll<HTMLButtonElement>(".space-option"));
+    const top = list.getBoundingClientRect().top;
+    const firstVisible = options.find(option => option.getBoundingClientRect().top >= top);
+    (firstVisible ?? options[0])?.focus();
   }
 
   return (
@@ -178,10 +231,8 @@ export function SpaceSwitcher({
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => {
-          setOpen((value) => !value);
-          if (open) {
-            closeCreator();
-          }
+          if (open) closePopover();
+          else setOpen(true);
         }}
       >
         <span
@@ -206,7 +257,7 @@ export function SpaceSwitcher({
 
       {open && (
         <div
-          className="space-switcher-popover"
+          className={filtered ? "space-switcher-popover searching" : "space-switcher-popover"}
           role="dialog"
           aria-label="Switch space"
         >
@@ -219,15 +270,34 @@ export function SpaceSwitcher({
           </div>
 
           <label className="space-search"><Search size={14} aria-hidden="true"/>
-            <input ref={searchRef} type="search" aria-label="Search spaces" placeholder="Search spaces" value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => {
-              if (event.key === 'ArrowDown') { event.preventDefault(); rootRef.current?.querySelector<HTMLButtonElement>('.space-option')?.focus(); }
-              if (event.key === 'Enter' && visibleSpaces.length === 1) { event.preventDefault(); onSwitchSpace(visibleSpaces[0].workspace.id); closePopover(true); }
+            <input ref={searchRef} type="search" aria-label="Search spaces" placeholder="Search spaces" value={query} maxLength={600} onChange={event => {
+              rememberListPosition();
+              setQuery(event.target.value);
+            }} onKeyDown={event => {
+              if (event.nativeEvent.isComposing) return;
+              if (event.key === 'ArrowDown') { event.preventDefault(); focusVisibleOption(); }
+              if (event.key === 'Enter' && visibleSpaces.length === 1) { event.preventDefault(); selectSpace(visibleSpaces[0].workspace.id); }
             }}/>
           </label>
-          <div className="space-switcher-list">
-            {visibleSpaces.length === 0 && <p className="space-search-empty" role="status">No matching spaces</p>}
-            {visibleSpaces.map((space) => {
+          {filtered && discovery.hasNotes && <div className="space-discovery-action">
+            <button type="button" className="space-search-meaning"
+              disabled={!discovery.configured || expanding || discovery.meaningState === 'ready'}
+              title={discovery.configured ? 'Find related wording with your AI connection. Your notes are searched locally.' : 'Connect AI in Settings to search by meaning.'}
+              onClick={discovery.searchByMeaning}>
+              <Search size={13} aria-hidden="true"/>
+              {expanding ? 'Searching by meaning…' : discovery.meaningState === 'ready' ? 'Searched by meaning' : 'Search by meaning'}
+            </button>
+            {!discovery.configured && <small>Connect AI in Settings</small>}
+          </div>}
+          {discovery.meaningState === 'failed' && <p className="space-discovery-status" role="status">Meaning search couldn’t finish. You can retry or choose a local match.</p>}
+          <div className="space-switcher-list" ref={listRef}>
+            {visibleSpaces.length === 0 && <p className="space-search-empty" role="status">
+              {discovery.localPending ? 'Searching notes…' : expanding ? 'Looking for related wording…' : discovery.localFailed ? 'Couldn’t search the notes.' : 'No matching spaces'}
+            </p>}
+            {visibleSpaces.map((space, index) => {
               const active = space.workspace.id === activeSpaceId;
+              const match = evidence.get(space.workspace.id);
+              const evidenceId = `${helpId}-evidence-${index}`;
               return (
                 <div
                   key={space.workspace.id}
@@ -237,6 +307,7 @@ export function SpaceSwitcher({
                     type="button"
                     className={active ? "space-option active" : "space-option"}
                     aria-current={active ? "true" : undefined}
+                    aria-describedby={match ? evidenceId : undefined}
                     aria-label={
                       space.workspace.name +
                       ", " +
@@ -244,12 +315,7 @@ export function SpaceSwitcher({
                       " " +
                       (space.notes.length === 1 ? "note" : "notes")
                     }
-                    onClick={() => {
-                      if (!active) {
-                        onSwitchSpace(space.workspace.id);
-                      }
-                      closePopover(true);
-                    }}
+                    onClick={() => selectSpace(space.workspace.id)}
                   >
                     <span
                       className="space-option-orbit"
@@ -263,13 +329,16 @@ export function SpaceSwitcher({
                     </span>
                     <span>
                       <strong>{space.workspace.name}</strong>
-                      <small>
+                      {match ? <span className="space-discovery-evidence" id={evidenceId}>
+                        <span className="space-discovery-note" title={match.noteTitle}><FileText size={12} aria-hidden="true"/><span className="sr-only">Matching note: </span><span>{match.noteTitle}</span></span>
+                        {match.snippet && match.snippet !== match.noteTitle && <span className="space-discovery-excerpt" title={match.snippet}>{match.snippet}</span>}
+                      </span> : <small>
                         {space.notes.length}{" "}
                         {space.notes.length === 1 ? "note" : "notes"}
                         {space.sources.length > 0
                           ? " · " + space.sources.length + " sources"
                           : ""}
-                      </small>
+                      </small>}
                     </span>
                     {active && <Check size={14} aria-hidden="true" />}
                   </button>

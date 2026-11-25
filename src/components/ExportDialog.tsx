@@ -220,7 +220,7 @@ export function ExportDialog({
               <span>{selectionLabel}</span>
             </div>
             {format==='orion'?<div className="portable-note-selection">
-              <p>Choose exactly what to share. Each file contains this same selection and opens a different note.</p>
+              <p>Every file includes all selected notes—send any one of them. The recipient can open the whole collection in Orion without the other files. Your Space name is preserved; each file opens a different note first.</p>
               <div className="portable-selection-actions"><button type="button" className="text-button" onClick={()=>setChosenIds(snapshot.notes.map(n=>n.id))}>Select all</button><button type="button" className="text-button" onClick={()=>setChosenIds([])}>Clear selection</button></div>
               <div className="portable-note-options" role="group" aria-label="Notes to include">{snapshot.notes.map(note=><label key={note.id}><input type="checkbox" checked={chosenIds.includes(note.id)} onChange={event=>setChosenIds(ids=>event.target.checked?[...ids,note.id]:ids.filter(id=>id!==note.id))}/><span>{displayNoteTitle(note)}</span></label>)}</div>
             </div>:<div className="export-scope-options" role="radiogroup" aria-label="Export scope">
@@ -275,7 +275,7 @@ export function ExportDialog({
             <ShieldCheck size={15} />
             <span>
               <strong>Only the selected notes leave Orion.</strong>
-              <small>Citation titles and original web URLs are preserved. Raw source text, settings, Chat, API keys, and other Spaces are never included.</small>
+              <small>{format === 'orion' ? 'The Space name, citation titles and original web URLs are preserved.' : 'Citation titles and original web URLs are preserved.'} Raw source text, settings, Chat, API keys, and other Spaces are never included.</small>
             </span>
           </div>
         </div>

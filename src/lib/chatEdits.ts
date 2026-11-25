@@ -1,11 +1,11 @@
-import type { AppSnapshot, ChatEditProposal, ChatEvidence, ChatNoteEdit, ChatRequest, ChatEditMode } from "../types";
+import type { AppSnapshot, ChatEditProposal, ChatEvidence, ChatNoteEdit, ChatRequest, ChatEditMode, WritingOrigin } from "../types";
 import protocol from "./chatEditsProtocol.json";
 import { splitMarkdownFrontmatter } from "./markdown";
 import { splitSavedChatPassages } from "./chatCitations";
 import { splitTrailingReferences } from "./sourceCitations";
 
-export interface ChatEditApplication { id: string; proposal: ChatEditProposal }
-export interface ChatEditorChange { id: string; baseMarkdown: string; nextMarkdown: string; mode?: ChatEditMode }
+export interface ChatEditApplication { id: string; proposal: ChatEditProposal; writingOrigin?: WritingOrigin }
+export interface ChatEditorChange { id: string; baseMarkdown: string; nextMarkdown: string; mode?: ChatEditMode; writingOrigin?: WritingOrigin }
 
 export const CHAT_EDIT_INSTRUCTIONS = [protocol.automaticInstructions, protocol.instructions, protocol.rewriteInstructions].join("\n\n");
 export const CHAT_EDIT_INTENT_SCHEMA = protocol.intentSchema;

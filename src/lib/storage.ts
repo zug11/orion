@@ -1,3 +1,5 @@
+import { isWritingOrigins } from "./writingOrigins";
+import { isContactMetadata } from "./contacts";
 import { isCalendarDismissalList } from "./calendarDismissal";
 import { isTicketCodes } from './ticketCodes';
 import { isPortableImportIdentity } from './portableOrion';
@@ -173,6 +175,16 @@ function migrateInlineSourceText(vault: OrionVault): void {
   })();
 }
 
+export async function loadVaultRevision(): Promise<string | null> {
+  if (isTauriRuntime()) return invokeTauri<string | null>("load_vault_revision");
+  const storage = getLocalStorage();
+  const serialized = storage?.getItem(VAULT_STORAGE_KEY) ?? storage?.getItem(LEGACY_SNAPSHOT_STORAGE_KEY);
+  if (serialized == null) return null;
+  const revision = JSON.parse(serialized)?.updatedAt;
+  if (typeof revision !== "string") throw new Error("The browser preview vault has an invalid revision.");
+  return revision;
+}
+
 export async function loadSnapshot(): Promise<OrionVault | null> {
   if (isTauriRuntime()) {
     const value = await invokeTauri<unknown>("load_vault");
@@ -233,6 +245,14 @@ export async function saveSnapshot(
   }
   const write = () => {
     const storage = getLocalStorage();
+    if (vault.spaces.some(space => space.notes.some(note =>
+      note.contact !== undefined && !isContactMetadata(note.contact)))) {
+      throw new Error("Invalid contact metadata. Nothing was saved.");
+    }
+    if (vault.spaces.some(space => space.notes.some(note =>
+      note.writingOrigins !== undefined && !isWritingOrigins(note.writingOrigins)))) {
+      throw new Error("Invalid note writing origins. Nothing was saved.");
+    }
     if (expectedUpdatedAt !== undefined) {
       const raw = storage?.getItem(VAULT_STORAGE_KEY) ?? storage?.getItem(LEGACY_SNAPSHOT_STORAGE_KEY);
       const parsed = raw ? parseVault(JSON.parse(raw)) : null;
@@ -2485,6 +2505,8 @@ function isNote(value: unknown): boolean {
     typeof value.title === "string" &&
     typeof value.slug === "string" &&
     typeof value.summary === "string" &&
+    (value.writingOrigins === undefined || isWritingOrigins(value.writingOrigins)) &&
+    (value.contact === undefined || isContactMetadata(value.contact)) &&
     (value.headingLayout === undefined || isOneOf(value.headingLayout, ["both", "title", "subtitle", "none"])) &&
     (value.dismissedCalendarMentions === undefined || isCalendarDismissalList(value.dismissedCalendarMentions)) &&
     typeof value.body === "string" &&

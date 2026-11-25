@@ -10,7 +10,7 @@ import { UrgencyPicker, KanbanBoard, LoadMoreTickets, WorkItemComposer, type Cre
 import { useTicketDrag } from './useTicketDrag';
 import type { DismissCalendarMention } from '../lib/calendarDismissal';
 import { TicketCode } from './TicketCode';
-import { useTicketNavigation } from './TicketNavigation';
+import { TicketCodeSettings, useTicketNavigation } from './TicketNavigation';
 import { TicketDetailsDialog } from './TicketDetailsDialog';
 
 export interface HomeWorkPreferences {
@@ -128,6 +128,7 @@ export function HomeTickets({ spaceId, preferences, notes, work, concepts, onOpe
     {hasTickets && <section className="home-tickets" aria-label="Tickets">
       <header><h2>{view === 'board' ? 'Kanban' : 'Tickets'} <span>{tickets.filter(t => t.status !== 'done').length} open</span></h2><div className="ticket-toolbar">
         {work.boards.length > 0 && <div className="ticket-view-switch"><button type="button" aria-pressed={view === 'board'} onClick={() => remember({ view: 'board' })}><Columns3 size={14}/>Board</button><button type="button" aria-pressed={view === 'list'} onClick={() => remember({ view: 'list' })}><List size={14}/>List</button></div>}
+        <TicketCodeSettings/>
         {creationButtons}
       </div></header>
       {work.boards.length > 0 && <div className="ticket-board-strip" aria-label="Boards">

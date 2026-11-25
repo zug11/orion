@@ -9,8 +9,13 @@ import type { ChatViewProps } from "./components/ChatView";
 import type { Sidebar } from "./components/Sidebar";
 import type { SettingsView } from "./components/SettingsView";
 import type { VoiceConnectionRequest } from "./lib/liveVoice";
+import { useTicketNavigation } from "./components/TicketNavigation";
+import { voiceWorkspaceRequest, resolveVoiceWorkspace } from "./lib/voiceWorkspace";
+import { collectWork } from "./lib/tickets";
+import { resolveVoiceTickets } from "./lib/voiceTicketCompletion";
 
 const runtime = vi.hoisted(() => ({ disk: null as OrionVault | null, chat: null as ChatViewProps | null,
+  tickets: null as ReturnType<typeof useTicketNavigation> | null,
   settings: null as ComponentProps<typeof SettingsView> | null, sidebar: null as ComponentProps<typeof Sidebar> | null,
   load: vi.fn(), save: vi.fn(), invoke: vi.fn(), saveElevenLabsKey: vi.fn() }));
 vi.mock("./lib/storage", async original => ({ ...await original<typeof import("./lib/storage")>(),
@@ -30,7 +35,9 @@ vi.mock("./components/NoteView", () => ({ NoteView: () => null }));
 vi.mock("./components/ImportStudio", () => ({ ImportStudio: () => null }));
 vi.mock("./components/CommandPalette", () => ({ CommandPalette: () => null }));
 vi.mock("./components/ExportDialog", () => ({ ExportDialog: () => null }));
-vi.mock("./components/ChatDock", () => ({ ChatDock: (props: ChatViewProps) => { runtime.chat = props; return null; } }));
+vi.mock("./components/ChatDock", () => ({ ChatDock: (props: ChatViewProps) => {
+  runtime.chat = props; runtime.tickets = useTicketNavigation(); return null;
+} }));
 import App from "./App";
 
 const voiceId = "ABCDEFGHIJKLMNO123456";
@@ -69,6 +76,26 @@ function heldSave() {
 }
 
 describe("App voice connection save barrier", () => {
+  it("saves named tickets in the speaking Space and acknowledges them after the disk write", async () => {
+    const body = "- [ ] Record the intro <!-- orion-ticket:v1 intro progress launch -->\n- [ ] Edit the mix <!-- orion-ticket:v1 mix todo launch -->";
+    for (const space of runtime.disk!.spaces) {
+      space.notes = [{ id: "plan", slug: "plan", title: "Plan", body, summary: "", kind: "article", status: "ready", sourceIds: [], conceptIds: [], tags: [], aliases: [], createdAt: "", updatedAt: "" }];
+    }
+    await launch();
+    const held = heldSave();
+    let result!: Promise<string>;
+    const targets = resolveVoiceTickets(runtime.tickets!.snapshot!, "Record the intro and Edit the mix");
+    if (!("tickets" in targets)) throw new Error(targets.message);
+    act(() => { result = runtime.tickets!.completeTickets!(targets.tickets); });
+    expect(runtime.disk!.spaces[0].notes[0].body).toBe(body);
+    await act(async () => {
+      held.resolve();
+      expect(await result).toMatch(/^Moved .+ to Done\.$/);
+    });
+    expect(runtime.disk!.spaces[0].notes[0].body).toContain("- [x] Record the intro <!-- orion-ticket:v1 intro done launch -->");
+    expect(runtime.disk!.spaces[0].notes[0].body).toContain("- [x] Edit the mix <!-- orion-ticket:v1 mix done launch -->");
+    expect(runtime.disk!.spaces[1].notes[0].body).toBe(body);
+  });
   it.each(["system", "openai"] as const)("saving a conversation key preserves %s note narration", async narration => {
     runtime.disk!.spaces[0].settings.liveVoiceProvider = "elevenlabs";
     runtime.disk!.spaces[0].settings.speechVoice = narration;
@@ -168,5 +195,67 @@ describe("App voice connection save barrier", () => {
     let result: unknown; await act(async () => { held.resolve(); result = await completion; });
     expect(result).toBeInstanceOf(Error);
     expect((result as Error).message).toMatch(/changed/);
+  });
+});
+
+describe("spoken work and the vault save queue", () => {
+  const wednesday = new Date(2026, 10, 25, 12);
+  async function resolve(prompt: string) {
+    const space = runtime.tickets!.snapshot!;
+    const intent = voiceWorkspaceRequest(prompt, space);
+    if (!intent) throw new Error("Unrecognized test utterance: " + prompt);
+    return resolveVoiceWorkspace(space, intent, {}, wednesday, () => true);
+  }
+  async function speak(prompt: string) {
+    const result = await resolve(prompt);
+    if (!result.write) throw new Error(result.message);
+    await act(async () => { await runtime.tickets!.writeVoiceWork!(result.write!); });
+    return result;
+  }
+
+  it("creates, reads and reschedules a calendar entry in the same persisted note", async () => {
+    await launch();
+    await speak("Schedule the design review for tomorrow");
+    const note = runtime.disk!.spaces[0].notes.find(n => n.title === "Calendar")!;
+    expect(note.body).toContain("orion-date://2026-11-26");
+    expect((await resolve("What's on my calendar tomorrow?")).message).toMatch(/design review/i);
+    await speak("Move the design review to Friday");
+    const changed = runtime.disk!.spaces[0].notes.find(n => n.id === note.id)!;
+    expect(changed.body).toContain("orion-date://2026-11-27");
+    expect(changed.body).not.toContain("2026-11-26");
+    expect(runtime.disk!.spaces[1].notes).toHaveLength(0);
+  });
+  it("creates a ticket on a named board and moves that ticket between boards and columns", async () => {
+    const source = runtime.disk!.spaces[0];
+    source.notes.push({ id: "plan", slug: "plan", title: "Plan", summary: "", kind: "article", status: "ready",
+      body: "<!-- orion-kanban:v1 launch Launch -->\n\n<!-- orion-kanban:v1 design Design -->",
+      sourceIds: [], conceptIds: [], tags: [], aliases: [], createdAt: source.updatedAt, updatedAt: source.updatedAt });
+    await launch();
+    await speak("Create a ticket called Review drawings on the Launch board due Friday");
+    const work = () => collectWork(runtime.disk!.spaces[0].notes).tickets;
+    const first = work()[0];
+    expect(first).toMatchObject({ title: "Review drawings", boardId: "launch", dueDate: "2026-11-27" });
+    await speak("Move Review drawings to the Design board");
+    await speak("Move Review drawings to In progress");
+    expect(work()).toHaveLength(1);
+    expect(work()[0]).toMatchObject({ id: first.id, boardId: "design", status: "progress" });
+    expect((await resolve("Read my tickets")).message).toMatch(/review drawings/i);
+    expect(runtime.disk!.spaces[1].notes).toHaveLength(0);
+  });
+  it("rejects a stale Space and reports a failed save for a newly created item", async () => {
+    await launch();
+    const result = await resolve("Create a ticket called Record demo");
+    const write = runtime.tickets!.writeVoiceWork!;
+    const held = heldSave();
+    let outcome!: Promise<unknown>;
+    act(() => { outcome = write(result.write!).catch(error => error); });
+    await waitFor(() => expect(runtime.save).toHaveBeenCalled());
+    expect(runtime.disk!.spaces[0].notes).toHaveLength(0);
+    let failure: unknown;
+    await act(async () => { held.reject(new Error("Disk unavailable")); failure = await outcome; });
+    expect(failure).toMatchObject({ message: "Disk unavailable" });
+    act(() => runtime.sidebar!.onSwitchSpace("other-space"));
+    await expect(write(result.write!)).rejects.toThrow(/Space changed/);
+    expect(runtime.disk!.spaces[1].notes).toHaveLength(0);
   });
 });

@@ -822,6 +822,7 @@ function nextColor(index: number): string {
 function cloneNote(note: Note): Note {
   return {
     ...note,
+    ...(note.writingOrigins ? { writingOrigins: [...note.writingOrigins] } : {}),
     aliases: [...note.aliases],
     tags: [...note.tags],
     conceptIds: [...note.conceptIds],

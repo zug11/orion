@@ -8,6 +8,7 @@ import { DictationNotInsertedError, prepareDictation } from "../lib/dictationCle
 import type { Note } from "../types";
 import type { VoiceMemoButton } from "./VoiceMemoButton";
 import { RichNoteEditor } from "./RichNoteEditor";
+import { DictationNavigationContext } from "./DictationNavigation";
 
 type Props = ComponentProps<typeof RichNoteEditor>;
 type MemoProps = ComponentProps<typeof VoiceMemoButton>;
@@ -48,13 +49,19 @@ async function fixture(extra: Partial<Props> = {}) {
     onChange, onAttachSource: vi.fn(), onRegisterConcept: vi.fn(), onDisableConceptAutoLink: vi.fn(),
     onTranscribeVoiceMemo: vi.fn().mockResolvedValue("Original words."), ...extra,
   };
-  const view = render(<div className="workspace-content"><RichNoteEditor key={props.noteId} {...props} /></div>);
+  let background = false;
+  const content = (changes: Partial<Props> = {}) => <DictationNavigationContext.Provider value={{ background, blocked: false, noteTitle: "Recording", onReturn: undefined }}>
+    <input aria-label="Other page input"/>
+    <div className="workspace-content" hidden={background}><RichNoteEditor key={changes.noteId ?? props.noteId} {...props} {...changes} /></div>
+  </DictationNavigationContext.Provider>;
+  const view = render(content());
   const editor = (view.container.querySelector(".tiptap") as HTMLElement & { editor: Editor }).editor;
   vi.spyOn(editor.view, "coordsAtPos").mockReturnValue({ left: 280, right: 360, top: 200, bottom: 220 });
   await waitFor(() => expect(editor.isFocused).toBe(true));
   return {
     ...view, editor, onChange,
-    update: (changes: Partial<Props>) => view.rerender(<div className="workspace-content"><RichNoteEditor key={changes.noteId ?? props.noteId} {...props} {...changes} /></div>),
+    update: (changes: Partial<Props>) => view.rerender(content(changes)),
+    setBackground: (value: boolean) => { background = value; view.rerender(content()); },
   };
 }
 
@@ -80,6 +87,21 @@ describe("dictation cleanup in the real rich note editor", () => {
     sourceId: "source-dictation-session", notice: "",
   };
   const boardNote = { id: "board-note", title: "Work", body: "<!-- orion-kanban:v1 board-launch Launch -->", sourceIds: [], conceptIds: [], tags: [], aliases: [] } as unknown as Note;
+
+  it("inserts into the retained editor without stealing focus from another page, retaining Undo", async () => {
+    const { editor, setBackground } = await fixture({ onPrepareDictation: vi.fn().mockResolvedValue(hybrid) });
+    const session = await start(editor);
+    const before = editor.state.doc;
+    setBackground(true);
+    const input = screen.getByRole("textbox", { name: "Other page input" });
+    input.focus();
+    await act(async () => { await session.complete(); });
+    expect(editor.isDestroyed).toBe(false);
+    expect(editor.getMarkdown()).toContain("orion-ticket:v1");
+    expect(input).toHaveFocus();
+    act(() => editor.commands.undo());
+    expect(editor.state.doc.eq(before)).toBe(true);
+  });
 
   it("inserts automatically at the mapped caret, without approval, as one Undo", async () => {
     const pending = deferred<PreparedDictation>();
@@ -107,15 +129,36 @@ describe("dictation cleanup in the real rich note editor", () => {
   });
 
   it("offers immediate original recovery after insertion and makes recovery undoable", async () => {
-    const { editor } = await fixture({ onPrepareDictation: vi.fn().mockResolvedValue(hybrid) });
+    const { editor, onChange } = await fixture({ onPrepareDictation: vi.fn().mockResolvedValue(hybrid), getWritingOrigins: () => [] });
     const session = await start(editor);
     await act(async () => { await session.complete(); });
     const structured = editor.state.doc;
+    expect(onChange.mock.lastCall?.[1]).toEqual({ origin: "orion-ai", present: true });
     fireEvent.click(screen.getByRole("button", { name: "Use original dictation" }));
     expect(editor.getMarkdown()).toBe(`Alpha ${hybrid.original} beta`);
     expect(editor.getMarkdown()).not.toContain("orion-ticket");
+    expect(onChange.mock.lastCall?.[1]).toEqual({ origin: "orion-ai", present: false });
     act(() => { editor.commands.undo(); });
     expect(editor.state.doc.eq(structured)).toBe(true);
+    expect(onChange.mock.lastCall?.[1]).toEqual({ origin: "orion-ai", present: true });
+    act(() => { editor.commands.undo(); });
+    expect(onChange.mock.lastCall?.[1]).toEqual({ origin: "orion-ai", present: false });
+    act(() => { editor.commands.redo(); });
+    expect(editor.state.doc.eq(structured)).toBe(true);
+    expect(onChange.mock.lastCall?.[1]).toEqual({ origin: "orion-ai", present: true });
+    act(() => { editor.commands.redo(); });
+    expect(editor.getMarkdown()).toBe(`Alpha ${hybrid.original} beta`);
+    expect(onChange.mock.lastCall?.[1]).toEqual({ origin: "orion-ai", present: false });
+  });
+
+  it.each([false, true])("leaves verbatim dictation unattributed even if cleanup echoes the transcript (%s)", async cleaned => {
+    const original = "These words are mine.";
+    const { editor, onChange } = await fixture({ getWritingOrigins: () => [],
+      onPrepareDictation: vi.fn().mockResolvedValue({ original, ...(cleaned ? { blocks: [{ kind:"paragraph", text:original }] } : {}), notice:"" }) });
+    const session = await start(editor);
+    await act(async () => { await session.complete(original); });
+    expect(editor.getMarkdown()).toContain(original);
+    expect(onChange.mock.lastCall).toEqual([editor.getMarkdown()]);
   });
 
   it("invalidates original replacement after further writing or an external replacement", async () => {

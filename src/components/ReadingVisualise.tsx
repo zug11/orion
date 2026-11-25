@@ -1,14 +1,14 @@
 import { useRef, useState } from "react";
 import type { Editor } from "@tiptap/core";
-import type { Settings } from "../types";
+import type { Settings, WritingOrigin } from "../types";
 import { resolveReadingArtifactEnd, type ReadingArtifactPassage } from "../lib/readingArtifactPassage";
 import { captureVisualArtifactAfterBlock, insertVisualArtifact } from "./editor/NoteVisualArtifact";
 import { VisualiseComposer } from "./VisualiseComposer";
 
 /** Freeze the writing position once the editor for the captured note has mounted. */
-export function ReadingVisualise({ passage, settings, editor, onClose, current }: {
+export function ReadingVisualise({ passage, settings, editor, onClose, current, getWritingOrigins }: {
   passage: ReadingArtifactPassage; settings: Settings; editor: Editor;
-  onClose: (inserted: boolean) => void; current: () => boolean;
+  onClose: (inserted: boolean) => void; current: () => boolean; getWritingOrigins: () => readonly WritingOrigin[];
 }) {
   const [capture] = useState(() => {
     const end = resolveReadingArtifactEnd(editor.state.doc, passage.block);
@@ -22,7 +22,7 @@ export function ReadingVisualise({ passage, settings, editor, onClose, current }
   return <VisualiseComposer source={passage.source} anchor={passage.anchor} settings={settings}
     onClose={() => onClose(inserted.current)}
     onInsert={artifact => {
-      inserted.current = current() && insertVisualArtifact(editor, capture, artifact);
+      inserted.current = current() && insertVisualArtifact(editor, capture, artifact, getWritingOrigins());
       return inserted.current;
     }} />;
 }

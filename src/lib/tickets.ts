@@ -105,13 +105,14 @@ function scanWork(markdown: string) {
   visit(parser.parse(content) as MarkdownNode);
   return { tickets, boards, identityCounts, boardLines };
 }
-const cache = new WeakMap<Note, { tickets: Ticket[]; boards: NoteBoard[] }>();
+const cache = new WeakMap<Note, { tickets: Ticket[]; boards: NoteBoard[]; ticketIdCounts: ReadonlyMap<string, number> }>();
 /** Derived, Space-local views. Unchanged immutable notes are never rescanned. */
 export function noteWork(note: Note) {
   const cached = cache.get(note);
   if (cached) return cached;
   const scanned = scanWork(note.body);
   const result = {
+    ticketIdCounts: scanned.identityCounts,
     tickets: scanned.tickets.map(({ blockStart: _start, blockEnd: _end, ...ticket }) => ({ ...ticket, id: ticket.durable ? ticket.id : `${note.id}:${ticket.lineIndex}`,
       noteId: note.id, noteTitle: displayNoteTitle(note) })),
     boards: scanned.boards.map(board => ({ ...board, noteId: note.id })),

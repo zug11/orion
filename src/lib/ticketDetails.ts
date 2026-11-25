@@ -4,7 +4,9 @@ import remarkGfm from 'remark-gfm';
 import { parseTicketMarker, type Ticket } from './tickets';
 
 type MdNode = { type: string; value?: string; checked?: boolean | null; children?: MdNode[]; position?: { start: { offset: number }; end: { offset: number } } };
+export interface InferredTicketDetails { description?: string; checklist?: string[] }
 export type TicketDetailChange =
+  | { kind: 'fillMissing'; fields: InferredTicketDetails }
   | { kind: 'title'; text: string }
   | { kind: 'description'; text: string }
   | { kind: 'add'; text: string }
@@ -18,8 +20,16 @@ const plain = (node: MdNode): string => node.type === 'html' ? '' : node.value ?
 const literal = (text: string) => text.replace(/[\\`*_[\]<>#~!+|.-]/g, '\\$&');
 const validText = (text: string, limit: number) => text.length <= limit && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text);
 
+/** Literal paragraphs and ordinary unchecked child tasks, relative to the marker line. */
+export function ticketDetailSuffix({ description, checklist }: InferredTicketDetails, newline = '\n') {
+  const blocks: string[] = [];
+  if (description) blocks.push('  ' + literal(description));
+  if (checklist?.length) blocks.push(checklist.map(step => '  - [ ] ' + literal(step)).join(newline));
+  return blocks.map(block => newline + newline + block).join('');
+}
+
 function parseUncached(ticket: Ticket) {
-  if (!ticket.durable || !ticket.rawBlock) return null;
+  if (!ticket.rawBlock) return null;
   const indent = ticket.rawBlock.match(/^[ \t]*/)?.[0] ?? '';
   const body = ticket.rawBlock.split('\n').map(line => line.startsWith(indent) ? line.slice(indent.length) : line).join('\n');
   const tree = parser.parse(body) as MdNode;
@@ -28,7 +38,7 @@ function parseUncached(ticket: Ticket) {
   const first = root.children?.[0];
   if (!first || first.type !== 'paragraph') return null;
   const markers = first.children?.filter(n => n.type === 'html' && parseTicketMarker(n.value ?? '')) ?? [];
-  if (markers.length !== 1 || parseTicketMarker(markers[0].value ?? '')?.id !== ticket.id) return null;
+  if (ticket.durable ? markers.length !== 1 || parseTicketMarker(markers[0].value ?? '')?.id !== ticket.id : markers.length !== 0) return null;
   const children = root.children ?? [];
   const description: MdNode[] = [];
   for (const child of children.slice(1)) { if (child.type === 'list') break; description.push(child); }
@@ -51,7 +61,8 @@ function parse(ticket: Ticket) {
   const result = parseUncached(ticket); parsedCache.set(ticket, result); return result;
 }
 
-export function ticketDetails(ticket: Ticket) {
+export function ticketDetails(ticket: Ticket, includePlainTask = false) {
+  if (!ticket.durable && !includePlainTask) return null;
   const parsed = parse(ticket);
   if (!parsed) return null;
   const { description, rows, body } = parsed;
@@ -74,13 +85,23 @@ export function ticketDetails(ticket: Ticket) {
 /** Edit only the captured task subtree. No independent checklist persistence. */
 export function changeTicketBlock(ticket: Ticket, change: TicketDetailChange): string | null {
   const parsed = parse(ticket);
-  if (!parsed) return null;
+  if (!ticket.durable || !parsed?.marker) return null;
   const { body, indent, first, marker, description, rows, root } = parsed;
   const newline = body.includes('\r\n') ? '\r\n' : '\n';
   const replace = (start: number, end: number, value: string) => body.slice(0, start) + value + body.slice(end);
   let next: string;
   if ('text' in change && (!validText(change.text, change.kind === 'description' ? 20_000 : 1000) || change.kind !== 'description' && (!change.text.trim() || /[\r\n]/.test(change.text)))) return null;
-  if (change.kind === 'title') {
+  if (change.kind === 'fillMissing') {
+    const fields = change.fields;
+    const singleLine = (text: string, limit: number) => validText(text, limit) && !/[\r\n\t]/.test(text);
+    if (fields.description && !singleLine(fields.description, 1000) || fields.checklist &&
+        (fields.checklist.length > 32 || !fields.checklist.every(step => step.trim() && singleLine(step, 300)))) return null;
+    const at = first.position!.end.offset;
+    const listAt = description[description.length - 1]?.position?.end.offset ?? at;
+    const addDescription = description.length ? '' : ticketDetailSuffix({ description: fields.description }, newline);
+    const addChecklist = rows.length ? '' : ticketDetailSuffix({ checklist: fields.checklist }, newline);
+    next = body.slice(0, at) + addDescription + body.slice(at, listAt) + addChecklist + body.slice(listAt);
+  } else if (change.kind === 'title') {
     if (change.text.length > 1000) return null;
     next = replace(first.position!.start.offset, first.position!.end.offset, `${literal(change.text.trim())} ${marker.value}`);
   } else if (change.kind === 'description') {

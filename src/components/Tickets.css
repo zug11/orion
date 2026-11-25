@@ -174,3 +174,10 @@
 .kanban-column-name:hover { color:var(--text); }
 .kanban-name-form { display:flex; align-items:center; gap:8px; margin:10px 0; }
 .kanban-name-form input { min-width:0; max-width:300px; flex:1; border:1px solid var(--line); border-radius:8px; padding:8px 10px; color:var(--text); background:var(--surface-1); font:inherit; }
+
+.inferred-ticket-details { margin: 8px 0 0 26px; font-size: 13px; overflow-wrap: anywhere; }
+.inferred-ticket-details p, .inferred-ticket-details ul { margin: 3px 0 8px; }
+.inferred-ticket-details ul { padding-inline-start: 1.3em; }
+
+.ticket-inference-schedule { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 8px 0 0 26px; font-size: 13px; }
+.ticket-inference-schedule label { display: flex; align-items: center; gap: 6px; }

@@ -1,0 +1,23 @@
+.lead-contact-results {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  max-height: min(16rem, 35vh);
+  overflow: auto;
+}
+.lead-contact-results button {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  width: 100%;
+  padding: 8px;
+  border-radius: 6px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.lead-contact-results button:hover, .lead-contact-results button:focus-visible { background: var(--periwinkle-wash); }
+.lead-contact-results strong { font-weight: 500; }
+.lead-contact-results span, .lead-contact-results small { color: var(--text-soft); }
+.lead-contact-dialog footer { justify-content: flex-end; }
+.lead-contact-dialog footer .text-button { margin-right: auto; }

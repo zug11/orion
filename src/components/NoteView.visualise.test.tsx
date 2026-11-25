@@ -7,6 +7,7 @@ import type { Note } from "../types";
 import type { VisualArtifact } from "../lib/visualArtifacts";
 import { generateVisualArtifact } from "../lib/visualArtifactGeneration";
 import { NoteAISettingsContext } from "./NoteAISettingsContext";
+import { DictationNavigationContext } from "./DictationNavigation";
 import { NoteView } from "./NoteView";
 
 vi.mock("../lib/visualArtifactGeneration", () => ({ generateVisualArtifact: vi.fn() }));
@@ -32,16 +33,18 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.getSelection()?.removeAllRanges(); });
 
-function setup() {
+function setup(noteToOpen = initial) {
   const store = createVoiceSelectionStore("space");
   const onFinish = vi.fn();
   const settings = { ...createEmptySnapshot().settings, apiKeyConfigured: true, model: "gpt-5.6-sol" };
-  let latest: Note = initial;
-  function Harness() {
-    const [note, setNote] = useState(initial); latest = note;
-    return <NoteAISettingsContext.Provider value={settings}><NoteView note={note} notes={[note]} concepts={[]} voiceSelection={store}
-      onUpdateNote={setNote} onFinishEditing={onFinish}
-      onOpenNote={vi.fn()} onOpenConcept={vi.fn()} onDeleteNote={vi.fn()} onRegisterConcept={vi.fn()} onDisableConceptAutoLink={vi.fn()} /></NoteAISettingsContext.Provider>;
+  let latest: Note = noteToOpen;
+  function Harness({ background = false }: { background?: boolean }) {
+    const [note, setNote] = useState(noteToOpen); latest = note;
+    return <DictationNavigationContext.Provider value={{ background, blocked: false, noteTitle: note.title, onReturn: undefined }}>
+      <NoteAISettingsContext.Provider value={settings}><NoteView note={note} notes={[note]} concepts={[]} voiceSelection={store}
+      onUpdateNote={next => setNote(next)} onFinishEditing={onFinish}
+      onOpenNote={vi.fn()} onOpenConcept={vi.fn()} onDeleteNote={vi.fn()} onRegisterConcept={vi.fn()} onDisableConceptAutoLink={vi.fn()} /></NoteAISettingsContext.Provider>
+    </DictationNavigationContext.Provider>;
   }
   const view = render(<Harness />);
   async function open() {
@@ -58,23 +61,31 @@ function setup() {
     fireEvent.click(await screen.findByRole("button", { name: "Visualise" }));
     return screen.findByRole("dialog", { name: "Visualise" });
   }
-  return { open, latest: () => latest, onFinish, view };
+  return { open, latest: () => latest, onFinish, view, setBackground: (background: boolean) => view.rerender(<Harness background={background} />) };
 }
 
 it("anchors the second identical passage, retries on request, then renders the saved card without a wiki refresh", async () => {
   generate.mockRejectedValueOnce(new Error("Connection interrupted")).mockResolvedValueOnce(artifact);
-  const { open, latest, onFinish } = setup();
+  const { open, latest, onFinish } = setup({ ...initial, writingOrigins: ["mcp"] });
   await open();
   const button = screen.getByRole("button", { name: "Generate for me" });
   expect(generate).not.toHaveBeenCalled();
   fireEvent.click(button);
   expect(await screen.findByRole("alert")).toHaveTextContent("Connection interrupted");
   expect(latest().body).not.toContain("orion-artifact");
+  expect(latest().writingOrigins).toEqual(["mcp"]);
   fireEvent.click(button);
   await waitFor(() => expect(latest().body).toContain("orion-artifact:v1"));
   expect(latest().body).toContain([passage, "First rinse.", passage, "<!-- orion-artifact:v1"].join("\n\n"));
   expect(latest().body.trimEnd()).toMatch(/-->\n\nFinal rinse\.$/);
   expect(generate.mock.calls.map(call => call.slice(0,3))).toEqual([[passage, "auto", ""], [passage, "auto", ""]]);
+  expect(latest().writingOrigins).toEqual(["orion-ai", "mcp"]);
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  await waitFor(() => expect(latest().body.trimEnd()).toBe(initial.body));
+  expect(latest().writingOrigins).toEqual(["mcp"]);
+  fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+  await waitFor(() => expect(latest().body).toContain("orion-artifact:v1"));
+  expect(latest().writingOrigins).toEqual(["orion-ai", "mcp"]);
   fireEvent.click(screen.getByRole("button", { name: "Done" }));
   expect(await screen.findByRole("heading", { name: artifact.title })).toBeVisible();
   expect(onFinish).not.toHaveBeenCalled();
@@ -89,7 +100,23 @@ it("cancels an in-flight request and ignores a late result after returning to re
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(generate.mock.calls[0][4].aborted).toBe(true);
   await act(async () => { finish(artifact); });
+  expect(latest().writingOrigins).toBeUndefined();
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(latest().body.trimEnd()).toBe(initial.body);
   expect(document.querySelector('[data-voice-note-body="reading"]')).toBeTruthy();
+});
+
+it("cancels generation when a recording keeps the note mounted in the background", async () => {
+  let finish!: (value: VisualArtifact) => void;
+  generate.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const { open, latest, setBackground } = setup();
+  await open();
+  fireEvent.click(screen.getByRole("button", { name: "Generate for me" }));
+  setBackground(true);
+  expect(generate.mock.calls[0][4].aborted).toBe(true);
+  await act(async () => finish(artifact));
+  setBackground(false);
+  expect(screen.queryByRole("dialog", { name: "Visualise" })).toBeNull();
+  expect(latest().body.trimEnd()).toBe(initial.body);
+  expect(latest().writingOrigins).toBeUndefined();
 });

@@ -1,4 +1,4 @@
-import type { AppSnapshot, OrionVault } from '../types';
+import type { AppSnapshot, Note, OrionVault } from '../types';
 import { noteWork } from './tickets';
 
 /** Identity metadata only. Task prose and completion remain in ordinary notes. */
@@ -32,6 +32,9 @@ export function withTicketPrefix(codes: TicketCodes | undefined, prefix: string)
  * Tombstones are retained, so deletion/Undo never recycles another ticket's code.
  */
 export function allocateTicketCodes(vault: OrionVault, previous?: OrionVault): OrionVault {
+  // A portable collection can contain long prose notes. Only a literal ticket
+  // marker can earn a code, so ordinary articles never need a Markdown parse here.
+  const durableTickets = (note: Note) => note.body.includes('orion-ticket:v1') ? noteWork(note).tickets.filter(ticket => ticket.durable) : [];
   let changed = false;
   const spaces = vault.spaces.map((space): AppSnapshot => {
     let existing = space.ticketCodes;
@@ -49,10 +52,10 @@ export function allocateTicketCodes(vault: OrionVault, previous?: OrionVault): O
       const before = new Map(prior.notes.map(note => [note.id, note]));
       const changed = space.notes.filter(note => before.get(note.id)?.body !== note.body);
       // Ordinary typing never reparses the library just to maintain codes.
-      if (!changed.some(note => [note, before.get(note.id)].some(version => version && noteWork(version).tickets.some(ticket => ticket.durable && !Object.prototype.hasOwnProperty.call(existing.assigned, ticket.id))))) return space;
+      if (!changed.some(note => [note, before.get(note.id)].some(version => version && durableTickets(version).some(ticket => !Object.prototype.hasOwnProperty.call(existing.assigned, ticket.id))))) return space;
     }
     const ids = new Map<string, number>();
-    for (const note of space.notes) for (const ticket of noteWork(note).tickets) if (ticket.durable) ids.set(ticket.id, (ids.get(ticket.id) ?? 0) + 1);
+    for (const note of space.notes) for (const ticket of durableTickets(note)) ids.set(ticket.id, (ids.get(ticket.id) ?? 0) + 1);
     const missing = [...ids].filter(([id, count]) => count === 1 && !Object.prototype.hasOwnProperty.call(existing?.assigned ?? {}, id)).map(([id]) => id).sort();
     if (!missing.length) return space;
     const assigned: Record<string, number> = Object.assign(Object.create(null), existing?.assigned);

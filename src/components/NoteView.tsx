@@ -6,9 +6,10 @@ import { TicketDetailLauncher } from './TicketDetailsDialog';
 import { TicketInferenceDialog } from './TicketInferenceDialog';
 import { noteInferenceTarget } from '../lib/ticketInference';
 import { collectWork, noteWork, remarkNoteBoards } from "../lib/tickets";
-import { KanbanBoard, type TicketWorkspace, type CreateWorkItem } from "./Tickets";
+import { EMPTY_WORK, KanbanBoard, type TicketWorkspace, type CreateWorkItem } from "./Tickets";
 import { visibleNoteSummary } from "../lib/importSummary";
 import { NoteWordCount } from "./NoteWordCount";
+import { useDictationNavigation } from "./DictationNavigation";
 import type { Editor } from "@tiptap/core";
 import { PassageThreads } from "./PassageThreads";
 import { NoteAISettingsContext } from "./NoteAISettingsContext";
@@ -86,6 +87,7 @@ import {
 import { collectTasksFromNote, setTaskChecked } from "../lib/tasks";
 import { findTextMatches, wrapMatchIndex } from "../lib/noteFind";
 import { editableNoteTitle, editableNoteSubtitle, noteHeadingVisibility, noteHeadingLayout, visibleNoteTags, type NoteHeadingVisibility } from "../lib/noteMetadata";
+import { writingCredit, withWritingOrigin } from "../lib/writingOrigins";
 import {
   extractNoteOutline,
   resolveActiveOutlineHeading,
@@ -103,6 +105,7 @@ import { savedChatEvidence } from "../lib/chatCitations";
 import { CitedPassage } from "./CitedPassage";
 import { decorateAutoLinks } from "../lib/wiki";
 import type { Concept, Note, NoteTypeface, Source } from "../types";
+import type { WritingOriginChange } from "./editor/writingOriginHistory";
 import { isGeneratePlaceholder } from "../lib/generate";
 import {
   buildDeckPlaybackCues,
@@ -182,7 +185,7 @@ interface NoteViewProps {
   onOpenConcept: (conceptId: string) => void;
   onOpenSource?: (sourceId: string) => void;
   onAttachSource?: (noteId: string, sourceId: string) => void;
-  onUpdateNote: (note: Note) => void;
+  onUpdateNote: (note: Note, removeOrigin?: "remove-orion-ai" | "remove-mcp") => void;
   onDeleteNote: (noteId: string) => void;
   onFinishEditing?: (noteId: string) => void;
   onRegisterConcept: (input: RegisterWikiLinkInput) => string;
@@ -285,6 +288,7 @@ export function NoteView({
   imageContextEnabled = false,
   aiProviderName,
 }: NoteViewProps) {
+  const { background } = useDictationNavigation();
   const localEditingModes = useRef(new Map<string, boolean>());
   const modes = editingModes ?? localEditingModes.current;
   const [editing, setEditingState] = useState(() => modes.get(note.id) ?? (initialEditing || !editableNoteTitle(note).trim()));
@@ -336,6 +340,7 @@ export function NoteView({
   const findScopeRef = useRef<HTMLElement>(null);
   const currentNoteRef = useRef(note);
   currentNoteRef.current = note;
+  const getWritingOrigins = () => currentNoteRef.current.writingOrigins ?? [];
   const editorReviewReady = useRef<(() => boolean) | null>(null);
   const richEditorContext = useRef<(() => RichEditorContextState) | null>(null);
   const displayedNoteCache = useRef<{ base: Note; body: string; note: Note } | undefined>(undefined);
@@ -387,7 +392,7 @@ export function NoteView({
     onEditorContextChange?.(note.id, () => contextReader.current());
     return () => onEditorContextChange?.(note.id, null);
   }, [note.id, onEditorContextChange]);
-  useVoiceSelection(findScopeRef, note, voiceSelection, voiceSelection?.spaceId, displayedNote, { state: captureState });
+  useVoiceSelection(findScopeRef, note, background ? undefined : voiceSelection, voiceSelection?.spaceId, displayedNote, { state: captureState });
   const shownTitle = editableNoteTitle(note);
   const shownSummary = useMemo(() => editableNoteSubtitle({ summary: visibleNoteSummary(note, sources) }), [note.summary, note.sourceIds, sources]);
   const dictationOriginals = useMemo(() => {
@@ -410,13 +415,14 @@ export function NoteView({
     }
     pendingHeadingFocus.current = null;
   }, [note.id, editing, headingVisibility.title, headingVisibility.subtitle, threadEditor]);
-  const settings = useContext(NoteAISettingsContext);
+  const spaceAISettings = useContext(NoteAISettingsContext);
+  const settings = background ? undefined : spaceAISettings;
   const [readingArtifact, setReadingArtifact] = useState<{ passage: ReadingArtifactPassage; noteId: string; body: string; spaceId?: string }>();
   const startReadingVisualise = useCallback((passage: ReadingArtifactPassage) => {
     setReadingArtifact({ passage, noteId: note.id, body: note.body, spaceId: voiceSelection?.spaceId });
     setEditing(true);
   }, [note.id, note.body, voiceSelection?.spaceId, setEditing]);
-  const readingArtifactActive = !!readingArtifact && editing && !chatEdit &&
+  const readingArtifactActive = !!settings && !!readingArtifact && editing && !chatEdit &&
     readingArtifact.noteId === note.id && readingArtifact.body === note.body && readingArtifact.spaceId === voiceSelection?.spaceId;
   useEffect(() => { if (!readingArtifactActive) setReadingArtifact(undefined); }, [readingArtifactActive, readingArtifact]);
   const comment = usePassageComment({ note, getNote: displayedNote, root: findScopeRef, store: voiceSelection,
@@ -466,7 +472,7 @@ export function NoteView({
       const next = splitMarkdownFrontmatter(chatProposalBody(chatEdit.proposal));
       const nextMarkdown = restoreMarkdownFrontmatter(next.prefix, expandOrionWikiLinks(
         stripDuplicateTitleHeading(stripOrionNoteMarkers(next.content), note.title), notes, concepts));
-      setChatEditorChange({ id: chatEdit.id, baseMarkdown: markdown, nextMarkdown, mode: chatEdit.proposal.mode });
+      setChatEditorChange({ id: chatEdit.id, baseMarkdown: markdown, nextMarkdown, mode: chatEdit.proposal.mode, writingOrigin: chatEdit.writingOrigin });
       setEditing(true);
     } catch (error) {
       onChatEditComplete?.(chatEdit.id, error instanceof Error ? error.message : String(error));
@@ -518,6 +524,10 @@ export function NoteView({
     () => new Map(outlineHeadings.map((heading) => [heading.line, heading.id])),
     [outlineHeadings],
   );
+  // Only a ticket card or board in this note needs the rest of the Space's work.
+  const readingWork = useMemo(() =>
+    note.body.includes("orion-ticket:v1") || note.body.includes("orion-kanban:v1") ? collectWork(notes) : EMPTY_WORK,
+  [note.body, notes]);
   const readTaskByVisibleLine = useMemo(() => {
     const storedTasks = collectTasksFromNote(note, concepts);
     const visibleTasks = collectTasksFromNote(
@@ -571,6 +581,7 @@ export function NoteView({
   useEffect(() => {
     // Consume only after StrictMode's setup/cleanup replay. Consuming during
     // setup loses the one-shot request when that first animation frame is cancelled.
+    if (background) return;
     let frame = 0;
     const reveal = () => {
       window.cancelAnimationFrame(frame);
@@ -589,7 +600,7 @@ export function NoteView({
     window.addEventListener(NOTE_PASSAGE_NAVIGATION_EVENT, receive);
     reveal();
     return () => { window.removeEventListener(NOTE_PASSAGE_NAVIGATION_EVENT, receive); window.cancelAnimationFrame(frame); clearNoteExcerptHighlight(); };
-  }, [note.id]);
+  }, [note.id, background]);
 
   const openFind = useCallback(() => {
     setFindOpen(true);
@@ -639,6 +650,7 @@ export function NoteView({
   );
 
   useEffect(() => {
+    if (background) return;
     const handleFindShortcut = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       const modifier = event.metaKey || event.ctrlKey;
@@ -655,7 +667,7 @@ export function NoteView({
     };
     window.addEventListener("keydown", handleFindShortcut, true);
     return () => window.removeEventListener("keydown", handleFindShortcut, true);
-  }, [closeFind, findOpen, openFind]);
+  }, [closeFind, findOpen, openFind, background]);
 
   useEffect(
     () => () => {
@@ -955,7 +967,7 @@ export function NoteView({
     {narrationDownload ? <LoaderCircle size={15} className="narration-download-spinner"/> : <Download size={15}/>}
   </button> : null;
 
-  function update(patch: Partial<Note>) {
+  function update(patch: Partial<Note>, origin?: WritingOriginChange) {
     if (editing) {
       dirtyEditingRef.current = {
         original: dirtyEditingRef.current?.original ?? currentNoteRef.current,
@@ -963,11 +975,18 @@ export function NoteView({
         bodyOnly: (dirtyEditingRef.current?.bodyOnly ?? true) && Object.keys(patch).every(key => key === "body"),
       };
     }
-    const next = { ...currentNoteRef.current, ...patch, updatedAt: new Date().toISOString() };
+    let next = { ...currentNoteRef.current, ...patch, updatedAt: new Date().toISOString() };
+    if (origin?.present) next = withWritingOrigin(next, origin.origin);
+    else if (origin) {
+      const remaining = next.writingOrigins?.filter(item => item !== origin.origin);
+      if (remaining?.length) next.writingOrigins = remaining;
+      else delete next.writingOrigins;
+    }
     // Selection capture can run before React delivers the updated note prop.
     // Bind it to the actual authored document, including the unsaved edit.
     currentNoteRef.current = next;
-    onUpdateNote(next);
+    if (origin && !origin.present) onUpdateNote(next, `remove-${origin.origin}`);
+    else onUpdateNote(next);
     setSavedPulse(true);
     if (savedPulseTimerRef.current !== null) {
       window.clearTimeout(savedPulseTimerRef.current);
@@ -1313,10 +1332,10 @@ export function NoteView({
         return <li className={className}>{renderedChildren}</li>;
       }
       const taskBody = withoutTaskMarker(renderedChildren);
-      const ticket = collectWork(notes).tickets.find(t => t.noteId === note.id && t.lineIndex === task.lineIndex && t.durable);
-      if (ticket && collectWork(notes).boards.some(board => board.id === ticket.boardId && board.noteId === note.id) &&
+      const ticket = readingWork.tickets.find(t => t.noteId === note.id && t.lineIndex === task.lineIndex && t.durable);
+      if (ticket && readingWork.boards.some(board => board.id === ticket.boardId && board.noteId === note.id) &&
           noteWork(note).tickets.filter(t => t.id === ticket.id).length === 1) return null;
-      if (ticket) return <li className="note-ticket-card">{onDeleteTicket && <TicketDeleteButton title={ticket.title} onDelete={() => onDeleteTicket(ticket)}/>}<div data-narration-ignore="true"><TicketDetailLauncher ticket={ticket} workspace={{work:collectWork(notes),onChangeBoard,onPatch:onPatchTicket,onOpenNote}}/></div><div className="note-ticket-prose">{taskBody}</div><TicketCardControls status={ticket.status} dueDate={ticket.dueDate} urgency={ticket.urgency} onPatch={onPatchTicket ? patch => onPatchTicket(ticket, patch) : undefined}/></li>;
+      if (ticket) return <li className="note-ticket-card">{onDeleteTicket && <TicketDeleteButton title={ticket.title} onDelete={() => onDeleteTicket(ticket)}/>}<div data-narration-ignore="true"><TicketDetailLauncher ticket={ticket} workspace={{work:readingWork,onChangeBoard,onPatch:onPatchTicket,onOpenNote}}/></div><div className="note-ticket-prose">{taskBody}</div><TicketCardControls status={ticket.status} dueDate={ticket.dueDate} urgency={ticket.urgency} onPatch={onPatchTicket ? patch => onPatchTicket(ticket, patch) : undefined}/></li>;
       return (
         <li className={className}>
           <input
@@ -1451,13 +1470,13 @@ export function NoteView({
   // Playback ticks must not remount the reading text: its native ranges also
   // anchor Find, selection, excerpts and narration highlighting.
   const renderedMarkdown = useMemo(() => (
-    <ReadingBoardContext.Provider value={{noteId:note.id,workspace:{work:collectWork(notes),onChangeBoard,onPatch:onPatchTicket,onDelete:onDeleteTicket,onOpenNote,inference:ticketInference,
+    <ReadingBoardContext.Provider value={{noteId:note.id,workspace:{work:readingWork,onChangeBoard,onPatch:onPatchTicket,onDelete:onDeleteTicket,onOpenNote,inference:ticketInference,
       onCreateTicket:onCreateWork ? (target,title,status,dueDate) => onCreateWork('ticket',title,target.noteId,target.id,status,dueDate) : undefined}}}>
     <ReactMarkdown remarkPlugins={[remarkGfm, ticketReferencePlugin, remarkVisualArtifacts, remarkNoteBoards, remarkNoteTableMetadata, remarkNoteBlocks, remarkNoteMargins, remarkNoteTextAlignment]} components={markdownComponents} urlTransform={safeUrl}>
       {visibleMarkdown}
     </ReactMarkdown>
     </ReadingBoardContext.Provider>
-  ), [visibleMarkdown, note, notes, concepts, sources, findQuery, selectedPassageId,
+  ), [visibleMarkdown, note, notes, readingWork, concepts, sources, findQuery, selectedPassageId,
     onOpenNote, onOpenConcept, onOpenSource, onUpdateNote, onPatchTicket, onDeleteTicket, onCreateWork, onChangeBoard, ticketInference, ticketReferencePlugin]);
 
   useLayoutEffect(() => {
@@ -1720,7 +1739,8 @@ export function NoteView({
               concepts={concepts}
               sources={sources}
               attachedSourceIds={note.sourceIds}
-              onChange={(body) => update({ body })}
+              onChange={(body, origin) => update({ body }, origin)}
+              getWritingOrigins={getWritingOrigins}
               onChangeBoard={onChangeBoard}
               onPatchTicket={onPatchTicket}
               onDeleteTicket={onDeleteTicket}
@@ -1793,6 +1813,7 @@ export function NoteView({
               <span key={tag}>#{tag}</span>
             ))}
           </div>
+          {note.writingOrigins?.length ? <span title="Writing contributions"><span className="sr-only">Writing contributions: </span>{writingCredit(note)}</span> : null}
           <span>
             Updated{" "}
             {new Intl.DateTimeFormat(undefined, {
@@ -1905,7 +1926,7 @@ export function NoteView({
     {onThreadAction && <PassageThreads draftThread={comment.draftThread} onDraftMarker={comment.setDraftMarker} key={note.id} openThreadId={comment.openThreadId} reviewActive={!!chatEdit} note={note} root={findScopeRef} editor={editing ? threadEditor : null} onAction={onThreadAction} references={{ notes, sources, onOpenNote, onOpenSource }} />}
     {comment.ui}
     {readingArtifactActive && threadEditor && settings && <Suspense fallback={null}><ReadingVisualise
-      key={readingArtifact.noteId} editor={threadEditor} passage={readingArtifact.passage} settings={settings}
+      key={readingArtifact.noteId} editor={threadEditor} passage={readingArtifact.passage} settings={settings} getWritingOrigins={getWritingOrigins}
       current={() => currentNoteRef.current.id === readingArtifact.noteId && currentNoteRef.current.body === readingArtifact.body && !threadEditor.isDestroyed}
       onClose={keepEditing => { setReadingArtifact(undefined); if (!keepEditing) setEditing(false); }}
     /></Suspense>}

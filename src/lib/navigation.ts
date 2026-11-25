@@ -11,6 +11,7 @@ export interface ScrollPosition {
 export type NavigationScreen =
   | "home"
   | "notes"
+  | "contacts"
   | "sources"
   | "chat"
   | "settings"
@@ -52,6 +53,49 @@ export function resetScrollPosition(
   target: ScrollPositionTarget | null,
 ): void {
   restoreScrollPosition(target, TOP_LEFT);
+}
+
+/** Restore a reading position that may extend past the initial editor or image layout. */
+export function restoreReadingPosition(pane: HTMLElement | null, position: ScrollPosition) {
+  if (!pane) return;
+  const restore = () => {
+    restoreScrollPosition(pane, position);
+    return Math.abs(pane.scrollTop - position.scrollTop) < 1 &&
+      Math.abs(pane.scrollLeft - position.scrollLeft) < 1;
+  };
+  if (restore() || typeof ResizeObserver === "undefined") return;
+
+  // Retry on actual layout changes only. A reader moving elsewhere owns the scroll again.
+  const listeners = new AbortController();
+  const resize = new ResizeObserver(retry);
+  const children = new MutationObserver(observeContent);
+  function observeLayout(element: Element) {
+    resize.observe(element);
+    // Note surfaces use display: contents, so their children supply the layout box.
+    if (element === pane || getComputedStyle(element).display === "contents") {
+      children.observe(element, { childList: true });
+      for (const child of element.children) observeLayout(child);
+    }
+  }
+  function observeContent() {
+    if (!pane || listeners.signal.aborted) return;
+    resize.disconnect();
+    children.disconnect();
+    observeLayout(pane);
+  }
+  function stop() {
+    resize.disconnect();
+    children.disconnect();
+    listeners.abort();
+  }
+  function retry() {
+    if (!listeners.signal.aborted && restore()) stop();
+  }
+  observeContent();
+  const options = { signal: listeners.signal, capture: true, passive: true };
+  for (const event of ["wheel", "pointerdown", "touchstart"]) pane.addEventListener(event, stop, options);
+  window.addEventListener("keydown", stop, options);
+  return stop;
 }
 
 export function routesMatch(

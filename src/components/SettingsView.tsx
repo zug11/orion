@@ -1,4 +1,3 @@
-import { TicketCodeSettings } from './TicketNavigation';
 import { ElevenLabsVoiceStudio } from "./ElevenLabsVoiceStudio";
 import { ChatGPTConnection } from "./ChatGPTConnection";
 import { SavedConnectionsAccess } from "./SavedConnectionsAccess";
@@ -1862,7 +1861,6 @@ export function SettingsView({
           </section>
 
           <section className="settings-section" id="data">
-            <TicketCodeSettings/>
             <div className="settings-section-title">
               <span className="settings-icon blue">
                 <Database size={18} />

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptySnapshot } from "../data/defaults";
 import type { VoiceWorkOrder } from "../lib/voiceResearch";
 import { SpaceVoice } from "./SpaceVoice";
+import { TicketNavigationRoot } from "./TicketNavigation";
 import { ChatDock } from "./ChatDock";
 import type { VoiceConstellationProps } from "./VoiceConstellation";
 import { createVoiceSelectionStore } from "../lib/voiceSelection";
@@ -120,7 +121,169 @@ function backgroundFinding(job: VoiceWorkOrder, spaceId: string, sequence = 1, d
 }
 const synthesized = () => mock.append.mock.calls.filter(call => call[0] === "thinking" && String(call[1]).includes('"type":"consolidated_worker_finding"'));
 
+function ticketCall(provider: "openai" | "elevenlabs", confirm: () => Promise<void> = async () => {}, write = vi.fn(async (..._args: unknown[]) => {})) {
+  const snapshot = createEmptySnapshot("Film", "2026-11-19", "film");
+  Object.assign(snapshot.settings, { apiKeyConfigured: true, elevenLabsApiKeyConfigured: true, liveVoiceProvider: provider });
+  snapshot.notes = [{ id: "shoot", title: "Film", slug: "shoot", summary: "", kind: "article", status: "ready", aliases: [], tags: [],
+    sourceIds: [], conceptIds: [], createdAt: "2026-11-19", updatedAt: "2026-11-19", body: "- [ ] Book the venue <!-- orion-ticket:v1 venue progress - -->\n- [ ] Pay the venue deposit <!-- orion-ticket:v1 deposit todo - -->" }];
+  snapshot.notes[0].body += "\n\nCostume fitting on 12 December 2026.";
+  snapshot.ticketCodes = { version: 1, prefix: "ORION", nextNumber: 9, assigned: { venue: 7, deposit: 8 } };
+  const patch = vi.fn(() => true), noop = vi.fn(), proposal = vi.fn();
+  const element = (active: typeof snapshot) => <TicketNavigationRoot snapshot={active} target={{}} openTicket={noop} openBoard={noop} changePrefix={noop} onClose={noop}
+    onOpenNote={noop} onPatch={patch} onConfirmDone={confirm} onWriteVoiceWork={write}>
+    <SpaceVoice snapshot={active} enabled toggleRequest={1} commit={noop} onProposal={proposal} onOpenNote={noop} onOpenSettings={noop}/>
+  </TicketNavigationRoot>;
+  const view = render(element(snapshot));
+  const say = async (prompt: string, start: number) => {
+    const id = "ticket-" + start;
+    event({ type: "session.input_audio.started", item_id: id });
+    speak(prompt, start, undefined, id); await settle();
+  };
+  return { patch, proposal, say, view, snapshot, update: (active: typeof snapshot) => view.rerender(element(active)) };
+}
+
 describe("Space voice work-order integration", () => {
+  it.each(["openai", "elevenlabs"] as const)("reads actual Space tickets and waits for the saved %s creation before confirming it once", async provider => {
+    let saved!: () => void;
+    const write = vi.fn(async (..._args: unknown[]) => new Promise<void>(resolve => { saved = resolve; }));
+    const { say } = ticketCall(provider, undefined, write);
+    await settle();
+    await say("What tickets do I have?", 1_000);
+    const results = () => mock.append.mock.calls.filter(call => call[0] === "thinking" && String(call[1]).includes("workspace_action_result")).map(call => JSON.parse(String(call[1])).message as string);
+    expect(results().join(" ")).toContain("Book the venue");
+    event({ type: "session.input_audio.started", item_id: "create-one" });
+    const utterance = { type: "session.input_transcript.delta", event_id: "create-event", item_id: "create-one", delta: "Add a ticket called Book rehearsal", start_ms: 4_000, end_ms: 4_200 };
+    event(utterance); await settle();
+    expect(write.mock.calls[0][0]).toMatchObject({ kind: "append", spaceId: "film", markdown: expect.stringContaining("Book rehearsal") });
+    expect(results().join(" ")).not.toContain("Book rehearsal");
+    event(utterance);
+    if (provider === "elevenlabs") event({ ...utterance, event_id: "retransmitted-final" });
+    event({ type: "session.delegation.created", item_id: "create-one", offset_ms: 4_200, delegation: { id: "late-create" } });
+    await settle(); expect(write).toHaveBeenCalledTimes(1);
+    saved(); await settle();
+    expect(results().filter(message => message.includes("Book rehearsal"))).toHaveLength(1);
+    expect(mock.run).not.toHaveBeenCalled();
+  });
+  it("saves two spoken creations in order into the same new Tickets note", async () => {
+    let firstSaved!: () => void;
+    const write = vi.fn(async (..._args: unknown[]) => {}).mockImplementationOnce(() => new Promise<void>(resolve => { firstSaved = resolve; }));
+    const { say, snapshot, update } = ticketCall("openai", undefined, write);
+    await settle();
+    await say("Create a ticket called Find cameras", 1_000);
+    await say("Create a ticket called Book sound", 4_000);
+    expect(write).toHaveBeenCalledTimes(1);
+    const first = write.mock.calls[0][0] as { markdown: string };
+    const created = { ...snapshot.notes[0], id: "new-tickets", title: "Tickets", body: first.markdown };
+    update({ ...snapshot, notes: [...snapshot.notes, created] });
+    firstSaved(); await settle();
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(write.mock.calls[1][0]).toMatchObject({ kind: "append", note: { id: created.id, body: first.markdown }, markdown: expect.stringContaining("Book sound") });
+  });
+  it.each(["openai", "elevenlabs"] as const)("opens a focused review for inferred %s dates and reports failed persistence without claiming a change", async provider => {
+    const write = vi.fn(async (..._args: unknown[]) => { throw Error("stale target"); });
+    const { say, proposal } = ticketCall(provider, undefined, write);
+    await settle();
+    await say("Reschedule costume fitting to 2026-12-15", 1_000);
+    await vi.dynamicImportSettled(); await settle();
+    const packet = () => mock.append.mock.calls.filter(call => call[0] === "thinking").map(call => String(call[1]));
+    expect(proposal).toHaveBeenCalledWith(expect.objectContaining({ editProposal: expect.objectContaining({ noteId: "shoot", edits: [{ before: "12 December 2026", after: "15 December 2026" }] }) }));
+    expect(write).not.toHaveBeenCalled();
+    expect(packet().some(text => text.includes('"saved":false'))).toBe(true);
+    await say("Create a ticket called Call production", 4_000);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(packet().some(text => text.includes("couldn’t verify"))).toBe(true);
+    expect(packet().some(text => text.includes("Added “Call production”"))).toBe(false);
+  });
+  it.each(["openai", "elevenlabs"] as const)("completes a ticket from the human %s turn once and waits for the save before reporting it", async provider => {
+    let saved!: () => void;
+    const confirm = vi.fn(() => new Promise<void>(resolve => { saved = resolve; }));
+    const { patch } = ticketCall(provider, confirm);
+    event({ type: "session.output_transcript.delta", delta: "Mark ORION-007 done.", start_ms: 0, end_ms: 200 });
+    await settle(); expect(patch).not.toHaveBeenCalled();
+    event({ type: "session.input_audio.started", item_id: "ticket-onset" });
+    speak("Could you move Orion zero zero seven to done?", 2_000, undefined, "ticket-onset");
+    await settle();
+    expect(patch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: "venue" }), { status: "done" });
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(screen.queryByText(/Moved ORION-007 to Done/)).toBeNull();
+    event({ type: "session.delegation.created", item_id: "ticket-onset", offset_ms: 2_200, delegation: { id: "late-ticket" } });
+    await settle(); expect(patch).toHaveBeenCalledTimes(1);
+    await act(async () => saved());
+    expect(screen.getByText("Moved ORION-007 to Done.")).toBeInTheDocument();
+    expect(mock.append.mock.calls.some(call => call[0] === "thinking" && String(call[1]).includes("ticket_completion_result"))).toBe(true);
+    expect(mock.run).not.toHaveBeenCalled(); expect(mock.route).not.toHaveBeenCalled();
+  });
+  it.each(["openai", "elevenlabs"] as const)("narrows an ambiguous %s request by voice without requiring the command again", async provider => {
+    const { patch, say } = ticketCall(provider);
+    await say("Okay, can you tick the venue one off for me?", 0);
+    expect(screen.getByText(/Which ticket should I mark Done,.*Pay the venue deposit/)).toBeInTheDocument();
+    await say("Yes", 2_000);
+    expect(patch).not.toHaveBeenCalled();
+    await say("The deposit one.", 4_000);
+    expect(patch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: "deposit" }), { status: "done" });
+    expect(screen.getByText("Moved ORION-008 to Done.")).toBeInTheDocument();
+    event({ type: "session.delegation.created", item_id: "ticket-4000", offset_ms: 4200, delegation: { id: "late-choice" } });
+    await settle();
+    expect(patch).toHaveBeenCalledTimes(1); expect(mock.editDriver).not.toHaveBeenCalled(); expect(mock.run).not.toHaveBeenCalled();
+  });
+  it.each(["openai", "elevenlabs"] as const)("asks before applying a semantic %s match and requires the human's reply", async provider => {
+    const { patch, say } = ticketCall(provider);
+    mock.editDriver.mockResolvedValue({ reply: '{"matches":[1]}' });
+    await say("Can you cross the rehearsal space rental off my list?", 0);
+    expect(mock.editDriver).toHaveBeenCalledOnce();
+    expect(screen.getByText("Should I mark “Book the venue” as Done?")).toBeInTheDocument();
+    event({ type: "session.output_transcript.delta", delta: "Yes, do it.", start_ms: 1_500, end_ms: 1_800 });
+    await settle(); expect(patch).not.toHaveBeenCalled();
+    await say("Yeah, please.", 3_000);
+    expect(patch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: "venue" }), { status: "done" });
+  });
+  it.each(["openai", "elevenlabs"] as const)("checks when the person spoke before accepting a %s confirmation of a progress report", async provider => {
+    const { patch, say } = ticketCall(provider);
+    event({ type: "session.input_audio.started", item_id: "early-yes" });
+    await say("I just booked the venue.", 0);
+    expect(screen.getByText("Should I mark “Book the venue” as Done?")).toBeInTheDocument();
+    speak("Yes.", 2_000, undefined, "early-yes");
+    await settle();
+    expect(patch).not.toHaveBeenCalled();
+    await say("Yes, please.", 4_000);
+    expect(patch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: "venue" }), { status: "done" });
+    expect(mock.editDriver).not.toHaveBeenCalled();
+  });
+  it("discards a late semantic suggestion after a topic change and falls back to a local question on timeout", async () => {
+    const { patch, say } = ticketCall("openai");
+    let finish!: (value: { reply: string }) => void;
+    mock.editDriver.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    await say("Cross the rental one off", 0);
+    const signal = mock.editDriver.mock.calls[0][1];
+    await say("Let's talk about tomorrow.", 2_000);
+    expect(signal.aborted).toBe(true);
+    await act(async () => finish({ reply: '{"matches":[1]}' }));
+    expect(screen.queryByText(/Should I mark/)).toBeNull();
+    await say("yes", 4_000); expect(patch).not.toHaveBeenCalled();
+    await say("Cross the rental one off", 6_000); await settle(6_000);
+    expect(screen.getByText(/Which ticket should I mark Done\?/)).toBeInTheDocument();
+    await say("The deposit one", 14_000);
+    expect(patch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: "deposit" }), { status: "done" });
+  });
+  it("keeps a spoken ticket question open when an ElevenLabs reply has no captured onset", async () => {
+    const { patch, say } = ticketCall("elevenlabs");
+    await say("I just booked the venue.", 0);
+    expect(screen.getByText("Should I mark “Book the venue” as Done?")).toBeInTheDocument();
+    speak("Yes.", 2_000); await settle();
+    expect(patch).not.toHaveBeenCalled();
+    expect(screen.getByText(/To confirm, say “mark”/)).toBeInTheDocument();
+    speak("Mark ORION-007 done.", 4_000); await settle();
+    expect(patch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: "venue" }), { status: "done" });
+  });
+  it("retains the ambiguous ticket choices after a late ordinal from an earlier utterance", async () => {
+    const { patch, say } = ticketCall("elevenlabs");
+    event({ type: "session.input_audio.started", item_id: "earlier-turn" });
+    await say("Tick the venue one off.", 0);
+    speak("The second one.", 2_000, undefined, "earlier-turn"); await settle();
+    expect(patch).not.toHaveBeenCalled();
+    await say("The deposit one.", 4_000);
+    expect(patch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: "deposit" }), { status: "done" });
+  });
   it.each(["openai", "elevenlabs"] as const)("shows routing and admits dense-Space idea workers from the exact %s question without a delegation", async provider => {
     const { routeVoiceTurn } = await vi.importActual<typeof import("../lib/voiceWorkOrders")>("../lib/voiceWorkOrders");
     mock.route.mockImplementation(routeVoiceTurn);
@@ -320,6 +483,26 @@ describe("Space voice work-order integration", () => {
     await settle(3_000);
     expect(mock.run).toHaveBeenCalled();
     expect(mock.run.mock.calls[0][3]).toBe("original-note");
+  });
+
+  it("accepts a second spoken research request across note navigation while the Foucault worker is running", async () => {
+    const snapshot = createEmptySnapshot("Research", "2026-11-18", "candidates");
+    Object.assign(snapshot.settings, { apiKeyConfigured: true, elevenLabsApiKeyConfigured: true, liveVoiceProvider: "elevenlabs" });
+    const props = { snapshot, enabled: true, toggleRequest: 1, commit: vi.fn(), onProposal: vi.fn(),
+      onOpenNote: vi.fn(), onOpenSettings: vi.fn() };
+    const { rerender } = render(<SpaceVoice {...props} focusNoteId="candidate-list" />);
+    speak("Research Foucault as a fifth candidate.", 0); await settle();
+    expect(mock.jobs).toEqual([expect.objectContaining({ state: "running", focusNoteId: "candidate-list" })]);
+    event({ type: "session.input_audio.started", item_id: "second-request" });
+    rerender(<SpaceVoice {...props} focusNoteId="different-note" />);
+    speak("Research the dates in this note.", 2_000, undefined, "second-request"); await settle();
+    expect(mock.run.mock.calls.map(call => [call[1], call[3]])).toEqual([
+      ["Research Foucault as a fifth candidate.", "candidate-list"],
+      ["Research the dates in this note.", "candidate-list"],
+    ]);
+    expect(mock.jobs).toHaveLength(2);
+    expect(mock.jobs.every(job => job.state === "running")).toBe(true);
+    expect(mock.cancel).not.toHaveBeenCalled();
   });
 
   it("does not authorize an ElevenLabs transcript whose original target was not captured", async () => {

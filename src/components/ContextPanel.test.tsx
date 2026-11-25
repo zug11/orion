@@ -9,6 +9,16 @@ import { ContextPanel } from "./ContextPanel";
 const NOW = "2026-08-05T00:00:00.000Z";
 
 describe("ContextPanel", () => {
+  it("shows recorded writing contributions together and leaves undocumented notes unlabelled", () => {
+    const snapshot = createEmptySnapshot("Research", NOW);
+    const note: Note = { id:"field", title:"Field notes", slug:"field", summary:"", body:"Interview transcript.",
+      aliases:[], tags:[], kind:"article", status:"ready", conceptIds:[], sourceIds:[], createdAt:NOW, updatedAt:NOW };
+    const props = {snapshot,onOpenNote:vi.fn(),onOpenSource:vi.fn(),onClose:vi.fn()};
+    const view = render(<ContextPanel {...props} note={note}/>);
+    expect(screen.queryByText('Writing contributions')).toBeNull();
+    view.rerender(<ContextPanel {...props} note={{...note,writingOrigins:['orion-ai','mcp']}}/>);
+    expect(screen.getByText('Orion AI · External app via MCP')).toBeVisible();
+  });
   it("shows supporting, qualifying, and conflicting arguments even when they also mention this note", () => {
     const snapshot = createEmptySnapshot("Arguments", NOW);
     const note: Note = {

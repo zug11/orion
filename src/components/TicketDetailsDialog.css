@@ -53,3 +53,7 @@
 .ticket-code-settings input { background:var(--surface-1); color:var(--text); border:1px solid var(--line-strong); border-radius:8px; padding:9px 12px; font:inherit; width:180px; }
 @media(max-width:600px) { .ticket-detail { width:calc(100vw - 20px); max-height:calc(100dvh - 24px); padding:20px; } .ticket-detail-properties { gap:12px; } .ticket-detail-item { gap:9px; flex-wrap:wrap; } .ticket-detail-item-actions { width:100%; justify-content:flex-end; margin-top:-3px; margin-bottom:6px; } .ticket-detail-item-text { min-width:120px; } }
 @media(prefers-reduced-transparency:reduce),(prefers-contrast:more) { .ticket-detail::backdrop { background:#17191de6; backdrop-filter:none; -webkit-backdrop-filter:none; } }
+
+.ticket-detail-header-actions { display:flex; align-items:center; gap:10px; }
+.ticket-code-settings { width:min(440px, calc(100vw - 32px)); }
+.ticket-code-settings small { color:var(--text-muted); }

@@ -7,6 +7,7 @@ import {
   createEmptyVault,
 } from "../data/defaults";
 import type { AppSnapshot } from "../types";
+import { makeContactNote } from "./contacts";
 import {
   apiKeyStatus,
   anthropicApiKeyStatus,
@@ -1206,6 +1207,37 @@ describe("browser persistence fallback", () => {
     },
   );
 
+  it("round-trips contact metadata and preserves the last save after an invalid write", async () => {
+    const vault = createEmptyVault("Clients");
+    const contact = makeContactNote("Sam", "Lua Studio")!;
+    vault.spaces[0].notes = [contact];
+    await saveSnapshot(vault);
+    expect((await loadSnapshot())?.spaces[0].notes[0]).toEqual(contact);
+    const saved = window.localStorage.getItem("orion:vault:v2");
+    Object.assign(contact, { contact: { version: 1, organization: null } });
+    await expect(saveSnapshot(vault)).rejects.toThrow("Invalid contact");
+    expect(window.localStorage.getItem("orion:vault:v2")).toBe(saved);
+    window.localStorage.setItem("orion:vault:v2", JSON.stringify(vault));
+    await expect(loadSnapshot()).rejects.toThrow("invalid schema");
+  });
+
+  it("round-trips writing provenance and rejects noncanonical data without erasing the saved note", async () => {
+    const vault = createEmptyVault("Writing provenance", TEST_NOW);
+    vault.spaces[0] = createPopulatedSnapshot(); vault.activeSpaceId = vault.spaces[0].workspace.id;
+    const note = vault.spaces[0].notes[0];
+    note.writingOrigins = ["orion-ai", "mcp"];
+    await saveSnapshot(vault);
+    expect((await loadSnapshot())?.spaces[0].notes[0]).toEqual(note);
+    const saved = window.localStorage.getItem("orion:vault:v2");
+    for (const writingOrigins of [null, [], ["human"], ["mcp", "mcp"], ["mcp", "orion-ai"]]) {
+      Object.assign(note, { writingOrigins });
+      await expect(saveSnapshot(vault)).rejects.toThrow("writing origins");
+      expect(window.localStorage.getItem("orion:vault:v2")).toBe(saved);
+      window.localStorage.setItem("orion:vault:v2", JSON.stringify(vault));
+      await expect(loadSnapshot()).rejects.toThrow("invalid schema");
+      window.localStorage.setItem("orion:vault:v2", saved!);
+    }
+  });
   it.each([undefined, [], ["v1:0123456789abcdef:0:12"]])("round-trips optional calendar dismissal metadata %j", async dismissedCalendarMentions => {
     const vault = createEmptyVault("Calendar metadata", TEST_NOW);
     vault.spaces[0] = createPopulatedSnapshot(); vault.activeSpaceId = vault.spaces[0].workspace.id;

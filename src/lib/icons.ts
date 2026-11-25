@@ -26,6 +26,7 @@ export { default as CircleDot } from "lucide-react/dist/esm/icons/circle-dot.mjs
 export { default as CircleArrowUp } from "lucide-react/dist/esm/icons/circle-arrow-up.mjs";
 export { default as CirclePlay } from "lucide-react/dist/esm/icons/circle-play.mjs";
 export { default as Clock3 } from "lucide-react/dist/esm/icons/clock-3.mjs";
+export { default as Contact } from "lucide-react/dist/esm/icons/contact.mjs";
 export { default as Command } from "lucide-react/dist/esm/icons/command.mjs";
 export { default as CornerDownLeft } from "lucide-react/dist/esm/icons/corner-down-left.mjs";
 export { default as CornerUpLeft } from "lucide-react/dist/esm/icons/corner-up-left.mjs";

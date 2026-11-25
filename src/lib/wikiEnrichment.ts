@@ -1,5 +1,6 @@
 import { stripVisualArtifactMarkers } from "./markdown";
 import { nanoid } from "nanoid";
+import { withWritingOrigin } from "./writingOrigins";
 import { slugifyTitle } from "../data/defaults";
 import type {
   AppSnapshot,
@@ -168,6 +169,7 @@ export function applyWikiEnrichmentResult(
 
     const noteId = `note-${nanoid(10)}`;
     const created: Note = {
+      writingOrigins: ["orion-ai"],
       id: noteId,
       title,
       slug: uniqueSlug(title, notes),
@@ -266,14 +268,14 @@ function mergeNoteContext(
       ? wikiArticleBody(article, spaceName)
       : currentBody);
 
-  return {
-    ...note,
-    summary:
-      !note.summary.trim() ||
+  const summary = !note.summary.trim() ||
       note.summary.startsWith("Orion is preparing a Space article for ") ||
       note.summary.startsWith("Orion is writing a Space article for ")
         ? article.summary.trim()
-        : note.summary,
+        : note.summary;
+  return {
+    ...(body !== currentBody || summary !== note.summary ? withWritingOrigin(note, "orion-ai") : note),
+    summary,
     body,
     aliases: unique([...note.aliases, ...article.aliases]).slice(0, 16),
     tags: unique([
@@ -507,6 +509,7 @@ function uniqueSlug(title: string, notes: readonly Note[]): string {
 function cloneNote(note: Note): Note {
   return {
     ...note,
+    ...(note.writingOrigins ? { writingOrigins: [...note.writingOrigins] } : {}),
     aliases: [...note.aliases],
     tags: [...note.tags],
     conceptIds: [...note.conceptIds],

@@ -13,9 +13,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zug11/orion/releases/download/v0.6.4/Orion-0.6.4.m-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/zug11/orion/releases/download/v0.6.5/Orion-0.6.5.m-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
   ·
-  <a href="https://github.com/zug11/orion/releases/tag/v0.6.4">Release notes · Whisper Medium edition</a>
+  <a href="https://github.com/zug11/orion/releases/tag/v0.6.5">Release notes · Whisper Medium edition</a>
   ·
   <a href="#the-orchestration-topology">How it works</a>
   ·
@@ -24,7 +24,7 @@
   <a href="#local-first-by-construction">Privacy</a>
 </p>
 
-> Orion 0.6.4 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
+> Orion 0.6.5 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
 
 ## ChatGPT plan access and voice choices
 
@@ -347,7 +347,12 @@ sections of the remaining prose. Completed to-dos are filtered out before any
 AI request. Section results are combined and deduplicated locally, with supporting
 passages for review. Existing to-dos are promoted to tickets in place; new actions
 are added only after you accept them. A changed note requires a fresh review.
-Without an AI key, it still collects written open to-dos locally.
+The review shows the description, checklist steps and supporting text. When the
+note gives a deadline or says work has started, you can accept or change the
+suggested date and status. Relative deadlines use the day the note was last
+saved. Existing deadlines and board columns are preserved. Without an AI
+connection, Orion still collects written open to-dos and recognises explicit
+deadlines in them.
 
 Tickets appear as editable cards in notes as well as on boards, with soft shadows.
 The optional **Set urgency** action offers Urgent, High, Medium or Low, with no
@@ -469,7 +474,7 @@ One dictation can mix prose, tickets, new kanban boards, to-do lists and editabl
 
 Distinct project tasks and errands stay separate cards or checkboxes, even when you say them in one sentence. Immediately after AI insertion, **Use original dictation** in the writing toolbar replaces the result with the local transcript. That shortcut disappears when you make another document edit, so it cannot overwrite later writing. The full original remains accessible from **Original dictations** and **Sources**. You can also undo the entire insertion normally.
 
-After Stop, the microphone button quietly shows processing without progress or success pop-ups. During cleanup, click that same button (**Use original** in its tooltip) to insert the local transcript immediately. Without a key for the selected provider, Orion uses only local Whisper transcription and never attempts AI cleanup. If an optional ticket, board or table is invalid, Orion keeps the validated cleaned writing without another AI request. Provider errors, a timeout or an invalid cleaned transcript still use the original. If an audio segment fails, Orion preserves the words it did recover and shows an incomplete-recording error; it skips AI interpretation because the missing speech might change your intent. Cleanup has a 45-second limit and accepts up to 24,000 Unicode characters; longer dictation stays complete and local. Insertion is one Undo step. **Original dictations** at the bottom of the note opens the unedited transcript, also available in **Sources** after reopening Orion. Original transcripts stay local except for the optional text cleanup request; audio is never sent for this step. Moving to another note or an incoming edit from another window prevents late insertion into the wrong document.
+After Stop, the microphone button quietly shows processing without progress or success pop-ups. During cleanup, click that same button (**Use original** in its tooltip) to insert the local transcript immediately. Without a key for the selected provider, Orion uses only local Whisper transcription and never attempts AI cleanup. If an optional ticket, board or table is invalid, Orion keeps the validated cleaned writing without another AI request. Provider errors, a timeout or an invalid cleaned transcript still use the original. If an audio segment fails, Orion preserves the words it did recover and shows an incomplete-recording error; it skips AI interpretation because the missing speech might change your intent. Cleanup has a 45-second limit and accepts up to 24,000 Unicode characters; longer dictation stays complete and local. Insertion is one Undo step. **Original dictations** at the bottom of the note opens the unedited transcript, also available in **Sources** after reopening Orion. Original transcripts stay local except for the optional text cleanup request; audio is never sent for this step. You can browse Home, Sources or another note in the same Space while dictation continues. A floating control shows the timer, lets you stop, and returns to the recording note. Stopping inserts at that note’s original cursor without interrupting the page you are using; Undo remains available when you return. Switching Spaces or closing the editor stops capture and preserves the original in Sources. An incoming replacement from another window prevents insertion into a changed document.
 
 Small edition builds process two-minute segments. The current `0.5.3` Medium download bundles Whisper Medium, loads it once per dictation, and transcribes overlapping 30-second windows in the background. Both keep all generated text hidden until you press Stop, and neither imposes a fixed recording-duration cap.
 
@@ -856,12 +861,12 @@ See [all 21 tools and their contracts](docs/mcp-library-tools.md).
 
 ## Download
 
-[**Download Orion 0.6.4 for Apple Silicon — Whisper Medium**](https://github.com/zug11/orion/releases/download/v0.6.4/Orion-0.6.4.m-Apple-Silicon.dmg)
+[**Download Orion 0.6.5 for Apple Silicon — Whisper Medium**](https://github.com/zug11/orion/releases/download/v0.6.5/Orion-0.6.5.m-Apple-Silicon.dmg)
 
 This release includes Whisper Medium and its persistent dictation worker, the
 Claude connector and the Codex plugin. It is Developer ID signed,
 Apple-notarized, stapled and Gatekeeper-accepted. Verify the installer with the
-[SHA-256 checksums](https://github.com/zug11/orion/releases/download/v0.6.4/Orion-0.6.4-SHA256SUMS.txt). Small edition builds are available
+[SHA-256 checksums](https://github.com/zug11/orion/releases/download/v0.6.5/Orion-0.6.5-SHA256SUMS.txt). Small edition builds are available
 in [earlier releases](https://github.com/zug11/orion/releases).
 
 Requirements:
@@ -1039,6 +1044,15 @@ request, rather than receiving a rewritten authorizing question. Independent
 work orders keep this work parallel; saves still require explicit authority and
 existing-note changes still require review. Provider failures retain their actual
 error message in the request's status.
+
+In Talk to Space, **“Tick the venue one off”** moves *Book the venue* to Done
+when it is the only match. If *Pay the venue deposit* also fits, Orion names
+the options. Answer **“the deposit one”** or **“the second one.”** Say **“tick
+that one off”** for an open card or a ticket you just named. **“I’ve booked
+the venue”** is a progress update, so Orion asks before changing the board.
+For a paraphrase, your connected Intelligence provider can suggest a title
+for you to confirm. Both voice providers also accept ticket codes and lists
+of tickets. Orion confirms each move after saving it.
 
 Explicit voice edits such as “rewrite this paragraph”, “make this tighter” or
 “add a paragraph” go directly to the captured note, using the same highlighted
@@ -1285,15 +1299,23 @@ voice indicators retain their lightweight rendering and accessible controls.
 Tickets now have stable Space-local codes, an expanded title/description/checklist
 view, and synchronized note/board/dashboard controls. Known codes in notes and
 Chat open the same ticket, with links back to its source and containing board.
-Change the prefix for future tickets in Settings → Data; existing codes stay put.
+Choose Ticket codes in the Tickets/Kanban toolbar or ticket Details to change
+the prefix for future tickets in this Space; existing codes stay put.
 The reading note's Infer tickets action reviews source-grounded work, suggests
-existing boards and flags likely duplicates. Dictation can also create a ticket's
+existing boards and flags likely duplicates. Review the description and unchecked
+steps drawn from the action's passage. Accepting saves them inside the ticket,
+where they stay editable from its source note or board. Dictation can also create a ticket's
 spoken checklist steps in the same insertion.
 
 Share or export → Orion collection selects individual notes for `.orion` files.
-Each file contains the same chosen collection and opens its named note. Open it
-from Finder or the export sheet; subsequent opens preserve edits in the imported
-Space. Unselected notes, raw source text, private metadata, settings, Chat and
+Each file preserves the original Space name, contains the same chosen collection,
+and opens its named note. Opening from Finder takes you straight to that note,
+including when Orion is launching. Opening from the export sheet closes the
+sheet as soon as the note is ready. You can start reading while the collection
+saves. Subsequent opens preserve edits in the imported Space.
+A new imported Space keeps your local model, saved connection status,
+dictation and appearance preferences, so importing a collection does not switch
+AI cleanup off. Unselected notes, raw source text, private metadata, settings, Chat and
 credentials are excluded. Included links, boards, tickets and referenced images
 travel together. See [the file format and privacy contract](docs/portable-orion.md).
 
@@ -1309,5 +1331,13 @@ Orion's native folder picker without an AI call.
 Keep the default kanban columns, add extra stages, and rename boards or columns
 without moving their tickets. Drag cards between columns or use Left/Right on a
 focused card. Custom columns remain portable in note Markdown and are available
-through Orion's MCP tools. Use Search spaces in the Space switcher to find a
-project; switching back restores the view and scroll position left in that window.
+through Orion's MCP tools. In the Spaces dropdown, typing immediately finds
+matching names. It also searches saved notes locally and shows the title and
+excerpt of the strongest matching note under each Space. Choose **Search by
+meaning** when you remember the idea in different words. Only the query goes
+to your AI provider. Choose a Space to return to its previous view and scroll
+position in that window.
+
+Notes with known AI writing contributions show **Orion AI**, **External app
+via MCP**, or both in the note footer and Note details. Older notes without a
+record of their writing origin stay unlabelled.

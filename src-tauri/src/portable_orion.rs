@@ -4,7 +4,7 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use pulldown_cmark::{Event, Options, Parser, Tag};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -29,42 +29,94 @@ pub(crate) struct Package {
     collection: Collection,
     assets: Vec<Asset>,
 }
+// These wire structs are serialized directly into the content hash. Keep fields
+// in lexical order of their JSON names, matching the browser canonicalizer.
+// The empty/optional fields follow the same serialization rules on export.
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Collection {
-    title: String,
     notes: Vec<Note>,
     sources: Vec<Source>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ticket_codes: Option<Value>,
+    title: String,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Note {
-    id: String,
-    title: String,
-    summary: String,
     body: String,
-    tags: Vec<String>,
-    source_ids: Vec<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_contact"
+    )]
+    contact: Option<crate::contact::Contact>,
     #[serde(skip_serializing_if = "Option::is_none")]
     heading_layout: Option<String>,
+    id: String,
+    source_ids: Vec<String>,
+    summary: String,
+    tags: Vec<String>,
+    title: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_writing_origins"
+    )]
+    writing_origins: Option<Value>,
+}
+
+fn deserialize_contact<'de, D: serde::Deserializer<'de>>(
+    input: D,
+) -> Result<Option<crate::contact::Contact>, D::Error> {
+    crate::contact::parse(&Value::deserialize(input)?)
+        .map(Some)
+        .ok_or_else(|| serde::de::Error::custom("Invalid contact metadata."))
+}
+
+fn deserialize_writing_origins<'de, D: serde::Deserializer<'de>>(
+    input: D,
+) -> Result<Option<Value>, D::Error> {
+    let value = Value::deserialize(input)?;
+    if crate::writing_origins::is_valid(&value) {
+        Ok(Some(value))
+    } else {
+        Err(serde::de::Error::custom("Invalid note writing origins."))
+    }
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Source {
     id: String,
-    title: String,
     kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     source_url: Option<String>,
+    title: String,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Asset {
+    base64_data: String,
     id: String,
     mime_type: String,
-    base64_data: String,
+}
+
+fn collection_hash(package: &Package) -> Result<String, String> {
+    #[derive(Serialize)]
+    struct Content<'a> {
+        assets: &'a [Asset],
+        collection: &'a Collection,
+    }
+    let mut digest = Sha256::new();
+    serde_json::to_writer(
+        &mut digest,
+        &Content {
+            assets: &package.assets,
+            collection: &package.collection,
+        },
+    )
+    .map_err(|error| format!("Could not identify this collection: {error}"))?;
+    Ok(format!("{:x}", digest.finalize()))
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -83,6 +135,9 @@ fn id(value: &str, min: usize, max: usize) -> bool {
 fn image_ids(collection: &Collection) -> BTreeSet<String> {
     let mut ids = BTreeSet::new();
     for note in &collection.notes {
+        if !note.body.contains("![") {
+            continue;
+        }
         for event in Parser::new_ext(&note.body, Options::all()) {
             if let Event::Start(Tag::Image { dest_url, .. }) = event {
                 if let Some(value) = dest_url.strip_prefix("orion-image://localhost/") {
@@ -95,7 +150,7 @@ fn image_ids(collection: &Collection) -> BTreeSet<String> {
     }
     ids
 }
-fn validate(package: &Package, require_assets: bool) -> Result<(), String> {
+fn validate_manifest(package: &Package, require_assets: bool) -> Result<usize, String> {
     if package.format != "orion"
         || package.version != 1
         || !id(&package.export_id, 16, 64)
@@ -179,7 +234,6 @@ fn validate(package: &Package, require_assets: bool) -> Result<(), String> {
     }
     let references = image_ids(&package.collection);
     let mut asset_ids = BTreeSet::new();
-    let mut asset_bytes = 0;
     for asset in &package.assets {
         if !id(&asset.id, 12, 80)
             || !asset_ids.insert(asset.id.clone())
@@ -188,27 +242,40 @@ fn validate(package: &Package, require_assets: bool) -> Result<(), String> {
         {
             return Err("Invalid, duplicated or unreferenced collection attachment.".into());
         }
-        let bytes = STANDARD
-            .decode(&asset.base64_data)
-            .map_err(|_| "An attachment is not valid base64.")?;
-        if bytes.is_empty() || bytes.len() > crate::MAX_NOTE_IMAGE_BYTES {
-            return Err("An attachment exceeds the 12 MB image limit.".into());
-        }
-        let (_, mime) = crate::note_image_kind_from_bytes(&bytes)
-            .ok_or("An attachment is not a supported raster image.")?;
-        if mime != asset.mime_type {
-            return Err("An attachment's contents do not match its type.".into());
-        }
-        asset_bytes += bytes.len();
     }
     if require_assets && references != asset_ids {
         return Err("An attachment referenced by this collection is missing.".into());
     }
-    if asset_bytes + body_bytes > 90 * 1024 * 1024 {
+    Ok(body_bytes)
+}
+
+fn decode_asset(asset: &Asset, total_bytes: &mut usize) -> Result<Vec<u8>, String> {
+    let bytes = STANDARD
+        .decode(&asset.base64_data)
+        .map_err(|_| "An attachment is not valid base64.")?;
+    if bytes.is_empty() || bytes.len() > crate::MAX_NOTE_IMAGE_BYTES {
+        return Err("An attachment exceeds the 12 MB image limit.".into());
+    }
+    let (_, mime) = crate::note_image_kind_from_bytes(&bytes)
+        .ok_or("An attachment is not a supported raster image.")?;
+    if mime != asset.mime_type {
+        return Err("An attachment's contents do not match its type.".into());
+    }
+    *total_bytes += bytes.len();
+    if *total_bytes > 90 * 1024 * 1024 {
         return Err("This collection exceeds the portable file size limit.".into());
+    }
+    Ok(bytes)
+}
+
+fn validate(package: &Package, require_assets: bool) -> Result<(), String> {
+    let mut total_bytes = validate_manifest(package, require_assets)?;
+    for asset in &package.assets {
+        decode_asset(asset, &mut total_bytes)?;
     }
     Ok(())
 }
+
 fn populate_assets(package: &mut Package, directory: &Path) -> Result<(), String> {
     validate(package, false)?;
     for id in image_ids(&package.collection) {
@@ -373,38 +440,61 @@ pub(crate) async fn export_orion_files(
 
 #[derive(Default)]
 pub(crate) struct PendingFiles(Mutex<VecDeque<(String, PathBuf)>>);
-pub(crate) fn receive(app: &AppHandle, urls: Vec<reqwest::Url>) {
-    let state = app.state::<PendingFiles>();
-    let Ok(mut pending) = state.0.lock() else {
-        return;
-    };
-    for url in urls {
-        if let Ok(path) = url.to_file_path() {
-            if path
+impl PendingFiles {
+    fn enqueue(&self, paths: impl IntoIterator<Item = PathBuf>) -> Result<bool, String> {
+        let mut pending = self
+            .0
+            .lock()
+            .map_err(|_| "The file-open queue was interrupted.")?;
+        let mut accepted = false;
+        for path in paths {
+            if !path
                 .extension()
                 .is_some_and(|s| s.eq_ignore_ascii_case("orion"))
-                && pending.len() < 32
-                && !pending.iter().any(|(_, p)| p == &path)
             {
+                continue;
+            }
+            if pending.iter().any(|(_, queued)| *queued == path) {
+                accepted = true;
+            } else if pending.len() < 32 {
                 pending.push_back((uuid::Uuid::new_v4().to_string(), path));
+                accepted = true;
             }
         }
+        Ok(accepted)
     }
-    let has_files = !pending.is_empty();
-    drop(pending);
-    if !has_files {
-        return;
+
+    fn claim(&self, token: &str) -> Result<Option<PathBuf>, String> {
+        let mut pending = self
+            .0
+            .lock()
+            .map_err(|_| "The file-open queue was interrupted.")?;
+        let Some(position) = pending.iter().position(|(id, _)| id == token) else {
+            // Another library window can have drained the same queue snapshot.
+            return Ok(None);
+        };
+        Ok(pending.remove(position).map(|(_, path)| path))
     }
-    let _ = app.emit("orion-portable-files", ());
-    if crate::desktop_windows::preferred_library_window(app).is_none() {
+}
+
+async fn show_pending_files(app: AppHandle) -> Result<(), String> {
+    if let Err(error) = crate::desktop_windows::ensure_library_window(app.clone()).await {
+        // A window that macOS declined to raise can still open its document.
+        if crate::desktop_windows::preferred_library_window(&app).is_none() {
+            return Err(error);
+        }
+    }
+    app.emit("orion-portable-files", ())
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) fn receive(app: &AppHandle, urls: Vec<reqwest::Url>) {
+    let paths = urls.into_iter().filter_map(|url| url.to_file_path().ok());
+    if app.state::<PendingFiles>().enqueue(paths).unwrap_or(false) {
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
-            let _ = crate::desktop_windows::ensure_library_window(app).await;
+            let _ = show_pending_files(app).await;
         });
-    }
-    if let Some(window) = crate::desktop_windows::preferred_window(app) {
-        let _ = window.show();
-        let _ = window.set_focus();
     }
 }
 #[tauri::command]
@@ -428,8 +518,15 @@ pub(crate) fn pending_orion_files(
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct OpenedDocument {
+    export_id: String,
+    entry_note_id: String,
+    collection: Collection,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct OpenedPackage {
-    file: Package,
+    file: OpenedDocument,
     collection_hash: String,
     image_urls: BTreeMap<String, String>,
 }
@@ -459,17 +556,18 @@ fn open_file(path: &Path, images: &Path) -> Result<OpenedPackage, String> {
     }
     let file: Package = serde_json::from_slice(&bytes)
         .map_err(|e| format!("This .orion file is invalid or uses an unsupported version: {e}"))?;
-    validate(&file, true)?;
-    // serde_json's Value object keys are sorted, matching the browser canonicalizer.
-    let digest = serde_json::to_vec(&json!({"collection":file.collection,"assets":file.assets}))
-        .map_err(|_| "Could not identify this collection.")?;
-    let collection_hash = format!("{:x}", Sha256::digest(&digest));
+    drop(bytes);
+    let mut total_bytes = validate_manifest(&file, true)?;
+    let collection_hash = collection_hash(&file)?;
+    // Release each encoded string as its checked bytes replace it. No image
+    // is written until every image has passed all format and size checks.
+    let mut decoded = Vec::with_capacity(file.assets.len());
+    for asset in file.assets {
+        let bytes = decode_asset(&asset, &mut total_bytes)?;
+        decoded.push((asset.id, bytes));
+    }
     let mut image_urls = BTreeMap::new();
-    // Every asset was decoded and validated before the first attachment is staged.
-    for asset in &file.assets {
-        let bytes = STANDARD
-            .decode(&asset.base64_data)
-            .map_err(|_| "Invalid attachment encoding.")?;
+    for (asset_id, bytes) in decoded {
         let id = format!("portable-{:x}", Sha256::digest(&bytes));
         let path = images.join(&id);
         if path.exists() {
@@ -485,41 +583,58 @@ fn open_file(path: &Path, images: &Path) -> Result<OpenedPackage, String> {
                 return Err(error);
             }
         }
-        image_urls.insert(asset.id.clone(), format!("orion-image://localhost/{id}"));
+        image_urls.insert(asset_id, format!("orion-image://localhost/{id}"));
     }
     Ok(OpenedPackage {
-        file,
+        file: OpenedDocument {
+            export_id: file.export_id,
+            entry_note_id: file.entry_note_id,
+            collection: file.collection,
+        },
         collection_hash,
         image_urls,
     })
 }
+fn pick_collection_path(app: &AppHandle) -> Result<Option<PathBuf>, String> {
+    app.dialog()
+        .file()
+        .set_title("Open Orion collection")
+        .add_filter("Orion collection", &["orion"])
+        .blocking_pick_file()
+        .map(crate::selected_export_path)
+        .transpose()
+}
+
+#[tauri::command]
+pub(crate) async fn pick_orion_file_for_library(app: AppHandle) -> Result<bool, String> {
+    let Some(path) = pick_collection_path(&app)? else {
+        return Ok(false);
+    };
+    if !app.state::<PendingFiles>().enqueue([path])? {
+        return Err(
+            "Orion could not queue this collection. Finish opening the queued files and try again."
+                .into(),
+        );
+    }
+    show_pending_files(app).await?;
+    Ok(true)
+}
+
 #[tauri::command]
 pub(crate) async fn open_orion_file(
     app: AppHandle,
     token: Option<String>,
 ) -> Result<Option<OpenedPackage>, String> {
     let path = if let Some(token) = token {
-        let state = app.state::<PendingFiles>();
-        let mut queue = state
-            .0
-            .lock()
-            .map_err(|_| "The file-open queue was interrupted.")?;
-        let position = queue
-            .iter()
-            .position(|(id, _)| id == &token)
-            .ok_or("This file-open request expired. Open the file again.")?;
-        queue.remove(position).unwrap().1
-    } else {
-        let selected = app
-            .dialog()
-            .file()
-            .set_title("Open Orion collection")
-            .add_filter("Orion collection", &["orion"])
-            .blocking_pick_file();
-        let Some(selected) = selected else {
+        let Some(path) = app.state::<PendingFiles>().claim(&token)? else {
             return Ok(None);
         };
-        crate::selected_export_path(selected)?
+        path
+    } else {
+        let Some(path) = pick_collection_path(&app)? else {
+            return Ok(None);
+        };
+        path
     };
     let images = crate::note_image_directory(&app)?;
     tauri::async_runtime::spawn_blocking(move || open_file(&path, &images).map(Some))
@@ -530,6 +645,86 @@ pub(crate) async fn open_orion_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    #[test]
+    fn overlapping_library_drains_claim_a_finder_request_only_once() {
+        let pending = PendingFiles::default();
+        let path = PathBuf::from("Selected note.orion");
+        pending.enqueue([path.clone()]).unwrap();
+        let token = pending.0.lock().unwrap().front().unwrap().0.clone();
+        assert_eq!(pending.claim(&token).unwrap(), Some(path));
+        assert_eq!(pending.claim(&token).unwrap(), None);
+    }
+    #[test]
+    fn finder_and_the_writing_picker_share_one_bounded_file_queue() {
+        let pending = PendingFiles::default();
+        assert!(!pending.enqueue([PathBuf::from("other.txt")]).unwrap());
+        for n in 0..32 {
+            assert!(pending
+                .enqueue([PathBuf::from(format!("{n}.orion"))])
+                .unwrap());
+        }
+        assert!(pending.enqueue([PathBuf::from("0.orion")]).unwrap());
+        assert!(!pending.enqueue([PathBuf::from("extra.orion")]).unwrap());
+        assert_eq!(pending.0.lock().unwrap().len(), 32);
+    }
+    #[test]
+    fn streamed_hash_matches_sorted_wire_json_with_all_optional_fields() {
+        let raw = include_str!("../tests/fixtures/portable-collection.orion");
+        let mut file: Package = serde_json::from_str(raw).unwrap();
+        file.collection.notes[0].heading_layout = Some("title".into());
+        file.collection.notes[0].writing_origins = Some(json!(["orion-ai", "mcp"]));
+        file.collection.notes[0].source_ids.push("src".into());
+        file.collection.sources.push(Source {
+            id: "src".into(),
+            kind: "text".into(),
+            source_url: Some("https://example.com/notes".into()),
+            title: "Source".into(),
+        });
+        let sorted = json!({"collection":file.collection,"assets":file.assets});
+        let expected = Sha256::digest(serde_json::to_vec(&sorted).unwrap());
+        assert_eq!(collection_hash(&file).unwrap(), format!("{expected:x}"));
+    }
+
+    #[test]
+    fn portable_contact_round_trips_with_browser_hash() {
+        let mut wire: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/portable-collection.orion"))
+                .unwrap();
+        wire["collection"]["notes"][0]["contact"] =
+            json!({"version": 1, "organization": "Lua Studio"});
+        let package: Package = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            collection_hash(&package).unwrap(),
+            "04b795ce8ac96533c223663e08b993412951fe8fefd6e0fcf2d94fbee498c6c7"
+        );
+        assert_eq!(serde_json::to_value(package).unwrap(), wire);
+        wire["collection"]["notes"][0]["contact"] = Value::Null;
+        assert!(serde_json::from_value::<Package>(wire).is_err());
+    }
+
+    #[test]
+    fn writing_origins_round_trip_with_browser_hash_and_reject_invalid_metadata() {
+        let raw = include_str!("../tests/fixtures/portable-collection.orion");
+        let mut wire: Value = serde_json::from_str(raw).unwrap();
+        wire["collection"]["notes"][0]["writingOrigins"] = json!(["orion-ai", "mcp"]);
+        let package: Package = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            collection_hash(&package).unwrap(),
+            "3510704b4d4ef228c4b8e95cdba28f8ecdce2ab35082cdce48ba60c3a3818c45"
+        );
+        assert_eq!(serde_json::to_value(package).unwrap(), wire);
+        for invalid in [
+            json!([]),
+            json!(null),
+            json!(["mcp", "orion-ai"]),
+            json!(["human"]),
+        ] {
+            wire["collection"]["notes"][0]["writingOrigins"] = invalid;
+            assert!(serde_json::from_value::<Package>(wire.clone()).is_err());
+        }
+    }
+
     #[test]
     fn image_roundtrip_matches_browser_identity_and_validates_every_asset_before_staging() {
         let raw = include_str!("../tests/fixtures/portable-collection.orion");
@@ -544,7 +739,13 @@ mod tests {
         );
         let url = &opened.image_urls["picture_fixture_2026"];
         let asset_id = url.strip_prefix("orion-image://localhost/").unwrap();
-        let bytes = STANDARD.decode(&opened.file.assets[0].base64_data).unwrap();
+        let package: Package = serde_json::from_str(raw).unwrap();
+        let bytes = STANDARD.decode(&package.assets[0].base64_data).unwrap();
+        let response = serde_json::to_value(&opened).unwrap();
+        assert!(response["file"].get("assets").is_none());
+        assert!(!response
+            .to_string()
+            .contains(&package.assets[0].base64_data));
         assert_eq!(
             crate::read_note_image(images.path(), asset_id).unwrap().0,
             bytes
@@ -553,7 +754,7 @@ mod tests {
         assert_eq!(again.image_urls, opened.image_urls);
         assert_eq!(fs::read_dir(images.path()).unwrap().count(), 1);
         // Managed content can be repackaged without reading a code-example image.
-        let mut repack = opened.file.clone();
+        let mut repack = package.clone();
         repack.collection.notes[0].body =
             format!("![Picture]({url})\n\n`![private](orion-image://localhost/private_1234567)`");
         repack.assets.clear();
@@ -564,7 +765,7 @@ mod tests {
             bytes
         );
         let untouched = tempfile::tempdir().unwrap();
-        let mut invalid = opened.file.clone();
+        let mut invalid = package;
         invalid.collection.notes[1]
             .body
             .push_str("\n\n![bad](orion-image://localhost/invalid_picture_2026)");

@@ -3,7 +3,7 @@ import { StrictMode, useState } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { NoteView } from "./NoteView";
-import type { Note } from "../types";
+import type { Note, WritingOrigin } from "../types";
 import type { ChatEditApplication } from "../lib/chatEdits";
 const base = "---\nprivate: kept\n---\n\nAn old opening.\n\nKeep **this formatting**.\n\n- [x] A finished task";
 const note: Note = { id: "draft", title: "Draft", slug: "draft", summary: "", body: base, aliases: [], tags: [], kind: "article", status: "ready", conceptIds: [], sourceIds: [], createdAt: "2026-10-08", updatedAt: "2026-10-08" };
@@ -13,13 +13,17 @@ beforeAll(() => Object.defineProperties(Range.prototype, {
   getClientRects: { configurable: true, value: () => [] },
   getBoundingClientRect: { configurable: true, value: () => ({ x: 0, y: 0, top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 }) },
 }));
-it("opens the real editor from preview, autosaves once, and preserves one Undo through parent echoes", async () => {
+it.each([
+  { origin: "orion-ai", prior: ["mcp"] },
+  { origin: "mcp", prior: [] },
+  { origin: "orion-ai", prior: ["orion-ai"] },
+] as { origin: WritingOrigin; prior: WritingOrigin[] }[])("keeps the accepted body and writing origin together through review, Undo and Redo ($origin, $prior)", async ({ origin, prior }) => {
   const save = vi.fn(), complete = vi.fn();
   function Harness() {
-    const [current, setCurrent] = useState(note), [application, setApplication] = useState<ChatEditApplication>();
-    return <><button onClick={() => setApplication(request)}>Apply proposed edit</button><NoteView note={current} notes={[current]} concepts={[]}
+    const [current, setCurrent] = useState<Note>({ ...note, ...(prior.length ? { writingOrigins: prior } : {}) }), [application, setApplication] = useState<ChatEditApplication>();
+    return <><button onClick={() => setApplication({ ...request, writingOrigin: origin })}>Apply proposed edit</button><NoteView note={current} notes={[current]} concepts={[]}
       chatEdit={application} onChatEditComplete={(id, error, accepted) => { complete(id, error, accepted); setApplication(undefined); }}
-      onUpdateNote={next => { save(next); setCurrent(next); }} onOpenNote={vi.fn()} onOpenConcept={vi.fn()} onDeleteNote={vi.fn()} onRegisterConcept={vi.fn()} onDisableConceptAutoLink={vi.fn()} /></>;
+      onUpdateNote={(next, clear) => { save(next, clear); setCurrent(next); }} onOpenNote={vi.fn()} onOpenConcept={vi.fn()} onDeleteNote={vi.fn()} onRegisterConcept={vi.fn()} onDisableConceptAutoLink={vi.fn()} /></>;
   }
   render(<StrictMode><Harness /></StrictMode>);
   expect(screen.getByRole("button", { name: "Edit" })).toBeVisible();
@@ -35,9 +39,15 @@ it("opens the real editor from preview, autosaves once, and preserves one Undo t
   expect(save.mock.calls.filter(([next]) => next.body.includes("A clearer opening."))).toHaveLength(1);
   expect(save.mock.lastCall![0].body).toContain("private: kept");
   expect(save.mock.lastCall![0].body).toContain("**this formatting**");
+  const expected = ["orion-ai", "mcp"].filter(item => item === origin || prior.includes(item as WritingOrigin));
+  expect(save.mock.lastCall![0].writingOrigins).toEqual(expected);
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   await waitFor(() => expect(screen.getByRole("textbox", { name: "Note body" })).toHaveTextContent("An old opening."));
   expect(save.mock.lastCall![0].body).toContain("- [x] A finished task");
+  expect(save.mock.lastCall![0].writingOrigins ?? []).toEqual(prior);
+  expect(save.mock.lastCall![1]).toBe(prior.includes(origin) ? undefined : `remove-${origin}`);
+  fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+  await waitFor(() => expect(save.mock.lastCall![0].writingOrigins).toEqual(expected));
 });
 it("refuses a stale proposal before opening or changing the note", async () => {
   const complete = vi.fn(), save = vi.fn();
@@ -46,6 +56,38 @@ it("refuses a stale proposal before opening or changing the note", async () => {
   await waitFor(() => expect(complete).toHaveBeenCalledWith(request.id, expect.stringContaining("changed")));
   expect(save).not.toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "Edit" })).toBeVisible();
+});
+it("undoes successive Orion and MCP acceptances as two separate writing contributions", async () => {
+  const save = vi.fn();
+  function Harness() {
+    const [current, setCurrent] = useState(note);
+    const [application, setApplication] = useState<ChatEditApplication>();
+    const offer = (origin: WritingOrigin, before: string, after: string) => setApplication({
+      id: origin, writingOrigin: origin, proposal: { ...request.proposal, baseBody: current.body, edits: [{before, after}] },
+    });
+    return <>
+      <button onClick={() => offer("orion-ai", "An old opening.", "The first revision.")}>Orion edit</button>
+      <button onClick={() => offer("mcp", "The first revision.", "The second revision.")}>MCP edit</button>
+      <NoteView note={current} notes={[current]} concepts={[]} chatEdit={application} onChatEditComplete={() => setApplication(undefined)}
+        onUpdateNote={next => { save(next); setCurrent(next); }} onOpenNote={vi.fn()} onOpenConcept={vi.fn()}
+        onDeleteNote={vi.fn()} onRegisterConcept={vi.fn()} onDisableConceptAutoLink={vi.fn()}/>
+    </>;
+  }
+  render(<Harness/>);
+  for (const button of ["Orion edit", "MCP edit"]) {
+    fireEvent.click(screen.getByRole("button", {name:button}));
+    fireEvent.click(await screen.findByRole("button", {name:"Accept changes"}));
+    await waitFor(() => expect(screen.queryByRole("button", {name:"Accept changes"})).toBeNull());
+  }
+  expect(save.mock.lastCall![0].writingOrigins).toEqual(["orion-ai", "mcp"]);
+  for (const [button, origins, passage] of [
+    ["Undo", ["orion-ai"], "The first revision."], ["Undo", [], "An old opening."],
+    ["Redo", ["orion-ai"], "The first revision."], ["Redo", ["orion-ai", "mcp"], "The second revision."],
+  ] as const) {
+    fireEvent.click(screen.getByRole("button", {name:button}));
+    await waitFor(() => expect(save.mock.lastCall![0].body).toContain(passage));
+    expect(save.mock.lastCall![0].writingOrigins ?? []).toEqual(origins);
+  }
 });
 it.each([false, true])("reviews a full rewrite and added paragraph without saving; accept=%s", async accept => {
   const save = vi.fn(), complete = vi.fn();

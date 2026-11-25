@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createEmptySnapshot } from '../data/defaults';
 import type { Note } from '../types';
+import { ticketDetails } from './ticketDetails';
 import { boardMarker, newTicketMarkdown, noteWork, patchTicket } from './tickets';
-import { applyInferredTickets, buildTicketInferenceRequest, inferBoardTickets, parseTicketSuggestions, noteInferenceTarget } from './ticketInference';
+import { reviewTicket, applyInferredTickets, buildTicketInferenceRequest, hasInferredTicketWriting, inferBoardTickets, parseTicketSuggestions, noteInferenceTarget } from './ticketInference';
 
 const board = { id:'b', title:'Launch', noteId:'n' };
 const body = `We need to ask Jo about the launch date.\n\nMaybe test a smaller event first.\n\n${boardMarker(board)}\n\n- [x] Secret finished action\n- [ ] Existing task`;
@@ -11,6 +12,15 @@ function snapshot() { const s=createEmptySnapshot('Launch');s.settings.apiKeyCon
 const reply = JSON.stringify({tickets:[{title:'Ask Jo about the launch date',evidence:'We need to ask Jo about the launch date.'}]});
 
 describe('note-local ticket inference', () => {
+  it('credits accepted provider-written titles while preserving local promotions and user-edited titles', async () => {
+    const s=snapshot(), original=s.notes[0];
+    const result=await inferBoardTickets(s,board,async()=>({reply}),new AbortController().signal);
+    const rows=result.suggestions.map(reviewTicket);
+    expect(hasInferredTicketWriting(original,result,rows)).toBe(true);
+    expect(hasInferredTicketWriting(original,result,rows.filter(row=>result.suggestions[row.index].taskId))).toBe(false);
+    expect(hasInferredTicketWriting(original,result,rows.map(row=>({...row,title:"My wording"})))).toBe(false);
+    expect(hasInferredTicketWriting(original,{...result,localOnly:true},rows)).toBe(false);
+  });
   it('extracts from a note without a board, suggests a destination and flags duplicate candidates across this Space',async()=>{
     const s=snapshot();
     s.notes=[note('We need to test launch checkout.\n\n- [ ] Ask Jo about launch dates'),{...note(`${boardMarker(board)}\n\n${newTicketMarkdown('Test launch checkout','b')}`),id:'other'}];
@@ -22,11 +32,11 @@ describe('note-local ticket inference', () => {
     expect(result.suggestions[1]).toMatchObject({boardId:'b',likelyDuplicate:{noteId:'other',title:'Test launch checkout'}});
     expect(call.mock.calls[0][0].notes).toHaveLength(1);
     const chosen=result.suggestions[0];
-    const changed=applyInferredTickets(s.notes[0],target,result,[chosen.title],[chosen.taskId],[''],['b'],result.boards)!;
+    const changed=applyInferredTickets(s.notes[0],target,result,[reviewTicket(chosen,0)],result.boards)!;
     expect(noteWork(note(changed)).tickets).toMatchObject([{title:'Ask Jo about launch dates',durable:true,boardId:'b'}]);
     expect(changed).toContain('We need to test launch checkout.');
-    expect(applyInferredTickets(s.notes[0],target,result,[chosen.title],[chosen.taskId],[''],['b'],[])).toBeNull();
-    expect(applyInferredTickets(note(changed),target,result,[chosen.title],[chosen.taskId],[''],['b'],result.boards)).toBeNull();
+    expect(applyInferredTickets(s.notes[0],target,result,[reviewTicket(chosen,0)],[])).toBeNull();
+    expect(applyInferredTickets(note(changed),target,result,[reviewTicket(chosen,0)],result.boards)).toBeNull();
   });
   it('infers urgency for written and new actions in the same reader call and persists it without duplicating tasks', async () => {
     const s = snapshot();
@@ -38,7 +48,7 @@ describe('note-local ticket inference', () => {
     const result = await inferBoardTickets(s, board, call, new AbortController().signal);
     expect(call).toHaveBeenCalledOnce();
     expect(result.suggestions.map(s=>s.urgency || '')).toEqual(['high', '', 'urgent']);
-    const updated = applyInferredTickets(s.notes[0], board, result, result.suggestions.map(s=>s.title), result.suggestions.map(s=>s.taskId))!;
+    const updated = applyInferredTickets(s.notes[0], board, result, result.suggestions.map(reviewTicket))!;
     expect(noteWork(note(updated)).tickets).toMatchObject([
       {title:'Fix sign-in: it is blocking launch.',boardId:'b',urgency:'high'}, {title:'Pick a colour.',boardId:'b'}, {title:'Restore payments',boardId:'b',urgency:'urgent'},
     ]);
@@ -49,10 +59,9 @@ describe('note-local ticket inference', () => {
     s.notes = [note(`${boardMarker(board)}\n\n${newTicketMarkdown('Keep existing', '', 'todo', '', undefined, 'low')}\n- [ ] Urgent: restore service\n- [ ] This is not urgent` )];
     const result = await inferBoardTickets(s, board, vi.fn(), new AbortController().signal);
     expect(result.suggestions.map(s=>s.urgency)).toEqual(['low', 'urgent', '']);
-    const titles=result.suggestions.map(s=>s.title), ids=result.suggestions.map(s=>s.taskId);
-    expect(applyInferredTickets(s.notes[0],board,result,titles,ids,['high'])).toBeNull();
-    expect(applyInferredTickets(s.notes[0],board,result,titles,ids,['critical' as never,'',''])).toBeNull();
-    const updated=applyInferredTickets(s.notes[0],board,result,titles,ids,['','',''])!;
+    expect(applyInferredTickets(s.notes[0],board,result,[{...reviewTicket(result.suggestions[0],0),index:100}])).toBeNull();
+    expect(applyInferredTickets(s.notes[0],board,result,result.suggestions.map((s,i)=>({...reviewTicket(s,i),urgency:'critical' as never})))).toBeNull();
+    const updated=applyInferredTickets(s.notes[0],board,result,result.suggestions.map((s,i)=>({...reviewTicket(s,i),urgency:''})))!;
     expect(noteWork(note(updated)).tickets.every(t=>!t.urgency)).toBe(true);
     s.notes=[note(`${boardMarker(board)}\n\n- [ ] High-quality thumbnails\n- [ ] Low-level rendering work\n- [ ] Medium-sized export`)];
     const ordinary=await inferBoardTickets(s,board,vi.fn(),new AbortController().signal);
@@ -74,7 +83,7 @@ describe('note-local ticket inference', () => {
     s.notes=[note(`${boardMarker(board)}\n\n${newTicketMarkdown('Restore sign-in', 'b')}\n\nSign-in is blocking launch.\n\n${newTicketMarkdown('Authored urgency', 'b', 'todo', '', undefined, 'low')}`)];
     const result=await inferBoardTickets(s,board,async()=>({reply:JSON.stringify({tickets:[],taskUrgencies:[{task:'- [ ] Restore sign\\-in',urgency:'high',evidence:'Sign-in is blocking launch.'},{task:'- [ ] Authored urgency',urgency:'high',evidence:'Authored urgency'}]})}),new AbortController().signal);
     expect(result.suggestions).toMatchObject([{title:'Restore sign-in',onBoard:true,urgency:'high'}]);
-    const body=applyInferredTickets(s.notes[0],board,result,result.suggestions.map(s=>s.title),result.suggestions.map(s=>s.taskId))!;
+    const body=applyInferredTickets(s.notes[0],board,result,result.suggestions.map(reviewTicket))!;
     expect(noteWork(note(body)).tickets).toMatchObject([{title:'Restore sign-in',urgency:'high'},{title:'Authored urgency',urgency:'low'}]);
     expect(noteWork(note(body)).tickets).toHaveLength(2);
   });
@@ -86,7 +95,7 @@ describe('note-local ticket inference', () => {
     expect(request).toMatchObject({allowNoteActions:false,sources:[],concepts:[],history:[],effort:'low'});
     expect(request.editNoteId).toBeUndefined();
     const s=snapshot();s.settings.model='claude-sonnet-5';s.settings.anthropicApiKeyConfigured=false;
-    expect(()=>buildTicketInferenceRequest(s,board)).toThrow('AI key');
+    expect(()=>buildTicketInferenceRequest(s,board)).toThrow('Connect an AI provider');
     s.settings.anthropicApiKeyConfigured=true;
     expect(buildTicketInferenceRequest(s,board).request.model).toBe('claude-sonnet-5');
   });
@@ -112,19 +121,24 @@ describe('note-local ticket inference', () => {
     expect(parseTicketSuggestions(JSON.stringify(duplicates),body,note())).toHaveLength(1);
   });
   it('accepts edited titles in one guarded note update, escaping markup and rejecting stale or repeated acceptance', async () => {
-    const result=await inferBoardTickets(snapshot(),board,async()=>({reply}),new AbortController().signal);
-    const updated=applyInferredTickets(note(),board,result,['Ask Jo about the launch date','Ask Jo about the launch date','<b>Literal</b>'])!;
+    const result=await inferBoardTickets(snapshot(),board,async()=>({reply:JSON.stringify({tickets:[
+      ...JSON.parse(reply).tickets, {title:'Test a smaller event', evidence:'Maybe test a smaller event first.'},
+    ]})}),new AbortController().signal);
+    const rows=result.suggestions.map(reviewTicket).filter(row=>!result.suggestions[row.index].taskId);
+    rows[1].title='<b>Literal</b>';
+    const updated=applyInferredTickets(note(),board,result,rows)!;
     const created=noteWork(note(updated)).tickets.filter(t=>t.durable);
     expect(created).toHaveLength(2);expect(created.map(t=>t.title)).toContain('<b>Literal</b>');
     expect(created.every(t=>t.boardId==='b'&&t.status==='todo')).toBe(true);
-    expect(applyInferredTickets(note(updated),board,result,['Another action'])).toBeNull();
-    expect(applyInferredTickets(note(`${body}\nChanged.`),board,result,['Action'])).toBeNull();
-    expect(applyInferredTickets(note(),{...board,id:'other'},result,['Action'])).toBeNull();
-    expect(applyInferredTickets(note(),board,result,['Existing task'])).toBeNull();
+    expect(applyInferredTickets(note(updated),board,result,rows)).toBeNull();
+    expect(applyInferredTickets(note(`${body}\nChanged.`),board,result,rows)).toBeNull();
+    expect(applyInferredTickets(note(),{...board,id:'other'},result,rows)).toBeNull();
+    expect(applyInferredTickets(note(),board,result,[{...rows[0],title:'Existing task'}])).toBeNull();
   });
   it('cancels even a transport that ignores abort, and never starts an already-cancelled request', async () => {
     const controller=new AbortController();const call=vi.fn(()=>new Promise<{reply:string}>(()=>{}));
     const request=inferBoardTickets(snapshot(),board,call,controller.signal);
+    await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
     controller.abort();await expect(request).rejects.toThrow();
     expect(call).toHaveBeenCalledOnce();call.mockClear();
     await expect(inferBoardTickets(snapshot(),board,call,controller.signal)).rejects.toThrow();expect(call).not.toHaveBeenCalled();
@@ -156,8 +170,7 @@ describe('whole-note reader orchestration', () => {
     expect(result.partial).toBe(false); expect(result.sectionsRead).toBe(inputs.length); expect(peak).toBeLessThanOrEqual(2);
     expect(result.suggestions.filter(s=>s.taskId)).toHaveLength(32);
     expect(result.suggestions.filter(s=>s.title==='Call the venue')).toHaveLength(1);
-    const titles=result.suggestions.map(s=>s.title), ids=result.suggestions.map(s=>s.taskId);
-    const body=applyInferredTickets(s.notes[0],board,result,titles,ids)!;
+    const body=applyInferredTickets(s.notes[0],board,result,result.suggestions.map(reviewTicket))!;
     const work=noteWork(note(body)); expect(work.tickets.filter(t=>t.durable)).toHaveLength(33);
     expect(work.tickets.filter(t=>t.title==='Written action 0')).toHaveLength(1);
     expect(body).toContain('- [x] PRIVATE FINISHED WORK'); expect(work.tickets.find(t=>t.status==='done')?.durable).toBe(false);
@@ -167,7 +180,7 @@ describe('whole-note reader orchestration', () => {
     const result=await inferBoardTickets(s,board,request,new AbortController().signal);
     expect(request).not.toHaveBeenCalled();expect(result.localOnly).toBe(true);
     expect(result.suggestions).toEqual([expect.objectContaining({title:'Existing task',taskId:expect.any(String)})]);
-    const body=applyInferredTickets(s.notes[0],board,result,['Existing task'],[result.suggestions[0].taskId])!;
+    const body=applyInferredTickets(s.notes[0],board,result,[reviewTicket(result.suggestions[0],0)])!;
     expect(noteWork(note(body)).tickets.filter(t=>t.title==='Existing task')).toHaveLength(1);
   });
   it('fails and cancels sibling readers when a section fails, without returning a misleading complete review', async () => {
@@ -188,7 +201,7 @@ it('promotes multiline and long written to-dos without rewriting their prose or 
   s.notes=[note(`${boardMarker(board)}\n\n- [ ] Write the specification\n  and include examples\n- [ ] ${long}`)];
   const result=await inferBoardTickets(s,board,vi.fn(),new AbortController().signal);
   expect(result.suggestions.map(s=>s.title)).toEqual(['Write the specification and include examples','a'.repeat(139)]);
-  const body=applyInferredTickets(s.notes[0],board,result,result.suggestions.map(s=>s.title.trim()),result.suggestions.map(s=>s.taskId));
+  const body=applyInferredTickets(s.notes[0],board,result,result.suggestions.map(reviewTicket));
   expect(body).not.toBeNull();expect(body).toContain('\n  and include examples');expect(body).toContain(long);
   expect(noteWork(note(body!)).tickets.every(t=>t.durable&&t.boardId==='b')).toBe(true);
 });
@@ -199,7 +212,145 @@ it('keeps independently open nested tasks beneath a completed parent', async () 
   s.notes=[note(`${boardMarker(board)}\n\n- [x] Completed parent\n    - [ ] Still open nested child\n    - [x] Completed child`)];
   const result=await inferBoardTickets(s,board,vi.fn(),new AbortController().signal);
   expect(result.suggestions.map(s=>s.title)).toEqual(['Still open nested child']);
-  const body=applyInferredTickets(s.notes[0],board,result,result.suggestions.map(s=>s.title),result.suggestions.map(s=>s.taskId))!;
+  const body=applyInferredTickets(s.notes[0],board,result,result.suggestions.map(reviewTicket))!;
   expect(noteWork(note(body)).tickets.filter(t=>t.durable).map(t=>t.title)).toEqual(['Still open nested child']);
   expect(body).toContain('- [x] Completed parent');expect(body).toContain('- [x] Completed child');
+});
+
+describe('source-grounded ticket details', () => {
+  const context = 'Keep the dashboard steady when the last task closes.';
+  const steps = ['Pin or hide a section.', 'Show “All caught up”.'];
+  const passage = [context, ...steps].join(' ');
+  it('keeps only details from this action, even after renaming and deselecting another suggestion', async () => {
+    const s = snapshot();
+    s.notes = [note([passage, 'Book a room.', '- [x] Secret completed work'].join('\n\n'))];
+    const target = noteInferenceTarget(s.notes[0]);
+    const result = await inferBoardTickets(s, target, async () => ({ reply: JSON.stringify({ tickets: [
+      {title:'Book room', evidence:'Book a room.', checklist:[]},
+      {title:'Dashboard controls', evidence:context, detailEvidence:passage, description:context,
+        checklist:[...steps, steps[0], 'Book a room.', 'Secret completed work', 'Publish by Friday.']},
+    ] }) }), new AbortController().signal);
+    expect(result.suggestions[0].checklist).toBeUndefined();
+    expect(result.suggestions[1].checklist).toEqual(steps);
+    const next = applyInferredTickets(s.notes[0], target, result, [{...reviewTicket(result.suggestions[1],1),title:'Control dashboard sections'}], [])!;
+    const [created] = noteWork(note(next)).tickets.filter(t => t.durable);
+    expect(created.title).toBe('Control dashboard sections');
+    expect(ticketDetails(created)).toMatchObject({descriptionText:context, checklist:steps.map(text => ({text, checked:false}))});
+    expect(noteWork(note(next)).tickets.filter(t => t.durable)).toHaveLength(1);
+  });
+
+  it('rejects steps that clip a word or remove a stated negation', () => {
+    const evidence = "Handle shipping. Don't publish the report. Keep the original.";
+    const [suggestion] = parseTicketSuggestions(JSON.stringify({tickets:[{
+      title:'Handle shipping', evidence, description:'Handle shipping.',
+      checklist:['shipping', 'publish the report.', 'Keep the original.'],
+    }]}),evidence,note(evidence));
+    expect(suggestion.checklist).toEqual(['shipping', 'Keep the original.']);
+    const [partial] = parseTicketSuggestions(JSON.stringify({ tickets:[{
+      title:'Handle shipping', evidence, checklist:['ship','pping'],
+    }] }),evidence,note(evidence));
+    expect(partial.checklist).toBeUndefined();
+  });
+
+  it('fills missing fields in place and preserves existing children, priority and ticket identity on another pass', async () => {
+    const s = snapshot();
+    s.notes = [note([boardMarker(board), passage, newTicketMarkdown('Dashboard controls','b','progress','','board','high') +
+      '\n  - [x] My edited step', '- [ ] Review empty state'].join('\n\n'))];
+    const target = noteInferenceTarget(s.notes[0]);
+    const call = async () => ({reply: JSON.stringify({ tickets:[], taskDetails:[
+      {task:'- [ ] Dashboard controls', detailEvidence:passage, description:context, checklist:steps},
+      {task:'- [ ] Review empty state', detailEvidence:passage, description:context, checklist:steps},
+    ]})});
+    const result = await inferBoardTickets(s,target,call,new AbortController().signal);
+    const [old] = noteWork(s.notes[0]).tickets;
+    const suggestions = result.suggestions;
+    const body = applyInferredTickets(s.notes[0],target,result,suggestions.map(reviewTicket),result.boards)!;
+    const saved = noteWork(note(body)).tickets.filter(t=>t.durable);
+    expect(saved).toHaveLength(2);
+    expect(saved[0]).toMatchObject({id:old.id, boardId:'b', urgency:'high', status:'progress'});
+    expect(ticketDetails(saved[0])).toMatchObject({descriptionText:context,checklist:[{text:'My edited step',checked:true}]});
+    expect(ticketDetails(saved[1])).toMatchObject({descriptionText:context,checklist:steps.map(text=>({text,checked:false}))});
+    s.notes = [note(body)];
+    const again = await inferBoardTickets(s,target,call,new AbortController().signal);
+    expect(again.suggestions.flatMap(s=>s.checklist ?? [])).toEqual([]);
+    expect(again.suggestions.some(s=>steps.includes(s.title))).toBe(false);
+  });
+});
+
+describe('reviewing stated deadlines and work underway', () => {
+  async function propose(text: string, evidence = text, scheduleEvidence = text) {
+    const s = snapshot();
+    s.notes = [{ ...note(text), updatedAt:'2026-11-24T12:00:00' }];
+    const target = noteInferenceTarget(s.notes[0]);
+    const result = await inferBoardTickets(s, target, async () => ({ reply: JSON.stringify({
+      tickets:[{ title:'Prepare the venue brief', evidence, scheduleEvidence }],
+    }) }), new AbortController().signal);
+    return { original:s.notes[0], target, result, row:reviewTicket(result.suggestions[0], 0) };
+  }
+  it('saves the stated date and status to the renamed ticket and supports overriding either in review', async () => {
+    const {original,target,result,row} = await propose("I’ve started the venue brief. It’s due 4 December 2026.");
+    expect(row).toMatchObject({dueDate:'2026-12-04',status:'progress'});
+    const body = applyInferredTickets(original,target,result,[{...row, title:'Venue briefing'}])!;
+    expect(noteWork(note(body)).tickets[0]).toMatchObject({title:'Venue briefing',dueDate:'2026-12-04',status:'progress'});
+    const cleared = applyInferredTickets(original,target,result,[{...row,dueDate:'',status:'todo'}])!;
+    expect(noteWork(note(cleared)).tickets[0]).not.toHaveProperty('dueDate');
+    expect(noteWork(note(cleared)).tickets[0].status).toBe('todo');
+    expect(applyInferredTickets(original,target,result,[{...row,dueDate:'2026-02-30'}])).toBeNull();
+    expect(applyInferredTickets(original,target,result,[{...row,status:'done'}])).toBeNull();
+  });
+  it.each([
+    'We could start the venue brief on 4 December 2026.',
+    'I have not started the venue brief.',
+    'The venue meeting is on 4 December 2026.',
+    'The brief might be due 4 December 2026.',
+    'Is the venue brief due 4 December 2026?',
+    'The venue brief has no deadline.',
+    'Venue brief due 31 February 2026.',
+  ])('leaves unsupported scheduling fields at their defaults for %s', async text => {
+    expect((await propose(text)).row).toMatchObject({status:'todo',dueDate:''});
+  });
+  it('does not use another action’s deadline or a cropped conditional', async () => {
+    const text = 'Prepare the brief. The invoice is due tomorrow.';
+    expect((await propose(text,'Prepare the brief.', 'The invoice is due tomorrow.')).row.dueDate).toBe('');
+    expect((await propose(text,text,'')).row.dueDate).toBe('');
+    expect((await propose('Maybe I started the brief yesterday.','I started the brief yesterday.','I started the brief yesterday.')).row.status).toBe('todo');
+    expect((await propose('I started the venue brief?', 'I started the venue brief', 'I started the venue brief')).row.status).toBe('todo');
+  });
+  it('uses the saved local note day for a relative deadline and supports plain written tasks offline', async () => {
+    const s=snapshot(); s.settings.apiKeyConfigured=false;
+    s.notes=[{...note('- [ ] Submit the brief by tomorrow'),updatedAt:'2026-11-24T12:00:00'}];
+    const target=noteInferenceTarget(s.notes[0]), call=vi.fn();
+    const result=await inferBoardTickets(s,target,call,new AbortController().signal);
+    expect(call).not.toHaveBeenCalled();
+    expect(result.suggestions[0].dueDate).toBe('2026-11-25');
+    const next=applyInferredTickets(s.notes[0],target,result,result.suggestions.map(reviewTicket))!;
+    expect(noteWork(note(next)).tickets).toMatchObject([{dueDate:'2026-11-25',status:'todo'}]);
+    s.notes=[{...s.notes[0],body:next}];
+    const again=await inferBoardTickets(s,target,call,new AbortController().signal);
+    expect(again.suggestions).toHaveLength(0);
+  });
+  it('enriches the same existing ticket and preserves authored dates and custom columns', async () => {
+    const s=snapshot(), b={...board,columns:[{id:'column-review' as const,title:'Review'}]};
+    const text='I am working on the brief. It is due 4 December 2026.';
+    s.notes=[{...note([boardMarker(b),newTicketMarkdown('Brief','b'),text].join('\n\n')),updatedAt:'2026-11-24T12:00:00'}];
+    const target=noteInferenceTarget(s.notes[0]);
+    const call=async()=>({reply:JSON.stringify({tickets:[],taskDetails:[{task:'- [ ] Brief',detailEvidence:text,scheduleEvidence:text}]})});
+    const result=await inferBoardTickets(s,target,call,new AbortController().signal);
+    const previous=noteWork(s.notes[0]).tickets[0];
+    const saved=applyInferredTickets(s.notes[0],target,result,result.suggestions.map(reviewTicket),[b])!;
+    expect(noteWork(note(saved)).tickets).toMatchObject([{id:previous.id,boardId:'b',dueDate:'2026-12-04',status:'progress'}]);
+    s.notes=[{...s.notes[0],body:[boardMarker(b),newTicketMarkdown('Brief','b','column-review','2026-12-09'),text].join('\n\n')}];
+    const again=await inferBoardTickets(s,target,call,new AbortController().signal);
+    expect(again.suggestions).toEqual([]);
+  });
+  it('ignores a detached schedule about a different written task', async () => {
+    const s=snapshot();
+    const passage='The invoice is due tomorrow.';
+    s.notes=[{...note('- [ ] Prepare the brief\n\n'+passage),updatedAt:'2026-11-24T12:00:00'}];
+    const target=noteInferenceTarget(s.notes[0]);
+    const result=await inferBoardTickets(s,target,async()=>({reply:JSON.stringify({tickets:[],taskDetails:[{
+      task:'- [ ] Prepare the brief',detailEvidence:passage,scheduleEvidence:passage,
+    }]})}),new AbortController().signal);
+    expect(result.suggestions.map(reviewTicket)).toMatchObject([{dueDate:'',status:'todo'}]);
+  });
 });

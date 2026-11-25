@@ -1,11 +1,26 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { createEmptySnapshot } from "../data/defaults";
 import { SpaceSwitcher } from "./SpaceSwitcher";
+import * as expansion from "../lib/spaceDiscoveryExpansion";
+import type { Note } from "../types";
 
 const NOW = "2026-07-28T04:30:00.000Z";
+
+function renderDiscovery(configured = true) {
+  const home = createEmptySnapshot("Fieldwork", NOW, "home");
+  home.settings.apiKeyConfigured = configured;
+  const archive = createEmptySnapshot("Drafts", NOW, "drafts");
+  const note: Note = { id:"evidence", title:"Bench notes", slug:"bench-notes", body:"We traced the acoustic dropout to a faulty lead.",
+    summary:"", kind:"article", status:"ready", aliases:[], tags:[], sourceIds:[], conceptIds:[], createdAt:NOW, updatedAt:NOW };
+  archive.notes = [note];
+  const onSwitchSpace = vi.fn();
+  render(<SpaceSwitcher spaces={[home,archive]} activeSpaceId="home" onSwitchSpace={onSwitchSpace} onDeleteSpace={vi.fn()} onCreateSpace={vi.fn()}/>);
+  fireEvent.click(screen.getByRole('button',{name:/Open space switcher/}));
+  return {input:screen.getByRole('searchbox'),onSwitchSpace};
+}
 
 function renderSwitcher(deleteResult = true, renameResult = true) {
   const main = createEmptySnapshot("Main project", NOW, "space-main");
@@ -34,6 +49,67 @@ function renderSwitcher(deleteResult = true, renameResult = true) {
 }
 
 describe("SpaceSwitcher", () => {
+  it('shows local note evidence offline and opens the Space only when chosen', async () => {
+    const {input,onSwitchSpace} = renderDiscovery(false);
+    fireEvent.change(input,{target:{value:'acoustic dropout'}});
+    expect(screen.getByRole('button',{name:'Search by meaning'})).toBeDisabled();
+    const choice = await screen.findByRole('button',{name:'Drafts, 1 note'});
+    expect(within(choice).getByText('Bench notes')).toBeVisible();
+    expect(choice).toHaveAccessibleDescription(/acoustic dropout to a faulty lead/);
+    expect(onSwitchSpace).not.toHaveBeenCalled();
+    fireEvent.click(choice);
+    expect(onSwitchSpace).toHaveBeenCalledWith('drafts');
+  });
+
+  it('expands on request, discards a late response to an edited query, and retries a failed expansion', async () => {
+    let complete!: (terms:string[]) => void;
+    const ask = vi.spyOn(expansion,'expandSpaceSearchQuery')
+      .mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }))
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(['acoustic dropout']);
+    try {
+      const {input,onSwitchSpace} = renderDiscovery();
+      fireEvent.change(input,{target:{value:'broken sound'}});
+      expect(ask).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button',{name:'Search by meaning'}));
+      await waitFor(() => expect(ask).toHaveBeenCalledTimes(1));
+      fireEvent.change(input,{target:{value:'mic cutting out'}});
+      expect(ask.mock.calls[0][2].aborted).toBe(true);
+      await act(async () => complete(['acoustic dropout']));
+      expect(screen.queryByText('Bench notes')).toBeNull();
+      fireEvent.click(screen.getByRole('button',{name:'Search by meaning'}));
+      await screen.findByText(/Meaning search couldn’t finish/);
+      fireEvent.click(screen.getByRole('button',{name:'Search by meaning'}));
+      const choice = await screen.findByRole('button',{name:'Drafts, 1 note'});
+      expect(within(choice).getByText('Bench notes')).toBeVisible();
+      expect(onSwitchSpace).not.toHaveBeenCalled();
+      fireEvent.keyDown(input,{key:'Enter'});
+      expect(onSwitchSpace).toHaveBeenCalledWith('drafts');
+      expect(ask).toHaveBeenCalledTimes(3);
+    } finally { ask.mockRestore(); }
+  });
+  it("retains the picker scroll after selection and does not replace it with search scrolling", () => {
+    renderSwitcher();
+    const open = () => fireEvent.click(screen.getByRole('button', {name:/Main project space/}));
+    const list = () => document.querySelector<HTMLDivElement>('.space-switcher-list')!;
+    open();
+    list().scrollTop = 320;
+    // The platform can deliver selection before the pending scroll event.
+    fireEvent.click(screen.getByRole('button', {name:'Research project, 0 notes'}));
+    open();
+    expect(list().scrollTop).toBe(320);
+    list().scrollTop = 420;
+    fireEvent.change(screen.getByRole('searchbox'), {target:{value:'Research'}});
+    expect(list().scrollTop).toBe(0);
+    list().scrollTop = 12;
+    fireEvent.scroll(list());
+    fireEvent.change(screen.getByRole('searchbox'), {target:{value:''}});
+    expect(list().scrollTop).toBe(420);
+    fireEvent.keyDown(screen.getByRole('searchbox'), {key:'Escape'});
+    open();
+    expect(list().scrollTop).toBe(420);
+  });
+
   it("filters Space names without changing the current Space and opens a single result with Enter", () => {
     const {onSwitchSpace}=renderSwitcher();
     fireEvent.click(screen.getByRole('button',{name:/Main project/i}));

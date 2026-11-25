@@ -91,7 +91,13 @@ export function boardTicketVisibility(allowedBoard?: (id: string) => boolean) {
       return selection && !selection.eq(state.selection) ? state.tr.setSelection(selection).setMeta('addToHistory', false) : null;
     },
     view: view => {
-      queueMicrotask(() => { if (!view.isDestroyed) view.dispatch(view.state.tr.setMeta(boardTicketVisibilityKey, { refresh: true })); });
+      queueMicrotask(() => {
+        if (view.isDestroyed) return;
+        // Other plugins can append a trailing caret paragraph on first dispatch.
+        // Opening the board must not publish an authored edit or an Undo entry.
+        view.dispatch(view.state.tr.setMeta(boardTicketVisibilityKey, { refresh: true })
+          .setMeta('preventUpdate', true).setMeta('addToHistory', false));
+      });
       return {};
     },
   });

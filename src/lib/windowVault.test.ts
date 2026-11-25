@@ -3,6 +3,7 @@ import { createEmptyVault } from "../data/defaults";
 import type { Note, OrionVault } from "../types";
 import { mergeWindowVault, persistWindowVault, preserveWindowNavigation, vaultValuesEqual, WindowVaultConflict } from "./windowVault";
 import { applyChatResult } from "./chat";
+import { mergeNoteWritingOrigins } from "./writingOrigins";
 import { createChatThread, deleteChatThread, LEGACY_CHAT_THREAD_ID } from "./chatThreads";
 
 function fixture() {
@@ -17,6 +18,30 @@ function fixture() {
 const copy = (vault: OrionVault) => structuredClone(vault);
 
 describe("shared vault, independent windows", () => {
+  it("unions concurrent writing origins on the same note, preserving independent Undo", () => {
+    const base = fixture(), local = copy(base), remote = copy(base);
+    local.spaces[0].notes[0].writingOrigins = ["orion-ai"];
+    remote.spaces[0].notes[0].writingOrigins = ["mcp"];
+    const merged = mergeWindowVault(base, local, remote);
+    expect(merged.spaces[0].notes[0].writingOrigins).toEqual(["orion-ai", "mcp"]);
+    expect(merged.spaces[0].notes[1].writingOrigins).toBeUndefined();
+    const undo = copy(local);
+    delete undo.spaces[0].notes[0].writingOrigins;
+    expect(mergeWindowVault(local, undo, merged).spaces[0].notes[0].writingOrigins).toEqual(["mcp"]);
+    const undoMcp = copy(remote);
+    delete undoMcp.spaces[0].notes[0].writingOrigins;
+    expect(mergeWindowVault(remote, undoMcp, merged).spaces[0].notes[0].writingOrigins).toEqual(["orion-ai"]);
+  });
+  it("retains live writing origins on ordinary stale editor updates and omits an undone last origin", () => {
+    const previous = fixture().spaces[0].notes[0];
+    const next = { ...previous, body:"My new sentence." };
+    previous.writingOrigins = ["orion-ai", "mcp"];
+    expect(mergeNoteWritingOrigins(previous, next).writingOrigins).toEqual(["orion-ai", "mcp"]);
+    expect(mergeNoteWritingOrigins(previous, next, "remove-mcp").writingOrigins).toEqual(["orion-ai"]);
+    previous.writingOrigins = ["orion-ai"];
+    expect(mergeNoteWritingOrigins(previous, next, "remove-orion-ai")).not.toHaveProperty("writingOrigins");
+    expect(next.body).toBe("My new sentence.");
+  });
   it("merges concurrent first thread creation from a legacy vault", () => {
     const base = fixture(); delete base.spaces[0].studio.threads;
     const local = copy(base), remote = copy(base);

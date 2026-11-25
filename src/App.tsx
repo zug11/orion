@@ -1,13 +1,15 @@
 import type {TicketWorkspace} from './components/Tickets';
+import { importPortableCollection, readPortableFile, type OpenedPortableFile } from "./lib/portableOrion";
 import {boardColumns, changeBoard} from './lib/tickets';
 import { dismissCalendarMention, restoreCalendarMention, type DismissCalendarMention } from "./lib/calendarDismissal";
 import { invalidateChatSuggestionConnection } from "./components/useChatSuggestions";
 import { chatGPTCommand, type ChatGPTStatus } from "./lib/chatgpt";
 import { patchTicket, deleteTicket, boardMarker, newBoardId, newTicketMarkdown, collectWork, type Ticket, type TicketPatch } from "./lib/tickets";
 import { TicketCodesContext } from './components/TicketCode';
-import { TicketNavigationRoot, type WorkTarget } from './components/TicketNavigation';
+import { TicketNavigationRoot, type WorkTarget, type VoiceWorkEditor } from './components/TicketNavigation';
 import { withTicketPrefix } from './lib/ticketCodes';
-import { inferBoardTickets, applyInferredTickets, validTicketTitle, type TicketInferenceActions } from "./lib/ticketInference";
+import { inferBoardTickets, applyInferredTickets, hasInferredTicketWriting, validTicketTitle, type TicketInferenceActions } from "./lib/ticketInference";
+import { mergeNoteWritingOrigins, withWritingOrigin } from "./lib/writingOrigins";
 import type { CreateWorkItem } from "./components/Tickets";
 import type { HomeWorkPreferences } from "./components/HomeTickets";
 import { createWebResearch } from "./lib/webResearchProvider";
@@ -18,10 +20,14 @@ import { LEGACY_CHAT_THREAD_ID, listChatThreads, hasChatThread, projectChatThrea
   renameChatThread, deleteChatThread, messageChatThreadId, chatThreadRevision } from "./lib/chatThreads";
 import type { PassageThread } from "./types";
 import type { VoiceCommit, VoiceReceipt } from "./lib/voiceResearch";
+import { prepareVoiceWorkWrite } from "./lib/voiceWorkspaceMutation";
+import type { VoiceWorkWrite } from "./lib/voiceWorkspace";
+import { uniqueVoiceTicket } from "./lib/voiceTicketCompletion";
 import type { PrepareVoiceConnection } from "./lib/liveVoice";
 import { attachDictationOriginal, dictationOriginalSource, prepareDictation, type DictationCompletionOptions } from "./lib/dictationCleanup";
 import { cleanUpDictation } from "./lib/storage";
 import { dateKey } from "./lib/calendarDate";
+import { DictationNavigationContext } from "./components/DictationNavigation";
 import { createVoicePresence } from "./lib/voicePresence";
 import { createVoiceSelectionStore, type VoiceSelection } from "./lib/voiceSelection";
 import { validateChatEditTarget, type ChatEditApplication } from "./lib/chatEdits";
@@ -32,7 +38,7 @@ import { buildNarrationWav, NARRATION_SAMPLE_RATE, validateNarrationDownload } f
 import { downloadNarration } from "./lib/storage";
 import { generateFromSpace } from "./lib/generatePipeline";
 import { flushSync } from "react-dom";
-import { invoke as invokeAssistantHost } from "@tauri-apps/api/core";
+import { invoke as invokeNative } from "@tauri-apps/api/core";
 import { startAssistantExecutor } from "./lib/assistant/executor";
 import { startExternalEditReviews, type ExternalEditReviews, type EditReviewTarget } from "./lib/assistant/editReviews";
 import { startEditorContextMailbox, type EditorContextDocument } from "./lib/assistant/editorContext";
@@ -68,6 +74,9 @@ import { NoteAISettingsContext } from "./components/NoteAISettingsContext";
 import { VaultBackupRestore } from "./components/VaultBackupRestore";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { onDetachedDictation } from "./lib/dictationOutcome";
+import { ContactsView, ContactSources } from "./components/ContactsView";
+import { LeadContactsContext, type LeadContacts } from "./components/LeadContactsContext";
+import { isContactNote, makeContactNote } from "./lib/contacts";
 import { NotesIndex } from "./components/NotesIndex";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar, type WorkspaceView } from "./components/Sidebar";
@@ -122,6 +131,7 @@ import {
   isTauriRuntime,
   externalizeVaultForDisk,
   loadSnapshot,
+  loadVaultRevision,
   openDataDirectory,
   organizeWithAI,
   runKnowledgeAssignment,
@@ -254,7 +264,7 @@ import {
   pushNavigationHistory,
   readScrollPosition,
   resetScrollPosition,
-  restoreScrollPosition,
+  restoreReadingPosition,
   routesMatch,
   type NavigationEntry,
   type NavigationRoute,
@@ -451,6 +461,15 @@ function App() {
   const pendingSaveCount = useRef(0);
   const persistedVaultUpdatedAt = useRef<string | null>(null);
   const persistedVault = useRef<OrionVault | null>(null);
+  const [savedContactSpaces, setSavedContactSpaces] = useState<readonly string[]>([]);
+  const recordPersistedVault = useCallback((saved: OrionVault | null) => {
+    persistedVault.current = saved;
+    const spaces = saved?.spaces.filter(space => space.notes.some(isContactNote)).map(space => space.workspace.id) ?? [];
+    setSavedContactSpaces(previous => previous.length === spaces.length && previous.every((id, i) => id === spaces[i]) ? previous : spaces);
+  }, []);
+  const contacts = useMemo(() => snapshot.notes.filter(isContactNote), [snapshot.notes]);
+  const showContacts = contacts.length > 0 && savedContactSpaces.includes(snapshot.workspace.id);
+
   const [saveConflict, setSaveConflict] = useState<WindowVaultConflict | null>(null);
   const conflictResolution = useRef<{ choice: ConflictChoice; revision: string } | undefined>(undefined);
   const skipAutosaveVault = useRef<OrionVault | null>(null);
@@ -504,6 +523,7 @@ function App() {
   const linkedArticleRequests = useRef(new LinkedArticleRequestRegistry());
   const wikiEnrichmentRequests = useRef(new Set<string>());
   const dictationSessions = useRef(new Map<string, { spaceId: string; noteId: string; settings: Settings; referenceDate: string }>());
+  const [dictationOwner, setDictationOwner] = useState<{ spaceId: string; noteId: string; sessionId: string; active: boolean }>();
   const overviewRequests = useRef(new Map<string, string>());
   const overviewWaiting = useRef(new Map<string, object>());
   const overviewTimers = useRef(new Map<string, number>());
@@ -585,22 +605,24 @@ function App() {
     [connectionOriginNoteId, snapshot.notes],
   );
 
-  const spaceReturnPositions = useRef(new Map<string, {route: NavigationRoute; position: ScrollPosition}>());
-  const previousReadingRoute=useRef<NavigationRoute|null>(null);
+  const spaceReturnPositions = useRef(new Map<string, NavigationEntry>());
+  const previousReadingRoute = useRef<NavigationRoute | null>(null);
   useLayoutEffect(() => {
     const route = routeForScreen(screen, snapshot.activeNoteId, workTarget);
-    const previous=previousReadingRoute.current;
-    previousReadingRoute.current=route;
+    const previous = previousReadingRoute.current;
+    previousReadingRoute.current = route;
     const restoration = pendingScrollRestore.current;
     pendingScrollRestore.current = null;
     if (restoration && routesMatch(restoration.route, route)) {
-      restoreScrollPosition(
+      return restoreReadingPosition(
         workspaceContentRef.current,
         restoration.position,
       );
-      return;
     }
-    if(!previous || previous.screen!==route.screen || (previous.screen==='note' && route.screen==='note' && previous.noteId!==route.noteId)) resetScrollPosition(workspaceContentRef.current);
+    if (!previous || previous.screen !== route.screen ||
+      (previous.screen === "note" && route.screen === "note" && previous.noteId !== route.noteId)) {
+      resetScrollPosition(workspaceContentRef.current);
+    }
   }, [screen, snapshot.activeNoteId, workTarget, snapshot.workspace.id]);
 
   const showToast = useCallback(
@@ -860,7 +882,7 @@ function App() {
       const saved = await persistWindowVault(persistedVault.current, before, {
         load: loadSnapshot, save: saveSnapshot,
       }, conflictResolution.current);
-      persistedVault.current = saved;
+      recordPersistedVault(saved);
       persistedVaultUpdatedAt.current = saved.updatedAt;
       conflictResolution.current = undefined;
       setSaveConflict(null);
@@ -963,9 +985,9 @@ function App() {
         const before = vaultRef.current;
         const proposed = composeWorkflowVault(before, base, generated);
         // The native host compares this with the file on disk, so it must be in the on-disk form.
-        await invokeAssistantHost("assistant_commit_vault", { jobId: claim.id, sessionId, vault: await externalizeVaultForDisk(proposed), expectedUpdatedAt: persistedVaultUpdatedAt.current, result });
+        await invokeNative("assistant_commit_vault", { jobId: claim.id, sessionId, vault: await externalizeVaultForDisk(proposed), expectedUpdatedAt: persistedVaultUpdatedAt.current, result });
         persistedVaultUpdatedAt.current = proposed.updatedAt;
-        persistedVault.current = proposed;
+        recordPersistedVault(proposed);
         cancelSpaceOverviewRefresh(base.workspace.id);
         assistantOverviewVersions.current.set(base.workspace.id, spaceKnowledgeFingerprint(generated));
         flushSync(() => setVault((current) => {
@@ -1057,16 +1079,62 @@ function App() {
     return () => { mailbox.dispose(); if (externalEditorActions.current === mailbox) externalEditorActions.current = null; };
   }, [hydrated, persistenceEnabled, queueSnapshotSave, showToast]);
 
+  const closeConnections = useCallback(() => {
+    setConnectionConceptId(null);
+    setConnectionOriginNoteId(null);
+  }, []);
+
+  const displayPortableFile = useCallback((base: OrionVault, opened: OpenedPortableFile, startup = false) => {
+    const { vault: nextVault, spaceId, noteId, reused } = importPortableCollection(base, opened.file, opened.collectionHash, opened.imageUrls);
+    const noteCount = opened.file.collection.notes.length;
+    const route: NavigationRoute = noteId ? { screen: "note", noteId } : { screen: "home" };
+    // Publish the Space and its entry route together. Mounting Home in between
+    // indexes the collection and leaves the document hidden behind the export sheet.
+    if (!reused) skipAutosaveVault.current = nextVault;
+    flushSync(() => {
+      vaultRef.current = nextVault;
+      setVault(nextVault);
+      setScreen(route.screen);
+      setWorkTarget({});
+      setSelectedSourceId(null);
+      closeConnections();
+      setContextOpen(false);
+      setExportOpen(false);
+      setImportOpen(false);
+      setCommandOpen(false);
+      pendingScrollRestore.current = { route, position: { scrollTop: 0, scrollLeft: 0 } };
+      replaceHistory([createNavigationEntry(route)], 0);
+      if (startup) {
+        setPersistenceEnabled(true);
+        setHydrated(true);
+      }
+    });
+    if (reused) {
+      showToast("Collection opened", noteId ? "Your local edits were kept." : "This note was deleted locally. Your collection and edits were kept.");
+      return;
+    }
+    // Confirm a new import through the normal guarded save queue. The reader
+    // can already use the note, and a slow save cannot navigate them back.
+    const save = () => {
+      void queueSnapshotSave(vaultRef.current).then(() => {
+        if (vaultRef.current.activeSpaceId === spaceId && snapshotRef.current.activeNoteId === noteId) {
+          showToast("Collection imported", `Saved ${noteCount} ${noteCount === 1 ? "note" : "notes"} in this Space.`);
+        }
+      }).catch(error => showToast("Collection needs saving", error instanceof Error ? error.message : String(error), { label: "Retry save", run: save }));
+    };
+    save();
+  }, [closeConnections, queueSnapshotSave, replaceHistory, showToast]);
+
   useEffect(() => {
     let cancelled = false;
     setHydrated(false);
     setPersistenceEnabled(false);
     setVaultLoadError(null);
     loadSnapshot()
-      .then((saved) => {
+      .then(async (saved) => {
         if (cancelled) return;
         persistedVaultUpdatedAt.current = saved?.updatedAt ?? null;
-        persistedVault.current = saved;
+        recordPersistedVault(saved);
         const baseVault = saved ?? createEmptyVault();
         const spaces = baseVault.spaces.map((savedSpace) => {
           const base = isRetiredStarterVault(savedSpace)
@@ -1164,6 +1232,27 @@ function App() {
           activeSpaceId: spaces.some((space) => space.workspace.id === baseVault.activeSpaceId)
             ? baseVault.activeSpaceId : spaces[0].workspace.id,
         }, windowLaunch);
+        if (!windowLaunch.writing && isTauriRuntime()) {
+          try {
+            // The vault is usable before claiming a Finder token. Invalid vaults
+            // and cancelled hydration attempts leave the request in the native queue.
+            const tokens = await invokeNative<string[]>("pending_orion_files");
+            if (cancelled) return;
+            for (const token of tokens ?? []) {
+              try {
+                const opened = await readPortableFile(token);
+                if (cancelled) return;
+                if (opened) { displayPortableFile(nextVault, opened, true); return; }
+              } catch (error) {
+                if (cancelled) return;
+                showToast("Couldn’t open this collection", error instanceof Error ? error.message : String(error));
+              }
+            }
+          } catch (error) {
+            if (cancelled) return;
+            showToast("Couldn’t open this collection", error instanceof Error ? error.message : String(error));
+          }
+        }
         const launchedNote = windowLaunchNote(nextVault, windowLaunch);
         const initialRoute: NavigationRoute = launchedNote
           ? { screen: "note", noteId: launchedNote.id } : { screen: "home" };
@@ -1184,7 +1273,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [loadAttempt, replaceHistory, windowLaunch]);
+  }, [loadAttempt, replaceHistory, windowLaunch, displayPortableFile, showToast]);
 
   useEffect(() => {
     if (!hydrated || !persistenceEnabled || closing) return;
@@ -1325,7 +1414,7 @@ function App() {
             reconciledLatest,
           );
           persistedVaultUpdatedAt.current = latest.updatedAt;
-          persistedVault.current = latest;
+          recordPersistedVault(latest);
           if (!hadLocalChanges) skipAutosaveVault.current = reconciledLatest;
           vaultRef.current = reconciledLatest;
           setVault(reconciledLatest);
@@ -1452,25 +1541,26 @@ function App() {
     };
   }, [queueSnapshotSave, showToast]);
 
-  const closeConnections = useCallback(() => {
-    setConnectionConceptId(null);
-    setConnectionOriginNoteId(null);
-  }, []);
+  const rememberCurrentSpace = useCallback(() => {
+    const leaving = snapshotRef.current;
+    spaceReturnPositions.current.set(leaving.workspace.id, createNavigationEntry(
+      routeForScreen(screen, leaving.activeNoteId),
+      readScrollPosition(workspaceContentRef.current),
+    ));
+  }, [screen]);
 
   const resetSpaceNavigation = useCallback(
-    () => {
+    (entry = createNavigationEntry({ screen: "home" })) => {
       setWorkTarget({});
-      setScreen("home");
+      pendingScrollRestore.current = { route: entry.route, position: entry };
+      setScreen(entry.route.screen);
       setCommandOpen(false);
       setImportOpen(false);
       setSelectedSourceId(null);
       setContextOpen(false);
       closeConnections();
       snapshotBeforeImport.current = null;
-      replaceHistory(
-        [createNavigationEntry({ screen: "home" })],
-        0,
-      );
+      replaceHistory([entry], 0);
     },
     [closeConnections, replaceHistory],
   );
@@ -1483,32 +1573,26 @@ function App() {
       if (!target || spaceId === vaultRef.current.activeSpaceId) {
         return;
       }
-      const leaving = snapshotRef.current;
-      spaceReturnPositions.current.set(leaving.workspace.id, {
-        route: routeForScreen(screen, leaving.activeNoteId),
-        position: readScrollPosition(workspaceContentRef.current),
-      });
-      const remembered = spaceReturnPositions.current.get(spaceId);
-      const rememberedNoteId = remembered?.route.screen === 'note' ? remembered.route.noteId : undefined;
-      const returnTo = remembered && (!rememberedNoteId || target.notes.some(note => note.id === rememberedNoteId)) ? remembered : undefined;
+      rememberCurrentSpace();
+      let remembered = spaceReturnPositions.current.get(spaceId);
+      const noteId = remembered?.route.screen === "note" ? remembered.route.noteId : undefined;
+      if (noteId && !target.notes.some(note => note.id === noteId)) remembered = undefined;
+      if (remembered?.route.screen === "contacts" && !target.notes.some(isContactNote)) remembered = undefined;
       setVault((current) => ({
         ...current,
         activeSpaceId: spaceId,
-        spaces: returnTo?.route.screen === 'note' ? current.spaces.map(space => space.workspace.id === spaceId ? {...space,activeNoteId:rememberedNoteId!} : space) : current.spaces,
+        spaces: remembered && noteId ? current.spaces.map(space =>
+          space.workspace.id === spaceId ? { ...space, activeNoteId: noteId } : space,
+        ) : current.spaces,
         updatedAt: new Date().toISOString(),
       }));
-      resetSpaceNavigation();
-      if (returnTo) {
-        setScreen(returnTo.route.screen);
-        pendingScrollRestore.current = returnTo;
-        replaceHistory([createNavigationEntry(returnTo.route, returnTo.position)], 0);
-      } else pendingScrollRestore.current = {route:{screen:'home'},position:{scrollLeft:0,scrollTop:0}};
+      resetSpaceNavigation(remembered);
       showToast(
         target.workspace.name,
         "Space switched. Its links and concepts stay independent.",
       );
     },
-    [resetSpaceNavigation, showToast, screen, replaceHistory],
+    [rememberCurrentSpace, resetSpaceNavigation, showToast],
   );
 
   const createSpace = useCallback(
@@ -1531,6 +1615,7 @@ function App() {
         `space-${nanoid(10)}`,
       );
       space.settings = { ...snapshotRef.current.settings };
+      rememberCurrentSpace();
       setVault((current) => ({
         ...current,
         spaces: [...current.spaces, space],
@@ -1543,7 +1628,7 @@ function App() {
         `${normalizedName} is completely separate from your other projects.`,
       );
     },
-    [resetSpaceNavigation, showToast],
+    [rememberCurrentSpace, resetSpaceNavigation, showToast],
   );
 
   const renameSpace = useCallback(
@@ -1585,6 +1670,7 @@ function App() {
       const now = new Date().toISOString();
       const deletion = deleteSpaceFromVault(currentVault, spaceId, now);
       if (!deletion.deleted) return false;
+      spaceReturnPositions.current.delete(spaceId);
       const nextSpace = deletion.vault.spaces.find(
         (candidate) =>
           candidate.workspace.id === deletion.nextActiveSpaceId,
@@ -1791,7 +1877,7 @@ function App() {
         updatedAt: now,
       };
       persistedVaultUpdatedAt.current = latest.updatedAt;
-      persistedVault.current = latest;
+      recordPersistedVault(latest);
       vaultRef.current = nextVault;
       if (passages?.length) requestNoteExcerptNavigation(noteId, passages);
       setVault(nextVault);
@@ -2120,7 +2206,7 @@ function App() {
               notes: current.notes.map((candidate) =>
                 candidate.id === noteId && candidate.body === note.body
                   ? {
-                      ...applyGeneratedNoteTitle(candidate, title, generated.title),
+                      ...withWritingOrigin(applyGeneratedNoteTitle(candidate, title, generated.title), "orion-ai"),
                       body,
                       summary: candidate.summary,
                       tags: [
@@ -2191,11 +2277,11 @@ function App() {
     [],
   );
 
-  // A recording that was still running when its note was left finishes in the
-  // background. Its button is gone, so the window reports what became of it.
+  // A recording detached by a Space change or editor closure has no button
+  // left, so the window reports its archival outcome.
   useEffect(() => onDetachedDictation((outcome) => {
     if (outcome.saved) {
-      showToast("Dictation saved to Sources", "You left the note while it was recording, so it was not inserted. Open the note’s original dictations to use it.");
+      showToast("Dictation saved to Sources", "The recording’s editor closed or changed, so its text was kept without insertion. Open the original note’s dictations in Sources to use it.");
     } else {
       showToast("Dictation could not be saved", outcome.message ?? "The recording ended before any speech was transcribed.");
     }
@@ -2210,7 +2296,11 @@ function App() {
       if (!workspace?.notes.some((note) => note.id === noteId)) {
         throw new Error("This note is no longer available.");
       }
+      if ([...dictationSessions.current.values()].some(session => session.spaceId === workspaceId)) {
+        throw new Error("Stop the current dictation before starting another in this Space.");
+      }
       dictationSessions.current.set(sessionId, { spaceId: workspaceId, noteId, settings: workspace.settings, referenceDate: dateKey(new Date()) });
+      setDictationOwner({ spaceId: workspaceId, noteId, sessionId, active: true });
       await startVoiceMemoSession(sessionId, {
         language: workspace.settings.whisperLanguage || undefined,
       });
@@ -2246,6 +2336,7 @@ function App() {
 
   const finishVoiceMemoForNote = useCallback(async (sessionId: string) => {
     dictationSessions.current.delete(sessionId);
+    setDictationOwner(current => current?.sessionId === sessionId ? { ...current, active: false } : current);
     await finishVoiceMemoSession(sessionId);
   }, []);
 
@@ -2281,7 +2372,7 @@ function App() {
     });
   }, [queueSnapshotSave]);
 
-  const updateNote = useCallback((nextNote: Note) => {
+  const updateNote = useCallback((nextNote: Note, originRemoval?: 'remove-orion-ai' | 'remove-mcp') => {
     overviewWritingIdle.current?.activity();
     const normalized: Note = {
       ...nextNote,
@@ -2292,10 +2383,11 @@ function App() {
     };
     setSnapshot((current) => {
       const previous = current.notes.find((note) => note.id === normalized.id);
-      const merged: Note = previous
+      const merged = mergeNoteWritingOrigins(previous, previous
         ? {
             ...normalized,
-            // Dismissals are owned by Home, not a captured editor document.
+            // Both fields can change independently of the captured editor document.
+            contact: previous.contact,
             dismissedCalendarMentions: previous.dismissedCalendarMentions,
             conceptIds: [
               ...new Set([
@@ -2304,7 +2396,7 @@ function App() {
               ]),
             ],
           }
-        : normalized;
+        : normalized, originRemoval);
       const notes = current.notes.map((note) =>
         note.id === merged.id ? merged : note,
       );
@@ -2331,6 +2423,28 @@ function App() {
       };
     });
   }, []);
+
+  const saveLead = useCallback<LeadContacts["save"]>((choice, sourceNoteId, insert) => {
+    const live = snapshotRef.current;
+    const spaceId = snapshot.workspace.id;
+    const visibleId = writingWindow ? windowLaunch.noteId : screenRef.current === "note" ? live.activeNoteId : null;
+    if (!persistenceEnabledRef.current || closingRef.current || live.workspace.id !== spaceId ||
+        sourceNoteId !== visibleId || live.notes.filter(note => note.id === sourceNoteId).length !== 1) return false;
+    if ("existingId" in choice) {
+      const matches = live.notes.filter(note => note.id === choice.existingId);
+      return matches.length === 1 && matches[0].id !== sourceNoteId && isContactNote(matches[0]) && insert(matches[0]);
+    }
+    const contact = makeContactNote(choice.name, choice.organization);
+    if (!contact || live.notes.some(note => note.id === contact.id)) return false;
+    // The editor and contact update share this event. A stale cursor cannot create a detached contact.
+    if (!insert(contact)) return false;
+    setSnapshot(current => ({
+      ...current, notes: [contact, ...current.notes], updatedAt: nextVaultRevision(current.updatedAt),
+    }));
+    return true;
+  }, [snapshot.workspace.id, writingWindow, windowLaunch.noteId, setSnapshot]);
+  const leadContacts = useMemo(() => ({ spaceId: snapshot.workspace.id, contacts, save: saveLead }),
+    [snapshot.workspace.id, contacts, saveLead]);
 
   const onDismissCalendarMention = useCallback<DismissCalendarMention>((capturedNote, key) => {
     const spaceId = snapshot.workspace.id;
@@ -2436,15 +2550,17 @@ function App() {
       if (latest.workspace.id !== current.workspace.id || !note || note.body !== result.baseBody || note.title !== result.noteTitle) throw new Error("The note changed. Infer again to use its current text.");
       return result;
     },
-    apply: (board, result, titles, taskIds, urgencies, boardIds) => {
+    apply: (board, result, rows) => {
       const current = snapshotRef.current;
       const boards=collectWork(current.notes).boards;
       if (current.workspace.id !== snapshot.workspace.id || (!board.fromNote && boards.filter(b => b.id === board.id && b.noteId === board.noteId).length!==1)) return false;
-      const note = current.notes.find(n => n.id === board.noteId);
-      if (!note) return false;
-      const body = applyInferredTickets(note, board, result, titles, taskIds, urgencies, boardIds, boards);
+      const matches = current.notes.filter(n => n.id === board.noteId);
+      if (matches.length !== 1) return false;
+      const note = matches[0];
+      const body = applyInferredTickets(note, board, result, rows, boards);
       if (body === null) return false;
-      updateNote({ ...note, body, updatedAt: new Date().toISOString() });
+      const accepted = hasInferredTicketWriting(note, result, rows) ? withWritingOrigin(note, "orion-ai") : note;
+      updateNote({ ...accepted, body, updatedAt: new Date().toISOString() });
       return true;
     },
   }), [snapshot.workspace.id, ticketInferenceAvailable, updateNote]);
@@ -2843,7 +2959,7 @@ function App() {
             const notes = space.notes.map((note) =>
               note.id === articleId
                 ? {
-                    ...generatedArticle,
+                    ...mergeNoteWritingOrigins(currentArticle, generatedArticle),
                     conceptIds: [...currentArticle.conceptIds],
                     sourceIds: [
                       ...new Set([
@@ -3679,6 +3795,40 @@ function App() {
     if (result.editProposal) await reviewChatEdit(result.editProposal);
   }, [saveThreadSpace, voiceSelection, reviewChatEdit, startGenerate, openNote, queueSnapshotSave]);
 
+  const confirmVoiceTicketsDone = useCallback(async (spaceId: string, tickets: Ticket[]) => {
+    await queueSnapshotSave(vaultRef.current);
+    const saved = persistedVault.current?.spaces.find(space => space.workspace.id === spaceId);
+    if (!saved || tickets.some(ticket => uniqueVoiceTicket(saved, ticket)?.status !== "done")) {
+      throw new Error("Orion couldn’t verify the saved ticket status. Check the board and try again.");
+    }
+  }, [queueSnapshotSave]);
+
+  const writeVoiceWork = useCallback(async (action: VoiceWorkWrite, getEditor: (id: string) => VoiceWorkEditor | undefined) => {
+    if (closingRef.current || !persistenceEnabledRef.current) throw new Error("The Space is unavailable for a voice change.");
+    flushSync(() => setVault(current => current));
+    const current = snapshotRef.current;
+    const visibleSpaceId = writingWindow ? windowLaunch.spaceId : vaultRef.current.activeSpaceId;
+    if (visibleSpaceId !== action.spaceId || current.workspace.id !== action.spaceId) throw new Error("The voice Space changed. Ask again in the current Space.");
+    const change = prepareVoiceWorkWrite(current, action);
+    const editor = getEditor(change.note.id);
+    flushSync(() => {
+      if (editor) {
+        const applied = action.kind === "patchTicket" ? editor.onPatch?.(action.ticket, action.patch)
+          : editor.applyVoiceBody(change.note.body, change.body);
+        if (!applied) throw new Error("The open note changed. Check it and ask again.");
+      } else {
+        const note = { ...change.note, body: change.body, updatedAt: nextVaultRevision(change.note.updatedAt) };
+        if (change.creating) setSnapshot(space => ({
+          ...space, notes: [note, ...space.notes], updatedAt: nextVaultRevision(space.updatedAt),
+        }));
+        else updateNote(note);
+      }
+    });
+    await queueSnapshotSave(vaultRef.current);
+    const saved = persistedVault.current?.spaces.find(space => space.workspace.id === action.spaceId);
+    if (!saved || !change.verify(saved)) throw new Error("Orion couldn’t verify the saved change. Check the source note before trying again.");
+  }, [writingWindow, windowLaunch.spaceId, queueSnapshotSave, setSnapshot, updateNote]);
+
   const commitVoiceResult = useCallback(async (request: VoiceCommit): Promise<VoiceReceipt> => {
     // A deterministic message ID is the idempotency receipt. Failed persistence
     // can be retried without creating another note, including after reconnect.
@@ -4139,40 +4289,70 @@ function App() {
     }
   }
 
-  async function handleOpenPortable(source?:File|string):Promise<boolean>{
-    try{
-      if(!persistenceEnabledRef.current||closingRef.current)throw new Error('Finish saving your library before opening a collection.');
-      const portable=await import('./lib/portableOrion');
-      let file:import('./lib/portableOrion').PortableFile,hash:string,images:Record<string,string>;
-      if(source instanceof File){
-        if(source.size>portable.MAX_PORTABLE_BYTES)throw new Error('This .orion file is larger than 128 MB.');
-        file=portable.parsePortableFile(await source.text());hash=await portable.portableCollectionHash(file);
-        images=Object.fromEntries(file.assets.map(asset=>[asset.id,`data:${asset.mimeType};base64,${asset.base64Data}`]));
-      }else{
-        const {invoke}=await import('@tauri-apps/api/core');
-        const opened=await invoke<{file:import('./lib/portableOrion').PortableFile;collectionHash:string;imageUrls:Record<string,string>}|null>('open_orion_file',{token:typeof source==='string'?source:null});
-        if(!opened)return false;file=portable.parsePortableFile(JSON.stringify(opened.file));hash=opened.collectionHash;images=opened.imageUrls;
+  async function handleOpenPortable(source?: File | string): Promise<boolean> {
+    try {
+      if (!persistenceEnabledRef.current || closingRef.current) return false;
+      if (writingWindow && isTauriRuntime() && source === undefined) {
+        return await invokeNative<boolean>("pick_orion_file_for_library");
       }
-      await queueSnapshotSave(vaultRef.current);
-      const imported=portable.importPortableCollection(vaultRef.current,file,hash,images);
-      flushSync(()=>{vaultRef.current=imported.vault;setVault(imported.vault);});
-      await queueSnapshotSave(imported.vault);
-      setWorkTarget({});setScreen(imported.noteId?'note':'home');closeConnections();setSelectedSourceId(null);setContextOpen(false);
-      replaceHistory([createNavigationEntry(imported.noteId?{screen:'note',noteId:imported.noteId}:{screen:'home'})],0);
-      showToast(imported.reused?'Collection opened':'Collection imported',imported.noteId?imported.reused?'Your local edits were kept.':`${file.collection.notes.length} notes opened in their own Space.`:'This note was deleted locally. Your collection and edits were kept.');
+      // Finder and browser file inputs have already selected the file. The
+      // desktop picker can stay open a long time, so check disk after selection.
+      const startingRevision = persistedVaultUpdatedAt.current;
+      const [opened, revision] = await Promise.all([
+        readPortableFile(source),
+        source === undefined ? undefined : loadVaultRevision(),
+      ]);
+      if (!opened) return false;
+      const currentRevision = revision === undefined ? await loadVaultRevision() : revision;
+      // A different window may have imported, edited or deleted the entry.
+      // Our own save may also have finished while the selected file was read.
+      if (currentRevision !== startingRevision && currentRevision !== persistedVaultUpdatedAt.current) {
+        await queueSnapshotSave(vaultRef.current);
+      }
+      if (!persistenceEnabledRef.current || closingRef.current) return false;
+      flushSync(() => setVault(current => { vaultRef.current = current; return current; }));
+      displayPortableFile(vaultRef.current, opened);
       return true;
-    }catch(error){showToast('Couldn’t open this collection',error instanceof Error?error.message:String(error));return false;}
+    } catch (error) {
+      showToast("Couldn’t open this collection", error instanceof Error ? error.message : String(error));
+      return false;
+    }
   }
-  const openPortableRef=useRef(handleOpenPortable);openPortableRef.current=handleOpenPortable;
-  useEffect(()=>{
-    if(!hydrated||!persistenceEnabled||writingWindow||!isTauriRuntime())return;
-    let disposed=false,unlisten:(()=>void)|undefined;let busy=false,again=false;
-    void Promise.all([import('@tauri-apps/api/event'),import('@tauri-apps/api/core')]).then(async([{listen},{invoke}])=>{
-      const drain=async()=>{if(busy){again=true;return;}busy=true;try{do{again=false;const tokens=await invoke<string[]>('pending_orion_files');for(const token of tokens){if(disposed)return;await openPortableRef.current(token);}}while(again&&!disposed);}finally{busy=false;}};
-      const stop=await listen('orion-portable-files',()=>void drain());if(disposed){stop();return;}unlisten=stop;await drain();
-    }).catch(error=>showToast('File opening unavailable',String(error)));
-    return ()=>{disposed=true;unlisten?.();};
-  },[hydrated,persistenceEnabled,writingWindow,showToast]);
+  const openPortableRef = useRef(handleOpenPortable);
+  openPortableRef.current = handleOpenPortable;
+  useEffect(() => {
+    if (!hydrated || !persistenceEnabled || writingWindow || !isTauriRuntime()) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    let draining = false;
+    let requested = false;
+    const report = (error: unknown) => {
+      if (!disposed) showToast("File opening unavailable", error instanceof Error ? error.message : String(error));
+    };
+    const drain = async () => {
+      requested = true;
+      if (draining || disposed) return;
+      draining = true;
+      try {
+        while (requested && !disposed) {
+          requested = false;
+          const tokens = await invokeNative<string[]>("pending_orion_files");
+          for (const token of tokens ?? []) {
+            if (disposed) return;
+            await openPortableRef.current(token);
+          }
+        }
+      } catch (error) { report(error); }
+      finally { draining = false; }
+    };
+    void import("@tauri-apps/api/event").then(async ({ listen }) => {
+      const stop = await listen("orion-portable-files", () => void drain());
+      if (disposed) { stop(); return; }
+      unlisten = stop;
+      await drain();
+    }).catch(report);
+    return () => { disposed = true; unlisten?.(); };
+  }, [hydrated, persistenceEnabled, writingWindow, showToast]);
 
   async function handleSaveKey(apiKey: string) {
     await saveApiKey(apiKey);
@@ -4428,6 +4608,79 @@ function App() {
     );
   }
 
+  function renderNote(note: Note, background: boolean) {
+    const editorAI = resolveEditorAICapabilities(snapshot.settings);
+    return (
+      <NoteView
+        onChangeBoard={updateBoard}
+        onPatchTicket={updateTicket}
+        onDeleteTicket={removeTicket}
+        onCreateWork={createWorkItem}
+        ticketInference={ticketInference}
+        onCreateComment={createPassageComment}
+        onThreadAction={handlePassageThreadAction}
+        voiceSelection={voiceSelection}
+        chatEdit={!background && chatEdit?.proposal.spaceId === snapshot.workspace.id ? chatEdit : undefined}
+        onChatEditComplete={completeChatEdit}
+        onChatEditBeforeAccept={chatEdit && externalEditReviews.current?.owns(chatEdit.id)
+          ? (id) => externalEditReviews.current!.beforeAccept(id) : undefined}
+        onReviewReadinessChange={background ? undefined : receiveReviewReadiness}
+        onEditorContextChange={background ? undefined : receiveEditorContext}
+        onEditorActionHostChange={background ? undefined : receiveEditorActionHost}
+        onFlowActiveChange={background ? undefined : setFlowActive}
+        initialEditing={writingWindow}
+        editingModes={spaceEditingModes}
+        noteTypeface={snapshot.settings.noteTypeface}
+        onNoteTypefaceChange={(noteTypeface) =>
+          updateSettings({ ...snapshot.settings, noteTypeface })
+        }
+        note={note}
+        notes={snapshot.notes}
+        concepts={snapshot.concepts}
+        sources={snapshot.sources}
+        onOpenNote={openNote}
+        onOpenConcept={(conceptId) =>
+          followConcept(conceptId, note.id)
+        }
+        onOpenSource={setSelectedSourceId}
+        onAttachSource={attachSourceToNote}
+        onUpdateNote={updateNote}
+        onDeleteNote={deleteNote}
+        onFinishEditing={finishNoteEditing}
+        onRegisterConcept={(input) =>
+          registerLinkConcept(input, note.id)
+        }
+        onGenerateLinkTitle={(selectedContext, signal, context) =>
+          generateLinkTitle(note.id, selectedContext, signal, context)
+        }
+        onGenerateAIWriting={(input, signal) =>
+          generateAIWriting(note.id, input, signal)
+        }
+        onGenerateAIImage={(input, signal, callbacks) =>
+          generateAIImage(note.id, input, signal, callbacks)
+        }
+        onDisableConceptAutoLink={disableConceptAutoLink}
+        aiArticleWritingEnabled={editorAI.writingEnabled}
+        aiImageGenerationEnabled={editorAI.imageGenerationEnabled}
+        aiWritingUnavailableReason={editorAI.writingUnavailableReason}
+        aiImageUnavailableReason={editorAI.imageUnavailableReason}
+        imageContextEnabled={snapshot.settings.includeExistingNotesInAIContext}
+        aiProviderName={selectedAIProviderName(snapshot.settings)}
+        onSpeakNote={speakNoteText}
+        onDownloadNarration={downloadNoteNarration}
+        onPrepareSpeech={prepareSpeech}
+        onPrepareVoiceMemoSession={(sessionId) =>
+          prepareVoiceMemoForNote(note.id, sessionId)
+        }
+        onTranscribeVoiceMemo={(audio, sessionId) =>
+          transcribeVoiceMemoForNote(note.id, audio, sessionId)
+        }
+        onFinishVoiceMemoSession={finishVoiceMemoForNote}
+        onPrepareDictation={prepareCompletedDictation}
+      />
+    );
+  }
+
   function renderScreen() {
     if (writingWindow && !activeNote) {
       return <div className="writing-window-unavailable" role="status">
@@ -4436,79 +4689,11 @@ function App() {
         <button type="button" className="button secondary" onClick={openNewWindow}>Open Orion</button>
       </div>;
     }
-    if ((writingWindow || screen === "note") && activeNote) {
-      const editorAI = resolveEditorAICapabilities(snapshot.settings);
-      return (
-        <NoteView
-          onChangeBoard={updateBoard}
-        onPatchTicket={updateTicket}
-          onDeleteTicket={removeTicket}
-          onCreateWork={createWorkItem}
-          ticketInference={ticketInference}
-          onCreateComment={createPassageComment}
-          onThreadAction={handlePassageThreadAction}
-          voiceSelection={voiceSelection}
-          chatEdit={chatEdit?.proposal.spaceId === snapshot.workspace.id ? chatEdit : undefined}
-          onChatEditComplete={completeChatEdit}
-          onChatEditBeforeAccept={chatEdit && externalEditReviews.current?.owns(chatEdit.id)
-            ? (id) => externalEditReviews.current!.beforeAccept(id) : undefined}
-          onReviewReadinessChange={receiveReviewReadiness}
-          onEditorContextChange={receiveEditorContext}
-          onEditorActionHostChange={receiveEditorActionHost}
-          onFlowActiveChange={setFlowActive}
-          initialEditing={writingWindow}
-          editingModes={spaceEditingModes}
-          noteTypeface={snapshot.settings.noteTypeface}
-          onNoteTypefaceChange={(noteTypeface) =>
-            updateSettings({ ...snapshot.settings, noteTypeface })
-          }
-          note={activeNote}
-          notes={snapshot.notes}
-          concepts={snapshot.concepts}
-          sources={snapshot.sources}
-          onOpenNote={openNote}
-          onOpenConcept={(conceptId) =>
-            followConcept(conceptId, activeNote.id)
-          }
-          onOpenSource={setSelectedSourceId}
-          onAttachSource={attachSourceToNote}
-          onUpdateNote={updateNote}
-          onDeleteNote={deleteNote}
-          onFinishEditing={finishNoteEditing}
-          onRegisterConcept={(input) =>
-            registerLinkConcept(input, activeNote.id)
-          }
-          onGenerateLinkTitle={(selectedContext, signal, context) =>
-            generateLinkTitle(activeNote.id, selectedContext, signal, context)
-          }
-          onGenerateAIWriting={(input, signal) =>
-            generateAIWriting(activeNote.id, input, signal)
-          }
-          onGenerateAIImage={(input, signal, callbacks) =>
-            generateAIImage(activeNote.id, input, signal, callbacks)
-          }
-          onDisableConceptAutoLink={disableConceptAutoLink}
-          aiArticleWritingEnabled={editorAI.writingEnabled}
-          aiImageGenerationEnabled={editorAI.imageGenerationEnabled}
-          aiWritingUnavailableReason={editorAI.writingUnavailableReason}
-          aiImageUnavailableReason={editorAI.imageUnavailableReason}
-          imageContextEnabled={snapshot.settings.includeExistingNotesInAIContext}
-          aiProviderName={selectedAIProviderName(snapshot.settings)}
-          onSpeakNote={speakNoteText}
-          onDownloadNarration={downloadNoteNarration}
-          onPrepareSpeech={prepareSpeech}
-          onPrepareVoiceMemoSession={(sessionId) =>
-            prepareVoiceMemoForNote(activeNote.id, sessionId)
-          }
-          onTranscribeVoiceMemo={(audio, sessionId) =>
-            transcribeVoiceMemoForNote(activeNote.id, audio, sessionId)
-          }
-          onFinishVoiceMemoSession={finishVoiceMemoForNote}
-          onPrepareDictation={prepareCompletedDictation}
-        />
-      );
+    if ((writingWindow || screen === "note") && activeNote) return null;
+    if (screen === "contacts" && showContacts) {
+      return <ContactsView key={snapshot.workspace.id} notes={contacts} onOpenNote={openNote} />;
     }
-    if (screen === "notes") {
+    if (screen === "notes" || screen === "contacts") {
       return (
         <NotesIndex
           notes={snapshot.notes}
@@ -4536,7 +4721,7 @@ function App() {
           spaces={vault.spaces.map((space) => space.workspace)}
           assistantJobs={assistantJobs}
           onCancelAssistantJob={async (job) => {
-            await invokeAssistantHost("assistant_cancel", { spaceId: job.spaceId, jobId: job.id });
+            await invokeNative("assistant_cancel", { spaceId: job.spaceId, jobId: job.id });
           }}
           themePalette={resolvedThemePalette}
           onChange={updateSettings}
@@ -4587,6 +4772,21 @@ function App() {
     );
   }
 
+  const visibleNote = writingWindow || screen === "note" ? activeNote : null;
+  const retainedNote = dictationOwner?.spaceId === snapshot.workspace.id
+    ? snapshot.notes.find(note => note.id === dictationOwner.noteId) : undefined;
+  useEffect(() => {
+    // Keep a finished background insertion's Undo until its note is visited.
+    // Only one such editor is retained; a new recording replaces this owner.
+    if (dictationOwner && !dictationOwner.active && (!retainedNote || visibleNote?.id === dictationOwner.noteId)) {
+      setDictationOwner(undefined);
+    }
+  }, [dictationOwner, retainedNote?.id, visibleNote?.id]);
+  // Stable note keys retain only the recording editor across same-Space routes.
+  // Space changes/deletion remove it and invoke the existing stop/archive path.
+  const noteSurfaces = visibleNote ? [visibleNote] : [];
+  if (retainedNote && retainedNote.id !== visibleNote?.id) noteSurfaces.push(retainedNote);
+
   const shellClassName = [
     "app-shell",
     connectionConcept ? "with-context with-connection-canvas" : "",
@@ -4600,6 +4800,7 @@ function App() {
     <NoteAISettingsContext.Provider value={snapshot.settings}>
     <TicketCodesContext.Provider value={snapshot.ticketCodes}><TicketNavigationRoot snapshot={snapshot} target={workTarget}
       openTicket={openTicketReference} openBoard={openBoardReference} changePrefix={changeTicketPrefix} onOpenNote={openNote} onPatch={updateTicket}
+      onConfirmDone={confirmVoiceTicketsDone} onWriteVoiceWork={writeVoiceWork}
       onClose={()=>{if(historyIndexRef.current>0)navigateHistory(-1);else{setWorkTarget({});replaceHistory([createNavigationEntry(routeForScreen(screen,snapshot.activeNoteId))],0);}}}><div
       className={shellClassName}
       data-note-typeface={snapshot.settings.noteTypeface === "serif" ? "serif" : "sans"}
@@ -4608,7 +4809,8 @@ function App() {
         voicePresence={voicePresence}
         voicePalette={voicePalette}
         brandMarkSrc={brandMarkSrc}
-        view={screen === "note" ? "notes" : screen}
+        showContacts={showContacts}
+        view={screen === "note" || (screen === "contacts" && !showContacts) ? "notes" : screen}
         notes={snapshot.notes}
         spaces={vault.spaces}
         activeSpaceId={vault.activeSpaceId}
@@ -4689,7 +4891,19 @@ function App() {
             label={screen === "note" || writingWindow ? "this note" : "this view"}
             resetKey={`${snapshot.workspace.id}:${screen}:${activeNote?.id ?? ""}`}
           >
-            {renderScreen()}
+            {noteSurfaces.map(note => {
+              const background = note.id !== visibleNote?.id;
+              return <DictationNavigationContext.Provider key={`${snapshot.workspace.id}:${note.id}`} value={{
+                background, blocked: Boolean(dictationOwner?.active && retainedNote && retainedNote.id !== note.id),
+                noteTitle: displayNoteTitle(note), onReturn: () => openNote(note.id),
+              }}><div className="note-surface" hidden={background} inert={background || undefined}>
+                <LeadContactsContext.Provider value={background ? null : leadContacts}>
+                  {renderNote(note, background)}
+                </LeadContactsContext.Provider>
+                {!background && isContactNote(note) && <ContactSources note={note} notes={snapshot.notes} onOpenNote={openNote} />}
+              </div></DictationNavigationContext.Provider>;
+            })}
+            {hydrated && renderScreen()}
           </ErrorBoundary>
           <ErrorBoundary label="Chat" fallback="none" resetKey={snapshot.workspace.id} onError={reportSurfaceProblem}>
           <ChatDock

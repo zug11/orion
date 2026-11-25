@@ -11,7 +11,12 @@ import { startVoiceWorkOrderMailbox } from "../lib/assistant/voiceWorkOrders";
 import { voiceContextUsageRatio, type VoiceEvent, type VoiceStatus, type PrepareVoiceConnection } from "../lib/liveVoice";
 import { VoiceResearch, voiceContext, voicePromptSavesCurrentFinding, type VoiceCommit, type VoiceReceipt, type VoiceWorkOrder } from "../lib/voiceResearch";
 import { MAX_VOICE_WORKERS_PER_REQUEST, MAX_VOICE_BATCH_ASSIGNMENTS, deferredVoiceCancellation, explicitVoiceAssignment, requestedVoiceWorkerCount, workerClarificationAnswer, localVoiceTurnDecision, routeVoiceTurn, resolveVoiceClarification, voiceControlAction, voiceContinuationRequest, voiceCorrectionMayAffect, likelyVoiceControl, type VoiceTurnDecision } from "../lib/voiceWorkOrders";
-import { VoiceConversation, type VoiceTurn, type VoiceDelivery } from "../lib/voiceConversation";
+import { VoiceConversation, type VoiceTurn, type VoiceDelivery, type VoiceSpeechTarget } from "../lib/voiceConversation";
+import { useTicketNavigation } from "./TicketNavigation";
+import { suggestSpokenTickets, ticketChoiceQuestion } from "../lib/voiceTicketCompletion";
+import { validateChatEditTarget } from "../lib/chatEdits";
+import { refreshVoiceCreation, resolveVoiceWorkspace, voiceWorkspaceRequest } from "../lib/voiceWorkspace";
+import { VoiceTicketDialogue, type TicketDecision } from "../lib/voiceTicketDialogue";
 import { VoiceReservations, type VoiceReservationClarification } from "../lib/voiceReservations";
 import { isCurrentVoiceClarificationChoice, resolveVoiceClarificationChoice } from "../lib/voiceWorkOrders";
 import { VoiceTurnRouter, type RoutingVoiceTurn } from "../lib/voiceTurnRouter";
@@ -64,7 +69,6 @@ interface Props {
 }
 const noSelectionSubscription = () => () => {};
 const noSelection = () => undefined;
-type SpeechTarget = Pick<VoiceTurn, "focusNoteId" | "selection" | "focusedWorker">;
 const unmatchedSpeech = "This spoken request could not be matched to where you started speaking. Say it again with the intended note or worker open. If this keeps happening, restart voice there.";
 export function SpaceVoice(props: Props) {
   const voiceProvider = normalizeLiveVoiceProvider(props.snapshot.settings.liveVoiceProvider);
@@ -75,18 +79,26 @@ export function SpaceVoice(props: Props) {
   const previousVoiceProvider = useRef(voiceProvider);
   const selectedText = useSyncExternalStore(props.voiceSelection?.subscribe ?? noSelectionSubscription, props.voiceSelection?.getSnapshot ?? noSelection);
   const liveProps = useRef(props); liveProps.current = props;
+  const ticketNavigation = useTicketNavigation();
+  const liveTickets = useRef(ticketNavigation); liveTickets.current = ticketNavigation;
+  const [ticketDialogue] = useState(() => new VoiceTicketDialogue());
+  const ticketLookup = useRef<AbortController | undefined>(undefined);
   const [voiceCall] = useState(() => new VoiceCallLifecycle());
   const research = useRef<VoiceResearch | undefined>(undefined);
   const conversation = useRef(new VoiceConversation());
-  const spokenTargets = useRef(new Map<string, SpeechTarget>());
-  const unchangedCallTarget = useRef<SpeechTarget | undefined>(undefined);
+  const workspaceQueue = useRef(Promise.resolve());
+  const spokenTargets = useRef(new Map<string, VoiceSpeechTarget>());
+  const unchangedCallTarget = useRef<VoiceSpeechTarget | undefined>(undefined);
   // A final without an onset can only belong to the target held continuously
   // since the call opened. Invalidate even if the user later returns to it.
   useLayoutEffect(() => {
     const invalidate = () => { unchangedCallTarget.current = undefined; };
     const unsubscribe = props.voiceSelection?.subscribe(invalidate);
     return () => { invalidate(); unsubscribe?.(); };
-  }, [props.snapshot.workspace.id, props.conversationId, props.focusNoteId, props.voiceSelection, voiceProvider]);
+  }, [props.snapshot.workspace.id, props.conversationId, props.focusNoteId, props.voiceSelection, voiceProvider, ticketNavigation.focusedTicketId]);
+  useLayoutEffect(() => {
+    if (ticketDialogue.question && ticketDialogue.question.focusedTicketId !== ticketNavigation.focusedTicketId) dismissTicketQuestion();
+  }, [ticketNavigation.focusedTicketId, ticketDialogue]);
   const conversations = useRef(new Map<string, VoiceConversation>());
   const focusedConversation = useRef<{ id: string; revision: number } | undefined>(undefined);
   const [focusedJobId, setFocusedJobId] = useState<string>();
@@ -262,7 +274,14 @@ export function SpaceVoice(props: Props) {
   function finishAnswer(turn: RoutingVoiceTurn) {
     if (answering.current === turn.key) { answering.current = undefined; setAnswerBusy(false); }
   }
+  function dismissTicketQuestion() {
+    if (!ticketDialogue.question) return;
+    ticketDialogue.question = undefined;
+    ticketLookup.current?.abort(); ticketLookup.current = undefined;
+    setNotice("");
+  }
   function cancelRouting(preserveQuestion = false) {
+    ticketDialogue.reset(); ticketLookup.current?.abort(); ticketLookup.current = undefined;
     const pending = routes.pending;
     routes.clear(); answering.current = undefined;
     if (preserveQuestion && reservations.clarification) {
@@ -473,6 +492,7 @@ export function SpaceVoice(props: Props) {
       if (!voiceControlAction(source.prompt) && (count || reservations.members(source.key).length)) {
         reserveWorkers(source, count ?? reservations.members(source.key).length, "clarifying");
       }
+      dismissTicketQuestion();
       reservations.ask(source, decision.question, count, { choices: decision.choices, controlAction: decision.controlAction });
       setClarification(decision.question);
       publishPending();
@@ -613,6 +633,7 @@ export function SpaceVoice(props: Props) {
   }
   function cancelClarification(captured: VoiceReservationClarification) {
     if (!reservations.isCurrent(captured)) return;
+    dismissTicketQuestion();
     abortReservationRoutes(captured.turn.key); reservations.expire(captured.turn.key);
     setClarification(""); setNotice(""); setError(""); setReadyResult(undefined); noticeTarget.current = undefined; publishPending();
     deliveries.discardInvalid(item => Boolean(item.id) && validDelivery(item));
@@ -631,6 +652,7 @@ export function SpaceVoice(props: Props) {
       return false;
     }
     if (!routes.hasCapacity) { setError("Several requests are still being understood. Try again after one finishes."); return false; }
+    dismissTicketQuestion();
     // Suggested text narrows scope as reference data. Only exact authored text
     // can grant an action; a button never becomes a generated user command.
     const turn: RoutingVoiceTurn = { ...conversation.current.answer(text || captured.turn.prompt, captured.turn), uiAnswer: true,
@@ -644,12 +666,123 @@ export function SpaceVoice(props: Props) {
     }
     return true;
   }
+  async function handleTicketDecision(turn: VoiceTurn, decision: TicketDecision) {
+    if (decision.kind === "ignore") {
+      if (decision.guidance) {
+        setNotice(decision.guidance);
+        deliveries.enqueue({ text: decision.guidance, delegationId: turn.delegationId });
+      }
+      return;
+    }
+    const navigation = liveTickets.current;
+    const spaceId = liveProps.current.snapshot.workspace.id;
+    const generation = voiceCall.generation;
+    const owner = conversation.current;
+    if (!liveProps.current.enabled || !voiceCall.acceptsInput) return;
+    const current = () => alive.current && voiceCall.acceptsInput && generation === voiceCall.generation &&
+      conversation.current === owner && liveProps.current.snapshot.workspace.id === spaceId;
+    const publish = (message: string, failed = false, question = false) => {
+      if (!current()) return;
+      voiceCall.append("thinking", JSON.stringify({ type: question ? "ticket_clarification" : "ticket_completion_result", message }), voiceCall.delegation(turn.delegationId));
+      if (failed) setError(message);
+      if (!question && ticketDialogue.question) return;
+      if (!failed) setNotice(message);
+      deliveries.enqueue({ text: message, delegationId: turn.delegationId });
+    };
+    if (!navigation.completeTickets || navigation.snapshot?.workspace.id !== spaceId) {
+      publish("Ticket controls are unavailable in this Space.", true);
+      return;
+    }
+    if (decision.kind === "notice") { publish(decision.message); return; }
+    if (decision.kind === "complete") {
+      try { publish(await navigation.completeTickets(decision.tickets)); }
+      catch { publish("Orion couldn’t confirm the saved ticket status. Check the board and try again.", true); }
+      return;
+    }
+    const question = decision.question;
+    const ask = () => {
+      if (!current() || ticketDialogue.question !== question) return;
+      if (liveTickets.current.focusedTicketId !== question.focusedTicketId) { dismissTicketQuestion(); return; }
+      question.after = owner.latestSpokenKey;
+      publish(question.message, false, true);
+    };
+    if (!decision.search || !isSelectedAIConfigured(navigation.snapshot.settings)) { ask(); return; }
+    const controller = new AbortController();
+    ticketLookup.current = controller;
+    const timeout = setTimeout(() => {
+      if (!controller.signal.aborted) { controller.abort(); ask(); }
+    }, 5_000);
+    try {
+      const suggestions = await suggestSpokenTickets(navigation.snapshot, decision.search, chatWithOrion, controller.signal);
+      if (controller.signal.aborted || !current() || ticketDialogue.question !== question) return;
+      if (suggestions.length) {
+        question.choices = suggestions;
+        question.message = ticketChoiceQuestion(question.space, suggestions);
+      }
+      ask();
+    } catch { if (!controller.signal.aborted) ask(); }
+    finally {
+      clearTimeout(timeout);
+      if (ticketLookup.current === controller) ticketLookup.current = undefined;
+    }
+  }
+  function runWorkspaceRequest(turn: VoiceTurn, request: NonNullable<ReturnType<typeof voiceWorkspaceRequest>>) {
+    const owner = conversation.current, generation = voiceCall.generation;
+    const captured = liveProps.current.snapshot, spaceId = captured.workspace.id, received = new Date();
+    const current = () => alive.current && voiceCall.acceptsInput && liveProps.current.enabled &&
+      generation === voiceCall.generation && conversation.current === owner && liveProps.current.snapshot.workspace.id === spaceId;
+    const publish = (message: string, failed: boolean) => {
+      if (!current()) return;
+      voiceCall.append("thinking", JSON.stringify({ type: "workspace_action_result", message }), voiceCall.delegation(turn.delegationId));
+      if (failed) setError(message); else setNotice(message);
+      deliveries.enqueue({ text: message, delegationId: turn.delegationId });
+    };
+    // A read following a write in the same call sees its saved result. Recheck
+    // call ownership after an asynchronous calendar scan and before every write.
+    workspaceQueue.current = workspaceQueue.current.then(async () => {
+      if (!current()) return;
+      const source = request.kind === "calendar" || request.kind === "tickets" ? liveProps.current.snapshot : captured;
+      let result = await resolveVoiceWorkspace(source, request, turn, received, current);
+      if (request.kind === "createTicket" || request.kind === "createDate") {
+        result = await refreshVoiceCreation(captured, liveProps.current.snapshot, request, turn, received, result);
+      }
+      if (!current()) return;
+      if (result.proposal) {
+        validateChatEditTarget(liveProps.current.snapshot, result.proposal);
+        presentProposal({ reply: result.message, editProposal: result.proposal });
+      }
+      if (result.write) {
+        const navigation = liveTickets.current;
+        if (!navigation.writeVoiceWork || navigation.snapshot?.workspace.id !== spaceId) {
+          publish("Calendar and ticket changes are unavailable in this Space.", true);
+          return;
+        }
+        await navigation.writeVoiceWork(result.write);
+      }
+      publish(result.message, false);
+    }).catch(() => publish("Orion couldn’t verify that request against the current Space. Check the calendar or tickets and try again.", true));
+  }
   function considerTurns() {
     for (const receivedTurn of conversation.current.takeTurns()) {
-      setNotice(""); setReadyResult(undefined); noticeTarget.current = undefined;
+      if (conversation.current.handledTicketRequest(receivedTurn.key) || reservations.isCancelled(receivedTurn.key)) continue;
+      const oldQuestion = ticketDialogue.question;
+      const ticketDecision = ticketDialogue.interpret(liveProps.current.snapshot, receivedTurn);
+      if (oldQuestion !== ticketDialogue.question) { ticketLookup.current?.abort(); ticketLookup.current = undefined; }
+      if (!ticketDialogue.question) setNotice("");
+      setReadyResult(undefined); noticeTarget.current = undefined;
       const pending = reservations.clarification;
       const turn: RoutingVoiceTurn = { ...receivedTurn, ...((pending && !voiceControlAction(pending.turn.prompt) && !explicitVoiceAssignment(receivedTurn.prompt) && !likelyVoiceControl(receivedTurn.prompt)) ? { clarification: pending } : {}) };
-      if (reservations.isCancelled(turn.key)) continue;
+      if (ticketDecision && conversation.current.claimTicketRequest(turn.key)) {
+        routes.replace(turn.key); setError("");
+        void handleTicketDecision(turn, ticketDecision);
+        continue;
+      }
+      const workspaceRequest = voiceWorkspaceRequest(turn.prompt, liveProps.current.snapshot);
+      if (workspaceRequest && conversation.current.claimTicketRequest(turn.key)) {
+        routes.replace(turn.key); setError("");
+        runWorkspaceRequest(turn, workspaceRequest);
+        continue;
+      }
       // Editing the captured note uses Chat's proposal path directly. It does
       // not reserve an orb, enter a worker conversation or need a router call.
       if (directVoiceNoteEdit(turn.prompt)) {
@@ -684,11 +817,13 @@ export function SpaceVoice(props: Props) {
     routes.pump();
   }
   function receiveDebounced() { routes.debounce(considerTurns, conversation.current.settleMs); }
-  function captureSpeechTarget(): SpeechTarget {
+  function captureSpeechTarget(): VoiceSpeechTarget {
     const current = liveProps.current;
     const selection = current.voiceSelection?.getSnapshot();
     return {
       focusNoteId: current.focusNoteId,
+      focusedTicketId: liveTickets.current.focusedTicketId,
+      ticketQuestionKey: ticketDialogue.question?.after !== undefined ? ticketDialogue.question.key : null,
       ...(selection?.spaceId === current.snapshot.workspace.id && selection.noteId === current.focusNoteId ? { selection: structuredClone(selection) } : {}),
       ...(focusedConversation.current ? { focusedWorker: { ...focusedConversation.current } } : {}),
     };
@@ -710,9 +845,10 @@ export function SpaceVoice(props: Props) {
     const finalizedUtterances = normalizeLiveVoiceProvider(current.snapshot.settings.liveVoiceProvider) === "elevenlabs";
     if (finalizedUtterances && event.type === "session.delegation.created" && (!event.item_id || !spokenTargets.current.has(event.item_id))) return;
     const finalizedInput = finalizedUtterances && event.type === "session.input_transcript.delta";
+    const onset = event.item_id !== undefined ? spokenTargets.current.get(event.item_id) : undefined;
     const spokenTarget = finalizedInput
-      ? (event.item_id !== undefined ? spokenTargets.current.get(event.item_id) : event.uncertain_onset ? undefined : unchangedCallTarget.current)
-      : undefined;
+      ? (event.item_id !== undefined ? onset : event.uncertain_onset ? undefined : unchangedCallTarget.current)
+      : onset;
     if (finalizedInput && !spokenTarget) {
       setError(unmatchedSpeech);
       return;
@@ -722,7 +858,9 @@ export function SpaceVoice(props: Props) {
     if (!conversation.current.receive(event,
       spokenTarget ? spokenTarget.focusNoteId : current.focusNoteId,
       spokenTarget ? spokenTarget.selection : bound,
-      spokenTarget ? spokenTarget.focusedWorker : focusedConversation.current, finalizedUtterances)) return;
+      spokenTarget ? spokenTarget.focusedWorker : focusedConversation.current, finalizedUtterances,
+      spokenTarget ? spokenTarget.focusedTicketId : liveTickets.current.focusedTicketId,
+      spokenTarget ? spokenTarget.ticketQuestionKey : ticketDialogue.question?.after !== undefined ? ticketDialogue.question.key : null)) return;
     if (finalizedInput) setError(previous => previous === unmatchedSpeech ? "" : previous);
     if (event.type === "session.delegation.created" && event.delegation?.id) {
       voiceCall.rememberDelegation(event.delegation.id);

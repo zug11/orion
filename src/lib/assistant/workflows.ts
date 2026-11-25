@@ -1,4 +1,5 @@
 import { runSpaceSearch } from "../spaceSearch";
+import { withWritingOrigin } from "../writingOrigins";
 import { assistantSearchResult } from "./search";
 import { notesForExportScope } from "../webExport";
 import { nanoid } from "nanoid";
@@ -97,6 +98,7 @@ async function importSources(snapshot: AppSnapshot, request: Extract<AssistantRe
       organized = batch.map(({ item }, position) => ({ item,
         result: position === 0 ? knowledge.organized : { notes: [], wikiArticles: [], concepts: [], suggestedConnections: [] },
         provenance: position === 0 ? knowledge.provenance : [],
+        recovered: Boolean(knowledge.landing),
       }));
     }
     const payload = deps.buildImportPayload(organized, current, guidance, preservedIds);
@@ -165,7 +167,7 @@ export async function executeAssistantWorkflow(snapshot: AppSnapshot, request: A
         } else warnings.push("Slide text was generated. Add an OpenAI key in Orion for slide images.");
       }
       await deps.assertCurrent();
-      const finished: Note = { ...applyGeneratedNoteTitle(note, note.title, request.input.title ? undefined : generated.title), body, summary: "", tags: note.tags.filter((tag) => tag !== GENERATE_PENDING_TAG), updatedAt: timestamp() };
+      const finished: Note = { ...withWritingOrigin(applyGeneratedNoteTitle(note, note.title, request.input.title ? undefined : generated.title), "orion-ai"), body, summary: "", tags: note.tags.filter((tag) => tag !== GENERATE_PENDING_TAG), updatedAt: timestamp() };
       const vocabulary = reconcileConceptVocabulary([...snapshot.notes, finished], snapshot.concepts);
       return savedResult(snapshot, markSpaceOverviewStale({ ...snapshot, ...vocabulary, updatedAt: timestamp() }), { kind: request.input.kind, warnings });
     }

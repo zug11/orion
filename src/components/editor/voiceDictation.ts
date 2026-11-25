@@ -1,6 +1,8 @@
 import { type Editor, type JSONContent } from "@tiptap/core";
 import { closeHistory } from "@tiptap/pm/history";
 import type { Node } from "@tiptap/pm/model";
+import type { WritingOrigin } from "../../types";
+import { recordWritingOrigin } from "./writingOriginHistory";
 import { newBoardId, newTicketId, type NoteBoard } from "../../lib/tickets";
 import { parseDictationProposal, resolveDictationBoard, type DictationBlock,
   type DictationProposal, type DictationBoardTicket } from "../../lib/dictationCleanup";
@@ -8,15 +10,19 @@ import { parseDictationProposal, resolveDictationBoard, type DictationBlock,
 export type VoiceDictationBlock = DictationBlock;
 
 /** Dictation is one undoable insertion, separate from typing on either side. */
-function insertDictationContent(editor: Editor, position: number, content: JSONContent | JSONContent[]): boolean {
-  const inserted = editor.chain()
-    .focus()
+function insertDictationContent(editor: Editor, position: number, content: JSONContent | JSONContent[], origin?: WritingOrigin): boolean {
+  const chain = editor.chain();
+  // A retained background note must not move focus/scroll from the page the
+  // person is currently using. Its original mapped cursor still owns insertion.
+  if (!editor.view.dom.closest('[hidden]')) chain.focus();
+  const inserted = chain
     .command(({ tr }) => { closeHistory(tr); return true; })
     .insertContentAt(position, content, {
       errorOnInvalidContent: true,
       applyInputRules: false,
       applyPasteRules: false,
     })
+    .command(({ tr }) => { recordWritingOrigin(tr, origin); return true; })
     .run();
   if (inserted) editor.view.dispatch(closeHistory(editor.state.tr));
   return inserted;
@@ -26,6 +32,7 @@ export function insertVoiceTranscriptAt(
   editor: Editor,
   position: number,
   transcript: string,
+  origin?: WritingOrigin,
 ): boolean {
   const normalized = transcript.trim().replace(/\s+/g, " ");
   if (!normalized || editor.isDestroyed || !Number.isFinite(position)) return false;
@@ -56,7 +63,7 @@ export function insertVoiceTranscriptAt(
   return insertDictationContent(editor, insertionPosition, {
     type: "text",
     text: `${leadingSpace ? " " : ""}${normalized}${trailingSpace ? " " : ""}`,
-  });
+  }, origin);
 }
 
 /** Provider output has no markup authority: only literal text and these blocks. */
@@ -64,11 +71,12 @@ export function insertCleanedVoiceTranscriptAt(
   editor: Editor,
   position: number,
   blocks: readonly VoiceDictationBlock[],
+  origin?: WritingOrigin,
 ): boolean {
   if (editor.isDestroyed || blocks.length === 0 || !Number.isFinite(position) ||
       blocks.some(block => !["paragraph", "bullet", "todo"].includes(block.kind) || !block.text.trim())) return false;
   if (blocks.length === 1 && blocks[0].kind === "paragraph") {
-    return insertVoiceTranscriptAt(editor, position, blocks[0].text);
+    return insertVoiceTranscriptAt(editor, position, blocks[0].text, origin);
   }
 
   const content: JSONContent[] = [];
@@ -98,14 +106,14 @@ export function insertCleanedVoiceTranscriptAt(
   } catch {
     return false;
   }
-  return insertDictationContent(editor, Math.min(Math.max(0, Math.trunc(position)), editor.state.doc.content.size), content);
+  return insertDictationContent(editor, Math.min(Math.max(0, Math.trunc(position)), editor.state.doc.content.size), content, origin);
 }
 
 /** Materialize all structures in one transaction. Provider IDs and markup never
  * enter the document; existing board assignment is a local unambiguous lookup. */
 export function insertStructuredVoiceTranscriptAt(
   editor: Editor, position: number, proposal: DictationProposal, original: string,
-  boards: readonly NoteBoard[], document: Node,
+  boards: readonly NoteBoard[], document: Node, origin?: WritingOrigin,
 ): boolean {
   if (editor.isDestroyed || !editor.isEditable || !editor.state.doc.eq(document) ||
       !Number.isInteger(position) || position < 0 || position > document.content.size) return false;
@@ -155,13 +163,13 @@ export function insertStructuredVoiceTranscriptAt(
   // Full schema validation before the first mutation: unsupported structures
   // fall back to faithful text without leaving half a board or table behind.
   try { for (const node of content) editor.schema.nodeFromJSON(node).check(); } catch { return false; }
-  return insertDictationContent(editor, position, content);
+  return insertDictationContent(editor, position, content, origin);
 }
 
 /** Optional immediate recovery, only while the inserted document is unchanged.
  * Later edits always win; the complete transcript also remains in Sources. */
 export function restoreOriginalDictation(
-  editor: Editor, before: Node, after: Node, position: number, original: string,
+  editor: Editor, before: Node, after: Node, position: number, original: string, removedOrigin?: WritingOrigin,
 ): boolean {
   if (editor.isDestroyed || !editor.isEditable || !editor.state.doc.eq(after) ||
       !Number.isInteger(position) || position < 0 || position > before.content.size) return false;
@@ -173,7 +181,7 @@ export function restoreOriginalDictation(
   const trailing = right && !/[\s.,!?;:)\]}'\u201d\u2019]/.test(right) && !/[([{\u201c\u2018"']$/.test(normalized);
   const tr = closeHistory(editor.state.tr).replaceWith(0, after.content.size, before.content)
     .insertText(`${leading ? " " : ""}${normalized}${trailing ? " " : ""}`, position);
-  editor.view.dispatch(tr);
+  editor.view.dispatch(recordWritingOrigin(tr, removedOrigin, false));
   editor.view.dispatch(closeHistory(editor.state.tr));
   editor.view.focus();
   return true;

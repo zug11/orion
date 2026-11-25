@@ -30,7 +30,22 @@ describe('reviewing inferred board tickets',()=>{
     expect(actions.apply).not.toHaveBeenCalled();expect(screen.getByText('We should ask Jo.')).toBeVisible();
     fireEvent.change(title,{target:{value:'Ask Jo about the venue'}});fireEvent.click(screen.getByRole('checkbox',{name:'Include suggestion 2'}));
     fireEvent.click(screen.getByRole('button',{name:'Add 1 ticket'}));
-    expect(actions.apply).toHaveBeenCalledWith(board,result,['Ask Jo about the venue'],undefined,['']);expect(onClose).toHaveBeenCalledOnce();
+    expect(actions.apply).toHaveBeenCalledWith(board,result,[{index:0,title:'Ask Jo about the venue',boardId:'b',urgency:'',status:'todo',dueDate:''}]);expect(onClose).toHaveBeenCalledOnce();
+  });
+  it('shows the proposed content for the selected ticket and keeps its source identity through a rename', async () => {
+    const inferred: TicketInference = { ...result, suggestions: [result.suggestions[0], {
+      title: 'Dashboard controls', evidence: 'Keep the dashboard steady.', description: 'Keep the dashboard steady.',
+      checklist: ['Pin sections.', 'Keep the empty section visible.'],
+    }] };
+    const apply = vi.fn(() => true);
+    render(<TicketInferenceDialog board={board} actions={{generate:async()=>inferred, apply}} onClose={vi.fn()}/>);
+    expect(await screen.findByText('Pin sections.')).toBeVisible();
+    expect(screen.getByText('Keep the empty section visible.')).toBeVisible();
+    expect(screen.getByText('No checklist steps suggested.')).toBeVisible();
+    fireEvent.click(screen.getByRole('checkbox', {name:'Include suggestion 1'}));
+    fireEvent.change(screen.getByRole('textbox', {name:'Ticket 2'}), {target:{value:'Control dashboard sections'}});
+    fireEvent.click(screen.getByRole('button', {name:'Add 1 ticket'}));
+    expect(apply).toHaveBeenCalledWith(board, inferred, [{index:1,title:'Control dashboard sections',boardId:'b',urgency:'',status:'todo',dueDate:''}]);
   });
   it('shows inferred urgency and lets the user change or clear it before applying', async () => {
     const inferred: TicketInference = { ...result, suggestions: result.suggestions.map(s => ({ ...s, urgency: 'high' })) };
@@ -41,7 +56,7 @@ describe('reviewing inferred board tickets',()=>{
     fireEvent.change(first, {target:{value:''}});
     fireEvent.change(screen.getByRole('combobox', {name:'Urgency for suggestion 2'}), {target:{value:'low'}});
     fireEvent.click(screen.getByRole('button', {name:'Add 2 tickets'}));
-    expect(apply).toHaveBeenCalledWith(board, inferred, result.suggestions.map(s=>s.title), undefined, ['', 'low']);
+    expect(apply).toHaveBeenCalledWith(board, inferred, result.suggestions.map((s,index)=>({index,title:s.title,boardId:'b',urgency:index?'low':'',status:'todo',dueDate:''})));
   });
   it('keeps a stale review unsaved and allows a fresh inference attempt',async()=>{
     const actions={generate:vi.fn(async()=>result),apply:vi.fn(()=>false)};
@@ -51,6 +66,26 @@ describe('reviewing inferred board tickets',()=>{
     expect(screen.queryByRole('button',{name:'Add 2 tickets'})).toBeNull();
     fireEvent.click(screen.getByRole('button',{name:'Infer again'}));
     await screen.findByRole('button',{name:'Add 2 tickets'});expect(actions.generate).toHaveBeenCalledTimes(2);
+  });
+  it('lets the reviewer clear a proposed deadline and change status while protecting an authored date and column', async () => {
+    const inferred: TicketInference = { ...result, suggestions: [
+      { ...result.suggestions[0], dueDate:'2026-12-04', status:'progress' },
+      { ...result.suggestions[1], existingDueDate:'2026-12-10', existingStatus:'column-review', taskId:'existing', onBoard:true },
+    ] };
+    const apply = vi.fn(() => true);
+    render(<TicketInferenceDialog board={board} actions={{generate:async()=>inferred,apply}} onClose={vi.fn()}/>);
+    const status = await screen.findByRole('combobox', {name:'Status for suggestion 1'});
+    expect(status).toHaveValue('progress');
+    expect(screen.getByRole('combobox', {name:'Status for suggestion 2'})).toBeDisabled();
+    expect(screen.queryByRole('button', {name:/Due date for suggestion 2/})).toBeNull();
+    fireEvent.click(screen.getByRole('button', {name:/Due date for suggestion 1/}));
+    fireEvent.click(screen.getByRole('button', {name:'Remove date'}));
+    fireEvent.change(status, {target:{value:'todo'}});
+    fireEvent.click(screen.getByRole('button', {name:'Apply 2 changes'}));
+    expect(apply).toHaveBeenCalledWith(board, inferred, [
+      expect.objectContaining({index:0,dueDate:'',status:'todo'}),
+      expect.objectContaining({index:1,dueDate:'2026-12-10',status:'column-review'}),
+    ]);
   });
   it('aborts on leaving the board and ignores a late response',async()=>{
     let resolve!:(value:TicketInference)=>void;let signal!:AbortSignal;

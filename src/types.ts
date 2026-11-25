@@ -12,8 +12,13 @@ export type NoteKind =
 
 export type NoteStatus = "draft" | "ready" | "archived";
 export type NoteHeadingLayout = "both" | "title" | "subtitle" | "none";
+export type WritingOrigin = "orion-ai" | "mcp";
 
 export interface Note {
+  /** Explicit contact record. The note title is the contact's name. */
+  contact?: { version: 1; organization?: string };
+  /** Known contributions to the note's writing. Absent on older and unmarked notes. */
+  writingOrigins?: WritingOrigin[];
   /** Passage discussions are separate from authored Markdown and exports. */
   discussionThreads?: PassageThread[];
   id: EntityId;

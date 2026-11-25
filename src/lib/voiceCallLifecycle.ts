@@ -20,6 +20,7 @@ export class VoiceCallLifecycle {
     : new LiveVoiceConnection(options)) {}
 
   get status() { return this.currentStatus; }
+  get generation() { return this.epoch; }
   get isActive() { return this.active; }
   get acceptsInput() { return this.accepting; }
   get canStart() { return !this.active && !activeStatus(this.currentStatus); }

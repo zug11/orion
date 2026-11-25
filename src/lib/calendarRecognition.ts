@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm';
 import type { Note } from '../types';
 import { splitMarkdownFrontmatter } from './markdown';
 import { displayNoteTitle } from './noteMetadata';
-import { calendarDateFromUrl, dateKey, validCalendarDate } from './calendarDate';
+import { calendarDateFromUrl, dateKey, localDate, validCalendarDate } from './calendarDate';
 import { noteWork } from './tickets';
 import { stableKnowledgeHash } from './spaceKnowledge';
 
@@ -14,10 +14,12 @@ export interface CalendarEntry {
   title: string; phrase: string; kind: 'mentioned' | 'picked' | 'ticket'; referenceDate?: string;
   /** Source identity, independent of the resolved date and document offsets. */
   dismissalKey?: string;
+  /** Exact UTF-16 Markdown range when a date can be located in the original note. */
+  sourceRange?: { from: number; to: number };
 }
 interface Ast {
   type: string; checked?: boolean; value?: string; url?: string; children?: Ast[];
-  position?: { start: { line: number; offset?: number } };
+  position?: { start: { line: number; offset?: number }; end?: { offset?: number } };
 }
 const parser = unified().use(remarkParse).use(remarkGfm);
 const cache = new WeakMap<Note, CalendarEntry[]>();
@@ -86,6 +88,65 @@ function plausibleMention(result: ParsedResult, block: string, index: number): b
   }
   return true;
 }
+// A date can describe an appointment or the beginning of work. Only a deadline
+// cue attached to the date assigns it to the ticket.
+const deadlineCue = /\b(due(?:\s+date)?(?:\s+(?:is|on|by|for)){0,2}|deadline(?:\s+(?:is|of|on|for)){0,2}|no later than|by)\s*[:–—-]?\s*$/i;
+const startAction = /\b(?:start(?:ing)?|begin(?:ning)?|commenc(?:e|ing)|kick(?:ing)? off)\b/i;
+
+// Chrono falls back to US month/day order even in the en.GB locale,
+// including on some malformed ISO dates. Check the actual written components.
+function writtenDateMatches(result: ParsedResult): boolean {
+  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})\b/.exec(result.text);
+  if (iso) return Number(iso[2]) === result.start.get('month') && Number(iso[3]) === result.start.get('day');
+  const au = /^(\d{1,2})([./-])(\d{1,2})(?:\2\d{2,4})?\b/.exec(result.text);
+  return !au || Number(au[1]) === result.start.get('day') && Number(au[3]) === result.start.get('month');
+}
+
+export function statedTicketDeadline(clause: string, updatedAt: string): string | undefined {
+  // Date-only references are already local calendar days. JS interprets a bare
+  // ISO date as UTC and can also normalise an impossible day into the next month.
+  const savedDay = updatedAt.match(/^\d{4}-\d\d-\d\d(?=T|$)/)?.[0];
+  const reference = savedDay === updatedAt && validCalendarDate(savedDay) ? localDate(savedDay) : new Date(updatedAt);
+  const dated = Number.isFinite(reference.valueOf()) && validCalendarDate(savedDay);
+  const dates = new Set<string>();
+  // Slash spelling also recognises single-digit components in short-year dates.
+  const input = clause.replace(/\b(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})\b/g, '$1/$2/$3');
+  const matches = recognizer.parse(input, dated ? reference : new Date(2000, 0, 1, 12), { forwardDate: true });
+  for (const [index, match] of matches.entries()) {
+    // Our ordinal recognizer includes the preposition in "due the 15th".
+    const offset = match.start.tags().has(ORDINAL_DAY_TAG) ? match.text.search(/the\s+\d/i) : 0;
+    const prefix = clause.slice(0, match.index + offset);
+    const cue = deadlineCue.exec(prefix);
+    if (!cue) continue;
+    const action = prefix.slice(0, cue.index).split(/[,;]|\b(?:and|but|then)\b/i).pop() ?? '';
+    if (/^(?:by|no later than)$/i.test(cue[1]) && startAction.test(action)) continue;
+    if (cue[1].toLowerCase() === 'by' && /\b(?:inspired|illustrated|written)\s*$/i.test(action)) continue;
+    if (match.end || !(match.start.isCertain('day') || match.start.isCertain('weekday'))) continue;
+    if (!plausibleMention(match, clause, match.index) || !writtenDateMatches(match)) continue;
+    if (!dated && (!match.start.isCertain('year') || !/\b[1-9]\d{3}\b/.test(match.text) || match.start.tags().has('result/relativeDate'))) continue;
+    if (/^(?:this|next|last)\s+(?:week|weekend|month|year)$/i.test(match.text)) continue;
+    const after = match.index + match.text.length;
+    const next = matches[index + 1];
+    if (next && /^\s*(?:,|and|or)?\s*$/i.test(clause.slice(after, next.index))) return;
+    const suffix = clause.slice(after);
+    if (/^\s*(?:(?:or|to|through|until)\b|[-–—/.]\s*\d)/i.test(suffix)) return;
+    const date = dateKey(match.start.date());
+    if (!validCalendarDate(date)) continue;
+    dates.add(date);
+  }
+  return dates.size === 1 ? [...dates][0] : undefined;
+}
+/** Voice writes must resolve the whole date phrase to one all-day date. */
+export function spokenCalendarDay(phrase: string, now: Date): string | undefined {
+  const text = phrase.trim().replace(/^on\s+/i, '');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return validCalendarDate(text) ? text : undefined;
+  const [match, extra] = recognizer.parse(text, now, { forwardDate: true });
+  if (!match || extra || match.index !== 0 || match.text.length !== text.length || match.end ||
+      match.start.isCertain('hour') || !(match.start.isCertain('day') || match.start.isCertain('weekday')) ||
+      !writtenDateMatches(match) || /^(?:this|next|last)\s+(?:week|weekend|month|year)$/i.test(text)) return;
+  const key = dateKey(match.start.date());
+  return validCalendarDate(key) ? key : undefined;
+}
 function prose(node: Ast, omitPicked = false): string {
   if (skip.has(node.type)) return ' ';
   if (omitPicked && node.type === 'link' && calendarDateFromUrl(node.url)) return ' ';
@@ -119,6 +180,16 @@ export function* recognizeNoteDates(note: Note): Generator<void, CalendarEntry[]
     }
     for (const child of node.children ?? []) yield* indexBlocks(child);
   }
+  function plainDateRange(block: Ast, phrase: string): CalendarEntry['sourceRange'] {
+    for (const child of block.children ?? []) {
+      if (child.type !== 'text' || child.position?.start.offset === undefined || child.position?.end?.offset === undefined) continue;
+      const start = prefix.length + child.position.start.offset;
+      const raw = note.body.slice(start, prefix.length + child.position.end.offset);
+      if (raw !== child.value) continue;
+      const within = raw.indexOf(phrase);
+      if (within >= 0) return { from: start + within, to: start + within + phrase.length };
+    }
+  }
   function* visit(node: Ast): Generator<void> {
     if (skip.has(node.type)) return;
     if (node.type === 'listItem' && node.checked === true) {
@@ -136,7 +207,12 @@ export function* recognizeNoteDates(note: Note): Generator<void, CalendarEntry[]
       function explicit(part: Ast) {
         if (skip.has(part.type)) return;
         const date = part.type === 'link' ? calendarDateFromUrl(part.url) : null;
-        if (date) { pickedDates.add(date); entries.push({ ...base, id: `${note.id}:picked:${part.position?.start.offset ?? position}`, date, title, phrase: prose(part), kind: 'picked' }); }
+        if (date) {
+          const start = part.position?.start.offset, end = part.position?.end?.offset;
+          const sourceRange = start !== undefined && end !== undefined ? { from: prefix.length + start, to: prefix.length + end } : undefined;
+          pickedDates.add(date);
+          entries.push({ ...base, id: `${note.id}:picked:${start ?? position}`, date, title, phrase: prose(part), kind: 'picked', sourceRange });
+        }
         else part.children?.forEach(explicit);
       }
       explicit(node);
@@ -163,6 +239,9 @@ export function* recognizeNoteDates(note: Note): Generator<void, CalendarEntry[]
             if (inferredDates.has(dateIdentity) || pickedDates.has(date) && (!endDate || endDate === date)) continue;
             inferredDates.add(dateIdentity);
             entries.push({ ...base, id: `${note.id}:mentioned:${position}:${index}`, date, ...(endDate && endDate !== date ? { endDate } : {}),
+              // Only a literal text node can anchor a prose reschedule. Escaped
+              // or compound markup stays readable without granting an edit range.
+              sourceRange: plainDateRange(node, result.text),
               title, phrase: result.text, kind: 'mentioned', referenceDate: dateKey(reference), dismissalKey: `v1:${blockHash}:${occurrence}:${index}` });
           }
         }

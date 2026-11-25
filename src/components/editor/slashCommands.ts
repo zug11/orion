@@ -1,5 +1,5 @@
 import type { EditorState } from "@tiptap/pm/state";
-export type SlashCommand = "write" | "visualise" | "comment" | "heading" | "block" | "todo" | "ticket" | "kanban" | "calendar" | "bullet" | "numbered" | "divider" | "image" | "code" | "link" | "excerpt" | "table" | "delete-row" | "delete-column" | "delete-table" | `h${1|2|3|4|5|6}`;
+export type SlashCommand = "write" | "visualise" | "comment" | "heading" | "block" | "todo" | "ticket" | "lead" | "kanban" | "calendar" | "bullet" | "numbered" | "divider" | "image" | "code" | "link" | "excerpt" | "table" | "delete-row" | "delete-column" | "delete-table" | `h${1|2|3|4|5|6}`;
 export interface SlashMatch { from: number; to: number; query: string; inTable: boolean }
 export function getSlashMatch(state: EditorState): SlashMatch | null {
   const { $from, empty } = state.selection;
@@ -19,6 +19,7 @@ export const SLASH_ITEMS: { id: SlashCommand; title: string; description: string
   {id:"heading", title:"Heading", description:"Choose a heading size", keywords:"title h1 h2 h3 h4 h5 h6"},
   {id:"block", title:"Block", description:"Create a movable writing block", keywords:"group movable"},
   {id:"ticket", title:"Ticket", description:"Create a ticket here", keywords:"task issue"},
+  {id:"lead", title:"Lead", description:"Create or link a contact in this Space", keywords:"contact person"},
   {id:"calendar", title:"Calendar", description:"Choose a date with the arrow keys", keywords:"date schedule"},
   {id:"kanban", title:"Kanban", description:"Put a board in this note", keywords:"board tickets"},
   {id:"todo", title:"To-do", description:"A checkbox connected to Home", keywords:"task checkbox"},

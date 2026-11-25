@@ -108,6 +108,7 @@ import {
   type KnowledgeImportDiagnostic,
 } from "../lib/knowledgeOrchestration/import";
 import { runAutomaticKnowledgeImport } from "../lib/knowledgeOrchestration/automaticImport";
+import { withWritingOrigin } from "../lib/writingOrigins";
 
 const MAX_FILES = 12;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -153,6 +154,8 @@ export interface OrganizedSource {
   item: ImportItem;
   result?: OrganizeContentResult;
   provenance?: KnowledgeResultProvenance[];
+  /** Only set by the host's deterministic recovery path, which can preserve verbatim sources. */
+  recovered?: boolean;
 }
 
 interface OrganizeProgress {
@@ -747,9 +750,10 @@ function mergeWikiArticle(
   const body =
     article.body.trim() ||
     (!currentBody ? wikiArticleBody(article, spaceName) : currentBody);
+  const summary = note.summary.trim() || article.summary.trim();
   return {
-    ...note,
-    summary: note.summary.trim() || article.summary.trim(),
+    ...(body !== currentBody || summary !== note.summary ? withWritingOrigin(note, "orion-ai") : note),
+    summary,
     body,
     aliases: unique([...note.aliases, ...article.aliases]).slice(0, 16),
     tags: unique([
@@ -902,10 +906,14 @@ export function buildImportPayload(
         : [fallbackSourceId];
       const noteId = `note_${nanoid(12)}`;
       attachNoteToSources(noteId, sourceIds);
+      const preservedVerbatim = organizedSource.recovered && organizedSource.provenance?.some(entry =>
+        entry.kind === 'note' && entry.title === organized.title &&
+        entry.evidenceReferences.length > 0 && entry.evidenceReferences.every(ref => ref.kind === 'source'));
       generatedContexts.push({
         contributions: sourceIds.map((sourceId) => ({ sourceId, organized })),
         note: {
           id: noteId,
+          ...(result && !preservedVerbatim ? { writingOrigins: ["orion-ai"] } : {}),
           title: organized.title.trim() || parsed.title,
           slug: uniqueSlug(organized.title || parsed.title, reservedSlugs),
           summary:
@@ -1846,7 +1854,7 @@ export function ImportStudio({
             segmentItems.map((item, index) => ({
               item,
               result: index === 0 ? knowledge.organized : emptyResult,
-              ...(index === 0 ? { provenance: knowledge.provenance } : {}),
+              ...(index === 0 ? { provenance: knowledge.provenance, recovered: Boolean(knowledge.landing) } : {}),
             })),
         );
         const payload = buildImportPayload(

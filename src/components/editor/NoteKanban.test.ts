@@ -5,8 +5,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { NoteStarterKit, NoteTaskItem } from './NoteStarterKit';
 import { NoteMarkdown, NoteMargins } from './NoteMargins';
 import { NoteBlock } from './NoteBlock';
+import { applyPreparedChatChange, prepareChatEditorChange } from './chatEditTransaction';
+import { reviewTicket, applyInferredTickets, parseTicketSuggestions } from '../../lib/ticketInference';
+import { ticketDetails } from '../../lib/ticketDetails';
 import { Slice } from '@tiptap/pm/model';
-import { copyWorkIdentities, NoteKanban, insertWorkItem, insertBoardTickets, patchEditorTicket, deleteEditorTicket, deleteEditorTicketNode } from './NoteKanban';
+import { copyWorkIdentities, NoteKanban, insertWorkItem, insertBoardTickets, matchEditorTicket, patchEditorTicket, deleteEditorTicket, deleteEditorTicketNode } from './NoteKanban';
+import { completeVoiceTickets } from '../../lib/voiceTicketCompletion';
 import { boardMarker, noteWork, ticketMarker } from '../../lib/tickets';
 import type { Note } from '../../types';
 import { boardTicketVisibilityKey, editBoardTicket } from './boardTicketVisibility';
@@ -19,6 +23,18 @@ afterEach(() => editors.splice(0).forEach(e => e.destroy()));
 const n = (body: string): Note => ({ id:'n', title:'Note', body, slug:'n', summary:'', aliases:[], tags:[], sourceIds:[], conceptIds:[], kind:'article', status:'ready', createdAt:'2026-11-13T00:00:00Z', updatedAt:'2026-11-13T00:00:00Z' });
 
 describe('ticket and board editor transactions', () => {
+  it('opens a board quietly and publishes the first ticket move and its Undo', async () => {
+    const editor = create(boardMarker({ id: 'board', title: 'Launch' }) + '\n\n- [ ] Record sound ' +
+      ticketMarker({ id: 'sound', boardId: 'board', status: 'progress' }));
+    const updates: string[] = [];
+    editor.on('update', () => updates.push(noteWork(n(editor.getMarkdown())).tickets[0].status));
+    await Promise.resolve();
+    expect(updates).toEqual([]);
+    const [ticket] = noteWork(n(editor.getMarkdown())).tickets;
+    expect(patchEditorTicket(editor, ticket, { status: 'done' })).toBe(true);
+    expect(editor.commands.undo()).toBe(true);
+    expect(updates).toEqual(['done', 'progress']);
+  });
   it('moves an open-note ticket into a custom column belonging to another note in its Space', () => {
     const editor=create(`- [ ] Call Jo ${ticketMarker({id:'t1',boardId:'b',status:'todo'})}`);
     const ticket=noteWork(n(editor.getMarkdown())).tickets[0];
@@ -41,6 +57,24 @@ describe('ticket and board editor transactions', () => {
     const before = duplicated.getJSON();
     expect(patchEditorTicket(duplicated, captured, {detail:{kind:'add',text:'Check it'}})).toBe(false);
     expect(duplicated.getJSON()).toEqual(before);
+  });
+  it('rejects the whole voice request when a captured checklist changed before autosave', async () => {
+    const body = '- [ ] First ' + ticketMarker({ id: 'first', boardId: '', status: 'todo' }) +
+      '\n- [ ] Second ' + ticketMarker({ id: 'second', boardId: '', status: 'todo' }) + '\n  - [ ] Get approval';
+    const editor = create(body);
+    const savedNote = n(editor.getMarkdown());
+    const captured = noteWork(savedNote).tickets.filter(ticket => ticket.durable);
+    expect(captured.every(ticket => Boolean(matchEditorTicket(editor, ticket)))).toBe(true);
+    editor.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text === 'Get approval') editor.commands.insertContentAt(pos, 'Still need to ');
+    });
+    const response = await completeVoiceTickets({ notes: [savedNote] }, captured,
+      ticket => patchEditorTicket(editor, ticket, { status: 'done' }),
+      async () => { throw new Error('An unsuccessful request must not reach the save'); },
+      ticket => Boolean(matchEditorTicket(editor, ticket)));
+    expect(response).toMatch(/changed/);
+    expect(editor.getMarkdown()).toContain('Still need to Get approval');
+    expect(noteWork(n(editor.getMarkdown())).tickets.every(ticket => ticket.status === 'todo')).toBe(true);
   });
   it('skips hidden task text without changing Markdown, but explicitly opens the original card for editing', () => {
     const editor=create(`Before.\n\n${boardMarker({id:'b1',title:'Launch'})}\n\n- [ ] Call Jo ${ticketMarker({id:'t1',boardId:'b1',status:'todo'})}\n\nAfter.`);
@@ -219,4 +253,25 @@ describe('ticket and board editor transactions', () => {
     expect(editor.state.doc.child(0).firstChild?.attrs.ticketId).toBe('t1');
   });
 
+});
+
+it('reopens the inferred description and literal child steps after one undoable editor transaction', () => {
+  const board = { id:'b', noteId:'n', title:'Launch' };
+  const passage = 'Keep drafts open. Test [two] windows. Open <draft> again.';
+  const editor = create(boardMarker(board) + '\n\n' + passage);
+  const base = editor.getMarkdown();
+  const note = n(base);
+  const result = {boardId:'b',noteId:'n',noteTitle:note.title,baseBody:base,partial:false,
+    suggestions:parseTicketSuggestions(JSON.stringify({tickets:[{title:'Preserve drafts',evidence:passage,
+      description:'Keep drafts open.',checklist:['Test [two] windows.','Open <draft> again.']}]}),passage,note)};
+  const reviewed = {...reviewTicket(result.suggestions[0],0),boardId:board.id,dueDate:'2026-12-04',status:'progress' as const};
+  const next = applyInferredTickets(note,board,result,[reviewed])!;
+  applyPreparedChatChange(editor,prepareChatEditorChange(editor,base,next));
+  const reopened = create(editor.getMarkdown());
+  const [ticket] = noteWork(n(reopened.getMarkdown())).tickets;
+  expect(ticket).toMatchObject({boardId:'b',dueDate:'2026-12-04',status:'progress'});
+  expect(ticketDetails(ticket)).toMatchObject({descriptionText:'Keep drafts open.',checklist:[
+    {text:'Test [two] windows.',checked:false},{text:'Open <draft> again.',checked:false}]});
+  expect(editor.commands.undo()).toBe(true);
+  expect(editor.getMarkdown()).toBe(base);
 });

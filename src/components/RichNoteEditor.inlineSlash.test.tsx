@@ -18,10 +18,11 @@ beforeAll(() => {
 });
 afterEach(cleanup);
 
-function fixture(markdown: string, notes: Note[] = [], settings?: Settings) {
-  const view = render(<RichNoteEditor settings={settings} noteId="origin" markdown={markdown} notes={notes} concepts={[]} sources={[]} attachedSourceIds={[]} onChange={vi.fn()} onAttachSource={vi.fn()} onRegisterConcept={vi.fn()} onDisableConceptAutoLink={vi.fn()} />);
+function fixture(markdown: string, notes: Note[] = [], settings?: Settings, writingOrigins: Note["writingOrigins"] = []) {
+  const onChange = vi.fn();
+  const view = render(<RichNoteEditor settings={settings} noteId="origin" markdown={markdown} notes={notes} concepts={[]} sources={[]} attachedSourceIds={[]} onChange={onChange} getWritingOrigins={() => writingOrigins} onAttachSource={vi.fn()} onRegisterConcept={vi.fn()} onDisableConceptAutoLink={vi.fn()} />);
   const element = view.container.querySelector(".tiptap") as HTMLElement & { editor: Editor };
-  return { ...view, element, editor: element.editor };
+  return { ...view, element, editor: element.editor, onChange };
 }
 
 async function chooseInlineCommand(editor: Editor, original: string, token: string, name: string) {
@@ -35,7 +36,10 @@ async function chooseInlineCommand(editor: Editor, original: string, token: stri
 }
 
 describe("inline slash commands in the real note editor", () => {
-  it("chooses /visualise by keyboard, keeps cancellation local, then saves a generated artifact in one Undo", async () => {
+  it.each([
+    { origins: ["mcp"] },
+    { origins: ["orion-ai", "mcp"] },
+  ] satisfies { origins: NonNullable<Note["writingOrigins"]> }[])("chooses /visualise by keyboard and keeps Undo and existing writing origins intact ($origins)", async ({ origins }) => {
     HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
     HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
     vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
@@ -43,7 +47,8 @@ describe("inline slash commands in the real note editor", () => {
       blocks: [{ kind: "text", text: "A battery stores excess power." }] };
     const generate = vi.spyOn(visualGeneration, "generateVisualArtifact").mockResolvedValue(generated);
     const original = "The battery stores excess power. /vis";
-    const { element, editor } = fixture(original + "\n\nPrivate follow-up.", [], { ...defaultSettings, apiKeyConfigured: true });
+    const alreadyCredited = origins.some(origin => origin === "orion-ai");
+    const { element, editor, onChange } = fixture(original + "\n\nPrivate follow-up.", [], { ...defaultSettings, apiKeyConfigured: true }, origins);
     vi.spyOn(editor.view, "coordsAtPos").mockReturnValue({ left: 10, right: 11, top: 25, bottom: 40 });
     async function chooseWithKeyboard() {
       act(() => { editor.commands.focus(undefined, { scrollIntoView: false }); });
@@ -73,8 +78,10 @@ describe("inline slash commands in the real note editor", () => {
       expect(generate).toHaveBeenCalledWith("The battery stores excess power.", "explainer", "", expect.any(Object), expect.any(AbortSignal));
       expect(editor.state.doc.child(1).type.name).toBe("noteVisualArtifact");
       expect(screen.getByRole("heading", { name: "Capacity" })).toBeInTheDocument();
+      expect(onChange.mock.lastCall?.[1]).toEqual(alreadyCredited ? undefined : { origin: "orion-ai", present: true });
       act(() => { editor.commands.undo(); });
       expect(editor.getMarkdown()).toBe(original + "\n\nPrivate follow-up.");
+      expect(onChange.mock.lastCall?.[1]).toEqual(alreadyCredited ? undefined : { origin: "orion-ai", present: false });
     } finally {
       generate.mockRestore();
       vi.unstubAllGlobals();

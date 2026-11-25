@@ -6,7 +6,9 @@ import type { AppSnapshot, Note, OrionVault, SourceKind } from '../types';
 import { createEmptySnapshot, slugifyTitle } from '../data/defaults';
 import { expandOrionWikiLinks, splitMarkdownFrontmatter } from './markdown';
 import { decorateAutoLinks, resolveConceptDestination } from './wiki';
-import { boardMarker, collectWork, parseBoardMarker, parseTicketMarker, ticketMarker } from './tickets';
+import { boardMarker, collectWork, noteWork, parseBoardMarker, parseTicketMarker, ticketMarker } from './tickets';
+import { isContactMetadata } from './contacts';
+import { isWritingOrigins } from './writingOrigins';
 import { isTicketCodes, type TicketCodes } from './ticketCodes';
 import { readVisualArtifactMarker, visualArtifactMarker } from './visualArtifactMarkdown';
 import { parseNoteTableMetadata } from './noteTables';
@@ -16,11 +18,13 @@ import { parseNoteImageTitle, serializeNoteImageTitle } from './noteImageLayout'
 export const MAX_PORTABLE_BYTES=128*1024*1024;
 const MAX_NOTES=200;
 const parser=unified().use(remarkParse).use(remarkGfm);
-export interface PortableNote {id:string;title:string;summary:string;body:string;tags:string[];headingLayout?:Note['headingLayout'];sourceIds:string[]}
+export interface PortableNote {id:string;title:string;summary:string;body:string;tags:string[];headingLayout?:Note['headingLayout'];writingOrigins?:Note['writingOrigins'];contact?:Note['contact'];sourceIds:string[]}
 export interface PortableSource {id:string;title:string;kind:SourceKind;sourceUrl?:string}
 export interface PortableCollection {title:string;notes:PortableNote[];sources:PortableSource[];ticketCodes?:TicketCodes}
 export interface PortableAsset {id:string;mimeType:string;base64Data:string}
-export interface PortableFile {format:'orion';version:1;exportId:string;entryNoteId:string;collection:PortableCollection;assets:PortableAsset[]}
+interface PortableDocument {exportId:string;entryNoteId:string;collection:PortableCollection}
+export interface PortableFile extends PortableDocument {format:'orion';version:1;assets:PortableAsset[]}
+export interface OpenedPortableFile {file:PortableDocument;collectionHash:string;imageUrls:Record<string,string>}
 export interface PortableImportIdentity {version:1;exportId:string;collectionHash:string}
 const ID=/^[\w-]{1,96}$/;
 const EXPORT_ID=/^[A-Za-z0-9_-]{16,64}$/;
@@ -103,11 +107,11 @@ export function buildPortableCollection(snapshot:AppSnapshot,noteIds:string[],ex
   const sourceIds=new Set(notes.flatMap(n=>n.sourceIds));
   const sources=snapshot.sources.filter(s=>sourceIds.has(s.id)).map(s=>({id:s.id,title:s.title,kind:s.kind,...(safePublicUrl(s.sourceUrl)?{sourceUrl:safePublicUrl(s.sourceUrl)}:{})}));
   const assets:PortableAsset[]=[];
-  const selected=notes.map(n=>({id:n.id,title:n.title,summary:n.summary,body:portableBody(n,snapshot,included,new Set(sources.map(s=>s.id)),ticketIds,boardIds,assets),tags:[...n.tags],...(n.headingLayout?{headingLayout:n.headingLayout}:{}),sourceIds:n.sourceIds.filter(id=>sources.some(s=>s.id===id))}));
+  const selected=notes.map(n=>({id:n.id,title:n.title,summary:n.summary,body:portableBody(n,snapshot,included,new Set(sources.map(s=>s.id)),ticketIds,boardIds,assets),tags:[...n.tags],...(n.headingLayout?{headingLayout:n.headingLayout}:{}),...(n.writingOrigins?.length?{writingOrigins:[...n.writingOrigins]}:{}),...(isContactMetadata(n.contact)?{contact:{...n.contact}}:{}),sourceIds:n.sourceIds.filter(id=>sources.some(s=>s.id===id))}));
   const codes=snapshot.ticketCodes;
   const ticketCodes=codes?{version:1 as const,prefix:codes.prefix,nextNumber:codes.nextNumber,assigned:Object.fromEntries(Object.entries(codes.assigned).filter(([id])=>ticketIds.has(id))),...(codes.assignedPrefixes?{assignedPrefixes:Object.fromEntries(Object.entries(codes.assignedPrefixes).filter(([id])=>ticketIds.has(id)))}:{})}:undefined;
-  // Deliberately use the chosen notes' visible titles; a Space name may itself be private.
-  return {format:'orion',version:1,exportId,entryNoteId:noteIds[0],collection:{title:notes.length===1?notes[0].title||'Shared note':'Shared Orion notes',notes:selected,sources,...(ticketCodes?{ticketCodes}:{})},assets};
+  // The collection becomes a Space when opened, so preserve its authored name.
+  return {format:'orion',version:1,exportId,entryNoteId:noteIds[0],collection:{title:snapshot.workspace.name,notes:selected,sources,...(ticketCodes?{ticketCodes}:{})},assets};
 }
 
 function record(value:unknown,required:string[],optional:string[]=[]):Record<string,unknown>{
@@ -119,29 +123,74 @@ export function isPortableImportIdentity(value:unknown):value is PortableImportI
   if(!value||typeof value!=='object')return false;const v=value as PortableImportIdentity;
   return v.version===1&&typeof v.exportId==='string'&&EXPORT_ID.test(v.exportId)&&typeof v.collectionHash==='string'&&/^[a-f0-9]{64}$/.test(v.collectionHash)&&Object.keys(v).length===3;
 }
-export function parsePortableFile(raw:string):PortableFile{
-  if(new TextEncoder().encode(raw).length>MAX_PORTABLE_BYTES)throw new Error('This .orion file is larger than 128 MB.');
-  const value=record(JSON.parse(raw),['format','version','exportId','entryNoteId','collection','assets']);
+function validatePortableDocument(value:Record<string,unknown>):PortableDocument{
   const collection=record(value.collection,['title','notes','sources'],['ticketCodes']);
-  if(value.format!=='orion'||value.version!==1||typeof value.exportId!=='string'||!EXPORT_ID.test(value.exportId)||!text(value.entryNoteId,96,true)||!text(collection.title,500)||!Array.isArray(collection.notes)||!collection.notes.length||collection.notes.length>MAX_NOTES||!Array.isArray(collection.sources)||collection.sources.length>2000||!Array.isArray(value.assets)||value.assets.length>1000)throw new Error('This .orion file has an unsupported format or size.');
+  if(typeof value.exportId!=='string'||!EXPORT_ID.test(value.exportId)||!text(value.entryNoteId,96,true)||!text(collection.title,500)||!Array.isArray(collection.notes)||!collection.notes.length||collection.notes.length>MAX_NOTES||!Array.isArray(collection.sources)||collection.sources.length>2000)throw new Error('This .orion file has an unsupported format or size.');
   const notes=collection.notes.map(item=>{
-    const n=record(item,['id','title','summary','body','tags','sourceIds'],['headingLayout']);
+    const n=record(item,['id','title','summary','body','tags','sourceIds'],['headingLayout','writingOrigins','contact']);
+    if(n.contact!==undefined && !isContactMetadata(n.contact))throw new Error('This .orion file contains invalid contact metadata.');
+    if(n.writingOrigins!==undefined && !isWritingOrigins(n.writingOrigins))throw new Error('This .orion file contains invalid note writing origins.');
     if(!text(n.id,96,true)||!text(n.title,2000)||!text(n.summary,100_000)||!text(n.body,8*1024*1024)||!Array.isArray(n.tags)||n.tags.length>500||!n.tags.every(t=>text(t,500))||!Array.isArray(n.sourceIds)||n.sourceIds.length>2000||!n.sourceIds.every(id=>text(id,96,true))||n.headingLayout!==undefined&&!['both','title','subtitle','none'].includes(n.headingLayout as string))throw new Error('This .orion file contains an invalid note.');
     return n as unknown as PortableNote;
   });
   if(new Set(notes.map(n=>n.id)).size!==notes.length||!notes.some(n=>n.id===value.entryNoteId)||notes.reduce((n,item)=>n+item.body.length,0)>16*1024*1024)throw new Error('The collection contains duplicate, missing, or oversized notes.');
   collection.sources.forEach(item=>{const s=record(item,['id','title','kind'],['sourceUrl']);if(!text(s.id,96,true)||!text(s.title,2000)||!['manual','text','markdown','json','csv','html','pdf','docx','image','audio','video','youtube'].includes(s.kind as string)||s.sourceUrl!==undefined&&safePublicUrl(s.sourceUrl as string)!==s.sourceUrl)throw new Error('The collection contains invalid source attribution.');});
-  const sources=collection.sources as PortableSource[];if(new Set(sources.map(s=>s.id)).size!==sources.length||notes.some(n=>n.sourceIds.some(id=>!sources.some(s=>s.id===id))))throw new Error('The collection contains missing or duplicate source attribution.');
+  const sources = collection.sources as PortableSource[];
+  const sourceIds = new Set(sources.map(source => source.id));
+  if (sourceIds.size !== sources.length || notes.some(note => note.sourceIds.some(id => !sourceIds.has(id)))) {
+    throw new Error('The collection contains missing or duplicate source attribution.');
+  }
   if(collection.ticketCodes!==undefined){record(collection.ticketCodes,['version','prefix','nextNumber','assigned'],['assignedPrefixes']);if(!isTicketCodes(collection.ticketCodes))throw new Error('Ticket codes collide or are invalid in this file. Export a fresh collection to resolve them.');}
-  const work=collectWork(notes as Note[]),tickets=work.tickets.filter(ticket=>ticket.durable),ticketIds=new Set(tickets.map(ticket=>ticket.id));
-  if(ticketIds.size!==tickets.length||new Set(work.boards.map(board=>board.id)).size!==work.boards.length)throw new Error('This collection has duplicate ticket or board identities. Export a fresh collection to resolve them.');
+  const ticketIds = new Set<string>(), boardIds = new Set<string>();
+  function addIdentity(ids: Set<string>, id: string) {
+    if (ids.has(id)) throw new Error('This collection has duplicate ticket or board identities. Export a fresh collection to resolve them.');
+    ids.add(id);
+  }
+  for (const note of notes) {
+    if (!note.body.includes('orion-ticket:v1') && !note.body.includes('orion-kanban:v1')) continue;
+    const work = noteWork(note as Note);
+    for (const ticket of work.tickets) if (ticket.durable) addIdentity(ticketIds, ticket.id);
+    for (const board of work.boards) addIdentity(boardIds, board.id);
+  }
   if(collection.ticketCodes&&Object.keys((collection.ticketCodes as TicketCodes).assigned).some(id=>!ticketIds.has(id)))throw new Error('This collection contains ticket codes without their source tickets.');
-  const assetIds=new Set<string>();value.assets.forEach(item=>{const a=record(item,['id','mimeType','base64Data']);if(!text(a.id,80,true)||a.id.length<12||assetIds.has(a.id)||!['image/png','image/jpeg','image/gif','image/webp'].includes(a.mimeType as string)||typeof a.base64Data!=='string'||!a.base64Data.length||a.base64Data.length>16*1024*1024||! /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(a.base64Data))throw new Error('The collection contains invalid or duplicate attachments.');assetIds.add(a.id);});
-  const refs=portableImageIds(notes);if(refs.size!==assetIds.size||[...refs].some(id=>!assetIds.has(id)))throw new Error('An attachment is missing or is not referenced by a selected note.');
+  return value as unknown as PortableDocument;
+}
+function validateImageReferences(document: PortableDocument, assetIds: Set<string>) {
+  const refs = portableImageIds(document.collection.notes);
+  if (refs.size !== assetIds.size || [...refs].some(id => !assetIds.has(id))) {
+    throw new Error('An attachment is missing or is not referenced by a selected note.');
+  }
+}
+export function parsePortableFile(raw: string): PortableFile {
+  // A UTF-16 code unit needs at most three bytes in UTF-8.
+  if (raw.length > MAX_PORTABLE_BYTES || (raw.length > MAX_PORTABLE_BYTES / 3 && new TextEncoder().encode(raw).length > MAX_PORTABLE_BYTES)) {
+    throw new Error('This .orion file is larger than 128 MB.');
+  }
+  const value = record(JSON.parse(raw), ['format', 'version', 'exportId', 'entryNoteId', 'collection', 'assets']);
+  if (value.format !== 'orion' || value.version !== 1 || !Array.isArray(value.assets) || value.assets.length > 1000) {
+    throw new Error('This .orion file has an unsupported format or size.');
+  }
+  const document = validatePortableDocument(value);
+  const assetIds = new Set<string>();
+  for (const item of value.assets) {
+    const asset = record(item, ['id', 'mimeType', 'base64Data']);
+    const data = asset.base64Data;
+    if (!text(asset.id, 80, true) || asset.id.length < 12 || assetIds.has(asset.id) ||
+        !['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(asset.mimeType as string) ||
+        typeof data !== 'string' || !data.length || data.length > 16 * 1024 * 1024 ||
+        data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
+      throw new Error('The collection contains invalid or duplicate attachments.');
+    }
+    assetIds.add(asset.id);
+  }
+  validateImageReferences(document, assetIds);
   return value as unknown as PortableFile;
 }
 export function portableImageIds(notes:readonly Pick<PortableNote,'body'>[]):Set<string>{
-  const ids=new Set<string>();for(const note of notes){const walk=(node:MdNode)=>{if(node.type==='image'){const id=noteImageAssetId(node.url??'');if(id)ids.add(id);}node.children?.forEach(walk);};walk(parser.parse(note.body) as MdNode);}return ids;
+  const ids=new Set<string>();
+  const walk=(node:MdNode)=>{if(node.type==='image'){const id=noteImageAssetId(node.url??'');if(id)ids.add(id);}node.children?.forEach(walk);};
+  for(const note of notes) if(note.body.includes('![')) walk(parser.parse(note.body) as MdNode);
+  return ids;
 }
 const canonical=(value:unknown):unknown=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).sort(([a],[b])=>a<b?-1:a>b?1:0).map(([key,v])=>[key,canonical(v)])):value;
 export async function portableCollectionHash(file:PortableFile):Promise<string>{
@@ -150,21 +199,48 @@ export async function portableCollectionHash(file:PortableFile):Promise<string>{
 }
 /** Imports only into a separate collection Space. Reopening is navigation, never
  * replaying an old package over authored edits or resurrecting deleted notes. */
-export function importPortableCollection(vault:OrionVault,file:PortableFile,hash:string,imageUrls:Record<string,string>,now=new Date().toISOString()):{vault:OrionVault;spaceId:string;noteId:string|null;reused:boolean}{
+export function importPortableCollection(vault:OrionVault,file:PortableDocument,hash:string,imageUrls:Record<string,string>,now=new Date().toISOString()):{vault:OrionVault;spaceId:string;noteId:string|null;reused:boolean}{
   const spaceId=`space-portable-${file.exportId}`;
   const existing=vault.spaces.find(s=>s.workspace.id===spaceId);
   if(existing){
     if(existing.portableImport?.exportId!==file.exportId||existing.portableImport.collectionHash!==hash)throw new Error('Another collection uses this export identity with different content. Export it again to give it a new identity; your existing edits were kept.');
     const noteId=existing.notes.some(n=>n.id===file.entryNoteId)?file.entryNoteId:null;
+    if(vault.activeSpaceId===spaceId && existing.activeNoteId===noteId) return {vault,spaceId,noteId,reused:true};
     return {vault:{...vault,activeSpaceId:spaceId,spaces:vault.spaces.map(s=>s===existing?{...s,activeNoteId:noteId}:s),updatedAt:now},spaceId,noteId,reused:true};
   }
   const space=createEmptySnapshot(file.collection.title,now,spaceId);
+  // Connections and preferences belong to this installation, never the file.
+  // Match ordinary Space creation: defaults here would silently disable AI
+  // cleanup and could spread to every Space on the next settings change.
+  const localSettings=vault.spaces.find(s=>s.workspace.id===vault.activeSpaceId)?.settings;
+  if(localSettings)space.settings=structuredClone(localSettings);
   space.portableImport={version:1,exportId:file.exportId,collectionHash:hash};
   space.ticketCodes=file.collection.ticketCodes;
-  space.notes=file.collection.notes.map(n=>({id:n.id,title:n.title,summary:n.summary,body:n.body.replace(/orion-image:\/\/localhost\/([A-Za-z0-9_-]{12,80})/g,(url,id)=>Object.prototype.hasOwnProperty.call(imageUrls,id)?imageUrls[id]:url),tags:[...n.tags],...(n.headingLayout?{headingLayout:n.headingLayout}:{}),sourceIds:[...n.sourceIds],slug:slugifyTitle(n.title),aliases:[],kind:'article',status:'ready',conceptIds:[],createdAt:now,updatedAt:now}));
+  space.notes=file.collection.notes.map(n=>({id:n.id,title:n.title,summary:n.summary,body:n.body.replace(/orion-image:\/\/localhost\/([A-Za-z0-9_-]{12,80})/g,(url,id)=>Object.prototype.hasOwnProperty.call(imageUrls,id)?imageUrls[id]:url),tags:[...n.tags],...(n.headingLayout?{headingLayout:n.headingLayout}:{}),...(n.writingOrigins?.length?{writingOrigins:[...n.writingOrigins]}:{}),...(isContactMetadata(n.contact)?{contact:{...n.contact}}:{}),sourceIds:[...n.sourceIds],slug:slugifyTitle(n.title),aliases:[],kind:'article',status:'ready',conceptIds:[],createdAt:now,updatedAt:now}));
   space.sources=file.collection.sources.map(s=>({...s,text:'',noteIds:space.notes.filter(n=>n.sourceIds.includes(s.id)).map(n=>n.id),importedAt:now}));
   space.activeNoteId=file.entryNoteId;
   return {vault:{...vault,spaces:[...vault.spaces,space],activeSpaceId:spaceId,updatedAt:now},spaceId,noteId:file.entryNoteId,reused:false};
+}
+
+export async function readPortableFile(source?: File | string): Promise<OpenedPortableFile | null> {
+  if (source instanceof File) {
+    if (source.size > MAX_PORTABLE_BYTES) throw new Error('This .orion file is larger than 128 MB.');
+    const file = parsePortableFile(await source.text());
+    const imageUrls = Object.fromEntries(file.assets.map(asset => [asset.id, 'data:' + asset.mimeType + ';base64,' + asset.base64Data]));
+    const { exportId, entryNoteId, collection } = file;
+    return { file: { exportId, entryNoteId, collection }, collectionHash: await portableCollectionHash(file), imageUrls };
+  }
+  const {invoke} = await import('@tauri-apps/api/core');
+  const opened = await invoke<OpenedPortableFile | null>('open_orion_file', {token: source ?? null});
+  if (!opened) return null;
+  const file = validatePortableDocument(record(opened.file, ['exportId','entryNoteId','collection']));
+  const assets = Object.entries(opened.imageUrls);
+  if (!/^[a-f0-9]{64}$/.test(opened.collectionHash) || assets.length > 1000 ||
+      assets.some(([id,url]) => !/^[\w-]{12,80}$/.test(id) || !/^orion-image:\/\/localhost\/portable-[a-f0-9]{64}$/.test(url))) {
+    throw new Error('Orion could not verify this collection or its imported images.');
+  }
+  validateImageReferences(file, new Set(assets.map(([id]) => id)));
+  return { file, collectionHash: opened.collectionHash, imageUrls: opened.imageUrls };
 }
 
 export async function exportPortableFiles(snapshot:AppSnapshot,noteIds:string[],workflow?:{jobId:string;sessionId:string}):Promise<{cancelled:boolean;directory:string;exportedCount:number}>{

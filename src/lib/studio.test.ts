@@ -155,6 +155,7 @@ describe("Chat and legacy Studio state", () => {
 
     expect(applied.notes[0]).toMatchObject({
       id: "note-chat",
+      writingOrigins: ["orion-ai"],
       title: "Orientation through Orion",
       body: expect.stringContaining("grounded permanent note"),
       tags: ["navigation"],
@@ -209,6 +210,7 @@ describe("Chat and legacy Studio state", () => {
 
     expect(applied.notes[0]).toMatchObject({
       id: "note-saved",
+      writingOrigins: ["orion-ai"],
       title: "A useful synthesis",
       body: expect.stringContaining("This can become a note"),
     });

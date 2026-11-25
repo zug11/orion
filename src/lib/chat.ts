@@ -10,6 +10,7 @@ import type {
 import { slugifyTitle } from "../data/defaults";
 import { reconcileConceptVocabulary } from "./concepts";
 import { normalizeStudio } from "./studio";
+import { withWritingOrigin } from "./writingOrigins";
 import { touchChatThread } from "./chatThreads";
 import { truncateUnicode } from "./text";
 import { portableChatEvidence } from "./chatCitations";
@@ -396,7 +397,7 @@ export function chatNoteFromAction(
   now: string,
   id: string,
 ): Note {
-  return {
+  return withWritingOrigin<Note>({
     id,
     title: action.title,
     slug: slugifyTitle(action.title) || `chat-note-${id}`,
@@ -411,7 +412,7 @@ export function chatNoteFromAction(
     createdAt: now,
     updatedAt: now,
     color: "#8798ff",
-  };
+  }, "orion-ai");
 }
 
 function chatActionFromReply(reply: string): ChatNoteAction {

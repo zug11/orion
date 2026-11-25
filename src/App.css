@@ -3983,6 +3983,31 @@ kbd {
   align-items: center;
 }
 
+.note-surface:not([hidden]) { display: contents; }
+.dictation-floating {
+  position: fixed;
+  z-index: 90;
+  top: 78px;
+  right: 24px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow: 0 8px 28px rgba(1, 4, 12, 0.18);
+}
+.dictation-floating-note { min-width: 0; padding: 0; border: 0; background: none; color: inherit; text-align: left; }
+.dictation-floating-note span { display: block; color: var(--muted); font-size: 11px; }
+.dictation-floating-note strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.dictation-floating-note:focus-visible { outline: 2px solid var(--periwinkle-strong); outline-offset: 4px; border-radius: 4px; }
+.dictation-floating .voice-memo-control { gap: 10px; }
+.dictation-floating .voice-memo-status { position: static; padding: 0; border: 0; box-shadow: none; background: none; }
+@media (max-width: 800px) { .dictation-floating { top: 70px; right: 16px; } }
+
 .icon-button.voice-memo.active {
   color: var(--coral);
   border-color: color-mix(in srgb, var(--coral) 38%, var(--line));
@@ -6524,6 +6549,7 @@ button.source-citation-marker:focus-visible {
 
 .note-footer {
   display: flex;
+  flex-wrap: wrap;
   width: min(100%, 680px);
   align-items: center;
   justify-content: space-between;
@@ -15004,3 +15030,15 @@ button.source-citation-marker:focus-visible {
 }
 .chat-composer__footer .chat-web-toggle:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
 .chat-composer__footer:has(.chat-web-toggle) { flex-wrap: wrap; gap: 7px; }
+
+.contact-directory, .contact-sources ul { padding: 0; margin: 0; list-style: none; }
+.contact-directory li + li { border-top: 1px solid var(--line); }
+.contact-directory button {
+  width: 100%; padding: .85rem .5rem; display: flex; align-items: center; flex-wrap: wrap; gap: .75rem;
+  text-align: left; background: transparent; color: inherit; border: 0; cursor: pointer;
+}
+.contact-directory button:hover, .contact-directory button:focus-visible { background: var(--surface-raised); }
+.contact-directory span, .contact-sources p { color: var(--muted); }
+.contact-sources { max-width: 48rem; margin: 1.5rem auto; padding: 0 1.5rem 1.5rem; }
+.contact-sources p { display: flex; align-items: center; gap: .45rem; }
+.contact-sources h2 { font-size: 1rem; }

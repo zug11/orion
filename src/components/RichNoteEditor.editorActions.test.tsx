@@ -153,7 +153,7 @@ describe("external inline actions use the actual rich editor", () => {
   });
   it("awaits native review and native acceptance, records exact serialization once and retains one Undo", async () => {
     const review = deferred<void>(), claim = deferred<void>();
-    const { host, editor, onChange } = await fixture(); const before = editor.getJSON();
+    const { host, editor, onChange } = await fixture({ getWritingOrigins:() => [] }); const before = editor.getJSON();
     const hooks = options({ beforeReview: vi.fn(() => review.promise), beforeAccept: vi.fn(() => claim.promise) });
     const captured = host.capture(rewrite); act(() => host.start(captured.captureId, hooks));
     await waitFor(() => expect(hooks.beforeReview).toHaveBeenCalledOnce());
@@ -168,9 +168,11 @@ describe("external inline actions use the actual rich editor", () => {
     expect(onChange.mock.lastCall![0]).toContain("title: Keep this frontmatter");
     expect(onChange.mock.lastCall![0]).toContain("PRIVATE COMPLETED");
     expect(onChange.mock.lastCall![0]).toContain("The revised opening.");
+    expect(onChange.mock.lastCall![1]).toEqual({ origin:"orion-ai", present:true });
     expect(host.cancel(captured.captureId)).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     expect(editor.getJSON()).toEqual(before);
+    expect(onChange.mock.lastCall![1]).toEqual({ origin:"orion-ai", present:false });
   });
   it("cancels while native acceptance is pending without applying a late claim", async () => {
     const claim = deferred<void>(); const { host, editor, onChange } = await fixture(); const before = editor.getJSON();
@@ -214,7 +216,7 @@ describe("external inline actions use the actual rich editor", () => {
   it("sends the grant through image generation and acceptance storage, inserts once and undoes", async () => {
     const save = vi.spyOn(storage, "persistGeneratedNoteImage").mockResolvedValue({ id: "saved-image", fileName: image.fileName,
       mimeType: image.mimeType, byteSize: 4, src: "data:image/jpeg;base64,/9j/2Q==" });
-    const generate = vi.fn().mockResolvedValue(image); const { host, editor, onChange } = await fixture({ onGenerateAIImage: generate });
+    const generate = vi.fn().mockResolvedValue(image); const { host, editor, onChange } = await fixture({ onGenerateAIImage: generate, getWritingOrigins: () => [] });
     const before = editor.getJSON(), hooks = options(), captured = host.capture({ kind: "image", quality: "fast", context: "space", instruction: "A small illustration." });
     act(() => host.start(captured.captureId, hooks)); await screen.findByRole("region", { name: "Generated image preview" });
     expect(generate.mock.calls[0][0]).toMatchObject({ quality: "fast", contextMode: "space", editorActionGrant: hooks.grant });
@@ -223,6 +225,7 @@ describe("external inline actions use the actual rich editor", () => {
     expect(save).toHaveBeenCalledWith(image, expect.any(String), hooks.grant);
     expect(hooks.afterAccept).toHaveBeenCalledWith(onChange.mock.lastCall![0]);
     expect(editor.getHTML()).toContain("<img");
+    expect(onChange.mock.lastCall).toHaveLength(1);
     act(() => { editor.commands.undo(); }); expect(editor.getJSON()).toEqual(before);
   });
   it("unmounts cancel generation and stale callbacks never touch the closed editor", async () => {

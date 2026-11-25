@@ -6,6 +6,15 @@ use super::*;
 const JUSTIFY: &str = "<!-- orion-text:v1 justify -->";
 const IMAGE_PREFIX: &str = "orion-image-layout:v1:";
 
+pub(crate) fn image_caption(markdown_title: &str) -> Option<String> {
+    let encoded = markdown_title.strip_prefix(IMAGE_PREFIX)?;
+    if encoded.len() > 8192 {
+        return None;
+    }
+    let metadata: Value = serde_json::from_str(&decode_percent(encoded).ok()?).ok()?;
+    Some(metadata["caption"].as_str()?.to_owned())
+}
+
 pub(super) fn image_schema() -> Value {
     object(
         json!({

@@ -550,7 +550,7 @@ Existing foundation: real RichNoteEditor tests cover mapped cursors, automatic i
 
 ## EDT04 Note and Space navigation
 
-**P0 · Integration.** Leave the note, switch Space, close its view and reopen it while cleanup is pending. No late result may enter another note; the saved original remains in its originating Space.
+**P0 · Integration.** While recording, navigate to Home, Sources and another note in the same Space. Capture and segment rotation continue, the floating timer/Stop/return controls work, and a second note cannot start another recording. Stop and verify insertion only at the original mapped cursor without stealing focus; return and Undo once. Navigate during cleanup too. Switch Space or close the editor during capture/cleanup: stop capture and preserve the original in its originating Space without insertion into another note. Verify hidden editors do not own Find, selection, native toolbar glass or external edit actions.
 
 **Improvement:** prevent the most damaging destination errors while retaining recoverable work.
 
@@ -946,6 +946,11 @@ The live provider harness under the evidence directory is an opt-in QA tool, not
 | Native response body | At most 512 KiB |
 
 These are cleanup limits, not a recording-duration cap. Long recordings can still be inserted completely through the local path. Future support beyond the cleanup cap would need its own coverage, correction and latency design; silently truncating a transcript is not acceptable.
+
+## Same-Space recording checks
+
+- In the installed app, start recording between two words. Visit Home, open another note in the same Space and type into its body. Stop using the floating microphone. Check that the second note keeps focus and its new text. Return to the first note, confirm the insertion between the original words and Undo it once. Its original transcript should still be available in Sources.
+- The App integration test exercises this route with the real rich editors, simulated audio and isolated persistence. The recorder test also rejects Whisper startup while the note is in the background and verifies immediate microphone release and a visible error.
 
 ## Code and existing test owners
 

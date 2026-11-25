@@ -146,6 +146,14 @@ pub(super) fn call(path: &Path, name: &str, args: &Map<String, Value>) -> ToolRe
                     ));
                 }
                 if body != current.body {
+                    if !current.writing_origins.iter().any(|origin| origin == "mcp")
+                        && writing::wrote_body(name, args, &current.body, &body)
+                    {
+                        if !current.writing_origins.is_empty() {
+                            fields.insert("writingOrigins".into(), json!(current.writing_origins));
+                        }
+                        writing_origins::mark_note(&mut fields, "mcp").map_err(ToolFailure::new)?;
+                    }
                     fields.insert("body".into(), json!(body));
                     content_changed = true;
                 }

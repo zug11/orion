@@ -1,13 +1,13 @@
 import type { Editor } from "@tiptap/core";
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { GalleryVerticalEnd, CalendarDays, FileText, Columns3, ListTodo, List, ListOrdered, Image, FileCode2, Link2, Quote, Sheet, Trash2, ChevronRight, MessageCircle } from "../../lib/icons";
+import { Contact, GalleryVerticalEnd, CalendarDays, FileText, Columns3, ListTodo, List, ListOrdered, Image, FileCode2, Link2, Quote, Sheet, Trash2, ChevronRight, MessageCircle } from "../../lib/icons";
 import { getSlashMatch, matchingSlashItems, type SlashMatch, type SlashCommand } from "./slashCommands";
 import { AIWritingMark } from "../icons/AIWritingMark";
 import { BlocksMark } from "../icons/BlocksMark";
 
-export const slashCommandIcons = {write:AIWritingMark,visualise:GalleryVerticalEnd,comment:MessageCircle,heading:FileText,block:BlocksMark,todo:ListTodo,ticket:ListTodo,kanban:Columns3,calendar:CalendarDays,bullet:List,numbered:ListOrdered,divider:FileText,image:Image,code:FileCode2,link:Link2,excerpt:Quote,table:Sheet};
-export function SlashMenu({editor, suspended, onCommand, canComment = false, canVisualise = false}:{editor:Editor;suspended:boolean;onCommand:(command:SlashCommand,range:{from:number;to:number})=>void;canComment?:boolean;canVisualise?:boolean}) {
+export const slashCommandIcons = {write:AIWritingMark,visualise:GalleryVerticalEnd,comment:MessageCircle,heading:FileText,block:BlocksMark,todo:ListTodo,ticket:ListTodo,kanban:Columns3,calendar:CalendarDays,lead:Contact,bullet:List,numbered:ListOrdered,divider:FileText,image:Image,code:FileCode2,link:Link2,excerpt:Quote,table:Sheet};
+export function SlashMenu({editor, suspended, onCommand, canLead = false, canComment = false, canVisualise = false}:{editor:Editor;suspended:boolean;onCommand:(command:SlashCommand,range:{from:number;to:number})=>void;canLead?:boolean;canComment?:boolean;canVisualise?:boolean}) {
   const [match, setMatch] = useState<SlashMatch|null>(null);
   const [active,setActive] = useState(0);
   const [heading,setHeading] = useState(false);
@@ -18,7 +18,7 @@ export function SlashMenu({editor, suspended, onCommand, canComment = false, can
   const [editorDOM, setEditorDOM] = useState<HTMLElement|null>(null);
   const previousMatch = useRef<string|null>(null);
   const id = useId();
-  const items = match ? heading ? [1,2,3,4,5,6].map(level=>({id:`h${level}` as SlashCommand,title:`Heading ${level}`,description:""})) : matchingSlashItems(match).filter(item => (item.id !== "comment" || canComment) && (item.id !== "visualise" || canVisualise)) : [];
+  const items = match ? heading ? [1,2,3,4,5,6].map(level=>({id:`h${level}` as SlashCommand,title:`Heading ${level}`,description:""})) : matchingSlashItems(match).filter(item => (item.id !== "lead" || canLead) && (item.id !== "comment" || canComment) && (item.id !== "visualise" || canVisualise)) : [];
   function choose(command:SlashCommand) {
     if (!match) return;
     if (command === "heading") {setHeading(true);setActive(0);return;}

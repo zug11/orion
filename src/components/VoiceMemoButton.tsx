@@ -4,6 +4,8 @@ import {
   useState,
 } from "react";
 import { LoaderCircle, Mic2, Square } from "../lib/icons";
+import { createPortal } from "react-dom";
+import { useDictationNavigation } from "./DictationNavigation";
 import { DictationNotInsertedError, type DictationCompletionOptions } from "../lib/dictationCleanup";
 import { reportDetachedDictation } from "../lib/dictationOutcome";
 import {
@@ -86,6 +88,8 @@ export function VoiceMemoButton({
   onTranscribe,
   onComplete,
 }: VoiceMemoButtonProps) {
+  const navigation = useDictationNavigation();
+  disabled ||= navigation.blocked;
   const [phase, setPhase] = useState<VoiceMemoPhase>("idle");
   const [elapsedMs, setElapsedMs] = useState(0);
   const [pendingSegments, setPendingSegments] = useState(0);
@@ -214,6 +218,7 @@ export function VoiceMemoButton({
       setPhase("idle");
       if (outcome.error !== undefined) setError(recordingErrorMessage(outcome.error));
       else if (failure) setError(`Recording incomplete. The transcribed portion was kept, but some speech could not be recovered. ${recordingErrorMessage(failure)}`);
+
     } else {
       // The editor refuses to insert into a note that is gone, after archiving.
       const archived = outcome.error instanceof DictationNotInsertedError && Boolean(outcome.error.sourceId);
@@ -339,8 +344,7 @@ export function VoiceMemoButton({
       } catch (caught) {
         preparation = Promise.reject(caught);
       }
-      void preparation.catch(() => undefined);
-      session = {
+      const recording: Session = {
         id,
         stream,
         mimeType,
@@ -358,8 +362,16 @@ export function VoiceMemoButton({
         completion: null,
         detached: null,
       };
-      sessionRef.current = session;
-      startSegment(session);
+      session = recording;
+      sessionRef.current = recording;
+      // Recording can begin while Whisper warms up. If startup fails, release
+      // the mic now even if the user has navigated away from this editor.
+      void preparation.catch(error => {
+        if (recording.ended || recording.finishing) return;
+        recording.failure ??= error;
+        requestStop(recording);
+      });
+      startSegment(recording);
       setElapsedMs(0);
       setPhase("recording");
       elapsedTimerRef.current = window.setInterval(() => {
@@ -404,13 +416,13 @@ export function VoiceMemoButton({
         ? "Finishing dictation transcription"
         : "Start dictation";
 
-  return (
+  const control = (
     <span className="voice-memo-control">
       <button
         type="button"
         className={phase === "recording" ? "icon-button voice-memo active" : "icon-button voice-memo"}
         aria-label={label}
-        title={phase === "recording" ? "Stop dictation" : phase === "cleaning" ? "Use original dictation without AI cleanup" : disabled ? "Finish the current writing operation first" : "Dictate at cursor"}
+        title={phase === "recording" ? "Stop dictation" : phase === "cleaning" ? "Use original dictation without AI cleanup" : navigation.blocked ? "Stop the current dictation before starting another" : disabled ? "Finish the current writing operation first" : "Dictate at cursor"}
         aria-pressed={phase === "recording"}
         aria-busy={finishing}
         disabled={(phase === "idle" && disabled) || (finishing && phase !== "cleaning")}
@@ -436,4 +448,11 @@ export function VoiceMemoButton({
       ) : null}
     </span>
   );
+  if (!navigation.background) return control;
+  if (phase === "idle" && !error) return null;
+  return createPortal(<div className="dictation-floating" role="region" aria-label="Background dictation">
+    <button type="button" className="dictation-floating-note" onClick={navigation.onReturn}
+      title={`Return to ${navigation.noteTitle}`}><span>{phase === "idle" ? "Dictation needs attention" : "Dictating to"}</span><strong>{navigation.noteTitle}</strong></button>
+    {control}
+  </div>, document.body);
 }

@@ -3,6 +3,7 @@ import {
   type LinkedDocumentReceipt,
 } from "./concepts";
 import { truncateUnicode } from "./text";
+import { withWritingOrigin } from "./writingOrigins";
 import { deleteNoteFromSnapshot } from "./noteDeletion";
 import { buildCompactOrganizerContext } from "./organizerContext";
 import { projectEditorAIContext, type EditorAILinkContext } from "./editorAIWorkingContext";
@@ -384,7 +385,7 @@ export function applyLinkedArticleResult(
   ]);
 
   return {
-    ...note,
+    ...(body !== note.body || summary !== note.summary ? withWritingOrigin(note, "orion-ai") : note),
     title: phrase,
     summary,
     body,

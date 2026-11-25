@@ -100,7 +100,7 @@ export function startExternalEditReviews(host: EditReviewHost, transport: Transp
       assertTarget(review, true);
       if (receipt.state !== "awaiting_review") throw new Error(receipt.error ?? "This edit is no longer available for review.");
       review.phase = "review";
-      host.present({ id: delivery.id, proposal: review.proposal });
+      host.present({ id: delivery.id, proposal: review.proposal, writingOrigin: "mcp" });
     } catch (error) {
       if (review) await fail(review, error);
       else await transport("assistant_review_fail", { ...args(delivery.id), error: message(error) }).catch(() => undefined);

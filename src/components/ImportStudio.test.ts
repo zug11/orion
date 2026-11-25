@@ -82,6 +82,7 @@ describe("buildImportPayload", () => {
 
     const sqlNotes = payload.notes.filter((note) => note.id === "note-sql");
     expect(sqlNotes).toHaveLength(1);
+    expect(sqlNotes[0].writingOrigins).toEqual(["orion-ai"]);
     expect(sqlNotes[0].createdAt).toBe(TEST_NOW);
     expect(sqlNotes[0].body.startsWith(originalBody)).toBe(false);
     expect(sqlNotes[0].body).not.toContain("Context from");
@@ -135,6 +136,21 @@ describe("buildImportPayload", () => {
       status: "ready",
     });
     expect(payload.notes[0].tags).not.toContain("ai-draft");
+    expect(payload.notes[0].writingOrigins).toBeUndefined();
+  });
+
+  it("distinguishes preserved source wording from an AI-written note within one recovered batch", () => {
+    const parsed = makeParsedImport("Tape", "tape.md", "Words on the tape.");
+    const source = makeOrganizedSource("tape", parsed);
+    const note = {title:"Tape", body:parsed.text, summary:"", aliases:[], tags:[], links:[]};
+    const payload = buildImportPayload([{...source,recovered:true,
+      result:{notes:[note, {...note,title:"Interpretation",body:"A reasoned account."}],wikiArticles:[],concepts:[],suggestedConnections:[]},
+      provenance:[
+        {kind:"note",title:"Tape",sourceIds:["tape"],evidenceReferences:[{kind:"source",sourceId:"tape"}]},
+        {kind:"note",title:"Interpretation",sourceIds:["tape"],evidenceReferences:[{kind:"artifact",artifactId:"reading"}]},
+      ]}], createEmptySnapshot("Batch", TEST_NOW));
+    expect(payload.notes.find(item => item.title === "Tape")?.writingOrigins).toBeUndefined();
+    expect(payload.notes.find(item => item.title === "Interpretation")?.writingOrigins).toEqual(["orion-ai"]);
   });
 
   it("keeps portable excerpt metadata out of an imported note summary while preserving its body", () => {

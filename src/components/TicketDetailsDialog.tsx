@@ -9,7 +9,7 @@ import { TicketCode } from './TicketCode';
 import { ArrowUp, ArrowDown, Plus, Trash2, X, ExternalLink } from '../lib/icons';
 import { DateButton } from './CalendarPicker';
 import './TicketDetailsDialog.css';
-import { useTicketNavigation } from './TicketNavigation';
+import { TicketCodeSettings, useTicketNavigation } from './TicketNavigation';
 import { ticketBacklinks } from '../lib/ticketReferences';
 import { displayNoteTitle } from '../lib/noteMetadata';
 
@@ -87,7 +87,7 @@ export function TicketDetailsDialog({ selected, workspace, onClose }: { selected
       const bounds = event.currentTarget.getBoundingClientRect();
       if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) onClose();
     }} onKeyDown={event => event.stopPropagation()}>
-    <header className="ticket-detail-header"><span>{ticket ? <TicketCode id={ticket.id}/> : 'Ticket unavailable'}</span><button ref={closeButton} type="button" className="icon-button" aria-label="Close ticket details" onClick={onClose}><X size={19}/></button></header>
+    <header className="ticket-detail-header"><span>{ticket ? <TicketCode id={ticket.id}/> : 'Ticket unavailable'}</span><div className="ticket-detail-header-actions">{ticket && <TicketCodeSettings/>}<button ref={closeButton} type="button" className="icon-button" aria-label="Close ticket details" onClick={onClose}><X size={19}/></button></div></header>
     {!ticket || !details ? <p className="ticket-detail-unavailable">This ticket was removed, moved to another note, or has a duplicate identity. Close this view and reopen it from its note.</p> : <>
       <DetailText key={ticket.id} value={ticket.title} label="Ticket title" wrap className="ticket-detail-title" disabled={!editable} save={text => patch({ kind: 'title', text })}/>
       <div className="ticket-detail-properties">

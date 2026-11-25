@@ -25,6 +25,8 @@ mod assistant_protocol;
 #[path = "../../shared/assistant_review_protocol.rs"]
 #[allow(dead_code)]
 mod assistant_review_protocol;
+#[path = "../../shared/contact.rs"]
+mod contact;
 #[path = "../../shared/editor_actions_protocol.rs"]
 #[allow(dead_code)]
 mod editor_actions_protocol;
@@ -47,6 +49,9 @@ mod ticket_codes;
 mod voice_work_orders_protocol;
 mod workflows;
 mod working_view;
+mod writing;
+#[path = "../../shared/writing_origins.rs"]
+mod writing_origins;
 
 const SERVER_NAME: &str = "orion";
 const LATEST_PROTOCOL_VERSION: &str = "2025-06-18";
@@ -147,6 +152,8 @@ struct Workspace {
 #[serde(rename_all = "camelCase")]
 struct Note {
     #[serde(default)]
+    writing_origins: Vec<String>,
+    #[serde(default)]
     discussion_threads: Vec<Value>,
     #[serde(skip)]
     view_version: Option<String>,
@@ -175,6 +182,15 @@ struct Note {
     #[serde(default)]
     pinned: bool,
     color: Option<String>,
+}
+
+impl Note {
+    fn with_writing_origins(&self, mut result: Value) -> Value {
+        if !self.writing_origins.is_empty() {
+            result["writingOrigins"] = json!(self.writing_origins);
+        }
+        result
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1150,6 +1166,8 @@ fn read_vault_value_unlocked(path: &Path) -> Result<Value, ToolFailure> {
 }
 
 fn validate_vault_value(value: Value) -> Result<Vault, ToolFailure> {
+    contact::validate_vault(&value).map_err(ToolFailure::new)?;
+    writing_origins::validate_vault(&value).map_err(ToolFailure::new)?;
     ticket_codes::validate_vault(&value).map_err(ToolFailure::new)?;
     portable_identity::validate_vault(&value).map_err(ToolFailure::new)?;
     // Reference shape and schema invariants are checked on the raw records.
@@ -1415,13 +1433,13 @@ fn search_space(vault: &Vault, arguments: &Map<String, Value>) -> ToolResult {
             ) else {
                 continue;
             };
-            results.push((score, note.updated_at.as_str(), json!({
+            results.push((score, note.updated_at.as_str(), note.with_writing_origins(json!({
                 "type": "note", "id": note.id, "title": truncate_chars(&note.title, 300).0,
                 "summary": truncate_chars(&note.summary, 320).0,
                 "snippet": matching_snippet(&note.body, query, 320), "updatedAt": note.updated_at,
                 "orionUrl": orion_note_url(&space.workspace.id, &note.id),
                 "citation": citation_markdown(&truncate_chars(&note.title, 300).0, &space.workspace.id, &note.id)
-            })));
+            }))));
         }
     }
     if kind == "all" || kind == "concept" {
@@ -1555,7 +1573,7 @@ fn get_note(vault: &Vault, arguments: &Map<String, Value>) -> ToolResult {
 
     Ok(json!({
         "space": space_metadata(space),
-        "note": {
+        "note": note.with_writing_origins(json!({
             "id": note.id,
             "title": note.title,
             "slug": note.slug,
@@ -1571,7 +1589,7 @@ fn get_note(vault: &Vault, arguments: &Map<String, Value>) -> ToolResult {
             "updatedAt": note.updated_at,
             "orionUrl": orion_note_url(space_id, &note.id),
             "citation": citation_markdown(&note.title, space_id, &note.id)
-        },
+        })),
         "sources": sources,
         "concepts": concepts,
         "connections": connections,
@@ -1712,6 +1730,7 @@ fn create_note(path: &Path, arguments: &Map<String, Value>) -> ToolResult {
         let notes = required_array_mut(space, "notes")?;
         let note = json!({
             "id": note_id,
+            "writingOrigins": ["mcp"],
             "title": title,
             "slug": slug,
             "summary": summary,
@@ -1771,6 +1790,7 @@ fn update_note(path: &Path, arguments: &Map<String, Value>) -> ToolResult {
     let space_id = required_write_space_id(arguments)?;
     let note_id = required_string(arguments, "note_id", 200)?;
     let title = optional_nonempty_string(arguments, "title", 300)?;
+    let expected_version = optional_nonempty_string(arguments, "expected_version", 100)?;
     let body = optional_text(arguments, "body", MAX_NOTE_BODY_CHARS)?;
     let summary = optional_string(arguments, "summary", 1_000)?;
     let aliases = optional_string_array(arguments, "aliases", 30, 200)?;
@@ -1792,11 +1812,25 @@ fn update_note(path: &Path, arguments: &Map<String, Value>) -> ToolResult {
     mutate_vault(path, |vault| {
         let space = require_space_value_mut(vault, &space_id)?;
         let notes = required_array_mut(space, "notes")?;
+        if notes.iter().filter(|note| note["id"] == note_id).count() > 1 {
+            return Err(ToolFailure::new(
+                "Duplicate note IDs make this target ambiguous.",
+            ));
+        }
         let note = notes
             .iter_mut()
             .find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(&note_id))
             .and_then(Value::as_object_mut)
             .ok_or_else(|| ToolFailure::note_not_found(&note_id, &space_id))?;
+        if let Some(expected) = expected_version.as_deref() {
+            let current: Note = serde_json::from_value(Value::Object(note.clone()))
+                .map_err(|_| ToolFailure::new("Invalid note."))?;
+            if expected != library::note_version(&current) {
+                return Err(ToolFailure::new(
+                    "The note changed. Read its current version before editing.",
+                ));
+            }
+        }
         if body.is_some()
             && working_view::mask(note.get("body").and_then(Value::as_str).unwrap_or(""))
                 != note.get("body").and_then(Value::as_str).unwrap_or("")
@@ -1804,13 +1838,22 @@ fn update_note(path: &Path, arguments: &Map<String, Value>) -> ToolResult {
             if !working_view::history(arguments)? {
                 return Err(ToolFailure::new("This note contains completed tasks hidden from working reads. Use a guarded exact edit, or explicitly read task_view history and supply its expected_version for a whole-body replacement."));
             }
-            let current: Note = serde_json::from_value(Value::Object(note.clone()))
-                .map_err(|_| ToolFailure::new("Invalid note."))?;
-            if arguments.get("expected_version").and_then(Value::as_str)
-                != Some(library::note_version(&current).as_str())
-            {
+            if expected_version.is_none() {
                 return Err(ToolFailure::new("Read the original note with task_view history and supply its current expected_version."));
             }
+        }
+        let old = |key: &str| note.get(key).and_then(Value::as_str).unwrap_or("");
+        if title
+            .as_deref()
+            .is_some_and(|text| writing::added_text(old("title"), text))
+            || summary
+                .as_deref()
+                .is_some_and(|text| writing::added_text(old("summary"), text))
+            || body
+                .as_deref()
+                .is_some_and(|text| writing::added_markdown(old("body"), text))
+        {
+            writing_origins::mark_note(note, "mcp").map_err(ToolFailure::new)?;
         }
         if let Some(value) = title.as_ref() {
             note.insert("title".to_string(), json!(value));
@@ -1976,19 +2019,23 @@ fn require_space_value_mut<'a>(
     vault: &'a mut Value,
     space_id: &str,
 ) -> Result<&'a mut Map<String, Value>, ToolFailure> {
-    vault
+    let spaces = vault
         .get_mut("spaces")
         .and_then(Value::as_array_mut)
-        .and_then(|spaces| {
-            spaces.iter_mut().find(|space| {
-                space
-                    .get("workspace")
-                    .and_then(|workspace| workspace.get("id"))
-                    .and_then(Value::as_str)
-                    == Some(space_id)
-            })
-        })
-        .and_then(Value::as_object_mut)
+        .ok_or_else(|| ToolFailure::unknown_space(space_id))?;
+    let mut matches = spaces
+        .iter_mut()
+        .filter(|space| space["workspace"]["id"] == space_id);
+    let space = matches
+        .next()
+        .ok_or_else(|| ToolFailure::unknown_space(space_id))?;
+    if matches.next().is_some() {
+        return Err(ToolFailure::new(
+            "Duplicate Space IDs make this edit ambiguous.",
+        ));
+    }
+    space
+        .as_object_mut()
         .ok_or_else(|| ToolFailure::unknown_space(space_id))
 }
 
@@ -2140,7 +2187,7 @@ fn space_overview_preview(overview: Option<&SpaceOverview>) -> Value {
 }
 
 fn note_metadata(note: &Note, space_id: &str) -> Value {
-    json!({
+    note.with_writing_origins(json!({
         "id": note.id,
         "title": note.title,
         "summary": note.summary,
@@ -2153,7 +2200,7 @@ fn note_metadata(note: &Note, space_id: &str) -> Value {
         "updatedAt": note.updated_at,
         "orionUrl": orion_note_url(space_id, &note.id),
         "citation": citation_markdown(&note.title, space_id, &note.id)
-    })
+    }))
 }
 
 fn source_metadata(source: &Source) -> Value {

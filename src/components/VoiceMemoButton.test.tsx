@@ -2,6 +2,7 @@
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DictationNavigationContext } from "./DictationNavigation";
 import {
   VoiceMemoButton,
   VOICE_MEMO_SEGMENT_MS,
@@ -344,6 +345,35 @@ describe("VoiceMemoButton leaving its note", () => {
     return { seen, stop };
   }
 
+  it("keeps recording across background/foreground navigation with the same timer and Stop control", async () => {
+    vi.useFakeTimers();
+    const stopTrack = microphone();
+    const onComplete = vi.fn().mockResolvedValue(undefined), onReturn = vi.fn();
+    const onTranscribe = vi.fn().mockResolvedValue("Recorded speech.");
+    const content = (background: boolean) => <DictationNavigationContext.Provider value={{ background, blocked: false, noteTitle: "Lecture", onReturn }}>
+      <div hidden={background}><VoiceMemoButton noteId="one" onTranscribe={onTranscribe} onComplete={onComplete}/></div>
+    </DictationNavigationContext.Provider>;
+    const view = render(content(false));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Start dictation" })));
+    view.rerender(content(true));
+    expect(screen.getByRole("region", { name: "Background dictation" })).toBeVisible();
+    expect(stopTrack).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTimeAsync(VOICE_MEMO_SEGMENT_MS));
+    expect(onTranscribe).toHaveBeenCalledOnce();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(FakeMediaRecorder.instances).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: /Dictating toLecture/ }));
+    expect(onReturn).toHaveBeenCalledOnce();
+    view.rerender(content(false));
+    expect(screen.queryByRole("region", { name: "Background dictation" })).toBeNull();
+    expect(screen.getByRole("button", { name: /Stop dictation/ })).toHaveAccessibleName(/recording (0:30|2:00)/);
+    view.rerender(content(true));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Stop dictation/ })));
+    expect(onComplete).toHaveBeenCalledOnce();
+    expect(onComplete.mock.calls[0][2].signal.aborted).toBe(false);
+    expect(stopTrack).toHaveBeenCalledOnce();
+  });
+
   it("finishes transcribing and archives the original instead of discarding the recording", async () => {
     const { DictationNotInsertedError } = await import("../lib/dictationCleanup");
     const stopTrack = microphone();
@@ -434,6 +464,31 @@ describe("VoiceMemoButton leaving its note", () => {
     await waitFor(() => expect(seen).toHaveLength(2));
     expect(seen[1]).toEqual({ saved: false, message: "This note changed before dictation could be inserted." });
     stop();
+  });
+
+  it("releases the background microphone immediately if Whisper cannot start", async () => {
+    const stopTrack = vi.fn();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
+      getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: stopTrack }] }),
+    } });
+    vi.stubGlobal("MediaRecorder", FakeMediaRecorder);
+    let failStartup!: (error: Error) => void;
+    const preparation = new Promise<void>((_, reject) => { failStartup = reject; });
+    const onSessionEnd = vi.fn(), onTranscribe = vi.fn(), onComplete = vi.fn();
+    const content = (background: boolean) => <DictationNavigationContext.Provider value={{ background, blocked: false, noteTitle: "Lecture", onReturn: undefined }}>
+      <VoiceMemoButton noteId="one" onSessionStart={() => preparation} onSessionEnd={onSessionEnd} onTranscribe={onTranscribe} onComplete={onComplete}/>
+    </DictationNavigationContext.Provider>;
+    const view = render(content(false));
+    fireEvent.click(screen.getByRole("button", {name:"Start dictation"}));
+    await screen.findByRole("button", {name:/Stop dictation/});
+    view.rerender(content(true));
+    await act(async () => { failStartup(new Error("Whisper could not start.")); });
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(onSessionEnd).toHaveBeenCalledOnce();
+    expect(onTranscribe).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(screen.getByRole("status")).toHaveTextContent("Whisper could not start.");
+    view.unmount();
   });
 
   it("releases a microphone that is granted only after the note was left", async () => {

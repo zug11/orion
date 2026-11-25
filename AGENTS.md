@@ -117,16 +117,26 @@ These product decisions are intentional:
   loses a segment, preserve and insert recovered segments through the same source
   archival path, skip AI interpretation, and keep an actionable incomplete-recording
   error visible; never present partial recovered speech as a complete original.
-  Navigating/unmounting or an external document replacement cancels cleanup and
-  prevents a late insertion into another/replaced note. The completed original
+  Switching Spaces, unmounting the editor or an external document replacement
+  cancels cleanup and prevents a late insertion into another/replaced note. The completed original
   remains in its originating Space. Each audio recording is discarded after its
   transcription command finishes; cleanup never sends audio to a provider.
-  Leaving a note during recording stops capture and lets its existing session
-  finish pending transcription and preserve the original in the originating
-  Space. The detached session never inserts into another note. Its outcome is
-  reported through the App-owned dictation outcome listener, including failure.
+  Navigating within the same Space keeps dictation running. Retain the originating
+  keyed editor hidden and inert, with its mapped cursor and Undo; a floating
+  microphone/timer offers Stop and return to the note. Block another dictation
+  in that Space until completion. Insert only into the original editor without
+  moving focus or scrolling the visible page. Hidden editors must not register
+  active selection, Find shortcuts, external edit hosts or native toolbar glass.
+  Retain a finished background editor until revisited or replaced by a new recording
+  so its insertion can be undone. This state is window-local, never persisted.
+  Switching Spaces, deleting the note or closing its editor stops capture and lets
+  pending transcription preserve the original in its originating Space. A detached
+  session never inserts into another note; its outcome is reported through the
+  App-owned dictation outcome listener, including failure.
   Native Whisper sessions have separate worker locks and bounded startup/request
   waits; never hold the global session-map lock over blocking worker I/O.
+  If the worker fails to start, stop the active microphone immediately and
+  surface the error even if its first segment has not finished recording.
   After Stop, show processing only in the existing microphone button; do not
   display transcription, recovery-saving, cleanup or success status bubbles.
   Keep the recording timer and actionable errors visible. During AI cleanup the
@@ -255,12 +265,42 @@ These product decisions are intentional:
   saved-body changes require the exact current board identity and metadata.
   MCP update_board accepts title, or column_title with optional column_id, and
   ticket writes validate custom status against the destination board.
-- The Space switcher has local, case-insensitive name search. Search never
-  changes the active Space until a result is chosen. ArrowDown focuses results;
-  Enter opens a sole result. Returning to a Space restores that window's last
-  view and main scroll position during the session. This state stays out of the
-  vault. Ordinary note navigation still starts at the top; Back/Forward retain
-  their independent history positions.
+- `/lead` links a person at the note cursor. The user can select an existing
+  contact in this Space or create one with a name and optional organization.
+  The contact is an ordinary note with explicit optional
+  `Note.contact = {version: 1, organization?: string}` metadata. Its title is
+  the contact name. Preserve metadata across vault and portable-file round trips.
+  Opening or cancelling the picker creates nothing. Saving checks the source
+  editor and inserts an ordinary `orion-note://` link in one Undo. Undoing a
+  mention leaves the saved contact available for other notes. The Contacts
+  sidebar entry appears after the Space has a saved contact. Its directory
+  opens the contact note and shows links back to notes that mention it.
+- The Space switcher has local, case-insensitive name search. Name matches
+  appear immediately, followed by a yielded local search of readable note
+  content. Show the strongest matching note and its excerpt once per Space.
+  Search by meaning is explicit. Send only the typed query with fixed
+  instructions to the selected AI connection, then match any returned
+  alternate phrases locally. Never send Space names, notes, chat histories or
+  the evidence list as part of this query expansion. Discard expired queries
+  and keep local matches available on provider failure. Search changes
+  the active Space only when a result is chosen. ArrowDown focuses the first
+  visible result. Enter opens a sole result. On first opening, the active
+  Space is visible. Closing, choosing a Space, and clearing search retain
+  the unfiltered list's last scroll position in that window. Returning to a
+  Space restores that window's last view and main scroll position during the
+  session, including after creating a Space. If the view is still growing,
+  finish restoring as it lays out, yielding to user input. This state stays
+  out of the vault. Ordinary note navigation starts at the top. Back and
+  Forward retain their independent history positions.
+- Optional `Note.writingOrigins` records known writing contributions. Store
+  the unique values `orion-ai` and `mcp` in that order, omitting the field
+  when empty. Stamp the host that supplied the accepted wording. An MCP client
+  requesting Orion's own generation is attributed to Orion AI. Prose supplied
+  by an external app through MCP is attributed to MCP. Both can contribute
+  to one note. Keep the credit in note metadata and expose it in Note details
+  and the footer. Never infer historical authorship from the text, source,
+  model settings or a legacy tag. Pure navigation, formatting, status changes,
+  raw dictation, verbatim source imports, and discarded drafts add no credit.
 - Boards in Home and notes offer Add ticket inside every column. Enter creates
   in that board's source note with the column's status and keeps the field ready
   for another; Escape cancels and restores its Add button. Editor creation is
@@ -315,6 +355,13 @@ These product decisions are intentional:
   Re-running inference may also suggest missing urgency for open tickets already
   on this board, updating those same identities instead of adding copies. Ignore
   urgency suggestions for another board and keep authored urgency unchanged.
+  Ticket review shows descriptions and checklist steps grounded in exact
+  passages from the note. Fill only missing fields on existing tickets.
+  The same reader can quote a stated deadline or say that work has started.
+  Resolve these locally. Relative deadlines use the note's saved local date.
+  The reviewer can change or clear a proposed deadline and choose To do or
+  In progress. Preserve existing deadlines and in-progress or custom columns.
+  Accept the reviewed rows in the same guarded note write or editor Undo.
 - `/calendar` inserts a fixed inline date using a keyboard month grid: arrows
   move days/weeks, Home/End move within the week, PageUp/Down change month, Enter
   chooses, Escape cancels without removing the command. Store a readable
@@ -433,6 +480,10 @@ These product decisions are intentional:
   output and saved payloads with `parseVisualArtifact`. Render text as text
   and graphics with Orion's own components. Interactions run locally.
   A successful generation inserts one atom after the selection's last block.
+  Record the note's first Orion AI writing credit on that insertion's Undo
+  transaction. Previous writing credits survive Undo, and adjusting a saved
+  artifact is local interaction. If dictation keeps a note mounted in the
+  background, close its Visualise composer and cancel pending generation.
   A standalone slash command can supply its passage in the composer. Preserve
   the source, reject stale captures and keep insertion in one Undo group.
   An artifact-only save skips the whole-note wiki refresh. Store validated
@@ -2436,14 +2487,31 @@ concept-title matching shown in the reading surface. It is not recursive and
 must never cross a Space boundary.
 
 `.orion` uses explicit individual-note selection, never implicit linked-note
-inclusion. Each selected note's file contains the same curated collection and
+inclusion. Preserve the originating Space name as the collection title, including
+single-note selections. New imports use that name; reopening preserves local
+Space renames. Each selected note's file contains the same curated collection and
 export identity with a different entry note. `portableOrion.ts` whitelists visible
 note content and safe citation attribution, freezes included wiki links, removes
 excluded targets and private metadata, and includes only real referenced raster
 images. Native `portable_orion.rs` validates bounded JSON and image signatures,
 saves without overwriting files, and stages imports under content-addressed image
-IDs. Finder file opens use native opaque queue tokens, drained by the preferred
-library window after hydration. New collection Spaces have immutable
+IDs. Send the validated collection and managed image URLs to the renderer. Keep
+the original attachment bytes in the native host. Finder hands opaque queue
+tokens to the preferred library window. On launch, use the queued file to choose
+the first screen once the vault is usable. During a running session, check the
+saved vault revision and reconcile other writers' changes before resolving the
+entry note. Publish the Space and note together, dismiss the export sheet, and
+persist a new collection through the guarded save queue in the background.
+Report a failed save with a retry action. The writing-window file picker sends
+the selected file to the same library queue so its bound draft stays open.
+Ordinary reading notes do not need a Space-wide board or ticket scan.
+New collection Spaces inherit a detached copy of
+the active local settings, including model, non-secret connection status, context
+preferences, dictation language and appearance. Never load settings from the
+collection or reset them to defaults; that silently disables dictation cleanup
+and can propagate those defaults through shared Settings. Preserve workflow grants'
+exact Space IDs without authorizing the imported Space. Reopening keeps existing
+settings. New collection Spaces have immutable
 `portableImport:{version:1,exportId,collectionHash}` validated by both native
 writers. Reopening never replays the exported note text over local edits or
 resurrects deleted notes. Conflicting content with the same export identity fails
@@ -4604,6 +4672,49 @@ IDs without a planning call when each worker has 1–24 notes. Other distributio
 use the bounded router. These references are read-only and bypass the unrelated
 open-note focus; full document reads and honest coverage remain the reader's job.
 Single explicit writing requests retain the direct authorizing transcript path.
+Spoken requests can read the current Space's calendar and tickets, create a
+ticket or picked all-day date, move a ticket between boards or columns, and
+reschedule a picked date or ticket deadline. Capture the destination Space and
+note at the human turn, keeping both live providers on the same local path.
+A calendar read includes picked dates, visible inferred dates/ranges and open
+ticket deadlines. A precise date change in inferred prose uses the ordinary
+note review. Resolve local identities before writing, keep live editor Undo,
+and verify a queued vault save before reporting a successful mutation.
+Spoken ticket completion uses the local board action. Resolve codes, full
+titles and distinctive partial titles against durable tickets in the originating
+Space. Bind “tick that one off” to the open card at speech capture, then to a
+uniquely identified ticket in the preceding human turn. Resolve every named
+target before changing a group and reject duplicate identities. Ask which
+ticket when several titles fit and accept a short title, code or spoken ordinal
+on the next turn. A progress report can prompt a confirmation only. For an
+unmatched named request, the selected Intelligence connection may suggest up
+to three matches from a bounded list of open ticket titles. Every semantic
+suggestion requires a fresh human reply to the presented question. Bind replies
+to the captured candidates, speech onset when available, call, Space and open
+card. An ElevenLabs final without onset can issue a self-contained command on
+a stable call. A short answer that cannot be tied to the current question
+preserves the choices and offers the explicit title/code command. Unrelated
+turns and competing clarifications expire the question. Recheck the captured
+Markdown of every named ticket, including its description and checklist,
+before changing the first ticket in a group.
+Route through the source editor's guarded ticket transaction when mounted and
+the normal note patch otherwise. Report Done only after checking the saved
+status. A delayed delegation cannot repeat the action. Workers, assistant
+speech and provider-supplied arguments have no ticket mutation authority.
+Spoken calendar and ticket requests on both voice connections use the same
+human-transcript route in `SpaceVoice.tsx`. `voiceWorkspace.ts` resolves
+local reads, ticket creation, column/board moves, and all-day scheduling.
+`voiceCalendar.ts` reads the same picked dates, open ticket deadlines and
+undismissed inferred mentions as Home. Relative spoken dates use the local
+day of the request. Date moves patch a ticket's due date or replace one
+captured picked-date link. Changing an inferred date in prose produces an
+ordinary focused note review only when its source phrase has one exact,
+editable occurrence. Accept applies the edit; Discard leaves the calendar
+as it was. Ambiguous entries, ranges and timed requests receive guidance.
+New entries live in the captured or named note, or the board's source note
+for a board ticket. Away from a note the host can use an ordinary Tickets
+or Calendar note in this Space. Reports of successful changes require a
+verified vault save. Never create external appointments from this route.
 `voiceNoteEdits.ts` owns a direct unsaved-edit lane for explicit note revisions,
 independent of research workers and orb reservations. Capture the original note
 and selection, deduplicate delayed delegation, and cancel only a superseded edit.
@@ -5289,7 +5400,10 @@ contrast and WebGL failure/loss, and release GPU resources on unmount.
 ### Ticket references, extraction, and implementation evidence
 
 The optional Space ticket-code ledger now accepts `assignedPrefixes` to preserve
-published codes when the future prefix changes in Settings. Bare known codes
+published codes when the future prefix changes through Ticket codes in the
+Tickets/Kanban toolbar or ticket Details. Keep this Space-specific control out
+of global Settings; its compact dialog preserves existing codes and restores
+focus to its trigger on close. Bare known codes
 become Space-local references in reading, rich editing and Chat. Literal code
 and existing external links stay untouched. The ledger builds the reference
 index; ordinary typing never reparses the library for navigation. The shared
@@ -5302,6 +5416,15 @@ readers, completed-text masking and local task collection. Board suggestions and
 likely-duplicate comparisons run locally; review can change destination or leave
 it unassigned. Duplicates are candidates, left unchecked, never automatically
 merged. Recheck the captured note and unique Space-local boards before one write.
+The same section reader can propose a description and up to 32 distinct
+unchecked steps. Each value must match its action's supporting passage in the
+working note. Drop unsupported fields independently. A single action can have
+an empty checklist. Review the details alongside the title and keep their row
+identity through renaming, exclusion and board choice. Save them as literal
+paragraphs and nested Markdown tasks with the original guarded acceptance.
+Enrichment of an existing open ticket only fills missing fields and preserves
+authored children and completion. Open parent tasks retain their nested plain
+checklists; independently open work under a completed parent remains eligible.
 Dictation's existing cleanup request may return at most 32 literal checklist
 children per ticket, 256 total, with exact transcript evidence. They are ordinary
 nested tasks inserted with the parent in one Undo; invalid structure retains the
@@ -5315,3 +5438,8 @@ The global MCP mutation boundary rejects bypass through generic note edits,
 including moving a ticket between notes. These reports are caller-supplied
 evidence, never independent Orion test execution. Manual UI completion is
 unchanged. Keep completed material excluded from ordinary working reads.
+
+The Space picker remembers its unfiltered list scroll offset for the window
+session when closed or a Space is selected. Search results start at the top;
+clearing search restores the unfiltered offset. This navigation state is local,
+never persisted into the vault or saved on scroll.

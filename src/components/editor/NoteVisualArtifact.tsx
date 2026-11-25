@@ -5,6 +5,8 @@ import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tip
 import { SavedVisualArtifact } from "../SavedVisualArtifact";
 import { isVisualArtifactMarker, readVisualArtifactMarker, unavailableVisualArtifact, visualArtifactMarker } from "../../lib/visualArtifactMarkdown";
 import type { VisualArtifact } from "../../lib/visualArtifacts";
+import type { WritingOrigin } from "../../types";
+import { recordWritingOrigin } from "./writingOriginHistory";
 import { getSlashMatch, matchingSlashItems } from "./slashCommands";
 
 function ArtifactNodeView({ node }: NodeViewProps) {
@@ -90,7 +92,8 @@ export function captureVisualArtifact(editor: Editor, command?: Range) {
 }
 
 /** Keep both the source block and the original slash command intact until generation succeeds. */
-export function insertVisualArtifact(editor: Editor, capture: VisualArtifactCapture, artifact: VisualArtifact): boolean {
+export function insertVisualArtifact(editor: Editor, capture: VisualArtifactCapture, artifact: VisualArtifact,
+  writingOrigins?: readonly WritingOrigin[]): boolean {
   if (editor.isDestroyed || !editor.isEditable || editor !== capture.editor || editor.state.doc !== capture.document) return false;
   const type = editor.schema.nodes.noteVisualArtifact;
   if (!type) return false;
@@ -104,6 +107,7 @@ export function insertVisualArtifact(editor: Editor, capture: VisualArtifactCapt
     if (capture.command) tr.delete(capture.command.from, capture.command.to);
     tr.insert(tr.mapping.map(capture.end), node);
   }
+  if (writingOrigins && !writingOrigins.includes("orion-ai")) recordWritingOrigin(tr, "orion-ai");
   editor.view.dispatch(tr);
   editor.view.dispatch(closeHistory(editor.state.tr).setMeta("addToHistory", false));
   return true;

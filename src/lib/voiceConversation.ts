@@ -1,13 +1,30 @@
 import type { VoiceEvent } from "./liveVoice";
 import type { VoiceSelection } from "./voiceSelection";
 import { explicitVoiceAssignment, type VoiceFocusedWorker } from "./voiceWorkOrders";
+import { voiceTicketCompletionReference } from "./voiceTicketCompletion";
 import { unfinishedVoiceThought, voiceTurnSettleMs, VOICE_THOUGHT_CONTINUATION_MS, VOICE_TURN_SETTLE_MS } from "./voiceUtterance";
 
-interface FragmentReference { id: number; role: "user" | "assistant"; text: string; focusNoteId?: string; selection?: VoiceSelection; focusedWorker?: VoiceFocusedWorker }
+export interface VoiceSpeechTarget {
+  focusNoteId?: string;
+  selection?: VoiceSelection;
+  focusedWorker?: VoiceFocusedWorker;
+  focusedTicketId?: string;
+  /** null means speech began before a ticket question was presented. */
+  ticketQuestionKey?: number | null;
+}
+interface FragmentReference extends VoiceSpeechTarget { id: number; role: "user" | "assistant"; text: string }
 interface SpeechFragment extends FragmentReference { start: number; end: number; itemId?: string; kind?: undefined }
 interface AnswerFragment extends FragmentReference { kind: "answer" }
 type Fragment = SpeechFragment | AnswerFragment;
-export interface VoiceTurn { key: number; prompt: string; delegationId: string | null; delegated: boolean; focusNoteId?: string; selection?: VoiceSelection; focusedWorker?: VoiceFocusedWorker }
+export interface VoiceTurn extends VoiceSpeechTarget { key: number; prompt: string; delegationId: string | null; delegated: boolean }
+
+function spokenTurn(fragment: SpeechFragment, delegationId: string | null, delegated: boolean): VoiceTurn {
+  return { key: fragment.id, prompt: fragment.text.trim(), delegationId, delegated, focusNoteId: fragment.focusNoteId,
+    ...(fragment.focusedTicketId ? { focusedTicketId: fragment.focusedTicketId } : {}),
+    ...(fragment.ticketQuestionKey !== undefined ? { ticketQuestionKey: fragment.ticketQuestionKey } : {}),
+    ...(fragment.selection ? { selection: fragment.selection } : {}),
+    ...(fragment.focusedWorker ? { focusedWorker: fragment.focusedWorker } : {}) };
+}
 
 /** Transcripts are fragments on a session timeline, not complete work orders. */
 export class VoiceConversation {
@@ -15,9 +32,10 @@ export class VoiceConversation {
   private nextId = 0;
   private carry = "";
   private delegations = new Map<string, { offset: number | null; itemId?: string }>();
-  private handled = new Map<number, { text: string; delegated: boolean }>();
+  private handled = new Map<number, { text: string; delegated: boolean; completedTicketRequest?: boolean }>();
   private seen = new Set<string>();
   private seenDelegations = new Set<string>();
+  private finalItems = new Set<string>();
   private decisions: string[] = [];
   private opened = false;
 
@@ -30,11 +48,21 @@ export class VoiceConversation {
     const welcome = !this.opened && !this.text().trim();
     this.opened = true;
     this.carry = [this.carry, ...this.fragments.map(item => `${item.role}: ${item.text}`)].join("\n").slice(-6_000); this.fragments = []; this.delegations.clear();
-    this.handled.clear(); this.seen.clear(); this.seenDelegations.clear();
+    this.handled.clear(); this.seen.clear(); this.seenDelegations.clear(); this.finalItems.clear();
     return welcome;
   }
-  clear() { this.carry = ""; this.fragments = []; this.delegations.clear(); this.handled.clear(); this.seen.clear(); this.seenDelegations.clear(); this.decisions = []; this.opened = false; }
+  clear() { this.carry = ""; this.fragments = []; this.delegations.clear(); this.handled.clear(); this.seen.clear(); this.seenDelegations.clear(); this.finalItems.clear(); this.decisions = []; this.opened = false; }
   stop() { this.delegations.clear(); }
+  get latestSpokenKey() {
+    return this.fragments.reduce((last, fragment) => fragment.role === "user" && fragment.kind !== "answer" ? Math.max(last, fragment.id) : last, 0);
+  }
+  handledTicketRequest(key: number) { return this.handled.get(key)?.completedTicketRequest === true; }
+  claimTicketRequest(key: number) {
+    const turn = this.handled.get(key);
+    if (!turn || turn.completedTicketRequest) return false;
+    turn.completedTicketRequest = true;
+    return true;
+  }
   /** A UI answer is an independent user turn, never synthetic microphone input. */
   answer(prompt: string, captured: VoiceTurn): VoiceTurn {
     if (Number.isSafeInteger(captured.key)) this.nextId = Math.max(this.nextId, captured.key);
@@ -69,7 +97,7 @@ export class VoiceConversation {
     flush();
     return ordered.map(item => ({ key: item.id, prompt: item.text.trim(), delegated: this.handled.get(item.id)?.delegated ?? false }));
   }
-  receive(event: VoiceEvent, focusNoteId?: string, selection?: VoiceSelection, focusedWorker?: VoiceFocusedWorker, finalizedUtterances = false): boolean {
+  receive(event: VoiceEvent, focusNoteId?: string, selection?: VoiceSelection, focusedWorker?: VoiceFocusedWorker, finalizedUtterances = false, focusedTicketId?: string, ticketQuestionKey?: number | null): boolean {
     if (event.event_id) {
       if (this.seen.has(event.event_id)) return false;
       this.seen.add(event.event_id);
@@ -88,21 +116,28 @@ export class VoiceConversation {
         typeof event.delta !== "string" || !event.delta || event.delta.length > 100_000 ||
         !Number.isFinite(event.start_ms) || !Number.isFinite(event.end_ms) || event.start_ms! < 0 || event.end_ms! < event.start_ms!) return false;
     const role = event.type === "session.input_transcript.delta" ? "user" : "assistant";
+    if (finalizedUtterances && role === "user" && event.item_id) {
+      if (this.finalItems.has(event.item_id)) return false;
+      this.finalItems.add(event.item_id);
+      if (this.finalItems.size > 1_000) this.finalItems.delete(this.finalItems.values().next().value!);
+    }
     const start = event.start_ms!, end = event.end_ms!;
     // Full-duplex assistant backchannels must not split one user's utterance.
     const latest = [...this.fragments].reverse().find(item => item.role === role);
     const candidate = latest?.kind === "answer" ? undefined : latest;
     // A finalized utterance is a distinct turn, except for an unfinished
     // thought continued at the same captured note, selection and worker.
-    const sameTarget = candidate && candidate.focusNoteId === focusNoteId && candidate.selection?.id === selection?.id &&
+    const sameTarget = candidate && candidate.focusNoteId === focusNoteId && candidate.focusedTicketId === focusedTicketId &&
+      candidate.ticketQuestionKey === ticketQuestionKey && candidate.selection?.id === selection?.id &&
       candidate.focusedWorker?.id === focusedWorker?.id && candidate.focusedWorker?.revision === focusedWorker?.revision;
-    const recent = finalizedUtterances && role === "user" && !(sameTarget && unfinishedVoiceThought(candidate.text) && !explicitVoiceAssignment(event.delta)) ? undefined : candidate;
+    const newAssignment = role === "user" && (explicitVoiceAssignment(event.delta) || voiceTicketCompletionReference(event.delta) !== undefined);
+    const recent = finalizedUtterances && role === "user" && !(sameTarget && unfinishedVoiceThought(candidate.text) && !newAssignment) ? undefined : candidate;
     // Use the same silence boundary for live and batched transcripts. Once
     // dispatched, a new explicit assignment also starts its own turn.
     const continuation = role === "user" && recent && unfinishedVoiceThought(recent.text) &&
-      start - recent.end < VOICE_THOUGHT_CONTINUATION_MS && !explicitVoiceAssignment(event.delta);
+      start - recent.end < VOICE_THOUGHT_CONTINUATION_MS && !newAssignment;
     const separate = role === "user" && recent && !continuation && (start - recent.end >= VOICE_TURN_SETTLE_MS ||
-      this.handled.has(recent.id) && explicitVoiceAssignment(event.delta));
+      this.handled.has(recent.id) && (newAssignment || this.handledTicketRequest(recent.id) || recent.ticketQuestionKey !== ticketQuestionKey));
     if (recent?.role === role && !separate && start >= recent.start && (continuation || start - recent.end < 1_500)) {
       // Preserve the opening qualifications. The extra character triggers the
       // router's explicit overlength clarification instead of authorizing a tail.
@@ -110,6 +145,8 @@ export class VoiceConversation {
       recent.text = (recent.text + separator + event.delta).slice(0, 4_001); recent.end = Math.max(recent.end, end);
       if (finalizedUtterances) recent.itemId = event.item_id;
     } else this.fragments.push({ id: ++this.nextId, role, text: event.delta.slice(0, 4_001), start, end, focusNoteId, itemId: finalizedUtterances ? event.item_id : undefined,
+      ...(role === "user" && focusedTicketId ? { focusedTicketId } : {}),
+      ...(role === "user" && ticketQuestionKey !== undefined ? { ticketQuestionKey } : {}),
       ...(role === "user" && selection ? { selection: structuredClone(selection) } : {}),
       ...(role === "user" && focusedWorker ? { focusedWorker: { ...focusedWorker } } : {}) });
     this.trimFragments();
@@ -127,16 +164,16 @@ export class VoiceConversation {
       const handled = this.handled.get(target.id);
       this.delegations.delete(id);
       if (handled?.delegated && handled.text === target.text.trim()) continue;
-      if (!turns.has(target.id)) turns.set(target.id, { key: target.id, prompt: target.text.trim(), delegationId: id, delegated: true, focusNoteId: target.focusNoteId, ...(target.selection ? { selection: target.selection } : {}), ...(target.focusedWorker ? { focusedWorker: target.focusedWorker } : {}) });
+      if (!turns.has(target.id)) turns.set(target.id, spokenTurn(target, id, true));
     }
     // Several complete utterances can arrive before the debounce fires. Keep
     // every unseen turn, including local controls that have no delegation.
     for (const user of users) {
       if (user.text.trim() && this.handled.get(user.id)?.text !== user.text.trim() && !turns.has(user.id)) {
-        turns.set(user.id, { key: user.id, prompt: user.text.trim(), delegationId: null, delegated: this.handled.get(user.id)?.delegated ?? false, focusNoteId: user.focusNoteId, ...(user.selection ? { selection: user.selection } : {}), ...(user.focusedWorker ? { focusedWorker: user.focusedWorker } : {}) });
+        turns.set(user.id, spokenTurn(user, null, this.handled.get(user.id)?.delegated ?? false));
       }
     }
-    for (const turn of turns.values()) this.handled.set(turn.key, { text: turn.prompt, delegated: turn.delegated || this.handled.get(turn.key)?.delegated === true });
+    for (const turn of turns.values()) this.handled.set(turn.key, { ...this.handled.get(turn.key), text: turn.prompt, delegated: turn.delegated || this.handled.get(turn.key)?.delegated === true });
     // Delegation events may arrive out of order. Their arrival order must not
     // reorder corrections or cancellations relative to the user's speech.
     return users.sort((a, b) => a.start - b.start || a.id - b.id).flatMap(user => {

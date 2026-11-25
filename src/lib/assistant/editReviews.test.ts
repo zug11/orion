@@ -38,7 +38,7 @@ describe("external review mailbox", () => {
     const controller = f.start(); await vi.advanceTimersByTimeAsync(3_000);
     expect(f.transport).not.toHaveBeenCalled();
     f.state.target = target; await vi.advanceTimersByTimeAsync(1_000);
-    expect(f.host.present).toHaveBeenCalledOnce();
+    expect(f.host.present).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ writingOrigin: "mcp" }));
     await controller.beforeAccept(f.delivery.id); f.snapshot.notes[0].body = "Accepted.";
     const saved = deferred<void>(); f.host.flush.mockImplementationOnce(() => saved.promise);
     const completion = controller.complete(f.delivery.id); await settle();

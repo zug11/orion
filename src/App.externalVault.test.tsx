@@ -7,9 +7,12 @@ import { emit } from "@tauri-apps/api/event";
 import type { Editor } from "@tiptap/core";
 import { createEmptySnapshot, createEmptyVault } from "./data/defaults";
 import type { Note, OrionVault } from "./types";
+import { useTicketNavigation } from "./components/TicketNavigation";
+import { resolveVoiceWorkspace, voiceWorkspaceRequest } from "./lib/voiceWorkspace";
 
 const runtime = vi.hoisted(() => ({
   disk: null as OrionVault | null,
+  work: null as ReturnType<typeof useTicketNavigation> | null,
   load: vi.fn(), save: vi.fn(), invoke: vi.fn(),
 }));
 
@@ -26,12 +29,22 @@ vi.mock("./lib/useResolvedTheme", async () => {
 });
 vi.mock("./lib/useThemeIcon", () => ({ useThemeIcon: () => ({ mark: "", message: null }) }));
 vi.mock("./lib/assistant/executor", () => ({ startAssistantExecutor: () => () => undefined }));
-vi.mock("./components/Sidebar", () => ({ Sidebar: ({spaces,onSwitchSpace}: {spaces: Array<{workspace:{id:string;name:string}}> ;onSwitchSpace:(id:string)=>void}) => <nav>{spaces.map(space=><button key={space.workspace.id} onClick={()=>onSwitchSpace(space.workspace.id)}>Switch {space.workspace.name}</button>)}</nav> }));
+vi.mock("./components/Sidebar", () => ({ Sidebar: ({ spaces, onSwitchSpace, onCreateSpace }: {
+  spaces: Array<{ workspace: { id: string; name: string } }>;
+  onSwitchSpace: (id: string) => void;
+  onCreateSpace: (name: string) => void;
+}) => <nav>
+  {spaces.map(space => <button key={space.workspace.id} onClick={() => onSwitchSpace(space.workspace.id)}>Switch {space.workspace.name}</button>)}
+  <button onClick={() => onCreateSpace("Blank project")}>Create Space</button>
+</nav> }));
 vi.mock("./components/HomeView", () => ({ HomeView: () => null }));
 vi.mock("./components/ImportStudio", () => ({ ImportStudio: () => null }));
 vi.mock("./components/CommandPalette", () => ({ CommandPalette: () => null }));
 vi.mock("./components/ExportDialog", () => ({ ExportDialog: () => null }));
-vi.mock("./components/ChatDock", () => ({ ChatDock: () => null }));
+vi.mock("./components/ChatDock", () => ({ ChatDock: () => {
+  runtime.work = useTicketNavigation();
+  return null;
+} }));
 // Keep App's persistence, NoteView, RichNoteEditor and conflict dialog real.
 import App from "./App";
 
@@ -124,6 +137,10 @@ describe("external MCP changes with a note already open", () => {
     await screen.findByRole('textbox',{name:'Note body'});
     expect(main.scrollTop).toBe(620);
     expect(main.scrollLeft).toBe(25);
+    fireEvent.click(screen.getByRole('button',{name:'Switch Second'}));
+    expect(main.scrollTop).toBe(180);
+    fireEvent.click(screen.getByRole('button',{name:'Create Space'}));
+    expect(main.scrollTop).toBe(0);
     fireEvent.click(screen.getByRole('button',{name:'Switch Second'}));
     expect(main.scrollTop).toBe(180);
   });
@@ -297,3 +314,109 @@ describe("external MCP changes with a note already open", () => {
     expect(openEditor()).toBe(editor);
   });
 });
+
+it("generates a calculator from selected prose, reopens it from disk and keeps slider changes local", async ({ onTestFinished }) => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  onTestFinished(() => { vi.unstubAllGlobals(); });
+  const passage = "Borrow $1,200 for one year, with twelve equal monthly payments.";
+  const untouched = "Private context outside the selection.";
+  diskNote().body = passage + "\n\n" + untouched;
+  Object.assign(runtime.disk!.spaces[0].settings, { model: "chatgpt:gpt-6.2-astra", chatgptConfigured: true });
+  const calculator = {
+    version: 1, format: "calculator", title: "Loan payment",
+    blocks: [{ kind: "calculator", inputs: [
+      { label: "Annual rate", unit: "%", min: 0, max: 12, step: 1, initial: 0 },
+    ], outputs: [{ label: "Monthly payment", unit: "$/month", expression: {
+      op: "periodicPayment", principal: 1200, periods: 12, ratePerPeriod: { op: "divide", left: { input: 0 }, right: 1200 },
+    } }] }],
+  };
+  runtime.invoke.mockImplementation(async (command: string) =>
+    command === "chat" ? { reply: JSON.stringify(calculator), noteActions: [] } : undefined);
+  const calls = () => runtime.invoke.mock.calls.filter(([command]) => command === "chat");
+  window.history.replaceState(null, "", `/?space=${runtime.disk!.activeSpaceId}&note=open-draft`);
+  const first = render(<App />);
+  await waitFor(() => expect(runtime.save).toHaveBeenCalled(), { timeout: 2500 });
+  const paragraph = await screen.findByText(passage);
+  fireEvent.pointerDown(paragraph);
+  act(() => {
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+  });
+  fireEvent(document, new Event("selectionchange"));
+  fireEvent.pointerUp(paragraph);
+  fireEvent.click(await screen.findByRole("button", { name: "Visualise" }));
+  fireEvent.change(await screen.findByLabelText("Format"), { target: { value: "calculator" } });
+  expect(calls()).toHaveLength(0);
+  fireEvent.keyDown(screen.getByLabelText(/Guidance/), { key: "Enter" });
+  await screen.findByRole("slider", { name: "Annual rate" });
+  expect(calls()).toHaveLength(1);
+  const { request } = calls()[0][1];
+  expect(request).toMatchObject({ mode: "visual-artifact", model: "chatgpt:gpt-6.2-astra",
+    notes: [], sources: [], concepts: [], history: [], allowNoteActions: false });
+  expect(JSON.parse(request.prompt)).toEqual({ source: passage, format: "calculator", guidance: "" });
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  await waitFor(() => {
+    expect(diskNote().body).toContain("<!-- orion-artifact:v1");
+    expect(diskNote().writingOrigins).toContain("orion-ai");
+  }, { timeout: 2500 });
+  const saved = structuredClone(diskNote());
+  expect(saved.body).toContain(passage);
+  expect(saved.body).toContain(untouched);
+  first.unmount();
+  render(<App />);
+  const slider = await screen.findByRole("slider", { name: "Annual rate" });
+  const dollars = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", currencyDisplay: "narrowSymbol" });
+  expect(screen.getByText(dollars.format(100) + "/month")).toBeVisible();
+  expect(screen.getByTitle("Writing contributions")).toHaveTextContent("Orion AI");
+  expect(screen.getByRole("button", { name: "Edit" })).toBeEnabled();
+  const previousSaves = runtime.save.mock.calls.length;
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  try {
+    fireEvent.change(slider, { target: { value: "12" } });
+    expect(screen.getByText(dollars.format(106.62) + "/month")).toBeVisible();
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(runtime.save).toHaveBeenCalledTimes(previousSaves);
+    expect(diskNote()).toEqual(saved);
+    expect(calls()).toHaveLength(1);
+  } finally { vi.useRealTimers(); }
+});
+
+
+it("persists a spoken reschedule through the mounted editor and lets Undo restore the original date", async () => {
+  const original = "Before **the meeting**.\n\nDesign review — [Thursday, 26 November 2026](orion-date://2026-11-26)\n\nBring the sketches.";
+  diskNote().body = original;
+  const editor = await launch();
+  const context = runtime.work!;
+  const space = context.snapshot!;
+  const request = voiceWorkspaceRequest("Move the design review to Friday", space)!;
+  const result = await resolveVoiceWorkspace(space, request, { focusNoteId: diskNote().id }, new Date(2026, 10, 25, 12), () => true);
+  expect(result.write).toMatchObject({ kind: "moveDate", oldDate: "2026-11-26", newDate: "2026-11-27" });
+
+  const persisted = deferred<void>();
+  const saving = deferred<void>();
+  const write = runtime.save.getMockImplementation()!;
+  runtime.save.mockImplementationOnce(async (...args: unknown[]) => {
+    saving.resolve(); await persisted.promise; return write(...args);
+  });
+  let receipt = false;
+  let done!: Promise<void>;
+  act(() => {
+    done = context.writeVoiceWork!(result.write!).then(() => { receipt = true; });
+  });
+  await saving.promise;
+  expect(openEditor()).toBe(editor);
+  expect(editor.getMarkdown()).toContain("orion-date://2026-11-27");
+  expect(editor.getMarkdown()).toContain("Before **the meeting**.");
+  expect(editor.getMarkdown()).toContain("Bring the sketches.");
+  expect(diskNote().body).toBe(original);
+  expect(receipt).toBe(false);
+  await act(async () => { persisted.resolve(); await done; });
+  expect(receipt).toBe(true);
+  expect(diskNote().body).toBe(editor.getMarkdown());
+  act(() => { editor.commands.undo(); });
+  expect(editor.getMarkdown()).toBe(original);
+  await waitFor(() => expect(diskNote().body).toBe(original), { timeout: 3500 });
+}, 10_000);

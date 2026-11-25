@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createNavigationEntry,
   moveNavigationHistory,
   pushNavigationHistory,
   readScrollPosition,
   resetScrollPosition,
+  restoreReadingPosition,
   restoreScrollPosition,
 } from "./navigation";
 
@@ -28,6 +29,37 @@ describe("resetScrollPosition", () => {
     restoreScrollPosition(pane, position);
 
     expect(pane).toEqual({ scrollLeft: 4, scrollTop: 1280 });
+  });
+});
+
+describe("restoring a view that is still laying out", () => {
+  it.each([false, true])("restores after growth unless the reader already scrolled (wheel: %s)", wheel => {
+    let resized: () => void = () => {};
+    const disconnect = vi.fn();
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: () => void) { resized = callback; }
+      observe() {}
+      disconnect = disconnect;
+    });
+    const pane = document.createElement("main");
+    let top = 0;
+    let maximum = 100;
+    Object.defineProperty(pane, "scrollTop", {
+      get: () => top,
+      set: value => { top = Math.min(value, maximum); },
+    });
+    try {
+      const stop = restoreReadingPosition(pane, { scrollLeft: 0, scrollTop: 620 });
+      expect(top).toBe(100);
+      if (wheel) pane.dispatchEvent(new Event("wheel"));
+      maximum = 900;
+      resized();
+      expect(top).toBe(wheel ? 100 : 620);
+      stop?.();
+      expect(disconnect).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
