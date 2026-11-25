@@ -1,6 +1,7 @@
 import { VisualArtifactTable } from "../components/VisualArtifactTable";
 import { evaluateArtifactExpression, type ArtifactBlock } from "./visualArtifacts";
 import { readVisualArtifactMarker, unavailableVisualArtifact } from "./visualArtifactMarkdown";
+import { formatArtifactQuantity } from "./visualArtifactQuantity";
 
 function StaticBlock({ block }: { block: ArtifactBlock }) {
   switch (block.kind) {
@@ -20,8 +21,8 @@ function StaticBlock({ block }: { block: ArtifactBlock }) {
     case "calculator": {
       const initial = block.inputs.map(input => input.initial);
       return <div><ul>{block.inputs.map((input, i) =>
-        <li key={i}>{input.label} · {input.initial} {input.unit}</li>)}</ul>
-        {block.outputs.map((output, i) => <p key={i}>{output.label} · {evaluateArtifactExpression(output.expression, initial) ?? "Undefined"} {output.unit}</p>)}</div>;
+        <li key={i}>{input.label} · {formatArtifactQuantity(input.initial, input.unit)}</li>)}</ul>
+        {block.outputs.map((output, i) => <p key={i}>{output.label} · {formatArtifactQuantity(evaluateArtifactExpression(output.expression, initial), output.unit)}</p>)}</div>;
     }
   }
 }

@@ -420,7 +420,13 @@ These product decisions are intentional:
   authored spatial arrangement. Use the same renderer for saved and newly
   generated scenes. Comparison tables can leave their top-left corner empty
   when every body row has a label. Reading, editing and readable exports
-  preserve those row and column headings. Arithmetic uses a bounded expression tree.
+  preserve those row and column headings. Calculator inputs, results, accessible
+  slider values and readable exports share currency formatting. Round money
+  only for display and retain the unit's period or basis (such as $/month).
+  Arithmetic uses a bounded expression tree. Its periodicPayment operation
+  calculates equal end-of-period payments from principal, a fractional rate
+  per period and a whole payment count. At zero interest it divides principal
+  by the number of payments.
   `visual-artifact` uses the selected saved text connection and sends only
   the selected/entered source, format and optional guidance. Native and browser
   transports share `visualArtifactInstructions.txt`. Validate all provider

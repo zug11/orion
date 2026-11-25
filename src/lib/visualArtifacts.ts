@@ -13,6 +13,11 @@ export type ArtifactExpression = number | { input: number } | {
   op: typeof OPERATIONS[number];
   left: ArtifactExpression;
   right: ArtifactExpression;
+} | {
+  op: "periodicPayment";
+  principal: ArtifactExpression;
+  ratePerPeriod: ArtifactExpression;
+  periods: ArtifactExpression;
 };
 type Paint = { fill: ArtifactPaint; stroke: ArtifactPaint };
 export type ArtifactShape = Paint & (
@@ -155,20 +160,42 @@ function shape(value: unknown): ArtifactShape {
   return { kind, x, y, width, height, fill, stroke, ...(obj.level === undefined ? {} : { level: obj.level }) };
 }
 
-function expression(value: unknown, inputCount: number, depth = 0): ArtifactExpression {
-  if (depth > 5) return invalid(); // At most 63 nodes per expression.
+function expression(value: unknown, inputCount: number, depth = 0, budget = { remaining: 63 }): ArtifactExpression {
+  if (depth > 5 || --budget.remaining < 0) return invalid();
   if (typeof value === "number") return quantity(value);
   if (value && typeof value === "object" && "input" in value) {
     return { input: index(object(value, ["input"]).input, inputCount) };
   }
+  const operand = (child: unknown) => expression(child, inputCount, depth + 1, budget);
+  if ((value as { op?: unknown } | null)?.op === "periodicPayment") {
+    const obj = object(value, ["op", "principal", "ratePerPeriod", "periods"]);
+    return {
+      op: "periodicPayment",
+      principal: operand(obj.principal),
+      ratePerPeriod: operand(obj.ratePerPeriod),
+      periods: operand(obj.periods),
+    };
+  }
   const obj = object(value, ["op", "left", "right"]);
   return { op: oneOf(obj.op, OPERATIONS),
-    left: expression(obj.left, inputCount, depth + 1), right: expression(obj.right, inputCount, depth + 1) };
+    left: operand(obj.left), right: operand(obj.right) };
 }
 
 export function evaluateArtifactExpression(expr: ArtifactExpression, values: readonly number[]): number | null {
   if (typeof expr === "number") return Number.isFinite(expr) ? expr : null;
   if ("input" in expr) return Number.isFinite(values[expr.input]) ? values[expr.input] : null;
+  if (expr.op === "periodicPayment") {
+    const principal = evaluateArtifactExpression(expr.principal, values);
+    const rate = evaluateArtifactExpression(expr.ratePerPeriod, values);
+    const periods = evaluateArtifactExpression(expr.periods, values);
+    if (principal === null || principal < 0 || rate === null || rate < 0 ||
+        periods === null || !Number.isSafeInteger(periods) || periods < 1) return null;
+    if (rate === 0) return principal / periods;
+    // 1 - (1 + rate)^(-periods), retaining precision for rates close to zero.
+    const discount = -Math.expm1(-periods * Math.log1p(rate));
+    const payment = principal * (rate / discount);
+    return Number.isFinite(payment) ? payment : null;
+  }
   const left = evaluateArtifactExpression(expr.left, values);
   const right = evaluateArtifactExpression(expr.right, values);
   if (left === null || right === null) return null;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluateArtifactExpression, parseVisualArtifact, type ArtifactBlock } from "./visualArtifacts";
+import { evaluateArtifactExpression, parseVisualArtifact, type ArtifactBlock, type ArtifactExpression } from "./visualArtifacts";
 
 const mark = { kind: "path", d: "M 10,80 L 50 10 90 80 Z", fill: "cool", stroke: "ink" };
 const rect = { kind: "rect", x: 10, y: 20, width: 75, height: 60, fill: "accent", stroke: "ink", level: true };
@@ -54,6 +54,44 @@ describe("versioned visual documents", () => {
     const block = parseVisualArtifact(document(calculator, "calculator")).blocks[0] as Extract<ArtifactBlock, { kind: "calculator" }>;
     expect(evaluateArtifactExpression(block.outputs[0].expression, [3])).toBe(1350);
     expect(evaluateArtifactExpression({ op: "divide", left: 3, right: { input: 0 } }, [0])).toBeNull();
+  });
+  it("round-trips a fixed-payment calculator and recomputes from the chosen rate and term", () => {
+    const payment: ArtifactExpression = {
+      op: "periodicPayment",
+      principal: { input: 0 },
+      ratePerPeriod: { op: "divide", left: { input: 1 }, right: 1200 },
+      periods: { op: "multiply", left: { input: 2 }, right: 12 },
+    };
+    const saved = document({ kind: "calculator", inputs: [
+      { label: "Principal", unit: "$", min: 0, max: 500000, step: 1000, initial: 400000 },
+      { label: "Annual rate", unit: "%", min: 0, max: 12, step: 0.25, initial: 6 },
+      { label: "Term", unit: "years", min: 1, max: 30, step: 1, initial: 30 },
+    ], outputs: [{ label: "Monthly payment", unit: "$/month", expression: payment }] }, "calculator");
+    expect(parseVisualArtifact(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
+    expect(evaluateArtifactExpression(payment, [400000, 6, 30])).toBeCloseTo(2398.202100611010, 9);
+    expect(evaluateArtifactExpression(payment, [400000, 6, 15])).toBeCloseTo(3375.427312193805, 9);
+    expect(evaluateArtifactExpression(payment, [400000, 3, 30])).toBeCloseTo(1686.416134917802, 9);
+    expect(evaluateArtifactExpression(payment, [400000, 0, 30])).toBe(400000 / 360);
+    expect(evaluateArtifactExpression(payment, [400000, 1e-12, 30])).toBeCloseTo(1111.111111111278, 10);
+    expect(evaluateArtifactExpression(payment, [0, 6, 30])).toBe(0);
+  });
+  it("rejects invalid periodic-payment operands and preserves the existing expression budget", () => {
+    const payment = { op: "periodicPayment", principal: 1000, ratePerPeriod: 0.01, periods: 12 } as const;
+    const parse = (expression: unknown) => parseVisualArtifact(document({
+      ...calculator, outputs: [{ label: "Payment", unit: "$", expression }],
+    }, "calculator"));
+    for (const changes of [{ principal: -1 }, { ratePerPeriod: -0.01 }, { periods: 0 }, { periods: 1.5 },
+      { periods: { op: "divide", left: 1, right: 0 } as const }]) {
+      expect(evaluateArtifactExpression({ ...payment, ...changes }, [])).toBeNull();
+      expect(() => parse({ ...payment, ...changes })).toThrow();
+    }
+    expect(() => parse({ ...payment, left: 1 })).toThrow();
+    expect(() => parse({ ...payment, ratePerPeriod: undefined })).toThrow();
+    expect(() => parse({ ...payment, periods: { input: 1 } })).toThrow();
+    let branch: ArtifactExpression = 1;
+    for (let depth = 0; depth < 4; depth++) branch = { op: "add", left: branch, right: branch };
+    expect(() => parse({ op: "add", left: branch, right: branch })).not.toThrow(); // 63 nodes
+    expect(() => parse({ ...payment, principal: branch, periods: branch })).toThrow(); // 64 nodes
   });
   it.each([
     { ...rect, onclick: "handler" }, { ...rect, fill: "url(asset)" }, { ...rect, height: 100 }, { ...rect, level: 42 },

@@ -8,6 +8,7 @@ import {
   type VisualArtifact,
 } from '../lib/visualArtifacts';
 import { layoutVisualScene } from '../lib/visualSceneLayout';
+import { formatArtifactQuantity } from '../lib/visualArtifactQuantity';
 import { VisualArtifactTable } from './VisualArtifactTable';
 import './VisualArtifactView.css';
 
@@ -112,37 +113,32 @@ function Cards({ block }: { block: Block<'cards'> }) {
   );
 }
 
-// Use significant digits so small probabilities and unit conversions stay visible.
-const numberFormat = new Intl.NumberFormat(undefined, { maximumSignificantDigits: 10 });
-function quantity(value: number, unit: string) {
-  return [numberFormat.format(value), unit].filter(Boolean).join(' ');
-}
-
 function Calculator({ block }: { block: Block<'calculator'> }) {
   const [values, setValues] = useState(() => block.inputs.map(input => input.initial));
   const id = useId();
   return (
     <div className="visual-artifact__calculator">
       <div className="visual-artifact__inputs">
-        {block.inputs.map((input, index) => (
-          <label key={index} htmlFor={`${id}-${index}`}>
+        {block.inputs.map((input, index) => {
+          const displayValue = formatArtifactQuantity(values[index], input.unit);
+          return <label key={index} htmlFor={`${id}-${index}`}>
             <span>{input.label}</span>
-            <span className="visual-artifact__value" aria-hidden="true">{quantity(values[index], input.unit)}</span>
+            <span className="visual-artifact__value" aria-hidden="true">{displayValue}</span>
             <input id={`${id}-${index}`} type="range" min={input.min} max={input.max} step={input.step}
-              value={values[index]} aria-label={input.label} aria-valuetext={quantity(values[index], input.unit)}
+              value={values[index]} aria-label={input.label} aria-valuetext={displayValue}
               onChange={event => {
                 const value = event.currentTarget.valueAsNumber;
                 if (Number.isFinite(value)) setValues(values.map((old, i) => i === index ? value : old));
               }} />
-          </label>
-        ))}
+          </label>;
+        })}
       </div>
       <dl className="visual-artifact__results" aria-live="polite" aria-atomic="true">
         {block.outputs.map((output, index) => {
           const result = evaluateArtifactExpression(output.expression, values);
           return <div key={index}>
             <dt>{output.label}</dt>
-            <dd>{result === null ? 'Undefined' : quantity(result, output.unit)}</dd>
+            <dd>{formatArtifactQuantity(result, output.unit)}</dd>
           </div>;
         })}
       </dl>

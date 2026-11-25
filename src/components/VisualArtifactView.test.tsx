@@ -4,6 +4,7 @@ import type { ArtifactBlock, ArtifactFormat, VisualArtifact } from '../lib/visua
 import { VisualArtifactView } from './VisualArtifactView';
 import { ExportVisualArtifact } from '../lib/visualArtifactExport';
 import { visualArtifactMarker } from '../lib/visualArtifactMarkdown';
+import { formatArtifactQuantity } from '../lib/visualArtifactQuantity';
 
 afterEach(cleanup);
 
@@ -185,6 +186,26 @@ describe('VisualArtifactView', () => {
     expect(within(table).getByRole('columnheader', { name: 'Volume' })).toBeVisible();
     expect(within(table).getByRole('rowheader', { name: 'Upper' })).toBeVisible();
     expect(screen.getByText('<b>Field note</b>')).toBeVisible();
+  });
+
+  it('uses the same local currency display for saved slider values, results and readable exports', () => {
+    const calculator = artifact('calculator', { kind: 'calculator',
+      inputs: [{ label: 'Loan', unit: '$', min: 0, max: 800000, step: 1000, initial: 400000 }],
+      outputs: [{ label: 'Payment', unit: '$/month', expression: { op: 'multiply', left: { input: 0 }, right: 0.005995505251528 } }],
+    });
+    render(<><VisualArtifactView artifact={calculator} /><ExportVisualArtifact marker={visualArtifactMarker(calculator)} /></>);
+    const slider = screen.getByRole('slider', { name: 'Loan' });
+    const loan = formatArtifactQuantity(400000, '$');
+    const payment = formatArtifactQuantity(2398.20, '$/month');
+    const exactSpacing = { normalizer: (text: string) => text };
+    expect(slider).toHaveAttribute('aria-valuetext', loan);
+    expect(screen.getByText(loan, exactSpacing)).toBeVisible();
+    expect(screen.getByText(payment, exactSpacing)).toBeVisible();
+    expect(screen.getByText('Loan · ' + loan, exactSpacing)).toBeVisible();
+    expect(screen.getByText('Payment · ' + payment, exactSpacing)).toBeVisible();
+    fireEvent.change(slider, { target: { value: '200000' } });
+    expect(screen.getByText(formatArtifactQuantity(1199.10, '$/month'), exactSpacing)).toBeVisible();
+    expect(slider).toHaveAttribute('aria-valuetext', formatArtifactQuantity(200000, '$'));
   });
 
   it('preserves the unlabeled corner and row headings in notes and readable exports', () => {
