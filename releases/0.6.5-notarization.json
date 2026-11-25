@@ -1,0 +1,76 @@
+{
+  "version": "0.6.5",
+  "source_commit": "9c2669fae9e1f96ac48dc27e177ae701a0984d09",
+  "bundle_id": "app.orion.knowledge",
+  "edition": "Whisper Medium",
+  "platform": "darwin-aarch64",
+  "artifacts": [
+    {
+      "artifact": "Orion-0.6.5.m-Apple-Silicon.dmg",
+      "bytes": 1509087134,
+      "sha256": "44b103dbad66f0f8e0bf169e505abb84bb732f5f94cef400fb8fc219523a3bde"
+    },
+    {
+      "artifact": "Orion-0.6.5-Apple-Silicon.app.tar.gz",
+      "bytes": 1506922113,
+      "sha256": "08172f825c166f1198b2e42a482ae50d7e3610e38ccdce6f302c51c68bffa48e"
+    },
+    {
+      "artifact": "Orion-0.6.5-Apple-Silicon.app.tar.gz.sig",
+      "bytes": 448,
+      "sha256": "9b450ae48456fe71c2ad75c6b9965d2393e69acb35963f0ccabb819445f42504"
+    },
+    {
+      "artifact": "latest.json",
+      "bytes": 2471,
+      "sha256": "bd21b4278bba44f79c2a0eece15d65dcbd79f79f3a29c9398b9a44d271625e2a"
+    }
+  ],
+  "notarization": {
+    "app": {
+      "status": "Accepted",
+      "message": "Processing complete",
+      "id": "f48b27f6-9f3b-412b-9b67-c1d747f3a74c"
+    },
+    "dmg": {
+      "message": "Processing complete",
+      "id": "d4622764-4a82-407b-a317-c26bd923d795",
+      "status": "Accepted"
+    }
+  },
+  "app_and_dmg_stapled": true,
+  "app_and_dmg_gatekeeper": "accepted",
+  "copied_app_deep_strict_signature": "passed",
+  "main_executable_sha256": "a97c505d4268b6589cf82e5b197289612ad91ed12ebc4b6fcefb8b57678a4897",
+  "stamps": {
+    "orion-source.sha256": "c150af99dabcef01d572dc91b78757a44459ae777569199ec46dfcc4b49263ff",
+    "orion-renderer.sha256": "4d40b99fa2977b4aa66355000dadfd507493a237f1daa3b314aa5e3a445acf8f"
+  },
+  "updater": {
+    "signature": "verified",
+    "signed_version": "0.6.5",
+    "extracted_archive_identity_signature_ticket_gatekeeper": "passed",
+    "installed_over_user_app": false,
+    "endpoint": "https://github.com/zug11/orion/releases/latest/download/latest.json"
+  },
+  "verification": {
+    "copied_app_local_ocr_fixture": "passed",
+    "copied_app_local_whisper_medium_fixture": "passed",
+    "copied_app_bundled_mcp_and_codex_protocol_harnesses": "passed",
+    "renderer_tests_passed": 4071,
+    "renderer_tests_skipped": 1,
+    "native_tests_passed": 369,
+    "native_tests_ignored": 8,
+    "mcp_tests_passed": 140,
+    "updater_signing_tests_passed": 8,
+    "production_renderer_contacts": {
+      "created_contact_from_note": true,
+      "directory_and_backlink": true,
+      "reopen": true,
+      "viewport_widths": [
+        1360,
+        740
+      ]
+    }
+  }
+}
