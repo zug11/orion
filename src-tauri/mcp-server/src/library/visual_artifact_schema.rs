@@ -67,7 +67,7 @@ pub(super) fn definitions() -> Value {
             "explanation":array(json!({"oneOf":[blank_text(400),object(json!({"input":index(5)}), &["input"]),object(json!({"output":index(23)}), &["output"])]}),1,32),
             "presets":array(object(json!({"label":string(80),"values":array(quantity.clone(),1,6)}), &["label","values"]),1,12),
             "chart":object(json!({"input":index(5),"outputs":references(1,3),"dragInput":index(5),"settleOutput":index(23)}),&["input","outputs"]),
-            "recipe":object(json!({"input":index(5),"ingredients":references(1,24)}),&["input","ingredients"]),
+            "recipe":object(json!({"input":index(5),"ingredients":references(1,24),"cookingNote":string(500)}),&["input","ingredients"]),
             "counts":object(json!({"total":{"type":"integer","minimum":1,"maximum":1000},"outputs":references(2,6)}),&["total","outputs"]),
             "flow":object(json!({"source":string(100),"destinations":references(2,6),"capacity":{"type":"number","exclusiveMinimum":0,"maximum":1e9}}),&["source","destinations","capacity"])
         }),

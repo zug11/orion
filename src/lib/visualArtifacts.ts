@@ -56,7 +56,7 @@ export type ArtifactBlock =
       explanation?: (string | {input: number} | {output: number})[];
       presets?: {label: string; values: number[]}[];
       chart?: {input: number; outputs: number[]; dragInput?: number; settleOutput?: number};
-      recipe?: {input: number; ingredients: number[]};
+      recipe?: {input: number; ingredients: number[]; cookingNote?: string};
       counts?: {outputs: number[]; total: number};
       flow?: ArtifactFlow;
     }
@@ -304,8 +304,11 @@ function calculator(value: unknown): Extract<ArtifactBlock, {kind: "calculator"}
     result.chart = {input, outputs: series, ...(dragInput !== undefined && {dragInput}), ...(settleOutput !== undefined && {settleOutput})};
   }
   if (obj.recipe !== undefined) {
-    const recipe = object(obj.recipe, ["input", "ingredients"]);
-    result.recipe = {input: index(recipe.input, inputs.length), ingredients: outputIndices(recipe.ingredients, 1, 24)};
+    const recipe = object(obj.recipe, ["input", "ingredients", "cookingNote"]);
+    result.recipe = {
+      input: index(recipe.input, inputs.length), ingredients: outputIndices(recipe.ingredients, 1, 24),
+      ...(recipe.cookingNote !== undefined && {cookingNote: literal(recipe.cookingNote, 500)}),
+    };
   }
   if (obj.counts !== undefined) {
     const counts = object(obj.counts, ["outputs", "total"]);

@@ -532,6 +532,10 @@ These product decisions are intentional:
   trees. Live explanation tokens, conditional expressions, presets, population
   counts, recipe quantities and proportional flow bands use the same input
   values. Check presets, count totals and flow capacity before insertion.
+  Recipe calculators show a servings stepper and one table of original and scaled
+  ingredient amounts. Preserve optional original method, timing and heat as literal
+  `recipe.cookingNote` (up to 500 characters). Keep additional analyses and source
+  evidence accessible without duplicating ingredient results in the main view.
   Recipe shopping lists insert ordinary tasks only on the reader's explicit
   action. Saved artifacts remain usable offline. Both the renderer and MCP
   enforce the extended v1 contract before inserting a new document.

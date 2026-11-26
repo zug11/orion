@@ -1,8 +1,9 @@
+import { ListChecks, Minus, Plus } from '../lib/icons';
 import { FactSource } from "./ArtifactEvidenceView";
 import { useId, useRef, useState } from 'react';
 import { evaluateArtifactExpression } from '../lib/visualArtifacts';
-import { formatArtifactQuantity } from '../lib/visualArtifactQuantity';
-import { countGroups, expressionWorking, outputText, sliderGrid, type CalculatorBlock, type CalculatorInput } from '../lib/visualArtifactCalculator';
+import { formatArtifactQuantity, formatRecipeIngredient } from '../lib/visualArtifactQuantity';
+import { countGroups, expressionWorking, formatRecipeYield, outputText, sliderGrid, type CalculatorBlock, type CalculatorInput } from '../lib/visualArtifactCalculator';
 import { CalculatorFlow } from './CalculatorFlow';
 import { VisualArtifactCalculatorChart } from './VisualArtifactCalculatorChart';
 import './VisualArtifactCalculator.css';
@@ -66,29 +67,45 @@ function PopulationGrid({block, results}: {block: CalculatorBlock; results: (num
   </figure>;
 }
 
-function RecipeTable({block, values, results, onAddTasks}: {
-  block:CalculatorBlock; values:number[]; results:(number | null)[]; onAddTasks?: (tasks:string[])=>boolean;
+function Recipe({block, values, results, setServing, onAddTasks}: {
+  block: CalculatorBlock; values: number[]; results: (number | null)[];
+  setServing: (value: number) => void; onAddTasks?: (tasks: string[]) => boolean;
 }) {
-  const recipe = block.recipe!, base = block.inputs.map(input => input.initial);
+  const recipe = block.recipe!;
+  const base = block.inputs.map(input => input.initial);
+  const serving = block.inputs[recipe.input];
+  const grid = sliderGrid(serving);
+  const current = values[recipe.input];
+  const tick = grid.nearestTick(current);
   const [lastWrite, setLastWrite] = useState<string[] | null>(null);
   const [failed, setFailed] = useState(false);
   const rows = recipe.ingredients.map(i => {
     const out = block.outputs[i];
-    return {name: out.label, original: formatArtifactQuantity(evaluateArtifactExpression(out.expression, base), out.unit),
-      current: formatArtifactQuantity(results[i], out.unit)};
+    return {name: out.label, original: formatRecipeIngredient(evaluateArtifactExpression(out.expression, base), out.unit),
+      current: formatRecipeIngredient(results[i], out.unit)};
   });
   const tasks = rows.map(row => row.current + ' ' + row.name);
   const saved = lastWrite?.every((s,i) => s === tasks[i]);
-  const serving = block.inputs[recipe.input];
   return <div className="va-calc-recipe">
+    <div className="va-recipe-stepper" role="group" aria-label={serving.label}>
+      <span>{serving.label}</span>
+      <div className="va-recipe-stepper-controls">
+        <button type="button" aria-label={'Decrease ' + serving.label} disabled={tick === 0n}
+          onClick={() => setServing(grid.valueAt(tick - 1n))}><Minus size={16} aria-hidden="true" /></button>
+        <output aria-label={serving.label}>{formatRecipeYield(current, serving.unit)}</output>
+        <button type="button" aria-label={'Increase ' + serving.label} disabled={tick === grid.last}
+          onClick={() => setServing(grid.valueAt(tick + 1n))}><Plus size={16} aria-hidden="true" /></button>
+      </div>
+    </div>
     <div className="visual-artifact__table" role="region" tabIndex={0} aria-label="Scaled ingredient quantities"><table>
-      <thead><tr><th scope="col">Ingredient</th><th scope="col">As written · {formatArtifactQuantity(serving.initial, serving.unit)}</th>
-        <th scope="col">For {formatArtifactQuantity(values[recipe.input], serving.unit)}</th></tr></thead>
+      <thead><tr><th scope="col">Ingredient</th><th scope="col">For {formatRecipeYield(serving.initial, serving.unit)}, as written</th>
+        <th scope="col">For {formatRecipeYield(current, serving.unit)}</th></tr></thead>
       <tbody>{rows.map((row,i) => <tr key={i}><th scope="row">{row.name}</th><td>{row.original}</td><td>{row.current}</td></tr>)}</tbody>
     </table></div>
-    {onAddTasks && <button type="button" className="visual-artifact__minor-button" disabled={Boolean(saved) || recipe.ingredients.some(i => results[i] === null)}
+    {recipe.cookingNote && <p className="va-recipe-note">{recipe.cookingNote}</p>}
+    {onAddTasks && <button type="button" className="visual-artifact__minor-button va-recipe-shopping" disabled={Boolean(saved) || recipe.ingredients.some(i => results[i] === null)}
       onClick={() => { const ok = onAddTasks(tasks); if (ok) setLastWrite(tasks); setFailed(!ok); }}>
-        {saved ? 'Shopping list added' : 'Add shopping list as to-dos'}</button>}
+        <ListChecks size={15} aria-hidden="true" />{saved ? 'Shopping list added' : 'Add shopping list as to-dos'}</button>}
     {failed && <small role="status">The note changed. Try adding the shopping list again.</small>}
   </div>;
 }
@@ -102,33 +119,54 @@ export function VisualArtifactCalculator({block, onAddTasks}: {block: Calculator
   const set = (i: number, v: number) => {
     if (Number.isFinite(v)) setValues(previous => previous.map((old,j) => i === j ? v : old));
   };
-  return <div className="visual-artifact__calculator">
+  const recipe = block.recipe;
+  const inputIndices = block.inputs.map((_, i) => i).filter(i => i !== recipe?.input);
+  const outputIndices = block.outputs.map((_, i) => i).filter(i => !recipe?.ingredients.includes(i));
+  const controls = <>
     {block.presets && <div className="va-calc-presets" aria-label="Scenarios">{block.presets.map((preset,i) =>
       <button key={i} type="button" aria-pressed={preset.values.every((v,j) => values[j] === v)} onClick={() => setValues([...preset.values])}>{preset.label}</button>)}</div>}
     {block.explanation && <p className="va-calc-explanation">{block.explanation.map((token,i) => typeof token === 'string' ? token :
       'input' in token ? <InlineNumber key={i} input={block.inputs[token.input]} value={values[token.input]} set={v => set(token.input,v)} /> :
       <strong key={i}>{outputText(block.outputs[token.output], results[token.output])}</strong>)}</p>}
-    <div className="visual-artifact__inputs">{block.inputs.map((input,index) => {
+    {inputIndices.length > 0 && <div className="visual-artifact__inputs">{inputIndices.map(index => {
+      const input = block.inputs[index];
       const value = formatArtifactQuantity(values[index], input.unit);
       return <div key={index}><label htmlFor={id + '-slider-' + index}>
         <span>{input.label}</span><span className="visual-artifact__value" aria-hidden="true">{value}</span>
         <input id={id + '-slider-' + index} type="range" min={input.min} max={input.max} step={input.step}
           value={values[index]} aria-label={input.label} aria-valuetext={value} onChange={e => set(index,e.currentTarget.valueAsNumber)}/>
       </label><FactSource field="input" index={index}/></div>;
-    })}</div>
+    })}</div>}
     {changed && <button type="button" className="visual-artifact__minor-button va-calc-reset" onClick={() => setValues(block.inputs.map(v => v.initial))}>Back to the passage</button>}
-    {block.recipe && <RecipeTable block={block} values={values} results={results} onAddTasks={onAddTasks}/>}
     {block.counts && <PopulationGrid block={block} results={results}/>}
     {block.flow && <CalculatorFlow flow={block.flow} outputs={block.outputs} values={values}/>}
-    <dl className="visual-artifact__results" aria-live="polite" aria-atomic="true">
-      {block.outputs.map((out,i) => <div key={i}>
-        <dt><button type="button" className="va-calc-working-toggle" aria-label={'Show working for ' + out.label}
-          aria-controls={id + '-working'} aria-expanded={working === i} onClick={() => setWorking(working === i ? null : i)}>{out.label} <span aria-hidden="true">⌄</span></button></dt>
-        <dd data-unavailable={results[i] === null || undefined}>{outputText(out, results[i])}<FactSource field="output" index={i}/></dd>
-      </div>)}
-    </dl>
+    {outputIndices.length > 0 && <dl className="visual-artifact__results" aria-live="polite" aria-atomic="true">
+      {outputIndices.map(i => {
+        const out = block.outputs[i];
+        return <div key={i}>
+          <dt><button type="button" className="va-calc-working-toggle" aria-label={'Show working for ' + out.label}
+            aria-controls={id + '-working'} aria-expanded={working === i} onClick={() => setWorking(working === i ? null : i)}>{out.label} <span aria-hidden="true">⌄</span></button></dt>
+          <dd data-unavailable={results[i] === null || undefined}>{outputText(out, results[i])}<FactSource field="output" index={i}/></dd>
+        </div>;
+      })}
+    </dl>}
+    {recipe && <label className="va-calc-chart-select">Ingredient calculation
+      <select value={working !== null && recipe.ingredients.includes(working) ? working : ''}
+        onChange={event => setWorking(event.target.value === '' ? null : Number(event.target.value))}>
+        <option value="">Choose an ingredient</option>
+        {recipe.ingredients.map(i => <option key={i} value={i}>{block.outputs[i].label}</option>)}
+      </select>
+    </label>}
     {working !== null && <div className="va-calc-working" id={id + '-working'}><strong>How {block.outputs[working].label.toLowerCase()} is calculated</strong>
       <ol>{expressionWorking(block.outputs[working].expression, block.inputs, values).map((line,i) => <li key={i}>{line}</li>)}</ol></div>}
-    <VisualArtifactCalculatorChart block={block} values={values} onSet={set}/>
+    {(!recipe || block.chart) && <VisualArtifactCalculatorChart block={block} values={values} onSet={set}/>}
+  </>;
+  return <div className="visual-artifact__calculator">
+    {recipe ? <>
+      <Recipe block={block} values={values} results={results} setServing={value => set(recipe.input, value)} onAddTasks={onAddTasks} />
+      <details className="va-recipe-disclosure"><summary>Recipe details</summary>
+        <div className="va-recipe-details">{controls}</div>
+      </details>
+    </> : controls}
   </div>;
 }

@@ -251,11 +251,22 @@ export const VisualArtifactView = memo(function VisualArtifactView({ artifact, o
   const evidenceId = useId();
   // A reparse of identical Markdown preserves a reader's place. A replaced
   // block resets just its own controls, including answers and slider values.
-  const blocks = useMemo(() => artifact.blocks.map((block, index) => (
-    <EvidenceLinksContext.Provider key={`${index}:${JSON.stringify(block)}`} value={artifact.evidence && {block:index, evidence:artifact.evidence, panelId:evidenceId}}>
-      <RenderBlock block={block} title={artifact.title} onAddTasks={onAddTasks} onAskPart={onAskPart} />
-    </EvidenceLinksContext.Provider>
-  )), [artifact.blocks, artifact.title, artifact.evidence, evidenceId, onAddTasks, onAskPart]);
+  const blocks = useMemo(() => {
+    const rendered = artifact.blocks.map((block, index) => (
+      <EvidenceLinksContext.Provider key={`${index}:${JSON.stringify(block)}`} value={artifact.evidence && {block:index, evidence:artifact.evidence, panelId:evidenceId}}>
+        <RenderBlock block={block} title={artifact.title} onAddTasks={onAddTasks} onAskPart={onAskPart} />
+      </EvidenceLinksContext.Provider>
+    ));
+    // Earlier generators sometimes put the entire cooking method before the
+    // quantities. Keep that content reachable without pushing the stepper down.
+    const recipeIndex = artifact.blocks.findIndex(block => block.kind === 'calculator' && block.recipe);
+    if (recipeIndex < 0 || rendered.length === 1 || !artifact.blocks.every((block, index) =>
+      index === recipeIndex || block.kind === 'text' || block.kind === 'steps')) return rendered;
+    return <>{rendered[recipeIndex]}
+      <details className="va-recipe-disclosure"><summary>Method</summary>
+        <div className="va-recipe-details">{rendered.filter((_, index) => index !== recipeIndex)}</div>
+      </details></>;
+  }, [artifact.blocks, artifact.title, artifact.evidence, evidenceId, onAddTasks, onAskPart]);
   return (
     <section className="visual-artifact" data-visual-artifact="" data-narration-ignore="true"
       aria-labelledby={titleId} contentEditable={false} draggable={false}

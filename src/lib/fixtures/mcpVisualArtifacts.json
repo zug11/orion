@@ -1,4 +1,6 @@
 [
+  {"name":"Recipe with fixed cooking instructions","valid":true,"artifact":{"version":1,"format":"calculator","title":"Roast carrots","blocks":[{"kind":"calculator","inputs":[{"label":"Servings","unit":"","min":1,"max":8,"step":1,"initial":4}],"outputs":[{"label":"Carrots","unit":"g","expression":{"op":"multiply","left":50,"right":{"input":0}}}],"recipe":{"input":0,"ingredients":[0],"cookingNote":"Roast at 180 °C for 20 minutes."}}]}},
+  {"name":"Recipe with non-text cooking instructions","valid":false,"artifact":{"version":1,"format":"calculator","title":"Roast carrots","blocks":[{"kind":"calculator","inputs":[{"label":"Servings","unit":"","min":1,"max":8,"step":1,"initial":4}],"outputs":[{"label":"Carrots","unit":"g","expression":{"op":"multiply","left":50,"right":{"input":0}}}],"recipe":{"input":0,"ingredients":[0],"cookingNote":{}}}]}},
   {
     "name": "Timeline", "valid": true,
     "artifact": {"version":1,"format":"timeline","title":"Timeline","blocks":[{"kind":"steps","items":[{"label":"1","heading":"Étude","text":"🌱 Plant the seed."}]}]}

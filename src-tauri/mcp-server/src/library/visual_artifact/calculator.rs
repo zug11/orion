@@ -353,7 +353,10 @@ pub(super) fn validate(block: &Value) -> Result<(), String> {
     let recipe = block
         .get("recipe")
         .map(|v| -> Result<_, String> {
-            fields(v, &["input", "ingredients"])?;
+            fields(v, &["input", "ingredients", "cookingNote"])?;
+            if let Some(note) = v.get("cookingNote") {
+                literal(note, 500, false)?;
+            }
             Ok((
                 index(&v["input"], inputs.len())?,
                 indices(&v["ingredients"], 1, 24)?,

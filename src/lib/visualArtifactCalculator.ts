@@ -39,6 +39,12 @@ export function valueAtFraction(input: CalculatorInput, fraction: number) {
   return grid.valueAt((scaled * grid.last + precision / 2n) / precision);
 }
 
+export function formatRecipeYield(value: number, unit: string): string {
+  // The control already names the serving count. Keep units for recipes scaled by weight or volume.
+  const countUnit = /^(guests?|servings?|portions?|people|persons?|diners?|batch(?:es)?)$/i.test(unit.trim());
+  return formatArtifactQuantity(value, countUnit ? '' : unit);
+}
+
 export function outputText(output: CalculatorOutput, value: number | null) {
   return output.labels?.find(entry => entry.value === value)?.label ?? formatArtifactQuantity(value, output.unit);
 }

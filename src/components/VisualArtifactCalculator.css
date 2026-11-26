@@ -23,9 +23,26 @@
 .visual-artifact .va-calc-working-toggle { color: inherit; background: transparent; padding: 0; text-align: start; border-radius: 2px; }
 .visual-artifact .va-calc-working-toggle:hover { text-decoration: underline; }
 .va-calc-reset, .va-calc-chart button { justify-self: start; }
-.va-calc-recipe { display: grid; gap: .6em; }
-.va-calc-recipe button { justify-self: start; }
-.va-calc-recipe table td { font-variant-numeric: tabular-nums; }
+.va-calc-recipe, .va-recipe-details { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.va-recipe-stepper, .va-recipe-stepper-controls { display: flex; align-items: center; }
+.va-recipe-stepper { justify-content: space-between; gap: 12px; font-weight: 550; }
+.va-recipe-stepper-controls { gap: 4px; padding: 3px; border: 1px solid var(--line-strong); border-radius: 999px; }
+.visual-artifact .va-recipe-stepper-controls button {
+  display: grid; place-items: center; padding: 0; width: 32px; height: 32px;
+  border-radius: 50%; background: var(--va-surface); color: var(--va-ink);
+}
+.visual-artifact .va-recipe-stepper-controls button:hover:enabled { background: var(--surface-raised); }
+.va-recipe-stepper output { min-width: 2.2em; font-size: 1.15em; text-align: center; font-variant-numeric: tabular-nums; }
+.visual-artifact .va-calc-recipe .visual-artifact__table :is(td, th) { min-width: 0; }
+.visual-artifact .va-calc-recipe tbody th { font-weight: 500; }
+.visual-artifact .va-calc-recipe td { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.visual-artifact .va-calc-recipe td:nth-child(2) { color: var(--va-muted); }
+.visual-artifact .va-calc-recipe td:nth-child(3) { color: var(--va-ink); font-weight: 650; }
+.visual-artifact .va-recipe-note { margin: 0; color: var(--va-muted); font-size: .92em; }
+.visual-artifact .va-recipe-shopping { justify-self: start; display: inline-flex; align-items: center; gap: .5em; padding: 6px 10px; }
+.va-recipe-disclosure summary { cursor: pointer; color: var(--va-muted); }
+.va-recipe-disclosure summary:focus-visible { outline: 2px solid var(--va-accent); outline-offset: 2px; }
+.va-recipe-details { margin-top: 12px; }
 @media (forced-colors: active) {
  .visual-artifact .va-calc-presets button[aria-pressed="true"] { outline: 2px solid Highlight; }
  .va-calc-chart path, .va-calc-chart circle { stroke: CanvasText; }

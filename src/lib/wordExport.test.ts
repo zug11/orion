@@ -63,6 +63,23 @@ async function unpack(bytes: Uint8Array) {
 }
 
 describe("Word export", () => {
+  it("prints the written recipe yield, ingredients and fixed cooking conditions once", async () => {
+    const snapshot = fixture();
+    snapshot.notes[0].body = visualArtifactMarker({
+      version: 1, format: "calculator", title: "Roasted roots",
+      blocks: [{ kind: "calculator", inputs: [{ label: "Guests", unit: "", min: 1, max: 12, step: 1, initial: 4 }],
+        outputs: [{ label: "Carrots", unit: "g", expression: { op: "multiply", left: 50, right: { input: 0 } } }],
+        recipe: { input: 0, ingredients: [0], cookingNote: "Roast at 180 °C for 20 minutes. Add the herbs for the final 5 minutes." },
+      }],
+    });
+    const { document } = await unpack((await buildWordExportDocument(snapshot, "note", "origin")).bytes);
+    const cellText = [...document.getElementsByTagNameNS(W, "tc")].map(cell => cell.textContent);
+    expect(cellText).toEqual(["Ingredient", expect.stringMatching(/4.*as written/i), "Carrots", "200 g"]);
+    const paragraphs = [...document.getElementsByTagNameNS(W, "p")].map(p => p.textContent);
+    expect(paragraphs.filter(text => text === "Carrots")).toHaveLength(1);
+    expect(paragraphs.filter(text => text?.includes("180 °C for 20 minutes. Add the herbs for the final 5 minutes."))).toHaveLength(1);
+    expect(paragraphs).not.toContain("Show the working");
+  });
   it("writes each flashcard and its answer once as readable paragraphs", async () => {
     const snapshot = fixture();
     snapshot.notes[0].body = visualArtifactMarker({

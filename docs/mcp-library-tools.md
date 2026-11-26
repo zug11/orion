@@ -49,6 +49,8 @@ Successful receipts contain updated versions and exact Orion citations.
 
 ## Insert an interactive visualisation
 
+Recipe calculators support an optional literal `recipe.cookingNote` of up to 500 characters for source-backed preparation details that stay fixed as servings change.
+
 The artifact tool accepts cycle, linkedViews, argument, scaleZoom and deepTime document formats. Each requires a matching validated block. These blocks can also be combined in an explainer. Inspect the tool’s input schema for keyframe, premise dependency, length unit and clock event fields.
 
 Call `orion_insert_visual_artifact` with an existing note's current version from

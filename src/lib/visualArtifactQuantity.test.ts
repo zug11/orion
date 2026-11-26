@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatArtifactQuantity } from "./visualArtifactQuantity";
+import { formatArtifactQuantity, formatRecipeIngredient } from "./visualArtifactQuantity";
 
 const unspecifiedDollar = (amount: number) => new Intl.NumberFormat(undefined, {
   style: "currency", currency: "USD", currencyDisplay: "narrowSymbol",
@@ -37,5 +37,24 @@ describe("artifact calculator quantities", () => {
     expect(formatArtifactQuantity(0.00000012, "L/s")).toBe(number.format(0.00000012) + " L/s");
     expect(formatArtifactQuantity(120, "BPM")).toBe(number.format(120) + " BPM");
     expect(formatArtifactQuantity(null, "$/month")).toBe("No result at these settings");
+  });
+});
+
+describe("recipe ingredient amounts", () => {
+  it("uses familiar fractions for recurring quantities without rounding the recipe", () => {
+    expect(formatRecipeIngredient(2 * 7 / 6, "kg")).toBe("2⅓ kg");
+    expect(formatRecipeIngredient(4 * 7 / 6, "cloves")).toBe("4⅔ cloves");
+    expect(formatRecipeIngredient(1/6, "tsp")).toBe("⅙ tsp");
+    expect(formatRecipeIngredient(1 + 7/12, "cups")).toBe("1 7/12 cups");
+    expect(formatRecipeIngredient(-2/3, "")).toBe("−⅔");
+    for (const amount of [0, 1, .25, 1.2, .333, 1/7]) {
+      expect(formatRecipeIngredient(amount, "kg")).toBe(formatArtifactQuantity(amount, "kg"));
+    }
+  });
+  it("retains percentage, currency, per-unit monetary and unavailable displays", () => {
+    for (const unit of ["%", "%/day", "$", "USD", "$ per person", "AUD/kg", "¢"]) {
+      expect(formatRecipeIngredient(2/3, unit)).toBe(formatArtifactQuantity(2/3, unit));
+    }
+    expect(formatRecipeIngredient(null, "kg")).toBe(formatArtifactQuantity(null, "kg"));
   });
 });

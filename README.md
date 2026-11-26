@@ -32,7 +32,7 @@ Highlight text in a note and choose **Visualise**, or type `/visualise` and past
 
 Use **Cycle** to turn through a repeating process, or **Linked views** to move two illustrations with the same control. **Argument explorer** lets you withhold a premise and see which conclusions still have support. **Zoom across sizes** compares lengths on a logarithmic scale. **Deep time as one day** maps a passage’s timespan onto a 24-hour clock.
 
-In Space Chat, ask for a visual and watch it appear in the reply. Choose **Keep as note** to save it with the answer. In a calculator, drag the chart or adjust an input to update its results, explanation and working. Saved visuals also work in a self-contained HTML export.
+In Space Chat, ask for a visual and watch it appear in the reply. Choose **Keep as note** to save it with the answer. In a calculator, drag the chart or adjust an input to update its results, explanation and working. For a recipe, change the servings to see the original and scaled ingredients side by side. Use **Add shopping list as to-dos** in a note to keep the new quantities. Saved visuals also work in a self-contained HTML export.
 
 ## ChatGPT plan access and voice choices
 

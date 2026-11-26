@@ -5,6 +5,7 @@ import { validateGeneratedCalculatorRanges } from '../lib/visualArtifactCalculat
 import { expressionWorking, type CalculatorBlock } from '../lib/visualArtifactCalculator';
 import { readVisualArtifactMarker, visualArtifactMarker } from '../lib/visualArtifactMarkdown';
 import { VisualArtifactCalculator } from './VisualArtifactCalculator';
+import { VisualArtifactView } from './VisualArtifactView';
 
 const slider = {label:'Guests', unit:'guests', min:1, max:10, step:1, initial:4};
 const recipe:CalculatorBlock = {
@@ -16,29 +17,80 @@ const read = (block:unknown) => parseVisualArtifact({version:1,title:'Test a pas
 afterEach(cleanup);
 
 describe('passage calculators', () => {
-  it('round-trips the native marker and keeps prose, servings, working and shopping rows in sync', () => {
-    const art = read(recipe);
+  it('rescales one ingredient table, retains the as-written quantity, and adds only the current shopping list', () => {
+    const block: CalculatorBlock = {...recipe, explanation: undefined, presets: undefined,
+      recipe: {...recipe.recipe!, cookingNote: 'Simmer for 15 minutes.'}};
+    const art = read(block);
     validateGeneratedCalculatorRanges(art);
     expect(readVisualArtifactMarker(visualArtifactMarker(art))).toEqual(art);
     const add = vi.fn<() => boolean>().mockReturnValueOnce(false).mockReturnValueOnce(true);
-    render(<VisualArtifactCalculator block={recipe} onAddTasks={add}/>);
-    fireEvent.click(screen.getByRole('button',{name:'Dinner for six'}));
-    expect(screen.getByText(/For /,{selector:'p'})).toHaveTextContent('For 6 guests, use 300 g of rice.');
-    fireEvent.keyDown(screen.getByRole('slider',{name:'Adjust Guests in explanation'}), {key:'ArrowRight'});
+    render(<VisualArtifactCalculator block={block} onAddTasks={add}/>);
+    expect(screen.queryByRole('slider')).toBeNull();
+    expect(screen.queryByRole('figure')).toBeNull();
+    expect(screen.queryByRole('button', {name:/Show working/})).toBeNull();
+    expect(screen.getByLabelText('Ingredient calculation')).not.toBeVisible();
+    const stepper = within(screen.getByRole('group', {name:'Guests'}));
+    fireEvent.click(stepper.getByRole('button', {name:'Increase Guests'}));
+    expect(stepper.getByRole('status')).toHaveTextContent('5');
+    expect(screen.getByRole('columnheader',{name:'For 4, as written'})).toBeVisible();
+    expect(screen.getByRole('columnheader',{name:'For 5'})).toBeVisible();
     const row = within(screen.getByRole('row',{name:/Rice/}));
-    expect(row.getByText('350 g')).toBeVisible();
     expect(row.getByText('200 g')).toBeVisible();
-    expect(screen.getByRole('slider',{name:'Guests'})).toHaveAttribute('aria-valuetext','7 guests');
+    expect(row.getByText('250 g')).toBeVisible();
+    expect(screen.getByText('Simmer for 15 minutes.')).toBeVisible();
     const addButton = screen.getByRole('button',{name:'Add shopping list as to-dos'});
     fireEvent.click(addButton);
-    expect(screen.getByRole('status')).toHaveTextContent('note changed');
+    expect(screen.getByText(/The note changed/)).toBeVisible();
     fireEvent.click(addButton);
-    expect(add).toHaveBeenCalledWith(['350 g Rice']);
+    expect(add).toHaveBeenCalledWith(['250 g Rice']);
     expect(screen.getByRole('button',{name:'Shopping list added'})).toBeDisabled();
-    fireEvent.click(screen.getByRole('button',{name:'Show working for Rice'}));
-    expect(screen.getByText('50 × Guests (7) = 350')).toBeVisible();
-    fireEvent.click(screen.getByRole('button',{name:'Back to the passage'}));
+    fireEvent.click(stepper.getByRole('button',{name:'Decrease Guests'}));
+    expect(screen.getByRole('button',{name:'Add shopping list as to-dos'})).toBeEnabled();
+    fireEvent.click(screen.getByText('Recipe details'));
+    fireEvent.change(screen.getByRole('combobox', {name:'Ingredient calculation'}), {target:{value:'0'}});
     expect(screen.getByText('50 × Guests (4) = 200')).toBeVisible();
+    fireEvent.click(stepper.getByRole('button', {name:'Increase Guests'}));
+    expect(screen.getByText('50 × Guests (5) = 250')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', {name:'Back to the passage'}));
+    expect(stepper.getByRole('status')).toHaveTextContent('4');
+  });
+  it('uses reachable decimal ticks and authored measurement units for the scaling control', () => {
+    const block = {...recipe, inputs:[{...slider,label:'Batch weight',unit:'kg',min:.1,max:.35,initial:.1,step:.1}]};
+    render(<VisualArtifactCalculator block={block}/>);
+    const up = screen.getByRole('button', {name:'Increase Batch weight'});
+    const down = screen.getByRole('button', {name:'Decrease Batch weight'});
+    expect(down).toBeDisabled();
+    fireEvent.click(up);
+    fireEvent.click(up);
+    expect(up).toBeDisabled();
+    expect(screen.getByRole('columnheader', {name:'For 0.3 kg'})).toBeVisible();
+    fireEvent.click(down);
+    expect(up).toBeEnabled();
+    expect(screen.getByRole('columnheader', {name:'For 0.2 kg'})).toBeVisible();
+  });
+  it('keeps authored controls, a chart, extra outputs and method in disclosures on older recipes', () => {
+    const block: CalculatorBlock = {...recipe, inputs: [slider, {...slider,label:'Rice price',unit:'$'}],
+      presets: [{label:'Dinner for six',values:[6,4]}],
+      outputs: [...recipe.outputs, {label:'Total cost',unit:'$',expression:{op:'multiply',left:{input:0},right:{input:1}}}],
+      chart:{input:0,outputs:[1]}};
+    const art = parseVisualArtifact({version:1, format:'calculator',title:'Rice for dinner',
+      blocks: [{kind:'text',heading:'Finishing',text:'Let the rice rest.'},block]});
+    render(<VisualArtifactView artifact={art}/>);
+    expect(screen.getByText('Finishing')).not.toBeVisible();
+    expect(screen.getByText('Dinner for six')).not.toBeVisible();
+    fireEvent.click(screen.getByText('Method'));
+    expect(screen.getByText('Let the rice rest.')).toBeVisible();
+    fireEvent.click(screen.getByText('Recipe details'));
+    fireEvent.click(screen.getByRole('button',{name:'Dinner for six'}));
+    expect(screen.getByText(/For /,{selector:'p'})).toHaveTextContent('For 6 guests, use 300 g of rice.');
+    fireEvent.change(screen.getByRole('slider',{name:'Rice price'}), {target:{value:5}});
+    expect(screen.getByText('$30.00',{selector:'dd'})).toBeVisible();
+    fireEvent.click(screen.getByRole('button',{name:'Show working for Total cost'}));
+    expect(screen.getByText('Guests (6) × Rice price (5) = 30')).toBeVisible();
+    expect(screen.getByRole('img',{name:'Total cost by Guests'})).toBeVisible();
+    fireEvent.click(screen.getByRole('button',{name:'Back to the passage'}));
+    expect(screen.getByRole('columnheader',{name:'For 4'})).toBeVisible();
+    expect(screen.queryByRole('button',{name:'Show working for Rice'})).toBeNull();
   });
   it('preserves lazy rules on a zero-denominator branch and names discrete outcomes', () => {
     const rule:ArtifactExpression = {op:'ifLess',left:{input:0},right:1,then:0,else:{op:'divide',left:1,right:{input:0}}};
