@@ -23,6 +23,7 @@ void main(){
  float t=uRotationTime+uSeed*2.7;
  vec3 c;
  float opacity=1.;
+ float cloudCoverage=0.;
  if(uRadius<8.){
   c=dye(.3)*(.45+.25*z);
   opacity=.75;
@@ -30,9 +31,9 @@ void main(){
   vec4 worker=workerMaterial(p,n,t);
   c=worker.rgb;opacity=worker.a;
   c*=1.+uWorking*.035*sin(uTime*1.7+uSeed);
- }else if(uMaterial<.5)c=mirage_glass(p,n,t);
+ }else if(uMaterial<.5)c=mirage_glass(p,n,t,cloudCoverage);
  else if(uMaterial<5.)c=material4(p,n,t);
- else if(uMaterial<9.)c=material8(p,n,t);
+ else if(uMaterial<9.)c=material8(p,n,t,cloudCoverage);
  else c=material9(p,n,t);
  c*=1.+uLevel*.12;c+=uSecondary*uReceiving*.18*pow(1.-z,1.5);
  c=max(c,vec3(0.));c=c/(vec3(1.)+c*.32);c=pow(c,vec3(.89));
@@ -43,7 +44,14 @@ void main(){
   float rim=smoothstep(.79,.985,radius);
   float glint=pow(max(0.,dot(n,normalize(vec3(-.43,.54,.72)))),46.);
   float lightness=mix(.77+.18*relief,.739,rim)+.065*glint;
-  vec3 pigment=mix(uPrimary,uSecondary,.18*relief);
+  float secondary=.18*relief;
+  if(uDualTone>.5 && uDetail>.5){
+   // Keep the second dye attached to the actual rotating cloud; the outer
+   // glass keeps its own hue even where the two pigments have equal lightness.
+   float cloud=uMaterial<.5?smoothstep(.18,.78,cloudCoverage):smoothstep(.02,.80,cloudCoverage);
+   secondary=cloud*(.88+.10*relief)*(1.-rim);
+  }
+  vec3 pigment=mix(uPrimary,uSecondary,secondary);
   c=tintedGlass(pigment,min(.985,lightness),.96-.45*relief+.14*rim);
  }
  gl_FragColor=vec4(c,mask*uOpacity*opacity*(1.-.12*uLight));

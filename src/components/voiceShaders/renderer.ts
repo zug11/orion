@@ -27,12 +27,12 @@ export function createVoiceGlass() {
  }
  context.linkProgram(program);if(!context.getProgramParameter(program,context.LINK_STATUS)){dispose();return null;}
  const position=context.getAttribLocation(program,'aPosition');
- const names=['ShellRotation','InteriorRotation','Resolution','Center','Radius','Stretch','Angle','Dpr','Time','RotationTime','Material','Detail','Seed','Level','Receiving','Working','Opacity','Amount','Gloss','WorkerStyle','WorkerSheen','WorkerSoftness','Light','Primary','Secondary','Tertiary','Background'];
+ const names=['ShellRotation','InteriorRotation','Resolution','Center','Radius','Stretch','Angle','Dpr','Time','RotationTime','Material','Detail','Seed','Level','Receiving','Working','Opacity','Amount','Gloss','DualTone','WorkerStyle','WorkerSheen','WorkerSoftness','Light','Primary','Secondary','Tertiary','Background'];
  const u=Object.fromEntries(names.map(n=>[n,context.getUniformLocation(program,'u'+n)]));
  context.bindBuffer(context.ARRAY_BUFFER,buffer);context.bufferData(context.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),context.STATIC_DRAW);
  context.enable(context.BLEND);context.blendFuncSeparate(context.SRC_ALPHA,context.ONE_MINUS_SRC_ALPHA,context.ONE,context.ONE_MINUS_SRC_ALPHA);
  canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();available=false;});
- return {dispose, draw(target:CanvasRenderingContext2D,point:OrbCircle,palette:AtmospherePalette,time:number,rotation:VoiceOrbRotation,isMain:boolean,stretch:number,opacity:number,level:number,angle:number,style: "jelly" | "mirage-clear" = "jelly"){
+ return {dispose, draw(target:CanvasRenderingContext2D,point:OrbCircle,palette:AtmospherePalette,time:number,rotation:VoiceOrbRotation,isMain:boolean,stretch:number,opacity:number,level:number,angle:number,style: "jelly" | "mirage-clear" = "jelly", customSecondary=false){
   if(!available||context.isContextLost())return false;
   const size=Math.ceil(point.radius*3.2),dpr=Math.min(1.5,devicePixelRatio||1),pixels=Math.ceil(size*dpr);
   if(canvas.width!==pixels||canvas.height!==pixels){canvas.width=pixels;canvas.height=pixels;}
@@ -46,7 +46,7 @@ export function createVoiceGlass() {
    context.uniformMatrix3fv(u.InteriorRotation, false, rotation.interior);
   }
   one('Material',isMain?(style==='mirage-clear'?0:8):9);one('Detail',isMain?1:0);one('Amount',isMain&&style==='mirage-clear'?1.15:.8);one('Gloss',isMain&&style==='mirage-clear'?1.35:.8);one('WorkerStyle',0);one('WorkerSheen',.4);one('WorkerSoftness',1);
-  one('Level',level);one('Receiving',0);one('Working',0);one('Opacity',opacity);one('Light',palette.isLight?1:0);
+  one('DualTone',customSecondary?1:0);one('Level',level);one('Receiving',0);one('Working',0);one('Opacity',opacity);one('Light',palette.isLight?1:0);
   context.uniform3fv(u.Primary,rgb(palette.primary));context.uniform3fv(u.Secondary,rgb(palette.secondary));context.uniform3fv(u.Tertiary,rgb(palette.tertiary));context.uniform3fv(u.Background,rgb(palette.background));
   context.drawArrays(context.TRIANGLES,0,6);
   target.drawImage(canvas,point.x-size/2,point.y-size/2,size,size);return true;

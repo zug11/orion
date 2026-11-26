@@ -16,7 +16,14 @@
 @media (prefers-contrast: more) { .voice-constellation[data-muted="true"] { opacity: .7; } }
 
 [data-theme="light"] .voice-constellation[data-rendering="fallback"]::before {
-  --orb-day-edge: color-mix(in srgb, #cbd1d3 94%, var(--periwinkle));
-  background: radial-gradient(ellipse at 32% 24%, #fff 2%, color-mix(in srgb, var(--periwinkle) 18%, white) 32%, var(--orb-day-edge) 83%, color-mix(in srgb, var(--periwinkle) 15%, #d8dce2));
+  --orb-default-edge: color-mix(in srgb, #cbd1d3 94%, var(--periwinkle));
+  background: radial-gradient(ellipse at 32% 24%, #fff 2%, color-mix(in srgb, var(--periwinkle) 18%, white) 32%, var(--orb-default-edge) 83%, color-mix(in srgb, var(--periwinkle) 15%, #d8dce2));
+  box-shadow: inset 0 0 0 2px var(--orb-default-edge);
+}
+[data-theme="light"] .voice-constellation[data-orb-duotone="true"][data-rendering="fallback"]::before {
+  background:
+    radial-gradient(ellipse 30% 17% at 29% 19%, #ffffffb8, transparent),
+    radial-gradient(ellipse 40% 36% at 58% 56%, var(--orb-day-cloud) 0% 43%, transparent),
+    radial-gradient(ellipse at 32% 24%, #fff 2%, var(--orb-day-shell) 34%, var(--orb-day-edge));
   box-shadow: inset 0 0 0 2px var(--orb-day-edge);
 }

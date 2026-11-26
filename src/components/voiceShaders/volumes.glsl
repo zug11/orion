@@ -130,7 +130,8 @@ float volJellyShape(vec3 q) {
 }
 
 // 08 / Jelly: thick clear gelatin around one soft, folded organic core.
-vec3 material8(vec3 p, vec3 n, float t) {
+vec3 material8(vec3 p, vec3 n, float t, out float cloudCoverage) {
+  cloudCoverage = 0.;
   vec3 ray = volRay(n, 0.77);
   float span = max(0.0, -2.0 * dot(p, ray));
   float count = mix(12.0, 24.0, step(0.5, uDetail));
@@ -153,6 +154,7 @@ vec3 material8(vec3 p, vec3 n, float t) {
     vec3 gelColour = dye(colourDepth) * (0.42 + 0.85 * diffuse);
     float density = 0.13 + flesh * 2.6 + membrane * 0.55;
     float alpha = 1.0 - exp(-density * ds * (0.7 + uAmount * 1.15));
+    if (uDualTone > .5 && uLight > .5) cloudCoverage += transmission * alpha * flesh;
     vec3 scatter = mix(dye(0.87) * 0.24, gelColour, flesh);
     scatter += uPrimary * membrane * (0.18 + glint * 1.4);
     col += transmission * alpha * scatter;

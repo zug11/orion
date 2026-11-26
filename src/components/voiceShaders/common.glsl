@@ -1,7 +1,7 @@
 precision highp float;
 varying vec2 vLocal;
 uniform float uTime,uRotationTime,uMaterial,uRadius,uDpr,uLevel,uReceiving,uSeed;
-uniform float uLight,uWorking,uOpacity,uDetail,uAmount,uGloss;
+uniform float uLight,uDualTone,uWorking,uOpacity,uDetail,uAmount,uGloss;
 uniform mat3 uShellRotation,uInteriorRotation;
 uniform vec3 uPrimary,uSecondary,uTertiary,uBackground;
 mat2 turn(float a){float s=sin(a),c=cos(a);return mat2(c,-s,s,c);}

@@ -72,7 +72,7 @@ vec3 mirage_workerBead(vec3 n,float t) {
   return c;
 }
 
-vec3 mirage_glass(vec3 p,vec3 n,float t) {
+vec3 mirage_glass(vec3 p,vec3 n,float t,out float cloudCoverage) {
   // Original Mirage refraction, studio reflections and surface lighting.
   // The repeated interior light beams and their afterimages are removed.
   float eta=1./(1.18+.42*uAmount);
@@ -87,7 +87,9 @@ vec3 mirage_glass(vec3 p,vec3 n,float t) {
   vec3 interior=mirage_lightFrame(samplePoint,1.3);
   float phase=interior.x*5.4+interior.y*3.1+interior.z*1.35+sin(interior.x*2.4)*.86;
   float thickness=2.*n.z;
-  vec3 pigment=mirage_dye(phase*.39+cloud.z*2.2+uSeed*.8);
+  float dyePhase=phase*.39+cloud.z*2.2+uSeed*.8;
+  vec3 pigment=mirage_dye(dyePhase);
+  cloudCoverage=.5+.5*sin(dyePhase);
   vec3 absorb=exp(-(vec3(1.)-pigment)*thickness*1.3);
   vec3 inside=mix(uBackground*.7,pigment*.2,.8)*absorb;
   vec3 transmitted=dot(exitRay,exitRay)>.0001?normalize(exitRay):reflect(ray,-normalize(exitPoint));

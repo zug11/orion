@@ -5451,7 +5451,8 @@ Mirage's full pigment pattern moves in that same frame. These shaders live in
 shader settings and the current theme, including live system appearance changes.
 On light surfaces keep the cloud and rim light, even with black custom pigments.
 Give the rim a consistent pastel tone against the page and retain enough variation
-in the moving material to distinguish its folds at the real Chat size. Light
+in the moving material to distinguish its folds at the real Chat size. With two custom colours,
+keep the primary dye on the shell and the secondary dye in the rotating interior. Light
 materials reduce alpha by 12%. Canvas2D and no-canvas fallbacks also follow the surface. Dark mode retains its material. Mouse
 hover drives pitch and yaw in view space, with bounded momentum that decays
 along the last axis of motion, including after pointer exit. Integrate opposite

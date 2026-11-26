@@ -151,6 +151,7 @@ export function Sidebar({
   voicePresence,
   voicePalette,
 }: SidebarProps) {
+  const activeSettings = spaces.find(space => space.workspace.id === activeSpaceId)?.settings;
   const [generateOpen, setGenerateOpen] = useState(false);
   const [generateKind, setGenerateKind] = useState<GenerateKind>("note");
   const [generateUseSpaceNotes, setGenerateUseSpaceNotes] = useState(true);
@@ -228,7 +229,7 @@ export function Sidebar({
             aria-controls={generateOpen ? "orion-generate-composer" : undefined}
             onClick={() => {
               if (!generateOpen) setGenerateUseSpaceNotes(
-                spaces.find((space) => space.workspace.id === activeSpaceId)?.settings.includeExistingNotesInAIContext ?? false,
+                activeSettings?.includeExistingNotesInAIContext ?? false,
               );
               setGenerateOpen((open) => !open);
             }}
@@ -307,7 +308,7 @@ export function Sidebar({
             aria-label={label}
             onClick={() => onViewChange(id)}
           >
-            {id === "chat" && voicePresence ? <SidebarVoiceIndicator presence={voicePresence} voicePalette={voicePalette} /> : id === "chat" ? <ChatVoiceMark /> : <Icon size={17} />}
+            {id === "chat" && voicePresence ? <SidebarVoiceIndicator presence={voicePresence} voicePalette={voicePalette} settings={activeSettings} /> : id === "chat" ? <ChatVoiceMark /> : <Icon size={17} />}
             <span>{label}</span>
             {id === "notes" && <em>{notes.length}</em>}
           </button>

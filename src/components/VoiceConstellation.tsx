@@ -3,7 +3,7 @@ import { resolveAtmospherePalette } from "../lib/homeAtmosphere";
 import { resolveThemeMode, resolveThemePalette } from "../lib/theme";
 import { createVoiceGlass } from "./voiceShaders/renderer";
 import { VoiceOrbRotation } from "./voiceShaders/rotation";
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { VoiceActivity, VoiceStatus } from "../lib/liveVoice";
 import type { VoiceWorkOrder } from "../lib/voiceResearch";
 import type { IconPalette } from "../lib/themeIcon";
@@ -35,11 +35,27 @@ type RGB = readonly [number, number, number];
 const blend = (a: RGB, b: RGB, amount: number): RGB => a.map((value, index) => Math.round(value + (b[index] - value) * amount)) as unknown as RGB;
 const color = (rgb: RGB, alpha = 1) => `rgba(${rgb.join(",")},${alpha})`;
 const white: RGB = [255, 255, 255];
+const rgbFromHex = (hex: string): RGB => [1, 3, 5].map(offset => parseInt(hex.slice(offset, offset + 2), 16)) as unknown as RGB;
 function lightGlassTint(rgb: RGB, lightness: number, saturation: number): RGB {
   const luma = .2126 * rgb[0] + .7152 * rgb[1] + .0722 * rgb[2];
   const chroma = rgb.map(channel => (channel - luma) * saturation);
   const scale = Math.max(1, ...chroma.map(channel => Math.max(channel / (255 - lightness), -channel / lightness)));
   return chroma.map(channel => Math.round(lightness + channel / scale)) as unknown as RGB;
+}
+function daylightOrbColors(settings?: Settings) {
+  if (!settings?.homeAtmosphereCustomSecondaryColor) return undefined;
+  const { primary, secondary } = resolveAtmospherePalette(settings.homeAtmosphere, settings.homeAtmosphereTone,
+    resolveThemePalette(settings, "light"), settings.homeAtmosphereCustomColor, settings.homeAtmosphereCustomSecondaryColor);
+  const shell = rgbFromHex(primary);
+  const cloud = lightGlassTint(rgbFromHex(secondary), 203, 1);
+  const edge = lightGlassTint(shell, 184, .90);
+  const face = lightGlassTint(shell, 213, .90);
+  return {
+    cloud, edge, face,
+    style: {
+      "--orb-day-shell": color(face), "--orb-day-edge": color(edge), "--orb-day-cloud": color(cloud),
+    } as CSSProperties,
+  };
 }
 const workerTint: RGB[] = [[115, 211, 204], [223, 179, 132], [174, 156, 235], [218, 128, 147], [138, 176, 230], [195, 207, 133]];
 function workerLabel(job: VoiceWorkOrder) {
@@ -49,13 +65,15 @@ function workerLabel(job: VoiceWorkOrder) {
 }
 function cssPalette(element: HTMLElement): IconPalette {
   const css = getComputedStyle(element), accent = css.getPropertyValue("--periwinkle").trim();
-  const body: RGB = /^#[\da-f]{6}$/i.test(accent) ? [1, 3, 5].map(offset => parseInt(accent.slice(offset, offset + 2), 16)) as unknown as RGB : [143, 159, 225];
+  const body: RGB = /^#[\da-f]{6}$/i.test(accent) ? rgbFromHex(accent) : [143, 159, 225];
   return { body, shadow: blend(body, [17, 22, 36], .62), highlight: blend(body, [232, 240, 242], .55), background: "transparent" };
 }
 
 /** Live voice presence. PCM levels and real work transitions drive the animation;
  * it never starts a microphone, provider request, timer demo, or note mutation. */
 export function VoiceConstellation(props: VoiceConstellationProps) {
+  const daylightColors = useMemo(() => daylightOrbColors(props.settings), [props.settings]);
+  const currentDaylight = useRef(daylightColors); currentDaylight.current = daylightColors;
   const latest = useRef(props); latest.current = { ...props, jobs: props.jobs.filter(job => !job.provisional) };
   const host = useRef<HTMLDivElement>(null), canvas = useRef<HTMLCanvasElement>(null);
   const bodyMeasure = useRef<HTMLSpanElement>(null);
@@ -158,9 +176,10 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
       function sphere(point: OrbCircle, rgb: RGB, stretch = 1, opacity = 1, glow = 0, focused = false, angle = 0, main = false) {
         if (!context) return;
         if (shader && glassPalette && !contrast && shader.glass.draw(context, point, glassPalette,
-          shaderTime, shader.rotation, main, stretch, main ? 1 : opacity, glow, angle, current.settings?.voiceOrbStyle)) return;
+          shaderTime, shader.rotation, main, stretch, main ? 1 : opacity, glow, angle, current.settings?.voiceOrbStyle, !!currentDaylight.current)) return;
         const { radius } = point;
-        const pastel = mode === "light" ? lightGlassTint(rgb, 194, .82) : rgb;
+        const daylight = main && mode === "light" ? currentDaylight.current : undefined;
+        const pastel = daylight?.edge ?? (mode === "light" ? lightGlassTint(rgb, 194, .82) : rgb);
         context.save(); context.translate(point.x, point.y); context.rotate(angle); context.scale(1 / Math.sqrt(stretch), Math.sqrt(stretch)); context.globalAlpha = main && mode === "light" ? .96 : opacity;
         // The approved gravity study has a softly illuminated volume even at
         // rest. Audio adds expression; it is not needed to reveal the material.
@@ -172,14 +191,23 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
         const body = context.createRadialGradient(-radius * .34, -radius * .42, radius * .03, radius * .26, radius * .38, radius * 1.42);
         if (mode === "light") {
           body.addColorStop(0, color(blend(pastel, white, .93)));
-          body.addColorStop(.34, color(lightGlassTint(rgb, 222, .66)));
-          body.addColorStop(.75, color(lightGlassTint(rgb, 207, .75)));
+          body.addColorStop(.34, color(daylight?.face ?? lightGlassTint(rgb, 222, .66)));
+          body.addColorStop(.75, color(daylight ? blend(daylight.face, daylight.edge, .4) : lightGlassTint(rgb, 207, .75)));
           body.addColorStop(1, color(pastel));
         } else {
           body.addColorStop(0, color(blend(rgb, palette.highlight, .82))); body.addColorStop(.24, color(blend(rgb, palette.highlight, .28)));
           body.addColorStop(.61, color(rgb)); body.addColorStop(.88, color(blend(rgb, palette.shadow, contrast ? .90 : .72))); body.addColorStop(1, color(palette.shadow));
         }
         context.fillStyle = body; context.beginPath(); context.arc(0, 0, radius, 0, Math.PI * 2); context.fill();
+        if (daylight) {
+          const x = radius * .16, y = radius * .12;
+          const cloud = context.createRadialGradient(x, y, 0, x, y, radius * .78);
+          cloud.addColorStop(0, color(daylight.cloud));
+          cloud.addColorStop(.43, color(daylight.cloud, .94));
+          cloud.addColorStop(1, color(daylight.cloud, 0));
+          context.fillStyle = cloud; context.beginPath();
+          context.arc(0, 0, radius, 0, Math.PI * 2); context.fill();
+        }
         if (mode === "light" && radius >= 4) {
           context.lineWidth = Math.max(1, radius * .045);
           context.strokeStyle = color(pastel);
@@ -293,6 +321,7 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
   return <div ref={host} className={`voice-constellation voice-constellation--${size}`} data-muted={props.muted} data-status={props.status}
+    data-orb-duotone={daylightColors ? "true" : undefined} style={daylightColors?.style}
     role={interactive ? "group" : "img"} aria-label={props.status === "listening" ? props.muted ? "Voice on, microphone muted" : "Voice conversation" : props.status === "connecting" ? "Voice connecting" : "Voice disconnected"}
     onPointerMove={movePointer}
     onPointerLeave={() => { shaderHover.current?.rotation.leave(); motion.point(0, 0, false); }}>
