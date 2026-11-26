@@ -1,0 +1,4 @@
+0e42127bfedf4f34938a5f9612fecc6a5c74979e1969301c12064bbe98dc1b15  Orion-0.6.8.m-Apple-Silicon.dmg
+6a9266784891e49e69a21ac0d217beb34fa26053e4eeae207412dc646539536d  Orion-0.6.8-Apple-Silicon.app.tar.gz
+5bc92d68e0e8a40bfa587df7994533711f6ffe5ec538e26e04a1dbaed2b92280  Orion-0.6.8-Apple-Silicon.app.tar.gz.sig
+476dc9b01a9f863f070ef5a50312f6e343d308ca5b5ffebf89798eb6596a4090  latest.json

@@ -1,0 +1,107 @@
+{
+  "version": "0.6.8",
+  "release_id": 459176959,
+  "release_url": "https://github.com/zug11/orion/releases/tag/v0.6.8",
+  "published_at": "2026-11-26T09:22:08Z",
+  "release_tag_commit": "0d647785913de6702cd447f52677f840314330fa",
+  "assets": [
+    {
+      "name": "Orion-0.6.8.m-Apple-Silicon.dmg",
+      "bytes": 1509546343,
+      "sha256": "0e42127bfedf4f34938a5f9612fecc6a5c74979e1969301c12064bbe98dc1b15",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.8/Orion-0.6.8.m-Apple-Silicon.dmg"
+    },
+    {
+      "name": "Orion-0.6.8-Apple-Silicon.app.tar.gz",
+      "bytes": 1507531589,
+      "sha256": "6a9266784891e49e69a21ac0d217beb34fa26053e4eeae207412dc646539536d",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.8/Orion-0.6.8-Apple-Silicon.app.tar.gz"
+    },
+    {
+      "name": "Orion-0.6.8-Apple-Silicon.app.tar.gz.sig",
+      "bytes": 448,
+      "sha256": "5bc92d68e0e8a40bfa587df7994533711f6ffe5ec538e26e04a1dbaed2b92280",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.8/Orion-0.6.8-Apple-Silicon.app.tar.gz.sig"
+    },
+    {
+      "name": "latest.json",
+      "bytes": 2031,
+      "sha256": "476dc9b01a9f863f070ef5a50312f6e343d308ca5b5ffebf89798eb6596a4090",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.8/latest.json"
+    },
+    {
+      "name": "Orion-0.6.8-SHA256SUMS.txt",
+      "bytes": 386,
+      "sha256": "ecb0bcb50235b947d2d7a94bb315fc323200823b42a9c26b1a0456b6c6ca7828",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.8/Orion-0.6.8-SHA256SUMS.txt"
+    }
+  ],
+  "all_github_asset_digests_match": true,
+  "previous_release_key_commit": "603a9e2e3bb1a4883d7925ed2af8d66992ec9a53",
+  "anonymous_installer_download_verified": true,
+  "all_anonymous_asset_bytes_match": true,
+  "public_updater": {
+    "endpoint": "https://github.com/zug11/orion/releases/latest/download/latest.json",
+    "version": "0.6.8",
+    "platform": "darwin-aarch64",
+    "url": "https://github.com/zug11/orion/releases/download/v0.6.8/Orion-0.6.8-Apple-Silicon.app.tar.gz",
+    "exact_manifest_match": true,
+    "public_archive_and_signed_version_verified": true,
+    "public_detached_signature_matches_manifest": true,
+    "verified_with_previous_release_key": true,
+    "installed_over_user_app": false,
+    "installed_manual_check": {
+      "installed_version": "0.6.7",
+      "before_publication": {
+        "feed_version": "0.6.7",
+        "manual_check_message": "You’re up to date."
+      },
+      "current_executable_matches_published_0_6_7": true,
+      "current_source_and_renderer_stamps_match": true,
+      "after_publication": {
+        "feed_version": "0.6.8",
+        "installed_version": "0.6.7",
+        "offered_version": "0.6.8",
+        "message": "Orion 0.6.8 is available",
+        "action": "Download update",
+        "download_or_restart_started": false
+      }
+    }
+  },
+  "verified_at": "2026-11-26T09:44:16Z",
+  "website": {
+    "url": "https://www.itsorion.app",
+    "deployment_id": "dpl_8Z1rYBJKdgcBvXXqfqBhFpLLGJ1D",
+    "deployment_url": "https://orion-878m6n163-zug11s-projects.vercel.app",
+    "status": "READY",
+    "environment": "production",
+    "source_commit": "ccd89143a7534c3c62ba88a1725a7152d0a26f0d",
+    "project_id": "prj_EAGIeKVJxm4RZzZ1Ckm55viqgiQ6",
+    "aliases": [
+      "itsorion.app",
+      "orion-xi-three.vercel.app",
+      "orion-zug11s-projects.vercel.app",
+      "www.itsorion.app"
+    ],
+    "verified_at": "2026-11-26T09:46:32Z",
+    "live_checks": {
+      "installer": 200,
+      "checksum": 200,
+      "release_notes": 200,
+      "apex_redirects_to_www": true,
+      "checksum_bytes_and_installer_entry_match": true,
+      "release_download_checksum_links_and_structured_metadata": true,
+      "llms_matches_release": true,
+      "staged_responses_inspected_before_promotion": true,
+      "live_release_page_and_download_controls": true
+    },
+    "built_site_browser_checks": {
+      "desktop_and_mobile_fit": [
+        1340,
+        390
+      ],
+      "space_examples_and_article_navigation": "passed",
+      "voice_and_import_pause_resume_keyboard_and_reduced_motion": "passed"
+    }
+  }
+}

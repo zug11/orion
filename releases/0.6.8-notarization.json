@@ -1,0 +1,117 @@
+{
+  "version": "0.6.8",
+  "source_commit": "0d647785913de6702cd447f52677f840314330fa",
+  "bundle_id": "app.orion.knowledge",
+  "edition": "Whisper Medium",
+  "platform": "darwin-aarch64",
+  "developer_id_team": "NX592DPNHM",
+  "artifacts": [
+    {
+      "artifact": "Orion-0.6.8.m-Apple-Silicon.dmg",
+      "bytes": 1509546343,
+      "sha256": "0e42127bfedf4f34938a5f9612fecc6a5c74979e1969301c12064bbe98dc1b15"
+    },
+    {
+      "artifact": "Orion-0.6.8-Apple-Silicon.app.tar.gz",
+      "bytes": 1507531589,
+      "sha256": "6a9266784891e49e69a21ac0d217beb34fa26053e4eeae207412dc646539536d"
+    },
+    {
+      "artifact": "Orion-0.6.8-Apple-Silicon.app.tar.gz.sig",
+      "bytes": 448,
+      "sha256": "5bc92d68e0e8a40bfa587df7994533711f6ffe5ec538e26e04a1dbaed2b92280"
+    },
+    {
+      "artifact": "latest.json",
+      "bytes": 2031,
+      "sha256": "476dc9b01a9f863f070ef5a50312f6e343d308ca5b5ffebf89798eb6596a4090"
+    },
+    {
+      "artifact": "Orion-0.6.8-SHA256SUMS.txt",
+      "bytes": 386,
+      "sha256": "ecb0bcb50235b947d2d7a94bb315fc323200823b42a9c26b1a0456b6c6ca7828"
+    }
+  ],
+  "notarization": {
+    "app": {
+      "id": "0e70c48b-1fd0-4a69-b139-096f614c4576",
+      "status": "Accepted"
+    },
+    "dmg": {
+      "id": "816223e6-e28b-4f8b-8d81-33bd61d26ea0",
+      "status": "Accepted"
+    }
+  },
+  "app_and_dmg_stapled": true,
+  "app_and_dmg_gatekeeper": "accepted",
+  "copied_app_deep_strict_signature": "passed",
+  "main_executable_sha256": "1034db923b4996a3e1d9a39ace686f18aab4c1e1d0ae266cbf93aef99383812c",
+  "stamps": {
+    "orion-source.sha256": "345d5ab5bfff530cc16e8e24da663c83e060c827ffcebf5904f2fa1fd8c0548f",
+    "orion-renderer.sha256": "95898a0a0d5440aac42242a6253415ded504a6466ce552b00b808d85cf4e7f56"
+  },
+  "updater": {
+    "signature": "verified",
+    "signed_version": "0.6.8",
+    "extracted_archive_identity_signature_ticket_gatekeeper": "passed",
+    "installed_over_user_app": false,
+    "endpoint": "https://github.com/zug11/orion/releases/latest/download/latest.json"
+  },
+  "verification": {
+    "renderer_tests_passed": 4290,
+    "renderer_tests_skipped": 1,
+    "native_tests_passed": 378,
+    "native_tests_ignored": 8,
+    "mcp_tests_passed": 152,
+    "updater_signing_tests_passed": 8,
+    "renderer_typecheck_and_production_build": "passed",
+    "rustfmt_app_and_connector": "passed",
+    "copied_app_bundled_mcp_and_codex_protocol_harnesses": "passed",
+    "copied_app_whisper_ocr_downloader_and_deno_version_checks": "passed",
+    "production_renderer": {
+      "results": [
+        {
+          "width": 1360,
+          "custom_two_control_reveal": true,
+          "withdraw_and_restore_argument_paragraphs": true,
+          "play_pause_and_keyboard_scrub": true,
+          "independent_faders": true,
+          "horizontal_overflow": false
+        },
+        {
+          "width": 740,
+          "custom_two_control_reveal": true,
+          "withdraw_and_restore_argument_paragraphs": true,
+          "play_pause_and_keyboard_scrub": true,
+          "independent_faders": true,
+          "horizontal_overflow": false
+        }
+      ],
+      "errors": []
+    },
+    "self_contained_html_export": {
+      "results": [
+        {
+          "width": 740,
+          "custom_two_control_reveal": true,
+          "withdraw_and_restore_argument_paragraphs": true,
+          "play_pause_and_keyboard_scrub": true,
+          "independent_faders": true,
+          "horizontal_overflow": false
+        },
+        {
+          "width": 390,
+          "custom_two_control_reveal": true,
+          "withdraw_and_restore_argument_paragraphs": true,
+          "play_pause_and_keyboard_scrub": true,
+          "independent_faders": true,
+          "horizontal_overflow": false
+        }
+      ],
+      "errors": []
+    },
+    "copied_app_local_ocr_fixture": "passed",
+    "copied_app_local_whisper_medium_fixture": "passed",
+    "update_controls_store_and_integration_tests_passed": 14
+  }
+}
