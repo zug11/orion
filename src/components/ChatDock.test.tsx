@@ -83,6 +83,18 @@ describe("Space chat dock", () => {
     expect(screen.getByRole("textbox", { name: "Message Orion" })).toHaveValue("A separate draft");
   });
 
+  it("opens a part question as an editable draft in the originating note's chat", () => {
+    const p = props();
+    const onConsume = vi.fn();
+    const draft = {spaceId:p.snapshot.workspace.id, threadId:"chat-legacy",noteId:"mechanism",text:"Explain the float."};
+    const {rerender} = render(<ChatDock {...p} focusNoteId="mechanism" artifactQuestion={draft} onConsumeArtifactQuestion={onConsume}/>);
+    expect(screen.getByRole("textbox",{name:"Message Orion"})).toHaveValue("Explain the float.");
+    fireEvent.change(screen.getByRole("textbox",{name:"Message Orion"}),{target:{value:"My own question"}});
+    rerender(<ChatDock {...p} focusNoteId="another-note" artifactQuestion={{...draft}} onConsumeArtifactQuestion={onConsume}/>);
+    expect(screen.getByRole("textbox",{name:"Message Orion"})).toHaveValue("My own question");
+    expect(p.onSend).not.toHaveBeenCalled();
+  });
+
   it("starts a new threaded chat without clearing the current draft or calling legacy clear", () => {
     const p = props();
     p.snapshot.studio.threads = [{ id: "chat-one", title: "First thought", createdAt: "2026-11-13", updatedAt: "2026-11-13" }];

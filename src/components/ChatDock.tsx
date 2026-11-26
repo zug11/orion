@@ -1,3 +1,4 @@
+import type { ArtifactQuestionDraft } from "./ArtifactPartChatContext";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Maximize2, MessageCircle, Minus, Plus, X } from "../lib/icons";
 import { isSelectedAIConfigured } from "../lib/ai";
@@ -19,6 +20,8 @@ function restoredHistoryExpanded(): boolean {
 }
 
 interface ChatDockProps extends ChatViewProps {
+  artifactQuestion?: ArtifactQuestionDraft;
+  onConsumeArtifactQuestion?: () => void;
   /** Full Space state for a retained voice conversation while another text chat is selected. */
   canonicalSnapshot?: AppSnapshot;
   fullPage: boolean;
@@ -32,7 +35,7 @@ interface ChatDockProps extends ChatViewProps {
 }
 
 /** One mounted conversation/composer across the circle, panel and full Chat route. */
-export function ChatDock({ canonicalSnapshot, fullPage, flowActive, onExpand, allowExpand = true, voiceToggleRequest, voicePresence, voicePalette, voiceSelection, ...chat }: ChatDockProps) {
+export function ChatDock({ artifactQuestion, onConsumeArtifactQuestion, canonicalSnapshot, fullPage, flowActive, onExpand, allowExpand = true, voiceToggleRequest, voicePresence, voicePalette, voiceSelection, ...chat }: ChatDockProps) {
   const [open, setOpen] = useState(false);
   const [hasOpened, setHasOpened] = useState(fullPage);
   const [conversationKey, setConversationKey] = useState(0);
@@ -93,6 +96,19 @@ export function ChatDock({ canonicalSnapshot, fullPage, flowActive, onExpand, al
   const voiceTitle = chat.threadNavigation?.threads.find(thread => thread.id === voiceThreadId)?.title || "the original chat";
   const nativeGlass = useNativeChatGlass(circleRef, available && !fullPage && !hasVoiceControls, open, chat.busy);
 
+  const consumedQuestion = useRef<ArtifactQuestionDraft | undefined>(undefined);
+  useEffect(() => {
+    if (!artifactQuestion || consumedQuestion.current === artifactQuestion) return;
+    consumedQuestion.current = artifactQuestion;
+    if (available && artifactQuestion.spaceId === chat.snapshot.workspace.id && artifactQuestion.noteId === chat.focusNoteId && artifactQuestion.threadId === threadId) {
+      const question = artifactQuestion.text.slice(0, 8000);
+      setDrafts(current => ({...current, [draftKey]: [current[draftKey], question].filter(Boolean).join("\n\n")}));
+      returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      setOpen(true);
+      panelRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus({preventScroll:true});
+    }
+    onConsumeArtifactQuestion?.();
+  }, [artifactQuestion, onConsumeArtifactQuestion, available, chat.snapshot.workspace.id, chat.focusNoteId, threadId, draftKey]);
   useEffect(() => { if (visible) setHasOpened(true); }, [visible]);
   useEffect(() => { if (!available) setOpen(false); }, [available]);
   useEffect(() => {

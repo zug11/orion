@@ -369,14 +369,14 @@ it("generates a calculator from selected prose, reopens it from disk and keeps s
   render(<App />);
   const slider = await screen.findByRole("slider", { name: "Annual rate" });
   const dollars = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", currencyDisplay: "narrowSymbol" });
-  expect(screen.getByText(dollars.format(100) + "/month")).toBeVisible();
+  expect(screen.getByRole("definition")).toHaveTextContent(dollars.format(100) + "/month");
   expect(screen.getByTitle("Writing contributions")).toHaveTextContent("Orion AI");
   expect(screen.getByRole("button", { name: "Edit" })).toBeEnabled();
   const previousSaves = runtime.save.mock.calls.length;
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   try {
     fireEvent.change(slider, { target: { value: "12" } });
-    expect(screen.getByText(dollars.format(106.62) + "/month")).toBeVisible();
+    expect(screen.getByRole("definition")).toHaveTextContent(dollars.format(106.62) + "/month");
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     expect(runtime.save).toHaveBeenCalledTimes(previousSaves);
     expect(diskNote()).toEqual(saved);

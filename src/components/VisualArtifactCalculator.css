@@ -1,0 +1,35 @@
+.visual-artifact .va-calc-explanation { margin: 0; color: var(--va-ink); font-size: 1.08em; line-height: 1.65; }
+.va-calc-scrub { touch-action: none; cursor: ew-resize; user-select: none; color: var(--va-accent); border-bottom: 1px dashed currentColor; font-weight: 600; }
+.visual-artifact .va-calc-presets, .va-calc-chart-select, .va-calc-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px; }
+.visual-artifact .va-calc-presets button, .va-calc-chart-select select { background: var(--va-surface); color: var(--va-ink); padding: .4em .7em; border-radius: 5px; font: inherit; font-size: .9em; }
+.visual-artifact .va-calc-presets button[aria-pressed="true"] { box-shadow: inset 0 0 0 1.5px var(--va-accent); }
+.visual-artifact :is(.va-calc-chart, .va-calc-population) { margin: 0; display: grid; gap: .55em; min-width: 0; }
+.visual-artifact :is(.va-calc-chart, .va-calc-population) figcaption, .va-calc-working strong { color: var(--va-ink); font-weight: 550; }
+.va-calc-plot > svg, .va-calc-population > svg { display: block; width: 100%; height: auto; }
+.va-calc-plot > svg { cursor: ew-resize; touch-action: none; }
+.va-calc-chart svg [data-curve-handle] { cursor: ns-resize; }
+.va-calc-chart-select label { color: var(--va-muted); }
+.va-calc-chart-select select { border: 1px solid var(--line); max-width: 100%; }
+.va-calc-axis { display: flex; justify-content: space-between; gap: 1em; color: var(--va-muted); font: 500 .8em/1.25 var(--ui-font); }
+.va-calc-gridline { fill: none; stroke: var(--line-strong, currentColor); opacity: .55; }
+.va-calc-guide, .va-calc-zero { stroke: var(--va-muted); stroke-width: 1.2; }
+.va-calc-guide { stroke-dasharray: 3 4; }
+.visual-artifact .va-calc-legend { list-style: none; padding: 0; margin: .25em 0 0; }
+.va-calc-legend li { display: inline-flex; align-items: center; gap: .35em; color: var(--va-muted); }
+.va-calc-legend svg { width: 22px; height: 4px; }
+.va-calc-dot { display: inline-block; width: .65em; height: .65em; border-radius: 50%; margin-inline-end: .4em; }
+.va-calc-population svg { max-height: 230px; }
+.va-calc-working ol { padding-inline-start: 1.5em; font-variant-numeric: tabular-nums; }
+.visual-artifact .va-calc-working-toggle { color: inherit; background: transparent; padding: 0; text-align: start; border-radius: 2px; }
+.visual-artifact .va-calc-working-toggle:hover { text-decoration: underline; }
+.va-calc-reset, .va-calc-chart button { justify-self: start; }
+.va-calc-recipe { display: grid; gap: .6em; }
+.va-calc-recipe button { justify-self: start; }
+.va-calc-recipe table td { font-variant-numeric: tabular-nums; }
+@media (forced-colors: active) {
+ .visual-artifact .va-calc-presets button[aria-pressed="true"] { outline: 2px solid Highlight; }
+ .va-calc-chart path, .va-calc-chart circle { stroke: CanvasText; }
+}
+.va-calc-plot { display: grid; grid-template-columns: fit-content(28%) minmax(0, 1fr); align-items: stretch; }
+.va-calc-axis-va { display: flex; flex-direction: column; justify-content: space-between; padding-block: .75em; align-items: end; color: var(--va-muted); font: .8em/1.25 var(--ui-font); }
+.va-calc-axis-center { margin-block: auto; }

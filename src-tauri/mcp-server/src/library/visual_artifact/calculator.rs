@@ -18,6 +18,13 @@ enum Expression {
     Constant(f64),
     Input(usize),
     Binary(Binary, Box<Expression>, Box<Expression>),
+    Round(Box<Expression>),
+    IfLess {
+        left: Box<Expression>,
+        right: Box<Expression>,
+        yes: Box<Expression>,
+        no: Box<Expression>,
+    },
     Payment {
         principal: Box<Expression>,
         rate: Box<Expression>,
@@ -32,9 +39,9 @@ impl Expression {
         depth: usize,
         remaining: &mut usize,
     ) -> Result<Self, String> {
-        if depth > 5 || *remaining == 0 {
+        if depth > 8 || *remaining == 0 {
             return Err(invalid(
-                "Calculator formulas allow five levels and 63 nodes.",
+                "Calculator formulas allow eight levels and 63 nodes.",
             ));
         }
         *remaining -= 1;
@@ -48,6 +55,19 @@ impl Expression {
 
         let mut child =
             |key: &str| Self::parse(&value[key], inputs, depth + 1, remaining).map(Box::new);
+        if value["op"] == "round" {
+            fields(value, &["op", "value"])?;
+            return Ok(Self::Round(child("value")?));
+        }
+        if value["op"] == "ifLess" {
+            fields(value, &["op", "left", "right", "then", "else"])?;
+            return Ok(Self::IfLess {
+                left: child("left")?,
+                right: child("right")?,
+                yes: child("then")?,
+                no: child("else")?,
+            });
+        }
         if value["op"] == "periodicPayment" {
             fields(value, &["op", "principal", "ratePerPeriod", "periods"])?;
             return Ok(Self::Payment {
@@ -85,6 +105,26 @@ impl Expression {
                     Binary::Max => left.max(right),
                 }
             }
+            Self::Round(expr) => {
+                let n = expr.evaluate(values)?;
+                let floor = n.floor();
+                if n - floor < 0.5 {
+                    floor
+                } else {
+                    floor + 1.0
+                }
+            }
+            Self::IfLess {
+                left,
+                right,
+                yes,
+                no,
+            } => if left.evaluate(values)? < right.evaluate(values)? {
+                yes
+            } else {
+                no
+            }
+            .evaluate(values)?,
             Self::Payment {
                 principal,
                 rate,
@@ -170,6 +210,8 @@ struct Slider<'a> {
     label: &'a str,
     initial: f64,
     min: f64,
+    max: f64,
+    step: f64,
     grid: Grid,
 }
 
@@ -197,6 +239,8 @@ impl<'a> Slider<'a> {
             label,
             initial,
             min,
+            max,
+            step,
             grid: Grid::new(min, max, step),
         })
     }
@@ -219,22 +263,134 @@ fn visit_settings<F: Fn(&[f64]) -> Result<(), String>>(
 }
 
 pub(super) fn validate(block: &Value) -> Result<(), String> {
-    fields(block, &["kind", "inputs", "outputs"])?;
+    fields(
+        block,
+        &[
+            "kind",
+            "inputs",
+            "outputs",
+            "explanation",
+            "presets",
+            "chart",
+            "recipe",
+            "counts",
+            "flow",
+        ],
+    )?;
     let inputs = list(&block["inputs"], 1, 6)?
         .iter()
         .map(Slider::parse)
         .collect::<Result<Vec<_>, _>>()?;
     let mut outputs = Vec::new();
-    for output in list(&block["outputs"], 1, 6)? {
-        fields(output, &["label", "unit", "expression"])?;
+    let specs = list(&block["outputs"], 1, 24)?;
+    for output in specs {
+        fields(output, &["label", "unit", "expression", "labels"])?;
+        if let Some(labels) = output.get("labels") {
+            let mut seen = Vec::new();
+            for label in list(labels, 1, 12)? {
+                fields(label, &["value", "label"])?;
+                literal(&label["label"], 80, false)?;
+                let value = number(&label["value"], -1e9, 1e9)?;
+                if seen.contains(&value) {
+                    return Err(invalid("Duplicate output label value."));
+                }
+                seen.push(value);
+            }
+        }
         let label = literal(&output["label"], 100, false)?;
         literal(&output["unit"], 32, true)?;
         let expression = Expression::parse(&output["expression"], inputs.len(), 0, &mut 63)?;
         outputs.push((label, expression));
     }
+    let indices = |v: &Value, min, max| -> Result<Vec<usize>, String> {
+        let mut found = Vec::new();
+        for item in list(v, min, max)? {
+            let i = index(item, outputs.len())?;
+            if found.contains(&i) {
+                return Err(invalid("Expected distinct output indices."));
+            }
+            found.push(i);
+        }
+        Ok(found)
+    };
+    let same_units = |series: &[usize]| -> Result<(), String> {
+        if series
+            .iter()
+            .any(|i| specs[*i]["unit"] != specs[series[0]]["unit"])
+        {
+            return Err(invalid("Referenced outputs need matching units."));
+        }
+        Ok(())
+    };
+    if let Some(segments) = block.get("explanation") {
+        for seg in list(segments, 1, 32)? {
+            if seg.is_string() {
+                literal(seg, 400, true)?;
+            } else if let Some(input) = seg.get("input") {
+                fields(seg, &["input"])?;
+                index(input, inputs.len())?;
+            } else {
+                fields(seg, &["output"])?;
+                index(&seg["output"], outputs.len())?;
+            }
+        }
+    }
+    if let Some(chart) = block.get("chart") {
+        fields(chart, &["input", "outputs", "dragInput", "settleOutput"])?;
+        let axis = index(&chart["input"], inputs.len())?;
+        same_units(&indices(&chart["outputs"], 1, 3)?)?;
+        if let Some(drag) = chart.get("dragInput") {
+            if index(drag, inputs.len())? == axis {
+                return Err(invalid("Chart controls must be distinct."));
+            }
+        }
+        if let Some(out) = chart.get("settleOutput") {
+            if specs[index(out, outputs.len())?]["unit"] != block["inputs"][axis]["unit"] {
+                return Err(invalid("The equilibrium output must use the axis unit."));
+            }
+        }
+    }
+    let recipe = block
+        .get("recipe")
+        .map(|v| -> Result<_, String> {
+            fields(v, &["input", "ingredients"])?;
+            Ok((
+                index(&v["input"], inputs.len())?,
+                indices(&v["ingredients"], 1, 24)?,
+            ))
+        })
+        .transpose()?;
+    let counts = block
+        .get("counts")
+        .map(|v| -> Result<_, String> {
+            fields(v, &["outputs", "total"])?;
+            let total = number(&v["total"], 1.0, 1000.0)?;
+            if total.fract() != 0.0 {
+                return Err(invalid("Expected a whole population."));
+            }
+            Ok((indices(&v["outputs"], 2, 6)?, total))
+        })
+        .transpose()?;
+    let flow = block
+        .get("flow")
+        .map(|v| -> Result<_, String> {
+            fields(v, &["source", "destinations", "capacity"])?;
+            literal(&v["source"], 100, false)?;
+            let capacity = number(&v["capacity"], 0.0, 1e9)?;
+            if capacity <= 0.0 {
+                return Err(invalid("Flow capacity must be positive."));
+            }
+            let series = indices(&v["destinations"], 2, 6)?;
+            same_units(&series)?;
+            Ok((series, capacity))
+        })
+        .transpose()?;
     let check = |values: &[f64]| -> Result<(), String> {
+        let mut results = Vec::with_capacity(outputs.len());
         for (label, expression) in &outputs {
-            if expression.evaluate(values).is_none() {
+            if let Some(value) = expression.evaluate(values) {
+                results.push(value);
+            } else {
                 let settings = inputs
                     .iter()
                     .zip(values)
@@ -250,8 +406,54 @@ pub(super) fn validate(block: &Value) -> Result<(), String> {
                 return Err(invalid(&format!("“{label}” has no result at {settings}.")));
             }
         }
+        if let Some((input, ingredients)) = &recipe {
+            if values[*input] <= 0.0 || ingredients.iter().any(|&i| results[i] < 0.0) {
+                return Err(invalid(
+                    "Expected positive servings and nonnegative recipe quantities.",
+                ));
+            }
+        }
+        if let Some((groups, total)) = &counts {
+            if groups
+                .iter()
+                .any(|&i| results[i] < 0.0 || results[i].fract() != 0.0)
+                || groups.iter().map(|&i| results[i]).sum::<f64>() != *total
+            {
+                return Err(invalid(
+                    "Population counts must be whole, nonnegative and add up to the total.",
+                ));
+            }
+        }
+        if let Some((destinations, capacity)) = &flow {
+            if destinations.iter().any(|&i| results[i] < 0.0)
+                || destinations.iter().map(|&i| results[i]).sum::<f64>() > capacity * (1.0 + 1e-12)
+            {
+                return Err(invalid(
+                    "Flow quantities must be nonnegative and fit the capacity.",
+                ));
+            }
+        }
         Ok(())
     };
+    if let Some(presets) = block.get("presets") {
+        for preset in list(presets, 1, 12)? {
+            fields(preset, &["label", "values"])?;
+            literal(&preset["label"], 80, false)?;
+            let mut values = Vec::new();
+            for (v, input) in list(&preset["values"], inputs.len(), inputs.len())?
+                .iter()
+                .zip(&inputs)
+            {
+                let value = number(v, input.min, input.max)?;
+                let ticks = (value - input.min) / input.step;
+                if ticks.round() > MAX_SAFE_INTEGER || (ticks - ticks.round()).abs() > 1e-7 {
+                    return Err(invalid("A preset value must align with its slider step."));
+                }
+                values.push(value);
+            }
+            check(&values)?;
+        }
+    }
 
     let mut values: Vec<_> = inputs.iter().map(|input| input.initial).collect();
     check(&values)?;

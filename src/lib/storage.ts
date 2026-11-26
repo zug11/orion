@@ -1,3 +1,8 @@
+import { isChatGPTModel } from "./chatgpt";
+import { validatedVisualReview } from "./visualReviewInput";
+import reviewInstructions from "./visualReviewInstructions.txt?raw";
+import { readVisualProviderStream } from "./chatVisualStream";
+import { isVisualArtifactMarker } from "./visualArtifactMarkdown";
 import { isWritingOrigins } from "./writingOrigins";
 import { isContactMetadata } from "./contacts";
 import { isCalendarDismissalList } from "./calendarDismissal";
@@ -83,7 +88,11 @@ import {
 import { CHAT_SUGGESTIONS_INSTRUCTIONS, CHAT_SUGGESTIONS_SCHEMA, parseChatSuggestionContext, parseChatSuggestionResult } from "./chatSuggestionsProtocol";
 
 import { parseArtifactGenerationInput } from "./visualArtifacts";
-import visualArtifactInstructions from "./visualArtifactInstructions.txt?raw";
+import deferredDrawingInstructions from "./deferredDrawingInstructions.txt?raw";
+import visualSelectionReaderInstructions from "./visualSelectionReaderInstructions.txt?raw";
+import artifactBaseInstructions from "./visualArtifactInstructions.txt?raw";
+import illustrationInstructions from "./artifactIllustrationInstructions.txt?raw";
+import calculatorInstructions from "./visualArtifactCalculatorInstructions.txt?raw";
 
 const VAULT_STORAGE_KEY = "orion:vault:v2";
 const LEGACY_SNAPSHOT_STORAGE_KEY = "orion:vault:v1";
@@ -1026,6 +1035,44 @@ export async function generateSpeech(
   );
 }
 
+// Session-only, tied to the credential generation. Desktop credentials can
+// change in another window, so desktop lookups always check the active account.
+let drawingCatalog: { generation: number; until: number; items: import("./illustrationModel").IllustrationModelItem[] } | undefined;
+
+export async function loadIllustrationModelCatalog(settings: Settings, signal: AbortSignal): Promise<import("./illustrationModel").IllustrationModelItem[] | null> {
+  const plan = isChatGPTModel(settings.model);
+  const args = { plan, ...(plan && settings.chatgptAccountId ? { accountId: settings.chatgptAccountId } : {}) };
+  if (isTauriRuntime()) {
+    try {
+      return await providerCallScheduler.run(() => invokeTauri("illustration_models", args), { queueKey: "drawing-models", signal });
+    } catch (error) {
+      throw typeof error === "string" ? new Error(error) : error;
+    }
+  }
+  if (plan) throw new Error("ChatGPT plan drawings need the Orion desktop app.");
+  const generation = providerKeyGeneration("openai");
+  if (drawingCatalog?.generation === generation && drawingCatalog.until > Date.now()) return drawingCatalog.items;
+  const { apiIllustrationModelItems } = await import("./illustrationModel");
+  return providerCallScheduler.run(async () => {
+    const controller = new AbortController();
+    const stop = () => controller.abort(signal.reason);
+    signal.addEventListener("abort", stop, { once: true });
+    const timer = setTimeout(() => controller.abort(new Error("The drawing model catalog timed out.")), 20_000);
+    try {
+      if (signal.aborted) throw signal.reason;
+      const response = await fetch(OPENAI_MODELS_URL, { headers: { Authorization: `Bearer ${requireBrowserApiKey()}` }, signal: controller.signal });
+      // Listing and creating Responses have independent API-key permissions.
+      if (response.status === 403) return null;
+      if (!response.ok) throw new Error(await readApiError(response));
+      const bytes = await readBoundedProviderResponse(response, 2_000_000, "The model catalog is too large.");
+      const items = apiIllustrationModelItems(JSON.parse(new TextDecoder().decode(bytes)));
+      if (providerKeyGeneration("openai") !== generation) throw new Error("The OpenAI connection changed. Start the drawing again.");
+      drawingCatalog = { generation, until: Date.now() + 60_000, items };
+      return items;
+    } finally { clearTimeout(timer); signal.removeEventListener("abort", stop); }
+  }, { queueKey: "drawing-models", signal });
+}
+
 export async function testOpenAIKey(): Promise<ApiKeyTestResult> {
   if (isTauriRuntime()) {
     return invokeTauri<ApiKeyTestResult>("test_openai_key");
@@ -1489,8 +1536,18 @@ export async function chatWithOrion(
   request: ChatRequest,
   signal?: AbortSignal,
   editorActionGrant?: EditorActionGrant,
+  onVisualDelta?: (text: string) => void,
 ): Promise<ChatResult> {
   requireNativeEditorAction(editorActionGrant);
+  if (request.visualReview || onVisualDelta) {
+    if (request.mode !== "visual-artifact") throw new Error("Expected a visual generation request.");
+    const packet = parseArtifactGenerationInput(JSON.parse(request.prompt));
+    if (onVisualDelta && (packet.readSelection || request.visualReview)) throw new Error("Only a generated visual can be streamed.");
+    if (request.visualReview) {
+      if (!packet.drawing || packet.correction) throw new Error("Visual review requires an existing drawing.");
+      request = { ...request, visualReview: validatedVisualReview(request.visualReview, packet.source) };
+    }
+  }
   if (!request.prompt.trim()) {
     throw new Error("Ask Orion a question first.");
   }
@@ -1500,9 +1557,11 @@ export async function chatWithOrion(
   const visualSignal = request.mode === "visual-artifact" ? signal : undefined;
   let result: ChatResult;
   if (isTauriRuntime()) {
+    const channel = onVisualDelta ? new (await import("@tauri-apps/api/core")).Channel<string>() : undefined;
+    if (channel && onVisualDelta) channel.onmessage = text => { if (!signal?.aborted) onVisualDelta(text); };
     const value = await invokeTauri<unknown>(
       "chat",
-      { request, ...(editorActionGrant ? { editorActionGrant } : {}) },
+      { request, ...(channel ? { visualDeltas: channel } : {}), ...(editorActionGrant ? { editorActionGrant } : {}) },
       { queueKey, signal },
     ).catch((error: unknown) => {
       // Native Result<_, String> rejects with a string. Preserve that actionable
@@ -1515,13 +1574,13 @@ export async function chatWithOrion(
   } else if (aiProviderForModel(request.model) === "anthropic") {
     result = await runBrowserProviderCall(
       "anthropic",
-      () => chatInBrowserWithAnthropic(request, requireBrowserAnthropicApiKey(), visualSignal),
+      () => chatInBrowserWithAnthropic(request, requireBrowserAnthropicApiKey(), visualSignal, onVisualDelta),
       { queueKey, signal },
     );
   } else {
     result = await runBrowserProviderCall(
       "openai",
-      () => chatInBrowser(request, requireBrowserApiKey(), visualSignal),
+      () => chatInBrowser(request, requireBrowserApiKey(), visualSignal, onVisualDelta),
       { queueKey, signal },
     );
   }
@@ -1899,6 +1958,7 @@ async function chatInBrowser(
   request: ChatRequest,
   apiKey: string,
   signal?: AbortSignal,
+  onDelta?: (text: string) => void,
 ): Promise<ChatResult> {
   const inlineWriting = request.mode === "inline-writing";
   const allowNoteActions = chatRequestAllowsNoteActions(request);
@@ -1906,11 +1966,15 @@ async function chatInBrowser(
     ? "finish this writing proposal"
     : "finish this Chat reply";
   const body: Record<string, unknown> = {
+    ...(onDelta ? { stream: true } : {}),
     model: request.model || "gpt-5.6-sol",
     store: false,
     max_output_tokens: request.mode === "voice-synthesis" || request.mode === "chat-suggestions" ? 6_000 : inlineWriting || request.mode === "visual-artifact" || allowNoteActions || chatRequestAllowsEdits(request) ? 12_000 : 6_000,
     instructions: chatProviderInstructions(request),
-    input: JSON.stringify(chatProviderPayload(request)),
+    input: request.visualReview ? [{ role: "user", content: [
+      { type: "input_text", text: JSON.stringify(chatProviderPayload(request)) },
+      { type: "input_image", image_url: request.visualReview.png },
+    ] }] : JSON.stringify(chatProviderPayload(request)),
     text: {
       verbosity: "medium",
       format: {
@@ -1938,7 +2002,7 @@ async function chatInBrowser(
     throw new Error(await readApiError(response));
   }
 
-  const data = (await response.json()) as OpenAIResponse;
+  const data = (onDelta ? await readVisualProviderStream(response, "openai", onDelta) : await response.json()) as OpenAIResponse;
   const outputText = extractBrowserOutputText(data, operation);
   try {
     return request.mode === "voice-synthesis"
@@ -2024,6 +2088,7 @@ async function chatInBrowserWithAnthropic(
   request: ChatRequest,
   apiKey: string,
   signal?: AbortSignal,
+  onDelta?: (text: string) => void,
 ): Promise<ChatResult> {
   const inlineWriting = request.mode === "inline-writing";
   const allowNoteActions = chatRequestAllowsNoteActions(request);
@@ -2040,13 +2105,17 @@ async function chatInBrowserWithAnthropic(
     outputConfig.effort = request.effort;
   }
   const body = {
+    ...(onDelta ? { stream: true } : {}),
     model: request.model || "claude-sonnet-5",
     max_tokens: request.mode === "voice-synthesis" || request.mode === "chat-suggestions" ? 6_000 : inlineWriting || request.mode === "visual-artifact" || allowNoteActions || chatRequestAllowsEdits(request) ? 12_000 : 6_000,
     system: chatProviderInstructions(request),
     messages: [
       {
         role: "user",
-        content: JSON.stringify(chatProviderPayload(request)),
+        content: request.visualReview ? [
+          { type: "text", text: JSON.stringify(chatProviderPayload(request)) },
+          { type: "image", source: { type: "base64", media_type: "image/png", data: request.visualReview.png.slice("data:image/png;base64,".length) } },
+        ] : JSON.stringify(chatProviderPayload(request)),
       },
     ],
     output_config: outputConfig,
@@ -2057,6 +2126,7 @@ async function chatInBrowserWithAnthropic(
     undefined,
     operation,
     signal,
+    onDelta,
   );
   const outputText = extractAnthropicOutputText(
     response,
@@ -2086,6 +2156,7 @@ async function fetchAnthropic(
   requestedTimeoutMs: number | undefined,
   operation: string,
   signal?: AbortSignal,
+  onDelta?: (text: string) => void,
 ): Promise<AnthropicResponse> {
   const timeoutMs =
     typeof requestedTimeoutMs === "number" &&
@@ -2115,7 +2186,7 @@ async function fetchAnthropic(
       throw new Error(`Orion could not ask Anthropic to ${operation}: ${error instanceof Error ? error.message : String(error)}`);
     });
     if (!response.ok) throw new Error(await readProviderApiError(response, "Anthropic"));
-    return (await response.json()) as AnthropicResponse;
+    return (onDelta ? await readVisualProviderStream(response, "anthropic", onDelta) : await response.json()) as AnthropicResponse;
   } finally {
     signal?.removeEventListener("abort", cancel);
     globalThis.clearTimeout(timeout);
@@ -2378,6 +2449,8 @@ function isStudioMessage(value: unknown): boolean {
   return (
     isRecord(value) &&
     (value.threadId === undefined || validChatThreadId(value.threadId)) &&
+    (value.visualArtifact === undefined || value.role === "assistant" && isVisualArtifactMarker(value.visualArtifact)) &&
+    (value.visualError === undefined || value.role === "assistant" && typeof value.visualError === "string" && value.visualError.length <= 400) &&
     (value.passage === undefined || isRecord(value.passage) && typeof value.passage.noteId === "string" && isPassageAnchor(value.passage.anchor)) &&
     typeof value.id === "string" &&
     isOneOf(value.role, ["user", "assistant"]) &&
@@ -3019,7 +3092,7 @@ async function generateSpeechInBrowserWithOpenAI(
   if (!response.ok) {
     throw new Error(await readProviderApiError(response, "OpenAI"));
   }
-  const buffer = await readBoundedSpeechResponse(response, 12 * 1024 * 1024);
+  const buffer = await readBoundedProviderResponse(response, 12 * 1024 * 1024);
   return speechFromArrayBuffer(buffer);
 }
 
@@ -3053,7 +3126,7 @@ async function generateSpeechInBrowserWithElevenLabs(
     throw new Error(await readProviderApiError(response, "ElevenLabs"));
   }
   if (trackWords) {
-    const encoded = await readBoundedSpeechResponse(response, 18 * 1024 * 1024);
+    const encoded = await readBoundedProviderResponse(response, 18 * 1024 * 1024);
     const result: unknown = JSON.parse(new TextDecoder().decode(encoded));
     if (!result || typeof result !== "object") throw new Error("The speech provider returned invalid audio.");
     const payload = result as Record<string, unknown>;
@@ -3070,12 +3143,12 @@ async function generateSpeechInBrowserWithElevenLabs(
     const wordTimings = speechWordsFromCharacterAlignment(text, payload.alignment);
     return wordTimings ? { ...speech, wordTimings, timingSource: "elevenlabs", timingText: text } : speech;
   }
-  const buffer = await readBoundedSpeechResponse(response, 12 * 1024 * 1024);
+  const buffer = await readBoundedProviderResponse(response, 12 * 1024 * 1024);
   return speechFromArrayBuffer(buffer);
 }
 
-async function readBoundedSpeechResponse(response: Response, limit: number): Promise<ArrayBuffer> {
-  if (Number(response.headers.get("content-length")) > limit) throw new Error("That spoken audio is too large to play.");
+async function readBoundedProviderResponse(response: Response, limit: number, oversize = "That spoken audio is too large to play."): Promise<ArrayBuffer> {
+  if (Number(response.headers.get("content-length")) > limit) throw new Error(oversize);
   const reader = response.body?.getReader();
   if (!reader) return new ArrayBuffer(0);
   const chunks: Uint8Array[] = [];
@@ -3087,7 +3160,7 @@ async function readBoundedSpeechResponse(response: Response, limit: number): Pro
       total += value.byteLength;
       if (total > limit) {
         await reader.cancel();
-        throw new Error("That spoken audio is too large to play.");
+        throw new Error(oversize);
       }
       chunks.push(value);
     }
@@ -3358,7 +3431,13 @@ function chatInstructions(allowNoteActions: boolean): string {
 }
 
 function chatProviderInstructions(request: ChatRequest): string {
-  if (request.mode === "visual-artifact") return visualArtifactInstructions;
+  if (request.visualReview && request.mode === "visual-artifact") return reviewInstructions;
+  if (request.mode === "visual-artifact") {
+    const packet = parseArtifactGenerationInput(JSON.parse(request.prompt));
+    if (packet.readSelection) return visualSelectionReaderInstructions;
+    const plan = !request.model?.startsWith("claude-") && !packet.drawing;
+    return [artifactBaseInstructions, illustrationInstructions, calculatorInstructions, ...(plan ? [deferredDrawingInstructions] : [])].join("\n");
+  }
   if (request.mode === "voice-synthesis") return VOICE_SYNTHESIS_INSTRUCTIONS;
   if (request.mode === "chat-suggestions") return CHAT_SUGGESTIONS_INSTRUCTIONS;
   if (request.mode === "inline-writing") return INLINE_WRITING_INSTRUCTIONS;
@@ -3397,7 +3476,10 @@ function chatResponseSchema(request: ChatRequest): Record<string, unknown> {
 function chatProviderPayload(request: ChatRequest): Record<string, unknown> {
   if (request.mode === "voice-synthesis") return { synthesisContext: parseVoiceSynthesisContext(request.synthesisContext) };
   if (request.mode === "chat-suggestions") return { suggestionContext: parseChatSuggestionContext(request.suggestionContext) };
-  if (request.mode === "visual-artifact") return parseArtifactGenerationInput(JSON.parse(request.prompt));
+  if (request.mode === "visual-artifact") return {
+    ...parseArtifactGenerationInput(JSON.parse(request.prompt)),
+    ...(request.visualReview ? { drawingToReview: request.visualReview.drawing } : {}),
+  };
   const base = { question: request.prompt, workspaceName: request.workspaceName, conversation: request.history };
   return request.mode === "chat-reading"
     ? { ...base, readingContext: parseChatReadingContext(request.readingContext) }

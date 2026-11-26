@@ -81,6 +81,17 @@ calculation undefined and the write would fail. A stale note version also
 rejects the write. The success receipt includes the updated note version and
 citation. Creating the artifact uses no provider connection.
 
+For original vector drawings, send an `explainer` containing an `illustration`
+block. Each part has its own geometry in the same canvas, a label and an exact
+quote for the part inspector. Optional named glyphs cover common objects and
+level indicators. The tool's discovery schema lists the shapes, paints, canvas
+sizes and stage changes. Orion can save the rendered drawing as standalone SVG.
+
+Calculator blocks can bind prose directly to inputs and outputs, name presets,
+branch on a comparison, scale ingredients, or show population counts and
+proportional flows. Each chart samples its own formula. A top-level `evidence`
+field can link displayed facts to excerpts of the supplied passage.
+
 ## Writing blocks and slash-command content
 
 `orion_apply_note_command` applies the content produced by editor commands while

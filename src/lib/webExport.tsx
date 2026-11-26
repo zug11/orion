@@ -39,8 +39,7 @@ import {
 } from "./theme";
 import { decorateAutoLinks } from "./wiki";
 import { conceptDestinationIds, linkedNoteIdsForExport, notesForExportScope, type ExportScope } from "./exportScope";
-import viewerStyles from "../components/VisualArtifactView.css?inline";
-import { viewerScript } from "virtual:orion-visualisation-export";
+import { viewerScript, viewerStyles } from "virtual:orion-visualisation-export";
 
 export { linkedNoteIdsForExport, notesForExportScope, type ExportScope } from "./exportScope";
 

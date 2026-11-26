@@ -1,0 +1,19 @@
+.artifact-illustration { display: grid; min-width: 0; gap: 12px; }
+.artifact-illustration__figure { display: block; width: 100%; height: auto; max-height: min(66vh, 550px); margin-inline: auto; }
+.artifact-illustration [data-selectable], .artifact-illustration [data-drawing-badge] { cursor: pointer; }
+.artifact-illustration__parts, .artifact-illustration__stages [role="group"] { display: flex; flex-wrap: wrap; gap: 6px; }
+.artifact-illustration .artifact-illustration__parts button, .artifact-illustration .artifact-illustration__stages button { display: inline-flex; align-items: center; gap: .5em; padding: 5px 10px; border: 1px solid var(--line-strong); border-radius: 20px; background: var(--surface-1); color: var(--text-soft); font: inherit; }
+.artifact-illustration__parts button span { display: grid; place-items: center; min-width: 1.45em; height: 1.45em; border-radius: 50%; background: var(--surface-2); font-size: .86em; font-variant-numeric: tabular-nums; }
+.visual-artifact .artifact-illustration button[aria-pressed="true"] { color: var(--text); border-color: var(--va-accent); background: color-mix(in srgb, var(--va-accent) 11%, var(--surface-1)); }
+.artifact-illustration button:focus-visible, .artifact-illustration summary:focus-visible { outline: 2px solid var(--va-accent); outline-offset: 2px; }
+.artifact-illustration__detail { padding: 12px 15px; border-radius: 10px; background: var(--surface-2); }
+.artifact-illustration__detail p, .artifact-illustration__detail blockquote { margin: .35em 0; }
+.artifact-illustration__detail summary { cursor: pointer; color: var(--text-soft); }
+.artifact-illustration__detail mark { color: var(--text); background: color-mix(in srgb, var(--va-warm) 42%, var(--surface-2)); }
+.artifact-illustration__detail button { margin-top: 8px; }
+.artifact-illustration__stages { display: grid; gap: 10px; }
+.artifact-illustration__stages label { display: flex; flex-wrap: wrap; justify-content: space-between; }
+.artifact-illustration__stages input { width: 100%; accent-color: var(--va-accent); }
+.artifact-illustration__snapshot figure { break-inside: avoid; margin: 1em 0; }
+.artifact-illustration__snapshot svg { max-height: 420px; }
+.artifact-illustration__export { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }

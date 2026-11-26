@@ -873,6 +873,12 @@ pub async fn model_key(model: &str) -> Result<Option<Zeroizing<String>>, String>
     }
 }
 pub async fn credential(client: &Client) -> Result<Zeroizing<String>, String> {
+    credential_for_account(client, None).await
+}
+pub async fn credential_for_account(
+    client: &Client,
+    expected: Option<&str>,
+) -> Result<Zeroizing<String>, String> {
     let _gate = STORE_GATE.lock().await;
     let mut store = load().await?;
     let account = store
@@ -880,6 +886,9 @@ pub async fn credential(client: &Client) -> Result<Zeroizing<String>, String> {
         .iter_mut()
         .find(|a| Some(&a.id) == store.active.as_ref() && connected(a))
         .ok_or("Continue with ChatGPT in Settings before using a ChatGPT plan model.")?;
+    if expected.is_some_and(|id| id != account.id) {
+        return Err("The ChatGPT account changed. Start the drawing again.".into());
+    }
     if account.expires <= now() + 60 {
         let result = tokens(
             client,
@@ -936,6 +945,101 @@ async fn fetch_models(client: &Client) -> Result<Vec<Model>, String> {
     let value = bounded_json(response, 2 * 1024 * 1024).await?;
     model_catalog(&value)
 }
+#[tauri::command]
+pub async fn illustration_models(
+    client: State<'_, OpenAiClient>,
+    plan: bool,
+    account_id: Option<String>,
+) -> Result<Value, String> {
+    // Older Space settings may predate chatgptAccountId. Pin the account whose
+    // catalog was read so subsequent drawing and review calls cannot drift.
+    let account_id = if plan && account_id.is_none() {
+        Some(
+            chatgpt_status()
+                .await?
+                .active_id
+                .ok_or("Choose a connected ChatGPT account in Settings.")?,
+        )
+    } else {
+        account_id
+    };
+    let key = if plan {
+        credential_for_account(&client.0, account_id.as_deref()).await?
+    } else {
+        stored_api_key()
+            .await?
+            .ok_or("Add an OpenAI API key in Settings.")?
+    };
+    let response = client
+        .0
+        .get(OPENAI_MODELS_URL)
+        .bearer_auth(key.as_str())
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await
+        .map_err(|_| "Could not load the drawing model catalog.")?;
+    // A restricted API key can be allowed to create responses without permission
+    // to list models. The Responses request itself then determines access.
+    if !plan && response.status() == reqwest::StatusCode::FORBIDDEN {
+        return Ok(Value::Null);
+    }
+    if !response.status().is_success() {
+        return Err(if plan {
+            error(response).await
+        } else {
+            super::openai_error(response, "list drawing models").await
+        });
+    }
+    let mut items = drawing_model_items(&bounded_json(response, 2 * 1024 * 1024).await?, plan)?;
+    if let (true, Some(id), Some(items)) = (plan, account_id, items.as_array_mut()) {
+        for item in items {
+            item["planAccountId"] = json!(id);
+        }
+    }
+    Ok(items)
+}
+
+fn drawing_model_items(catalog: &Value, plan: bool) -> Result<Value, String> {
+    let plan_catalog = plan && catalog["models"].is_array();
+    let models = catalog[if plan_catalog { "models" } else { "data" }]
+        .as_array()
+        .ok_or("The connection returned an invalid model catalog.")?;
+    let items = models
+        .iter()
+        .filter_map(|m| {
+            if plan_catalog && m["visibility"] != "list" {
+                return None;
+            }
+            let id = m[if plan_catalog { "slug" } else { "id" }].as_str()?;
+            if id.len() > 110
+                || !id.contains("-astra")
+                || !id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || ".-".contains(c))
+            {
+                return None;
+            }
+            let mut item = json!({"id": if plan {format!("{PREFIX}{id}")} else {id.to_owned()}});
+            if let Some(name) = m["display_name"].as_str() {
+                item["name"] = json!(name.chars().take(128).collect::<String>());
+            }
+            if let Some(levels) = m
+                .get("supported_reasoning_levels")
+                .or_else(|| m.get("supported_reasoning_efforts"))
+                .and_then(Value::as_array)
+            {
+                item["efforts"] = json!(levels
+                    .iter()
+                    .filter_map(|v| v.as_str().or_else(|| v["effort"].as_str()))
+                    .filter(|s| matches!(*s, "none" | "low" | "medium" | "high" | "xhigh" | "max"))
+                    .collect::<Vec<_>>());
+            }
+            Some(item)
+        })
+        .collect::<Vec<_>>();
+    Ok(json!(items))
+}
+
 fn model_catalog(value: &Value) -> Result<Vec<Model>, String> {
     let models = value["models"]
         .as_array()
@@ -964,7 +1068,7 @@ fn model_catalog(value: &Value) -> Result<Vec<Model>, String> {
 /// Keep the requested response representation coupled to the plan body transform.
 /// Plan access requires SSE; API-key Responses requests retain ordinary JSON.
 pub fn text_request(request: reqwest::RequestBuilder, mut body: Value) -> reqwest::RequestBuilder {
-    let accept = if prepare(&mut body) {
+    let accept = if prepare(&mut body) || body["stream"] == true {
         "text/event-stream"
     } else {
         "application/json"
@@ -1164,44 +1268,30 @@ impl Events {
         Ok(response)
     }
 
+    #[cfg(test)]
     fn feed(&mut self, chunk: &[u8]) -> Result<Option<Value>, String> {
+        self.feed_with_delta(chunk, &|_| {})
+    }
+
+    fn feed_with_delta(
+        &mut self,
+        chunk: &[u8],
+        delta: &dyn Fn(&str),
+    ) -> Result<Option<Value>, String> {
         self.total += chunk.len();
         if self.total > self.limit {
             return Err("ChatGPT response exceeded its limit.".into());
         }
         self.pending.extend_from_slice(chunk);
-        loop {
-            let Some((end, size)) = [
-                self.pending
-                    .windows(2)
-                    .position(|s| s == b"\n\n")
-                    .map(|n| (n, 2)),
-                self.pending
-                    .windows(4)
-                    .position(|s| s == b"\r\n\r\n")
-                    .map(|n| (n, 4)),
-            ]
-            .into_iter()
-            .flatten()
-            .min_by_key(|(n, _)| *n) else {
-                return Ok(None);
-            };
-            let frame = self.pending.drain(..end + size).collect::<Vec<_>>();
-            let frame =
-                std::str::from_utf8(&frame).map_err(|_| "ChatGPT returned invalid stream text.")?;
-            let data = frame
-                .lines()
-                .filter_map(|l| l.strip_prefix("data:").map(str::trim_start))
-                .collect::<Vec<_>>()
-                .join("\n");
-            if data.is_empty() || data == "[DONE]" {
-                continue;
-            }
-            let event: Value =
-                serde_json::from_str(&data).map_err(|_| "ChatGPT returned invalid stream data.")?;
+        while let Some(event) = next_stream_event(&mut self.pending)? {
             #[cfg(test)]
             super::openai_web::record_live_stream_structure(&event);
             match event["type"].as_str() {
+                Some("response.output_text.delta") => {
+                    if let Some(text) = event["delta"].as_str() {
+                        delta(text);
+                    }
+                }
                 Some("response.output_item.done") => {
                     let index = match event.get("output_index") {
                         None => None,
@@ -1250,8 +1340,114 @@ impl Events {
                 _ => {}
             }
         }
+        Ok(None)
     }
 }
+
+fn next_stream_event(pending: &mut Vec<u8>) -> Result<Option<Value>, String> {
+    loop {
+        let Some((end, size)) = [
+            pending
+                .windows(2)
+                .position(|s| s == b"\n\n")
+                .map(|n| (n, 2)),
+            pending
+                .windows(4)
+                .position(|s| s == b"\r\n\r\n")
+                .map(|n| (n, 4)),
+        ]
+        .into_iter()
+        .flatten()
+        .min_by_key(|(n, _)| *n) else {
+            return Ok(None);
+        };
+        let frame = pending.drain(..end + size).collect::<Vec<_>>();
+        let frame = std::str::from_utf8(&frame)
+            .map_err(|_| "The provider returned invalid stream text.")?;
+        let data = frame
+            .lines()
+            .filter_map(|l| l.strip_prefix("data:").map(str::trim_start))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        let event: Value = serde_json::from_str(&data)
+            .map_err(|_| "The provider returned invalid stream data.")?;
+        return Ok(Some(event));
+    }
+}
+
+pub async fn read_visual_stream(
+    mut response: Response,
+    anthropic: bool,
+    on_delta: &tauri::ipc::Channel<String>,
+) -> Result<Value, String> {
+    let emit = |text: &str| {
+        let _ = on_delta.send(text.to_owned());
+    };
+    if !anthropic {
+        return read_response_deltas(response, 4_000_000, true, &emit).await;
+    }
+    let mut pending = Vec::new();
+    let mut total = 0;
+    let mut texts = std::collections::BTreeMap::<u64, String>::new();
+    let mut reason = None;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "Anthropic's visual stream was interrupted.")?
+    {
+        total += chunk.len();
+        if total > 4_000_000 {
+            return Err("The visual stream exceeded its size limit.".into());
+        }
+        pending.extend_from_slice(&chunk);
+        while let Some(event) = next_stream_event(&mut pending)? {
+            match event["type"].as_str() {
+                Some("content_block_start") if event["content_block"]["type"] == "text" => {
+                    let index = event["index"].as_u64().ok_or("Invalid text block index.")?;
+                    let initial = event["content_block"]["text"]
+                        .as_str()
+                        .ok_or("Invalid text block.")?;
+                    if texts.len() >= 64 || texts.insert(index, initial.to_string()).is_some() {
+                        return Err("Invalid text block.".into());
+                    }
+                    emit(initial);
+                }
+                Some("content_block_delta") if event["delta"]["type"] == "text_delta" => {
+                    let index = event["index"].as_u64().ok_or("Invalid text block index.")?;
+                    let text = event["delta"]["text"]
+                        .as_str()
+                        .ok_or("Invalid text delta.")?;
+                    texts
+                        .get_mut(&index)
+                        .ok_or("Unknown text block.")?
+                        .push_str(text);
+                    emit(text);
+                }
+                Some("message_delta") => {
+                    reason = event["delta"]["stop_reason"].as_str().map(str::to_owned)
+                }
+                Some("message_stop")
+                    if matches!(reason.as_deref(), Some("end_turn" | "stop_sequence")) =>
+                {
+                    let content = texts
+                        .into_values()
+                        .map(|text| json!({"type":"text","text":text}))
+                        .collect::<Vec<_>>();
+                    return Ok(json!({"stop_reason":reason,"content":content}));
+                }
+                Some("message_stop" | "error") => {
+                    return Err("Anthropic could not finish the visual.".into())
+                }
+                _ => {}
+            }
+        }
+    }
+    Err("Anthropic's visual stream ended before completion.".into())
+}
+
 pub async fn read_for_model(response: Response, model: &str) -> Result<Value, String> {
     let plan = is_model(model);
     read_response(response, 16 * 1024 * 1024, plan)
@@ -1269,9 +1465,18 @@ pub async fn read_with_limit(response: Response, limit: usize) -> Result<Value, 
     read_response(response, limit, true).await
 }
 async fn read_response(
+    response: Response,
+    limit: usize,
+    require_stream: bool,
+) -> Result<Value, String> {
+    read_response_deltas(response, limit, require_stream, &|_| {}).await
+}
+
+async fn read_response_deltas(
     mut response: Response,
     limit: usize,
     require_stream: bool,
+    delta: &(dyn Fn(&str) + Sync),
 ) -> Result<Value, String> {
     // The official SIWC DevKit allows a missing/empty Content-Type on the direct
     // route. Still parse bounded SSE and require response.completed; this is not
@@ -1298,7 +1503,7 @@ async fn read_response(
         .await
         .map_err(|_| "ChatGPT stream was interrupted. No complete result was received.")?
     {
-        if let Some(value) = events.feed(&chunk)? {
+        if let Some(value) = events.feed_with_delta(&chunk, delta)? {
             return Ok(value);
         }
     }
@@ -1674,6 +1879,29 @@ mod tests {
         assert!(connected(&store.accounts[0]));
     }
     #[test]
+    fn drawing_catalog_uses_only_the_selected_accounts_listed_models_and_efforts() {
+        let response = json!({"models":[
+          {"slug":"gpt-6.1-astra","visibility":"list","supported_reasoning_levels":[{"effort":"high"},{"effort":"xhigh"}]},
+          {"slug":"gpt-9-astra","visibility":"hide"},
+          {"slug":"gpt-6.2-sol","visibility":"list"}
+        ]});
+        assert_eq!(
+            drawing_model_items(&response, true).unwrap(),
+            json!([{"id":"chatgpt:gpt-6.1-astra","efforts":["high","xhigh"]}])
+        );
+        assert!(drawing_model_items(&response, false).is_err());
+        let api = json!({"data":[{"id":"gpt-6-astra-2026-05-01"},{"id":"gpt-5.6-sol"}]});
+        assert_eq!(
+            drawing_model_items(&api, false).unwrap(),
+            json!([{"id":"gpt-6-astra-2026-05-01"}])
+        );
+        assert_eq!(
+            drawing_model_items(&api, true).unwrap(),
+            json!([{"id":"chatgpt:gpt-6-astra-2026-05-01"}])
+        );
+    }
+
+    #[test]
     fn model_catalog_keeps_account_order_and_excludes_hidden_or_invalid_slugs() {
         let models = model_catalog(&json!({"models":[
             {"slug":"gpt-6.1-sol","display_name":"Sol","visibility":"list"},
@@ -1689,6 +1917,66 @@ mod tests {
         assert_eq!(models[0].name, "Sol");
         assert!(model_catalog(&json!({"data":[]})).is_err());
     }
+    #[tokio::test]
+    async fn visual_streams_forward_only_text_deltas_and_require_terminal_completion() {
+        let envelopes = [
+            (
+                false,
+                vec![
+                    json!({"type":"response.output_text.delta","delta":"public"}),
+                    json!({"type":"response.completed","response":{"status":"completed","output_text":"final"}}),
+                ],
+            ),
+            (
+                true,
+                vec![
+                    json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+                    json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"private"}}),
+                    json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"public"}}),
+                    json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}),
+                    json!({"type":"message_stop"}),
+                ],
+            ),
+        ];
+        for (anthropic, events) in envelopes {
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+            let captured = seen.clone();
+            let channel = tauri::ipc::Channel::<String>::new(move |value| {
+                if let tauri::ipc::InvokeResponseBody::Json(text) = value {
+                    captured
+                        .lock()
+                        .unwrap()
+                        .push(serde_json::from_str(&text).unwrap());
+                }
+                Ok(())
+            });
+            let frames = events
+                .iter()
+                .map(|event| format!("data: {event}\r\n\r\n"))
+                .collect::<Vec<_>>();
+            let result = read_visual_stream(
+                response_fixture("text/event-stream", &frames.concat()).await,
+                anthropic,
+                &channel,
+            )
+            .await
+            .unwrap();
+            assert_eq!(seen.lock().unwrap().concat(), "public");
+            if anthropic {
+                assert_eq!(result["content"][0]["text"], "public");
+            } else {
+                assert_eq!(result["output_text"], "final");
+            }
+            assert!(read_visual_stream(
+                response_fixture("text/event-stream", &frames[..frames.len() - 1].concat()).await,
+                anthropic,
+                &channel
+            )
+            .await
+            .is_err());
+        }
+    }
+
     async fn response_fixture(content_type: &str, body: &str) -> Response {
         response_fixture_with_type(Some(content_type), body).await
     }

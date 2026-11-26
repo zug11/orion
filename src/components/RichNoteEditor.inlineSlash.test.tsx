@@ -20,7 +20,7 @@ afterEach(cleanup);
 
 function fixture(markdown: string, notes: Note[] = [], settings?: Settings, writingOrigins: Note["writingOrigins"] = []) {
   const onChange = vi.fn();
-  const view = render(<RichNoteEditor settings={settings} noteId="origin" markdown={markdown} notes={notes} concepts={[]} sources={[]} attachedSourceIds={[]} onChange={onChange} getWritingOrigins={() => writingOrigins} onAttachSource={vi.fn()} onRegisterConcept={vi.fn()} onDisableConceptAutoLink={vi.fn()} />);
+  const view = render(<div className="workspace-content"><RichNoteEditor settings={settings} noteId="origin" markdown={markdown} notes={notes} concepts={[]} sources={[]} attachedSourceIds={[]} onChange={onChange} getWritingOrigins={() => writingOrigins} onAttachSource={vi.fn()} onRegisterConcept={vi.fn()} onDisableConceptAutoLink={vi.fn()} /></div>);
   const element = view.container.querySelector(".tiptap") as HTMLElement & { editor: Editor };
   return { ...view, element, editor: element.editor, onChange };
 }
@@ -75,7 +75,8 @@ describe("inline slash commands in the real note editor", () => {
       fireEvent.keyDown(guidance, { key: "Enter" });
       await waitFor(() => expect(screen.queryByRole("dialog", { name: "Visualise" })).toBeNull());
       expect(generate).toHaveBeenCalledTimes(1);
-      expect(generate).toHaveBeenCalledWith("The battery stores excess power.", "explainer", "", expect.any(Object), expect.any(AbortSignal));
+      expect(generate).toHaveBeenCalledWith("The battery stores excess power.", "explainer", "",
+        expect.any(Object), expect.any(AbortSignal), undefined, undefined, expect.any(Function), expect.any(Function));
       expect(editor.state.doc.child(1).type.name).toBe("noteVisualArtifact");
       expect(screen.getByRole("heading", { name: "Capacity" })).toBeInTheDocument();
       expect(onChange.mock.lastCall?.[1]).toEqual(alreadyCredited ? undefined : { origin: "orion-ai", present: true });
@@ -84,6 +85,49 @@ describe("inline slash commands in the real note editor", () => {
       expect(onChange.mock.lastCall?.[1]).toEqual(alreadyCredited ? undefined : { origin: "orion-ai", present: false });
     } finally {
       generate.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(["selected", "pasted"] as const)("sends the full %s passage from the editor and inserts in one Undo", async mode => {
+    HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
+    HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    const layout = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("workspace-content")) return new DOMRect(0, 0, 1200, 760);
+      if (this.classList.contains("rich-note-editor")) return new DOMRect(200, 80, 840, 620);
+      return new DOMRect(280, 150, 680, 24);
+    });
+    const first = "An opening sentence with a bicycle 🚲. ".repeat(400).trim();
+    const last = "Further observations. ".repeat(500) + "Final observation 🧭.";
+    const original = mode === "selected" ? [first, last, "Private follow-up."].join("\n\n") : "/vis";
+    const generate = vi.spyOn(visualGeneration, "generateVisualArtifact").mockResolvedValue({
+      version: 1, format: "explainer", title: "Observations", blocks: [{ kind: "text", text: "Final observation." }],
+    });
+    try {
+      const { editor } = fixture(original, [], { ...defaultSettings, apiKeyConfigured: true });
+      if (mode === "selected") {
+        vi.spyOn(editor.view, "coordsAtPos").mockReturnValue({ left: 280, right: 360, top: 200, bottom: 220 });
+        await waitFor(() => expect(editor.isFocused).toBe(true));
+        const { doc } = editor.state;
+        act(() => { editor.commands.setTextSelection({ from: 1, to: doc.child(0).nodeSize + doc.child(1).nodeSize - 1 }); });
+        fireEvent.click(await screen.findByRole("button", { name: "Visualise selected text" }));
+      } else {
+        await chooseInlineCommand(editor, original, "/vis", "Visualise");
+        const passage = await screen.findByRole("textbox", { name: "Passage" });
+        expect(passage).not.toHaveAttribute("maxlength");
+        fireEvent.change(passage, { target: { value: [first, last].join("\n") } });
+      }
+      expect(generate).not.toHaveBeenCalled();
+      fireEvent.click(await screen.findByRole("button", { name: "Generate for me" }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Visualise" })).toBeNull());
+      expect(generate.mock.calls[0][0]).toBe([first, last].join("\n"));
+      expect(editor.state.doc.child(mode === "selected" ? 2 : 0).type.name).toBe("noteVisualArtifact");
+      act(() => { editor.commands.undo(); });
+      expect(editor.getMarkdown()).toBe(original);
+    } finally {
+      generate.mockRestore();
+      layout.mockRestore();
       vi.unstubAllGlobals();
     }
   });

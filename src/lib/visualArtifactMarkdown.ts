@@ -42,10 +42,13 @@ interface MarkdownNode {
 export function remarkVisualArtifacts() {
   return (tree: MarkdownNode) => {
     if (!tree.children) return;
+    const occurrences = new Map<string, number>();
     tree.children = tree.children.map(child => {
       if (child.type !== "html" || !isVisualArtifactMarker(child.value)) return child;
+      const index = occurrences.get(child.value) ?? 0;
+      occurrences.set(child.value, index + 1);
       return { type: "orionArtifact", position: child.position,
-        data: { hName: "aside", hProperties: { "data-orion-artifact": child.value } }, children: [] };
+        data: { hName: "aside", hProperties: { "data-orion-artifact": child.value, "data-orion-artifact-index": index } }, children: [] };
     });
   };
 }

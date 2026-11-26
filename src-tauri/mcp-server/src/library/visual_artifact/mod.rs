@@ -6,59 +6,13 @@ use serde_json::Value;
 use std::{collections::HashSet, io};
 
 mod calculator;
+#[path = "../../../../shared/visual_input.rs"]
+mod checks;
+pub(super) use checks::illustration;
+use checks::{fields, invalid, js_space, list, literal, number};
 
 const MAX_ARTIFACT_BYTES: usize = 48_000;
 const PAINTS: [&str; 7] = ["none", "ink", "muted", "accent", "warm", "cool", "surface"];
-
-fn invalid(message: &str) -> String {
-    format!("Invalid visual artifact: {message}")
-}
-
-fn fields(value: &Value, allowed: &[&str]) -> Result<(), String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| invalid("expected an object"))?;
-    if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
-        let name: String = key.chars().take(80).collect();
-        return Err(invalid(&format!("unexpected field {name:?}")));
-    }
-    Ok(())
-}
-
-fn list(value: &Value, min: usize, max: usize) -> Result<&[Value], String> {
-    value
-        .as_array()
-        .map(Vec::as_slice)
-        .filter(|list| (min..=max).contains(&list.len()))
-        .ok_or_else(|| invalid(&format!("expected a list with {min} to {max} entries")))
-}
-
-// ECMAScript whitespace (String.trim and the SVG path tokenizer).
-fn js_space(ch: char) -> bool {
-    (ch.is_whitespace() && ch != '\u{85}') || ch == '\u{feff}'
-}
-
-fn literal(value: &Value, max: usize, allow_empty: bool) -> Result<&str, String> {
-    let text = value.as_str().ok_or_else(|| invalid("expected text"))?;
-    if text.encode_utf16().take(max + 1).count() > max
-        || (!allow_empty && text.trim_matches(js_space).is_empty())
-        || text
-            .bytes()
-            .any(|b| b < 0x20 && !matches!(b, b'\t' | b'\n' | b'\r') || b == 0x7f)
-    {
-        return Err(invalid(&format!(
-            "expected valid text within {max} UTF-16 units"
-        )));
-    }
-    Ok(text)
-}
-
-fn number(value: &Value, min: f64, max: f64) -> Result<f64, String> {
-    value
-        .as_f64()
-        .filter(|n| (min..=max).contains(n))
-        .ok_or_else(|| invalid(&format!("expected a number from {min} to {max}")))
-}
 
 fn index(value: &Value, count: usize) -> Result<usize, String> {
     let n = number(value, 0.0, count as f64 - 1.0)?;
@@ -296,6 +250,7 @@ fn block(value: &Value) -> Result<(), String> {
                 text_field(item, "back", 1200)?;
             }
         }
+        Some("illustration") => illustration::validate(value)?,
         Some("scene") => scene(value)?,
         Some("calculator") => calculator::validate(value)?,
         _ => return Err(invalid("unknown block kind")),
@@ -313,7 +268,12 @@ impl serde_json::ser::Formatter for MarkerFormatter {
 }
 
 pub(super) fn validated_marker(value: &Value) -> Result<String, String> {
-    fields(value, &["version", "format", "title", "summary", "blocks"])?;
+    fields(
+        value,
+        &[
+            "version", "format", "title", "summary", "blocks", "evidence",
+        ],
+    )?;
     if value["version"].as_f64() != Some(1.0) {
         return Err(invalid("expected version 1"));
     }
@@ -331,6 +291,31 @@ pub(super) fn validated_marker(value: &Value) -> Result<String, String> {
     let blocks = list(&value["blocks"], 1, 12)?;
     for (i, item) in blocks.iter().enumerate() {
         block(item).map_err(|error| format!("artifact.blocks[{i}]: {error}"))?;
+    }
+    if let Some(evidence) = value.get("evidence") {
+        fields(evidence, &["passage", "claims"])?;
+        text_field(evidence, "passage", 12000)?;
+        for claim in list(&evidence["claims"], 1, 48)? {
+            fields(claim, &["label", "quotes", "target"])?;
+            if let Some(target) = claim.get("target") {
+                fields(target, &["block", "field", "index"])?;
+                let b = &blocks[index(&target["block"], blocks.len())?];
+                let count = match (b["kind"].as_str(), target["field"].as_str()) {
+                    (Some("calculator"), Some("input")) => b["inputs"].as_array().unwrap().len(),
+                    (Some("calculator"), Some("output")) => b["outputs"].as_array().unwrap().len(),
+                    (Some("steps"), Some("step")) => b["items"].as_array().unwrap().len(),
+                    (Some("table"), Some("cell")) => {
+                        b["rows"].as_array().unwrap().len() * b["columns"].as_array().unwrap().len()
+                    }
+                    _ => return Err(invalid("Source target does not match its block.")),
+                };
+                index(&target["index"], count)?;
+            }
+            text_field(claim, "label", 200)?;
+            for quote in list(&claim["quotes"], 0, 4)? {
+                literal(quote, 500, false)?;
+            }
+        }
     }
     if let Some(kind) = required {
         if !blocks.iter().any(|b| b["kind"] == kind) {
@@ -371,6 +356,24 @@ pub(super) fn validated_marker(value: &Value) -> Result<String, String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn accepts_and_rejects_the_same_documents_as_the_renderer() {
+        let cases: Value = serde_json::from_str(include_str!(
+            "../../../../../src/lib/fixtures/mcpVisualArtifacts.json"
+        ))
+        .unwrap();
+        for case in cases.as_array().unwrap() {
+            let result = validated_marker(&case["artifact"]);
+            assert_eq!(
+                result.is_ok(),
+                case["valid"].as_bool().unwrap(),
+                "{}: {:?}",
+                case["name"],
+                result.err()
+            );
+        }
+    }
 
     #[test]
     fn validates_drawing_commands_and_implicit_groups() {

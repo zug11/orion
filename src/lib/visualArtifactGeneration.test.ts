@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatRequest, Settings } from "../types";
 import { providerCallScheduler } from "./providerScheduler";
 import { chatWithOrion, deleteApiKey, deleteAnthropicApiKey, saveApiKey, saveAnthropicApiKey } from "./storage";
-import { generateVisualArtifact } from "./visualArtifactGeneration";
+import { generatePassageIllustration, generateVisualArtifact } from "./visualArtifactGeneration";
 import { readVisualArtifactMarker, visualArtifactMarker } from "./visualArtifactMarkdown";
 import { type VisualArtifact } from "./visualArtifacts";
 
@@ -87,6 +87,25 @@ describe("Visualise through the saved connection", () => {
     expect(JSON.parse(body.input)).toEqual({ source: "create a note", format: "timeline", guidance: "" });
     expect(Object.keys(body.text.format.schema.properties)).toEqual(["reply"]);
   });
+  it.each([model, "claude-sonnet-5"])("reads one bounded section through %s without drawing or sending surrounding context", async selectedModel => {
+    const packet = { source: "The price changed to €12.", format: "calculator", guidance: "Compare prices.", readSelection: true };
+    const excerpt = JSON.stringify({ excerpts: [packet.source] });
+    const transport = mockReply(excerpt);
+    const request: ChatRequest = { mode: "visual-artifact", model: selectedModel, effort: "low", workspaceName: "Private Space",
+      notes: [], sources: [], concepts: [], history: [{role:"user", content:"Other conversation"}], allowNoteActions: true,
+      prompt: JSON.stringify(packet) };
+    expect((await chatWithOrion(request)).reply).toBe(excerpt);
+    const body = JSON.parse(transport.mock.calls[0][1]!.body as string);
+    expect(JSON.parse(body.input ?? body.messages[0].content)).toEqual(packet);
+    expect(body.instructions ?? body.system).toContain("Copy each excerpt exactly");
+    expect(body.instructions ?? body.system).not.toContain("drawingRequest");
+    expect(transport).toHaveBeenCalledTimes(1);
+    await expect(chatWithOrion(request, freshSignal(), undefined, vi.fn())).rejects.toThrow(/stream/);
+    for (const extra of [{ drawing: true, format: "explainer" }, { correction: "change" }, { readSelection: false }, { source: "x".repeat(12_001) }]) {
+      await expect(chatWithOrion({...request, prompt: JSON.stringify({...packet, ...extra})})).rejects.toThrow();
+    }
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
   it.each([
     ["bad data", "auto", /incomplete visual/], [JSON.stringify({ ...artifact, storageId: "generated" }), "auto", /could not read/],
     [JSON.stringify(artifact), "quiz", /different visual format/], ['{"unavailable":true}', "calculator", /enough detail/],
@@ -95,10 +114,100 @@ describe("Visualise through the saved connection", () => {
     await expect(generateVisualArtifact(source, format, "", selected, freshSignal())).rejects.toThrow(error);
     expect(transport).toHaveBeenCalledTimes(1);
   });
-  it("does not dispatch without a configured connection or on oversized or cancelled input", async () => {
+  it.each(["missing illustration", "only library symbols"])("corrects a drawing with %s and checks the final geometry and source", async initial => {
+    const passage = "A float rises.";
+    const drawing = { version:1,format:"explainer",title:"Float",blocks:[{kind:"illustration",passage,view:"square",
+      parts:[{id:"float",name:"Float",tone:"warm",selectable:true,about:passage,quote:"float rises",
+        shapes:[{type:"ellipse",cx:100,cy:90,rx:20,ry:10,paint:"soft"}]}]}] };
+    const first = initial === "missing illustration" ? artifact : {...drawing, blocks:[{...drawing.blocks[0],
+      parts:[{...drawing.blocks[0].parts[0], shapes:undefined, icon:{name:"gauge",x:40,y:40,size:80}}]}]};
+    const packets: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url, request) => {
+      if (String(_url).endsWith("/models")) return Response.json({data:[{id:"gpt-6.2-astra"}]});
+      const body = JSON.parse(request.body);
+      expect(body.model).toBe("gpt-6.2-astra");
+      expect(body.reasoning.effort).toBe("high");
+      packets.push(JSON.parse(body.input));
+      return new Response(JSON.stringify({status:"completed",output_text:JSON.stringify({reply:JSON.stringify(packets.length === 1 ? first : drawing)})}));
+    }));
+    expect(await generatePassageIllustration(passage,"Side view",selected,freshSignal())).toEqual(drawing);
+    expect(packets[0]).toEqual({source:passage, format:"explainer", drawing:true, guidance:"Side view"});
+    expect(packets[1]).toMatchObject({...packets[0],correction:expect.any(String)});
+    const called = mockReply(JSON.stringify(drawing));
+    await expect(generatePassageIllustration("Unrelated source","",selected,freshSignal())).rejects.toThrow(/passage differs/);
+    expect(called).toHaveBeenCalledTimes(2);
+  });
+  it.each(["planned", "unsolicited geometry"])("delegates only the %s block to Astra and retains indexed evidence and other blocks", async mode => {
+    const description = "Show the copper plate.";
+    const plate = { kind:"illustration", view:"square", passage:source, parts:[
+      { id:"plate", name:"Copper plate", tone:"warm", selectable:true, about:"The etched plate.", quote:"etched the plate",
+        shapes:[{type:"ellipse", cx:100,cy:100,rx:30,ry:24,paint:"soft"}] },
+    ] };
+    const block = mode === "planned" ? { kind:"drawingRequest",description } : {kind:"illustration", parts:[]};
+    const plan = { ...artifact, blocks:[block, ...artifact.blocks], evidence:{ passage:source, claims:[
+      {label:"Etching", quotes:["etched the plate"], target:{block:1,field:"step",index:0}},
+    ]} };
+    const dispatch: string[] = [];
+    const label = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async (url, opts) => {
+      if (String(url).endsWith("/models")) return Response.json({data:[{id:"gpt-6.2-astra"}]});
+      const body = JSON.parse(opts.body), input = JSON.parse(body.input);
+      dispatch.push(body.model);
+      if (body.model === selected.model) {
+        expect(body.instructions).toContain("drawingRequest");
+      } else {
+        expect(input.drawing).toBe(true);
+        expect(input.source).toBe(source);
+        expect(input).not.toHaveProperty("blocks");
+      }
+      const visual = body.model === selected.model ? plan : {version:1,format:"explainer",title:"Only the plate",blocks:[plate]};
+      return Response.json({status:"completed",output_text:JSON.stringify({reply:JSON.stringify(visual)})});
+    }));
+    const result = await generateVisualArtifact(source, mode === "planned" ? "auto" : "timeline", "", selected, freshSignal(), undefined, undefined, label);
+    expect(dispatch).toEqual([model,"gpt-6.2-astra"]);
+    expect(label).toHaveBeenCalledWith(expect.stringContaining("gpt-6.2-astra"));
+    expect(result).toEqual({...plan,blocks:[plate,...artifact.blocks]});
+  });
+  it("pins plan account, selected model and advertised effort for explicit SVG guidance", async () => {
+    Object.defineProperty(window,"__TAURI_INTERNALS__",{configurable:true,value:{}});
+    const config = {...selected,model:"chatgpt:gpt-6-sol",chatgptConfigured:true,chatgptAccountId:"test-account",apiKeyConfigured:false};
+    const plate = {kind:"illustration",view:"square",passage:source,parts:[
+      {id:"plate",name:"Plate",tone:"warm",selectable:true,about:"Plate.",quote:"the plate",shapes:[{type:"circle",cx:150,cy:150,r:40,paint:"outline"}]},
+    ]};
+    const image = {version:1,format:"explainer",title:"Etched plate",blocks:[plate]};
+    invoke.mockReset().mockImplementation(async (name,args)=>{
+      if (name === "illustration_models") {
+        expect(args).toEqual({plan:true,accountId:"test-account"});
+        return [{id:"chatgpt:gpt-6.1-astra",efforts:["medium","high"]}];
+      }
+      expect(args.request).toMatchObject({model:"chatgpt:gpt-6.1-astra",effort:"high",drawingAccountId:"test-account"});
+      expect(JSON.parse(args.request.prompt).drawing).toBe(true);
+      return {reply:JSON.stringify(image)};
+    });
+    expect(await generateVisualArtifact(source,"auto","Make an SVG of the plate",config,freshSignal())).toEqual(image);
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+  it.each([model, "gpt-6.1-astra"])("tries one same-key Astra request for %s when listing alone is forbidden", async saved => {
+    const paid: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url,opts) => {
+      if (String(url).endsWith("/models")) return new Response("",{status:403});
+      paid.push(JSON.parse(opts.body).model);
+      return Response.json({error:{message:"No access to this model."}},{status:403});
+    }));
+    const label = vi.fn();
+    await expect(generatePassageIllustration(source,"", {...selected,model:saved},freshSignal(),{onModelSelected:label})).rejects.toThrow();
+    expect(paid).toEqual([saved === model ? "gpt-6.2-astra" : saved]);
+    expect(label).toHaveBeenCalledWith(expect.stringContaining("model list restricted"));
+  });
+  it("stops at authentication failure when listing models", async () => {
+    const fetch = vi.fn(async () => Response.json({error:{message:"Invalid API key"}},{status:401}));
+    vi.stubGlobal("fetch", fetch);
+    await expect(generatePassageIllustration(source,"",selected,freshSignal())).rejects.toThrow(/invalid|key/i);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it("does not dispatch without a configured connection or on oversized guidance or cancelled input", async () => {
     const transport = mockReply("");
     await expect(generateVisualArtifact(source, "auto", "", { ...selected, apiKeyConfigured: false }, freshSignal())).rejects.toThrow(/Settings/);
-    await expect(generateVisualArtifact("z".repeat(12001), "auto", "", selected, freshSignal())).rejects.toThrow(/12,000/);
     await expect(generateVisualArtifact(source, "auto", "z".repeat(801), selected, freshSignal())).rejects.toThrow(/800/);
     const controller = new AbortController(); controller.abort();
     await expect(generateVisualArtifact(source, "auto", "", selected, controller.signal)).rejects.toThrow();
@@ -113,6 +222,8 @@ describe("Visualise through the saved connection", () => {
       const controller = new AbortController();
       const result = generateVisualArtifact(source, "auto", "", selected, controller.signal);
       const failure = expect(result).rejects.toThrow(deadline ? /timed out/ : /cancelled/);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(transport).toHaveBeenCalledTimes(1);
       if (deadline) await vi.advanceTimersByTimeAsync(120_000);
       else controller.abort(new Error("cancelled"));
       await failure;

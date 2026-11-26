@@ -1,3 +1,4 @@
+import { SavedVisualArtifact } from "./SavedVisualArtifact";
 import { TicketReferenceLink, useTicketNavigation } from './TicketNavigation';
 import { remarkTicketReferences, ticketIdFromUrl } from '../lib/ticketReferences';
 import { createContext, memo, useContext, useMemo, useRef, useState } from "react";
@@ -60,6 +61,8 @@ export const ChatReply = memo(function ChatReply({ snapshot, message, context = 
         <ReactMarkdown remarkPlugins={[remarkGfm,ticketReferencePlugin]} urlTransform={url=>ticketIdFromUrl(url)?url:defaultUrlTransform(url)} components={CHAT_COMPONENTS}>{message.content}</ReactMarkdown>
       </CitationContext.Provider>
     </div>
+    {message.visualArtifact && <SavedVisualArtifact marker={message.visualArtifact} />}
+    {message.visualError && <p className="chat-message__coverage">Visual unavailable. {message.visualError}</p>}
     {selected && <CitedPassage evidence={selected} notes={snapshot.notes} sources={snapshot.sources}
       panelId={panelId} savedWith={context === "search" ? "answer" : "reply"} onClose={closeEvidence} onOpenNote={onOpenNote} onOpenSource={onOpenSource} />}
     {coverage && (coverage.availableNotes > 0 || coverage.availableSources > 0 || (coverage.webSearches ?? 0) > 0) &&

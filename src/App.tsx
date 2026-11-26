@@ -1,3 +1,4 @@
+import { ArtifactPartChatContext, ArtworkReviewNoticeContext, type ArtifactQuestionDraft } from "./components/ArtifactPartChatContext";
 import type {TicketWorkspace} from './components/Tickets';
 import { importPortableCollection, readPortableFile, type OpenedPortableFile } from "./lib/portableOrion";
 import {boardColumns, changeBoard} from './lib/tickets';
@@ -29,7 +30,7 @@ import { cleanUpDictation } from "./lib/storage";
 import { dateKey } from "./lib/calendarDate";
 import { DictationNavigationContext } from "./components/DictationNavigation";
 import { createVoicePresence } from "./lib/voicePresence";
-import { createVoiceSelectionStore, type VoiceSelection } from "./lib/voiceSelection";
+import { createVoiceSelectionStore, visibleVoiceSelectionText, type VoiceSelection } from "./lib/voiceSelection";
 import { validateChatEditTarget, type ChatEditApplication } from "./lib/chatEdits";
 import { runSpaceSearch } from "./lib/spaceSearch";
 import { normalizeSavedThemePalettes, normalizeActiveThemePaletteId } from "./lib/savedThemePalettes";
@@ -151,6 +152,7 @@ import {
   applyChatResult,
   ChatRequestRegistry,
 } from "./lib/chat";
+import { finishChatVisual, type ChatVisualPreview } from "./lib/chatVisual";
 import { runChatReading } from "./lib/chatReading";
 import { keepChatReplyAsNote, prepareChatReplyEdit, type ChatNoteReceipt } from "./lib/chatNoteActions";
 import {
@@ -373,6 +375,7 @@ function App() {
   );
   const [screen, setScreen] = useState<AppScreen>("home");
   const [workTarget,setWorkTarget] = useState<WorkTarget>({});
+  const [artifactQuestion, setArtifactQuestion] = useState<ArtifactQuestionDraft>();
   const [passageChat, setPassageChat] = useState<PassageChatTarget>();
   // Conversation selection belongs to this window; message history belongs to its Space.
   const [selectedChatThreads, setSelectedChatThreads] = useState<Record<string, string>>({});
@@ -423,6 +426,7 @@ function App() {
     () => new Set(),
   );
   const [flowActive, setFlowActive] = useState(false);
+  const [chatVisualPreviews, setChatVisualPreviews] = useState<Record<string, ChatVisualPreview | undefined>>({});
   const [chatProgress, setChatProgress] = useState<Record<string, string>>({});
   const chatControllers = useRef(new Map<string, AbortController>());
   const [overviewBusySpaceIds, setOverviewBusySpaceIds] = useState<Set<string>>(
@@ -3587,7 +3591,7 @@ function App() {
   }, []);
 
   const sendChatMessage = useCallback(
-    async (prompt: string, focusNoteId?: string, selection?: VoiceSelection, webEnabled = false): Promise<ChatResult> => {
+    async (prompt: string, focusNoteId?: string, selection?: VoiceSelection, webEnabled = false, visualRequested = false): Promise<ChatResult> => {
       const workspaceId = vaultRef.current.activeSpaceId;
       const space = vaultRef.current.spaces.find(
         (candidate) => candidate.workspace.id === workspaceId,
@@ -3619,7 +3623,9 @@ function App() {
       });
 
       try {
-        const result = await runChatReading(projectChatThread(space, threadId), prompt, chatWithOrion, {
+        const conversation = projectChatThread(space, threadId);
+        const answer = await runChatReading(conversation, prompt, chatWithOrion, {
+          inlineVisuals: true,
           webResearch: webEnabled ? createWebResearch(space.settings) : undefined,
           focusNoteId,
           selection,
@@ -3634,6 +3640,14 @@ function App() {
             if (chatRequests.current.isCurrent(token)) setChatProgress(current => ({ ...current, [workspaceId]: message }));
           },
         });
+        const selectedText = selection && visibleVoiceSelectionText(selection, prompt);
+        const result = await finishChatVisual(answer, prompt, selectedText, visualRequested, space.settings, controller.signal, preview => {
+          if (!controller.signal.aborted && chatRequests.current.isCurrent(token)) {
+            setChatProgress(current => ({ ...current, [workspaceId]: preview.progress || "Drawing the visual" }));
+            setChatVisualPreviews(current => ({ ...current, [workspaceId]: preview }));
+          }
+        }, [...conversation.studio.messages].reverse().find(item => item.role === "assistant")?.content,
+        focusNoteId ? conversation.notes.find(note => note.id === focusNoteId) : undefined);
         const currentSpace = vaultRef.current.spaces.find(candidate => candidate.workspace.id === workspaceId);
         if (controller.signal.aborted || !chatRequests.current.isCurrent(token) || !currentSpace ||
             !hasChatThread(currentSpace.studio, threadId) || chatThreadRevision(currentSpace.studio, threadId) !== historyRevision ||
@@ -3671,6 +3685,7 @@ function App() {
       } finally {
         if (chatControllers.current.get(workspaceId) === controller) {
           chatControllers.current.delete(workspaceId);
+          setChatVisualPreviews(current => { const next = { ...current }; delete next[workspaceId]; return next; });
           setChatProgress((current) => {
             const next = { ...current };
             delete next[workspaceId];
@@ -3916,6 +3931,7 @@ function App() {
     if (chatEditCompletion.current) completeChatEdit(chatEditCompletion.current.id, undefined, false);
     chatControllers.current.get(spaceId)?.abort(new Error("This conversation was closed. Your message is ready to send again."));
     chatControllers.current.delete(spaceId);
+    setChatVisualPreviews(current => { const next = { ...current }; delete next[spaceId]; return next; });
     chatRequests.current.cancel(spaceId);
     setChatBusySpaceIds(current => { const next = new Set(current); next.delete(spaceId); return next; });
     setChatProgress(current => { const next = { ...current }; delete next[spaceId]; return next; });
@@ -4896,7 +4912,12 @@ function App() {
                 noteTitle: displayNoteTitle(note), onReturn: () => openNote(note.id),
               }}><div className="note-surface" hidden={background} inert={background || undefined}>
                 <LeadContactsContext.Provider value={background ? null : leadContacts}>
-                  {renderNote(note, background)}
+                  <ArtifactPartChatContext.Provider value={background || flowActive || !isSelectedAIConfigured(snapshot.settings) ? undefined : text => {
+                    setPassageChat(undefined);
+                    setArtifactQuestion({text, spaceId:snapshot.workspace.id, threadId:activeChatThreadId, noteId:note.id});
+                  }}><ArtworkReviewNoticeContext.Provider value={message => showToast("Original drawing inserted", message)}>
+                    {renderNote(note, background)}
+                  </ArtworkReviewNoticeContext.Provider></ArtifactPartChatContext.Provider>
                 </LeadContactsContext.Provider>
                 {!background && isContactNote(note) && <ContactSources note={note} notes={snapshot.notes} onOpenNote={openNote} />}
               </div></DictationNavigationContext.Provider>;
@@ -4905,6 +4926,7 @@ function App() {
           </ErrorBoundary>
           <ErrorBoundary label="Chat" fallback="none" resetKey={snapshot.workspace.id} onError={reportSurfaceProblem}>
           <ChatDock
+            artifactQuestion={artifactQuestion} onConsumeArtifactQuestion={() => setArtifactQuestion(undefined)}
             key={snapshot.workspace.id}
             voicePresence={voicePresence}
             voiceSelection={voiceSelection}
@@ -4929,6 +4951,7 @@ function App() {
             onExpand={() => openView("chat")}
             busy={chatBusySpaceIds.has(snapshot.workspace.id)}
             progress={chatProgress[snapshot.workspace.id]}
+            visualPreview={chatVisualPreviews[snapshot.workspace.id]}
             onCancel={() => chatControllers.current.get(snapshot.workspace.id)?.abort(new Error("Chat was stopped. Your message is ready to send again."))}
             onSend={sendChatMessage}
             onUseReply={useChatReplyInNote}

@@ -1,14 +1,15 @@
 import { memo, useId, useMemo, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import { ArrowLeft, ArrowRight, Check, Layers3 } from '../lib/icons';
 import {
-  evaluateArtifactExpression,
   type ArtifactBlock,
   type ArtifactFormat,
   type ArtifactShape,
   type VisualArtifact,
 } from '../lib/visualArtifacts';
 import { layoutVisualScene } from '../lib/visualSceneLayout';
-import { formatArtifactQuantity } from '../lib/visualArtifactQuantity';
+import { VisualArtifactCalculator } from './VisualArtifactCalculator';
+import { ArtifactIllustrationView } from './ArtifactIllustrationView';
+import { ArtifactEvidenceView, EvidenceLinksContext, FactSource } from './ArtifactEvidenceView';
 import { VisualArtifactTable } from './VisualArtifactTable';
 import './VisualArtifactView.css';
 
@@ -51,6 +52,7 @@ function Steps({ block }: { block: Block<'steps'> }) {
             <span className="visual-artifact__step-label">{item.label}</span>{' '}
             <span className="visual-artifact__step-heading">{item.heading}</span>
           </button>
+          <FactSource field="step" index={index}/>
           <p id={`${id}-${index}`} hidden={open !== index}>{item.text}</p>
         </li>
       ))}
@@ -109,39 +111,6 @@ function Cards({ block }: { block: Block<'cards'> }) {
         setIndex(next);
         setShowAnswer(false);
       }} />
-    </div>
-  );
-}
-
-function Calculator({ block }: { block: Block<'calculator'> }) {
-  const [values, setValues] = useState(() => block.inputs.map(input => input.initial));
-  const id = useId();
-  return (
-    <div className="visual-artifact__calculator">
-      <div className="visual-artifact__inputs">
-        {block.inputs.map((input, index) => {
-          const displayValue = formatArtifactQuantity(values[index], input.unit);
-          return <label key={index} htmlFor={`${id}-${index}`}>
-            <span>{input.label}</span>
-            <span className="visual-artifact__value" aria-hidden="true">{displayValue}</span>
-            <input id={`${id}-${index}`} type="range" min={input.min} max={input.max} step={input.step}
-              value={values[index]} aria-label={input.label} aria-valuetext={displayValue}
-              onChange={event => {
-                const value = event.currentTarget.valueAsNumber;
-                if (Number.isFinite(value)) setValues(values.map((old, i) => i === index ? value : old));
-              }} />
-          </label>;
-        })}
-      </div>
-      <dl className="visual-artifact__results" aria-live="polite" aria-atomic="true">
-        {block.outputs.map((output, index) => {
-          const result = evaluateArtifactExpression(output.expression, values);
-          return <div key={index}>
-            <dt>{output.label}</dt>
-            <dd data-unavailable={result === null || undefined}>{formatArtifactQuantity(result, output.unit)}</dd>
-          </div>;
-        })}
-      </dl>
     </div>
   );
 }
@@ -253,13 +222,16 @@ function Scene({ block }: { block: Block<'scene'> }) {
   );
 }
 
-function RenderBlock({ block, title }: { block: ArtifactBlock; title: string }) {
+type AddTasks = (tasks: string[]) => boolean;
+
+function RenderBlock({ block, title, onAddTasks, onAskPart }: { block: ArtifactBlock; title: string; onAddTasks?: AddTasks; onAskPart?: (context: string) => void }) {
   switch (block.kind) {
     case 'scene': return <Scene block={block} />;
     case 'steps': return <Steps block={block} />;
     case 'quiz': return <Quiz block={block} />;
     case 'cards': return <Cards block={block} />;
-    case 'calculator': return <Calculator block={block} />;
+    case 'illustration': return <ArtifactIllustrationView block={block} title={title} onAskPart={onAskPart} />;
+    case 'calculator': return <VisualArtifactCalculator block={block} onAddTasks={onAddTasks} />;
     case 'table': return (
       <div className="visual-artifact__table" tabIndex={0} role="region" aria-label={`${title} table`}>
         <VisualArtifactTable block={block} title={title} />
@@ -271,13 +243,16 @@ function RenderBlock({ block, title }: { block: ArtifactBlock; title: string }) 
   }
 }
 
-export const VisualArtifactView = memo(function VisualArtifactView({ artifact }: { artifact: VisualArtifact }) {
+export const VisualArtifactView = memo(function VisualArtifactView({ artifact, onAddTasks, onAskPart }: { artifact: VisualArtifact; onAddTasks?: AddTasks; onAskPart?: (context: string) => void }) {
   const titleId = useId();
+  const evidenceId = useId();
   // A reparse of identical Markdown preserves a reader's place. A replaced
   // block resets just its own controls, including answers and slider values.
   const blocks = useMemo(() => artifact.blocks.map((block, index) => (
-    <RenderBlock key={`${index}:${JSON.stringify(block)}`} block={block} title={artifact.title} />
-  )), [artifact.blocks, artifact.title]);
+    <EvidenceLinksContext.Provider key={`${index}:${JSON.stringify(block)}`} value={artifact.evidence && {block:index, evidence:artifact.evidence, panelId:evidenceId}}>
+      <RenderBlock block={block} title={artifact.title} onAddTasks={onAddTasks} onAskPart={onAskPart} />
+    </EvidenceLinksContext.Provider>
+  )), [artifact.blocks, artifact.title, artifact.evidence, evidenceId, onAddTasks, onAskPart]);
   return (
     <section className="visual-artifact" data-visual-artifact="" data-narration-ignore="true"
       aria-labelledby={titleId} contentEditable={false} draggable={false}
@@ -288,6 +263,7 @@ export const VisualArtifactView = memo(function VisualArtifactView({ artifact }:
         {artifact.summary && <p>{artifact.summary}</p>}
       </header>
       <div className="visual-artifact__blocks">{blocks}</div>
+      {artifact.evidence && <ArtifactEvidenceView key={JSON.stringify(artifact.evidence)} id={evidenceId} evidence={artifact.evidence} />}
     </section>
   );
 });

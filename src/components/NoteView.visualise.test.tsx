@@ -5,12 +5,14 @@ import { createEmptySnapshot } from "../data/defaults";
 import { createVoiceSelectionStore } from "../lib/voiceSelection";
 import type { Note } from "../types";
 import type { VisualArtifact } from "../lib/visualArtifacts";
-import { generateVisualArtifact } from "../lib/visualArtifactGeneration";
+import { generatePassageIllustration, generateVisualArtifact } from "../lib/visualArtifactGeneration";
 import { NoteAISettingsContext } from "./NoteAISettingsContext";
 import { DictationNavigationContext } from "./DictationNavigation";
 import { NoteView } from "./NoteView";
 
-vi.mock("../lib/visualArtifactGeneration", () => ({ generateVisualArtifact: vi.fn() }));
+vi.mock("../lib/visualArtifactGeneration", async original => ({
+  ...await original<typeof import("../lib/visualArtifactGeneration")>(), generatePassageIllustration: vi.fn(), generateVisualArtifact: vi.fn(),
+}));
 const generate = vi.mocked(generateVisualArtifact);
 const passage = "An electric motor spins the drum.";
 const initial: Note = { id: "washer", title: "Wash cycle", body: [passage, "First rinse.", passage, "Final rinse."].join("\n\n"),
@@ -30,6 +32,7 @@ beforeAll(() => Object.defineProperties(HTMLDialogElement.prototype, {
 beforeEach(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   generate.mockReset();
+  vi.mocked(generatePassageIllustration).mockReset();
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.getSelection()?.removeAllRanges(); });
 
@@ -47,13 +50,15 @@ function setup(noteToOpen = initial) {
     </DictationNavigationContext.Provider>;
   }
   const view = render(<Harness />);
-  async function open() {
+  async function open(start = 2, end = start) {
     const body = view.container.querySelector('[data-voice-note-body="reading"]')!;
-    const target = body.querySelectorAll("p")[2];
+    const paragraphs = body.querySelectorAll("p");
+    const target = paragraphs[start];
     fireEvent.pointerDown(target);
     act(() => {
       const range = document.createRange();
       range.selectNodeContents(target);
+      if (start !== end) range.setEnd(paragraphs[end], paragraphs[end].childNodes.length);
       const selected = window.getSelection()!;
       selected.removeAllRanges(); selected.addRange(range);
     });
@@ -91,6 +96,30 @@ it("anchors the second identical passage, retries on request, then renders the s
   expect(onFinish).not.toHaveBeenCalled();
 });
 
+it("passes an entire long reading selection to generation, reports progress and cancels safely", async () => {
+  const first = "First section 🚲. ".repeat(450).trim();
+  const middle = "Middle section 🚀. ".repeat(450).trim();
+  const last = "Last section 🧭. ".repeat(450) + "Only at the end.";
+  const body = ["Outside before.", first, middle, last, "Outside after."].join("\n\n");
+  const selectedText = [first, middle, last].join("\n\n");
+  let finish!: (value: VisualArtifact) => void;
+  generate.mockImplementation((_source, _format, _guidance, _settings, _signal, _preview, _heading, _model, progress) => {
+    progress?.("Reading selection · section 2 of 3");
+    return new Promise(resolve => { finish = resolve; });
+  });
+  const { open, latest } = setup({ ...initial, body });
+  await open(1, 3);
+  expect(screen.getByRole("blockquote", { name: "Selected passage" }).textContent!.length).toBeLessThan(400);
+  expect(generate).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Generate for me" }));
+  expect(generate.mock.calls[0][0]).toBe(selectedText);
+  expect(screen.getByText("Reading selection · section 2 of 3")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(generate.mock.calls[0][4].aborted).toBe(true);
+  await act(async () => finish(artifact));
+  expect(latest().body).toBe(body);
+});
+
 it("cancels an in-flight request and ignores a late result after returning to reading", async () => {
   let finish!: (value: VisualArtifact) => void;
   generate.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
@@ -119,4 +148,30 @@ it("cancels generation when a recording keeps the note mounted in the background
   expect(screen.queryByRole("dialog", { name: "Visualise" })).toBeNull();
   expect(latest().body.trimEnd()).toBe(initial.body);
   expect(latest().writingOrigins).toBeUndefined();
+});
+
+
+it("shows the drawing model before any call and the verified model during optional visual review", async () => {
+  const longDrawingSource = passage.repeat(500) + " Draw the belt behind the drum.";
+  let finish!: (value: VisualArtifact) => void;
+  vi.mocked(generatePassageIllustration).mockImplementation((_source, _guidance, _settings, _signal, options) => {
+    options?.onModelSelected?.("Verified Astra · high effort");
+    options?.onReviewStart?.();
+    return new Promise(resolve => { finish = resolve; });
+  });
+  const { open, latest } = setup({ ...initial, body: longDrawingSource });
+  await open(0);
+  fireEvent.change(screen.getByRole("combobox", { name: "Format" }), { target: { value: "illustration" } });
+  expect(screen.getByText(/Drawing model · .*astra/i)).toBeVisible();
+  expect(generatePassageIllustration).not.toHaveBeenCalled();
+  const checkbox = screen.getByRole("checkbox", { name: /Have AI review the drawing/ });
+  expect(checkbox).not.toBeChecked();
+  fireEvent.click(checkbox);
+  fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+  expect(vi.mocked(generatePassageIllustration).mock.calls[0][0]).toBe(longDrawingSource);
+  expect(vi.mocked(generatePassageIllustration).mock.calls[0][4]?.review).toBe(true);
+  expect(screen.getByRole("button", { name: "Reviewing drawing…" })).toBeDisabled();
+  expect(screen.getByText("Drawing model · Verified Astra · high effort")).toBeVisible();
+  await act(async () => finish(artifact));
+  expect(latest().body).toContain("orion-artifact");
 });

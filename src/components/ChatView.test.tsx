@@ -41,6 +41,17 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("ChatView", () => {
+  it("requests an interactive visual with the next message and resets the control after sending", async () => {
+    const callbacks = handlers();
+    render(<ChatView {...callbacks} snapshot={fixture()} busy={false}/>);
+    const toggle = screen.getByRole("button", { name: "Visualise" });
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    fireEvent.change(screen.getByRole("textbox", { name: "Message Orion" }), { target: { value: "Compare the sites" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(callbacks.onSend).toHaveBeenCalledWith("Compare the sites", undefined, undefined, false, true));
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+  });
   it("collapses the full-page thread rail without remounting the voice scene or clearing a draft", () => {
     const callbacks = handlers(), navigation = threadNavigation();
     const { container, rerender } = render(<ChatView {...callbacks} snapshot={fixture()} busy={false} threadNavigation={navigation}/>);

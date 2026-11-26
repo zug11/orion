@@ -1,3 +1,4 @@
+import { chatVisualSuggestion } from "./chatVisualIntent";
 import { createChatEditProposal, parseChatNoteEdits, parseChatEditIntent, chatEditableBody, createChatRewriteProposal, MAX_CHAT_REWRITE_CHARS, validateChatEditPassage } from "./chatEdits";
 import type {
   AppSnapshot, ChatCoverage, ChatEvidence, ChatReadRequest, ChatRequest,
@@ -61,6 +62,8 @@ interface DirectoryEntry {
 }
 
 export interface ChatReadingOptions {
+  /** Typed Chat alone may propose an inline interactive visual with its answer. */
+  inlineVisuals?: boolean;
   /** Host-granted capability, captured per submission. Absent means no web access. */
   webResearch?: WebResearch;
   /** Host-only absolute deadline update when an actual web lookup needs longer. */
@@ -759,7 +762,7 @@ class ChatReadingSession {
     return workerContinuity;
   }
 
-  packet(finalizing: boolean, correction?: string, checkpointsEnabled = false, voiceEnabled = false, editBoundary?: { noteId: string; passage: string }): string {
+  packet(finalizing: boolean, correction?: string, checkpointsEnabled = false, voiceEnabled = false, editBoundary?: { noteId: string; passage: string }, inlineVisuals = false): string {
     const workerContinuity = checkpointsEnabled ? this.workerContinuity() : undefined;
     const serialize = () => JSON.stringify({
       finalizing,
@@ -767,6 +770,7 @@ class ChatReadingSession {
         ...(this.webResearch ? { depths: ["quick", "standard", "deep"], defaultDepth: "standard",
           completedSearches: this.webSearches, recentLookups: this.webLookups.slice(-12),
           stalled: this.webStalled(), policy: "Continue with new evidence needed for the current question; stop once adequately supported. Reuse prior research. Repeated lookups without new source evidence require a grounded answer with remaining gaps." } : {}) },
+      ...(inlineVisuals ? { inlineVisuals: true } : {}),
       ...(voiceEnabled ? { voicePresentationEnabled: true } : {}),
       ...(checkpointsEnabled ? { checkpointsEnabled: true, workerContinuity } : {}),
       taskView: this.taskView,
@@ -962,7 +966,7 @@ export async function runChatReading(
       const finalizing = (!session.hasWebResearch() && turn >= MAX_CHAT_READING_TURNS - 1) || noProgress >= 2 || session.webStalled();
       options.onProgress?.(finalizing ? "Writing an answer" : "Considering the evidence");
       const readAnswer = () => driver({ ...request, mode: "chat-reading", readingContext: session!.packet(finalizing,
-        [scopeInstruction, correction].filter(Boolean).join("\n\n") || undefined, !!options.onCheckpoint, !!options.onWorkLabel, editBoundary) }, controller.signal);
+        [scopeInstruction, correction].filter(Boolean).join("\n\n") || undefined, !!options.onCheckpoint, !!options.onWorkLabel, editBoundary, options.inlineVisuals) }, controller.signal);
       let result: ChatResult;
       try { result = await readAnswer(); }
       catch (error) {
@@ -1010,8 +1014,9 @@ export async function runChatReading(
           correction = undefined;
           continue;
         }
-        if (!result.reply.trim()) throw new Error("Chat returned no answer. Answer with the available evidence or explain the gap.");
-        const finished = session.finish({ ...result, noteActions: request.allowNoteActions ? result.noteActions : undefined }, finalizing, request.editNoteId);
+        const suggested = options.inlineVisuals ? chatVisualSuggestion(result.reply) : { reply: result.reply };
+        if (!suggested.reply.trim()) throw new Error("Chat returned no answer. Answer with the available evidence or explain the gap.");
+        const finished = session.finish({ ...result, reply: suggested.reply, noteActions: request.allowNoteActions ? result.noteActions : undefined }, finalizing, request.editNoteId);
         if (editBoundary && finished.editProposal) validateChatEditPassage(finished.editProposal, editBoundary.passage);
         if (editing && !finished.editProposal) throw new Error("Prepare reviewable changes to the attached note using noteEdits or noteRewrite. A reply alone does not fulfill the user's editing request.");
         checkpoint();
@@ -1030,7 +1035,7 @@ export async function runChatReading(
               : "The worker did not produce cited findings from this Space. Retry the worker or give it a more specific research question.");
           throw new Error(`Research could not establish a supported answer. ${detail} (CHAT_RESEARCH_UNGROUNDED)`);
         }
-        return finished;
+        return suggested.format ? { ...finished, visualFormat: suggested.format } : finished;
       } catch (error) {
         // Stale authority is not a model-format error and must not be retried.
         assertCurrent();

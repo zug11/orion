@@ -405,3 +405,17 @@
   .visual-artifact .visual-artifact__tabs button[aria-selected="true"],
   .visual-artifact .visual-artifact__choices button[aria-pressed="true"] { outline: 2px solid currentColor; outline-offset: -2px; }
 }
+
+.va-quantity-flow { margin: 1em 0; }
+.va-quantity-flow svg { width: 100%; max-height: 12rem; margin: .5rem 0; }
+.va-quantity-flow ul, .va-evidence ul { list-style: none; padding: 0; }
+.va-quantity-flow li { display: inline-flex; align-items: center; gap: .4rem; margin-inline-end: 1rem; }
+.va-quantity-flow li i { width: .65rem; height: .65rem; border-radius: 2px; }
+.va-evidence { margin-top: 1em; border-top: 1px solid var(--line); padding-top: .75em; }
+.va-evidence summary { cursor: pointer; font-weight: 600; }
+.va-evidence li { margin: .35em 0; }
+.va-evidence button { text-align: start; }
+.va-evidence blockquote { white-space: pre-wrap; margin: .8em 0; padding-inline-start: .9em; border-inline-start: 2px solid var(--va-muted); }
+.va-evidence mark { background: color-mix(in srgb,var(--va-accent) 32%, transparent); color: inherit; }
+
+.visual-artifact button.va-source-link { display: inline; width: auto; padding: 2px 5px; margin-inline-start: 3px; background: transparent; border: 0; color: var(--va-accent); font-size: .78rem; text-decoration: underline; }

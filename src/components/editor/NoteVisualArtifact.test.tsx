@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { Editor } from "@tiptap/core";
+import TaskList from "@tiptap/extension-task-list";
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
 import { afterEach, describe, expect, it } from "vitest";
-import { NoteStarterKit } from "./NoteStarterKit";
+import { NoteStarterKit, NoteTaskItem } from "./NoteStarterKit";
 import { NoteMarkdown } from "./NoteMargins";
-import { captureVisualArtifact, captureVisualArtifactAfterBlock, insertVisualArtifact, NoteVisualArtifact } from "./NoteVisualArtifact";
+import { captureVisualArtifact, captureVisualArtifactAfterBlock, insertArtifactTasks, insertVisualArtifact, NoteVisualArtifact } from "./NoteVisualArtifact";
 import { readVisualArtifactMarker, remarkVisualArtifacts, visualArtifactMarker } from "../../lib/visualArtifactMarkdown";
 import { ExportVisualArtifact } from "../../lib/visualArtifactExport";
 import { type VisualArtifact } from "../../lib/visualArtifacts";
@@ -18,13 +19,28 @@ const artifact: VisualArtifact = { version: 1, format: "explainer", title: "Éne
   blocks: [{ kind: "text", heading: "Charge", text: "Excess power → storage. <!-- example -->" }] };
 const marker = visualArtifactMarker(artifact);
 function editorFor(body: string) {
-  const editor = new Editor({ extensions: [NoteStarterKit, NoteVisualArtifact, NoteMarkdown], content: body, contentType: "markdown" });
+  const editor = new Editor({ extensions: [NoteStarterKit, TaskList, NoteTaskItem, NoteVisualArtifact, NoteMarkdown], content: body, contentType: "markdown" });
   editors.push(editor);
   return editor;
 }
 afterEach(() => editors.splice(0).forEach(editor => editor.destroy()));
 
 describe("note visual artifacts", () => {
+  it("inserts the recipe list after the chosen artifact in a single Undo", () => {
+    const editor = editorFor([marker, "Middle", marker, "After"].join("\n\n"));
+    const before = editor.getMarkdown();
+    const positions: number[] = [];
+    editor.state.doc.forEach((node, pos) => {
+      if (node.type.name === "noteVisualArtifact") positions.push(pos);
+    });
+    expect(insertArtifactTasks(editor, positions[1], "stale marker", ["2 pears"])).toBe(false);
+    expect(insertArtifactTasks(editor, positions[1], marker, ["2 pears", "100 g flour"])).toBe(true);
+    expect(editor.state.doc.child(3).type.name).toBe("taskList");
+    expect(editor.state.doc.child(3).lastChild?.attrs.checked).toBe(false);
+    expect(editor.getMarkdown()).toContain("- [ ] 2 pears\n- [ ] 100 g flour");
+    expect(editor.commands.undo()).toBe(true);
+    expect(editor.getMarkdown()).toBe(before);
+  });
   it("inserts after the selected passage, keeps the original prose and one Undo survives adjacent edits", () => {
     const editor = editorFor("A line with **repeated** text.\n\nA line with repeated text.\n\nLast.");
     const before = editor.getMarkdown();

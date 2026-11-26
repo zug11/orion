@@ -1,35 +1,40 @@
 import { evaluateArtifactExpression, type ArtifactBlock, type VisualArtifact } from "./visualArtifacts";
 
+import { withinFlowCapacity } from "./visualArtifactFlow";
+import { countGroups, sliderGrid } from "./visualArtifactCalculator";
+
 type Calculator = Extract<ArtifactBlock, { kind: "calculator" }>;
 
-// HTML ranges count decimal steps from min. Work in decimal ticks so a range
-// such as 0.1…0.35 by 0.1 ends at exactly 0.3, as it does on the slider.
-function sliderGrid(input: Calculator["inputs"][number]) {
-  const decimals = [input.min, input.max, input.step].map(value => {
-    const [coefficient, exponent = "0"] = String(value).split("e");
-    const [whole, fraction = ""] = coefficient.split(".");
-    return { digits: BigInt(whole + fraction), exponent: Number(exponent) - fraction.length };
-  });
-  const exponent = Math.min(...decimals.map(decimal => decimal.exponent));
-  const [min, max, step] = decimals.map(decimal => decimal.digits * 10n ** BigInt(decimal.exponent - exponent));
-  const last = (max - min) / step;
-  const valueAt = (tick: bigint) => Number(`${min + tick * step}e${exponent}`);
-  return { last, valueAt, includesZero: min < 0n && max > 0n && min % step === 0n };
-}
-
-function validateCalculatorRange({ inputs, outputs }: Calculator) {
+function validateCalculatorRange(block: Calculator) {
+  const {inputs, outputs} = block;
   const grids = inputs.map(sliderGrid);
   const exhaustive = grids.reduce((count, grid) => count * (grid.last + 1n), 1n) <= 256n;
   const values = inputs.map(input => input.initial);
 
   function checkResults() {
-    for (const output of outputs) {
-      if (evaluateArtifactExpression(output.expression, values) === null) {
+    const results = outputs.map(output => evaluateArtifactExpression(output.expression, values));
+    for (const [i, output] of outputs.entries()) {
+      if (results[i] === null) {
         const settings = inputs.map((input, i) => `${input.label} = ${values[i]}`).join(", ");
         throw new Error(`“${output.label}” has no result at ${settings}. Try generating the calculator again.`);
       }
     }
+    if (block.flow && !withinFlowCapacity(block.flow.destinations.map(i => results[i]), block.flow.capacity)) {
+      throw new Error("A flow needs nonnegative quantities whose sum fits its capacity at every offered setting.");
+    }
+    if (block.counts && !countGroups(block, results)) {
+      throw new Error("The population counts must be whole numbers that add up to the stated total.");
+    }
+    if (block.recipe && (values[block.recipe.input] <= 0 || block.recipe.ingredients.some(i => results[i]! < 0))) {
+      throw new Error("A recipe needs positive servings and nonnegative ingredient amounts.");
+    }
   }
+
+  for (const preset of block.presets ?? []) {
+    values.splice(0, values.length, ...preset.values);
+    checkResults();
+  }
+  values.splice(0, values.length, ...inputs.map(input => input.initial));
 
   // Large ranges still cover every combination of defaults and endpoints
   // (at most 3⁶). Probe a reachable interior zero for each slider as well.

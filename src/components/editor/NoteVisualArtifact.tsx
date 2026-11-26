@@ -1,3 +1,4 @@
+import { singleLineTasks } from "../../lib/visualArtifactNoteTasks";
 import { Node, type Editor } from "@tiptap/core";
 import { closeHistory } from "@tiptap/pm/history";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
@@ -9,9 +10,22 @@ import type { WritingOrigin } from "../../types";
 import { recordWritingOrigin } from "./writingOriginHistory";
 import { getSlashMatch, matchingSlashItems } from "./slashCommands";
 
-function ArtifactNodeView({ node }: NodeViewProps) {
+export function insertArtifactTasks(editor: Editor, position: number | undefined, marker: string, tasks: string[]) {
+  const labels = singleLineTasks(tasks);
+  if (editor.isDestroyed || !editor.isEditable || position === undefined || !labels) return false;
+  const atom = editor.state.doc.nodeAt(position);
+  const {taskList, taskItem, paragraph} = editor.schema.nodes;
+  if (atom?.type.name !== "noteVisualArtifact" || atom.attrs.marker !== marker || !taskList || !taskItem) return false;
+  const list = taskList.create(null, labels.map(label => taskItem.create({checked:false}, paragraph.create(null, editor.schema.text(label)))));
+  const tr = closeHistory(editor.state.tr).insert(position + atom.nodeSize, list);
+  editor.view.dispatch(tr);
+  editor.view.dispatch(closeHistory(editor.state.tr).setMeta("addToHistory", false));
+  return true;
+}
+
+function ArtifactNodeView({ node, editor, getPos }: NodeViewProps) {
   return <NodeViewWrapper as="div" data-narration-ignore="true" contentEditable={false}>
-    <SavedVisualArtifact marker={node.attrs.marker}/>
+    <SavedVisualArtifact marker={node.attrs.marker} onAddTasks={tasks => insertArtifactTasks(editor, getPos(), node.attrs.marker, tasks)}/>
   </NodeViewWrapper>;
 }
 
@@ -39,7 +53,7 @@ export const NoteVisualArtifact = Node.create({
   renderMarkdown(node) { return isVisualArtifactMarker(node.attrs?.marker) ? node.attrs.marker : ""; },
   addNodeView() {
     return ReactNodeViewRenderer(ArtifactNodeView, {
-      stopEvent: ({ event }) => event.target instanceof Element && !!event.target.closest("button,input,select,textarea,label"),
+      stopEvent: ({ event }) => event.target instanceof Element && !!event.target.closest("button,input,select,textarea,label,summary,[role=slider],[role=button],.visual-artifact svg"),
     });
   },
 });
@@ -79,12 +93,14 @@ export function captureVisualArtifact(editor: Editor, command?: Range) {
     if (!source.trim()) return null;
     // A native paragraph selection can end at the start of the following block.
     // Anchor to the last selected text rather than skipping that following block.
+    let lastTextEnd = selection.to;
     doc.nodesBetween(selection.from, selection.to, (node, position) => {
       if (!node.isText) return;
       const end = Math.min(position + node.nodeSize, selection.to);
       const start = Math.max(position, selection.from);
-      if (node.text!.slice(start - position, end - position).trim()) endpoint = doc.resolve(end);
+      if (/\S/u.test(node.text!.slice(start - position, end - position))) lastTextEnd = end;
     });
+    endpoint = doc.resolve(lastTextEnd);
   }
   const end = endpoint.depth ? endpoint.after(1) : endpoint.pos;
   const capture = captureVisualArtifactAfterBlock(editor, end);

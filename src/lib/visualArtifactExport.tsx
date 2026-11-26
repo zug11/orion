@@ -1,3 +1,5 @@
+import { ArtifactIllustrationSnapshot } from "../components/ArtifactIllustrationView";
+import { outputText, calculatorExplanationText, expressionWorking } from "./visualArtifactCalculator";
 import { VisualArtifactTable } from "../components/VisualArtifactTable";
 import { evaluateArtifactExpression, type ArtifactBlock } from "./visualArtifacts";
 import { readVisualArtifactMarker, unavailableVisualArtifact, visualArtifactMarker } from "./visualArtifactMarkdown";
@@ -18,11 +20,15 @@ function StaticBlock({ block }: { block: ArtifactBlock }) {
       <div key={i}><h4>{frame.label}</h4><p>{frame.caption}</p><ul>{block.nodes.map((node, j) =>
         <li key={j}>{node.label}{frame.values[j] ? " · " + frame.values[j] : ""}</li>)}</ul>
         {frame.flows.map((flow, j) => <p key={j}>{block.nodes[flow.from].label} → {block.nodes[flow.to].label} {flow.label}</p>)}</div>)}</div>;
+    case "illustration": return <ArtifactIllustrationSnapshot block={block} />;
     case "calculator": {
       const initial = block.inputs.map(input => input.initial);
       return <div><ul>{block.inputs.map((input, i) =>
         <li key={i}>{input.label} · {formatArtifactQuantity(input.initial, input.unit)}</li>)}</ul>
-        {block.outputs.map((output, i) => <p key={i}>{output.label} · {formatArtifactQuantity(evaluateArtifactExpression(output.expression, initial), output.unit)}</p>)}</div>;
+        {block.outputs.map((output, i) => <p key={i}>{output.label} · {outputText(output, evaluateArtifactExpression(output.expression, initial))}</p>)}
+        {block.explanation && <p>{calculatorExplanationText(block, initial)}</p>}
+        <details><summary>Show the working</summary>{block.outputs.map((output, i) =>
+          <div key={i}><strong>{output.label}</strong><ol>{expressionWorking(output.expression,block.inputs,initial).map((line,j) => <li key={j}>{line}</li>)}</ol></div>)}</details></div>;
     }
   }
 }
@@ -36,6 +42,9 @@ export function ExportVisualArtifact({ marker, interactive = false }: { marker: 
       <h3>{artifact.title}</h3>
       {artifact.summary && <p>{artifact.summary}</p>}
       {artifact.blocks.map((block, i) => <StaticBlock key={i} block={block} />)}
+      {artifact.evidence && <div><h4>Sources in the passage</h4>{artifact.evidence.claims.map((claim, i) => <p key={i}>
+        <strong>{claim.label}</strong> · {claim.quotes.length ? claim.quotes.map(q => artifact.evidence!.passage.includes(q) ? q : "No matching excerpt").join(" · ") : "No matching excerpt"}
+      </p>)}</div>}
     </section>
   );
   if (!interactive) return snapshot;

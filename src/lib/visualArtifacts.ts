@@ -1,3 +1,6 @@
+import { parseArtifactIllustration, type ArtifactIllustration } from "./artifactIllustration";
+import { parseArtifactFlow, type ArtifactFlow } from "./visualArtifactFlow";
+
 /** Versioned data shared by generated and saved note artifacts. All drawing and
  * interaction are rendered by Orion; the document contains no executable code. */
 export const ARTIFACT_FORMATS = ["timeline", "explainer", "quiz", "comparison", "flashcards", "calculator"] as const;
@@ -14,6 +17,10 @@ export type ArtifactExpression = number | { input: number } | {
   left: ArtifactExpression;
   right: ArtifactExpression;
 } | {
+  op: "round"; value: ArtifactExpression;
+} | {
+  op: "ifLess"; left: ArtifactExpression; right: ArtifactExpression; then: ArtifactExpression; else: ArtifactExpression;
+} | {
   op: "periodicPayment";
   principal: ArtifactExpression;
   ratePerPeriod: ArtifactExpression;
@@ -26,6 +33,7 @@ export type ArtifactShape = Paint & (
   | { kind: "circle"; cx: number; cy: number; r: number }
 );
 export type ArtifactBlock =
+  | ArtifactIllustration
   | { kind: "text"; heading?: string; text: string }
   | { kind: "steps"; items: { label: string; heading: string; text: string }[] }
   | { kind: "table"; columns: string[]; rows: string[][] }
@@ -34,7 +42,13 @@ export type ArtifactBlock =
   | {
       kind: "calculator";
       inputs: { label: string; unit: string; min: number; max: number; step: number; initial: number }[];
-      outputs: { label: string; unit: string; expression: ArtifactExpression }[];
+      outputs: { label: string; unit: string; expression: ArtifactExpression; labels?: {value: number; label: string}[] }[];
+      explanation?: (string | {input: number} | {output: number})[];
+      presets?: {label: string; values: number[]}[];
+      chart?: {input: number; outputs: number[]; dragInput?: number; settleOutput?: number};
+      recipe?: {input: number; ingredients: number[]};
+      counts?: {outputs: number[]; total: number};
+      flow?: ArtifactFlow;
     }
   | {
       kind: "scene";
@@ -44,7 +58,15 @@ export type ArtifactBlock =
         flows: { from: number; to: number; label: string }[];
       }[];
     };
+export type EvidenceField = "input" | "output" | "step" | "cell";
+export interface EvidenceTarget { block: number; field: EvidenceField; index: number }
+export interface ArtifactEvidence {
+  passage: string;
+  claims: { label: string; quotes: string[]; target?: EvidenceTarget }[];
+}
+
 export interface VisualArtifact {
+  evidence?: ArtifactEvidence;
   version: 1;
   format: ArtifactFormat;
   title: string;
@@ -161,13 +183,19 @@ function shape(value: unknown): ArtifactShape {
 }
 
 function expression(value: unknown, inputCount: number, depth = 0, budget = { remaining: 63 }): ArtifactExpression {
-  if (depth > 5 || --budget.remaining < 0) return invalid();
+  if (depth > 8 || --budget.remaining < 0) return invalid();
   if (typeof value === "number") return quantity(value);
   if (value && typeof value === "object" && "input" in value) {
     return { input: index(object(value, ["input"]).input, inputCount) };
   }
   const operand = (child: unknown) => expression(child, inputCount, depth + 1, budget);
-  if ((value as { op?: unknown } | null)?.op === "periodicPayment") {
+  const operation = (value as { op?: unknown } | null)?.op;
+  if (operation === "round") return { op: operation, value: operand(object(value, ["op", "value"]).value) };
+  if (operation === "ifLess") {
+    const obj = object(value, ["op", "left", "right", "then", "else"]);
+    return { op: operation, left: operand(obj.left), right: operand(obj.right), then: operand(obj.then), else: operand(obj.else) };
+  }
+  if (operation === "periodicPayment") {
     const obj = object(value, ["op", "principal", "ratePerPeriod", "periods"]);
     return {
       op: "periodicPayment",
@@ -184,6 +212,10 @@ function expression(value: unknown, inputCount: number, depth = 0, budget = { re
 export function evaluateArtifactExpression(expr: ArtifactExpression, values: readonly number[]): number | null {
   if (typeof expr === "number") return Number.isFinite(expr) ? expr : null;
   if ("input" in expr) return Number.isFinite(values[expr.input]) ? values[expr.input] : null;
+  if (expr.op === "round") {
+    const result = evaluateArtifactExpression(expr.value, values);
+    return result === null ? null : Math.round(result);
+  }
   if (expr.op === "periodicPayment") {
     const principal = evaluateArtifactExpression(expr.principal, values);
     const rate = evaluateArtifactExpression(expr.ratePerPeriod, values);
@@ -199,6 +231,7 @@ export function evaluateArtifactExpression(expr: ArtifactExpression, values: rea
   const left = evaluateArtifactExpression(expr.left, values);
   const right = evaluateArtifactExpression(expr.right, values);
   if (left === null || right === null) return null;
+  if (expr.op === "ifLess") return evaluateArtifactExpression(left < right ? expr.then : expr.else, values);
   let result: number;
   switch (expr.op) {
     case "add": result = left + right; break;
@@ -236,23 +269,73 @@ function scene(value: unknown): Extract<ArtifactBlock, {kind: "scene"}> {
 }
 
 function calculator(value: unknown): Extract<ArtifactBlock, {kind: "calculator"}> {
-  const obj = object(value, ["kind", "inputs", "outputs"]);
+  const obj = object(value, ["kind", "inputs", "outputs", "explanation", "presets", "chart", "recipe", "counts", "flow"]);
+  const sliderSetting = (value: unknown, min: number, max: number, step: number) => {
+    const setting = finite(value, min, max);
+    const ticks = (setting - min) / step;
+    if (!Number.isSafeInteger(Math.round(ticks)) || Math.abs(ticks - Math.round(ticks)) > 1e-7) return invalid();
+    return setting;
+  };
   const inputs = list(obj.inputs, 1, 6, value => {
     const input = object(value, ["label", "unit", "min", "max", "step", "initial"]);
     const min = quantity(input.min), max = quantity(input.max), step = quantity(input.step);
     if (min >= max || step <= 0 || step > max - min || min + step === min) return invalid();
-    const initial = finite(input.initial, min, max);
-    const ticks = (initial - min) / step;
-    if (!Number.isSafeInteger(Math.round(ticks)) || Math.abs(ticks - Math.round(ticks)) > 1e-7) return invalid();
+    const initial = sliderSetting(input.initial, min, max, step);
     return { label: literal(input.label, 100), unit: literal(input.unit, 32, true), min, max, step, initial };
   });
-  const outputs = list(obj.outputs, 1, 6, value => {
-    const output = object(value, ["label", "unit", "expression"]);
+  const outputs = list(obj.outputs, 1, 24, value => {
+    const output = object(value, ["label", "unit", "expression", "labels"]);
     const result = expression(output.expression, inputs.length);
     if (evaluateArtifactExpression(result, inputs.map(input => input.initial)) === null) return invalid();
-    return { label: literal(output.label, 100), unit: literal(output.unit, 32, true), expression: result };
+    const labels = output.labels === undefined ? undefined : list(output.labels, 1, 12, value => {
+      const entry = object(value, ["value", "label"]);
+      return { value: quantity(entry.value), label: literal(entry.label, 80) };
+    });
+    if (labels && new Set(labels.map(entry => entry.value)).size !== labels.length) return invalid();
+    return { label: literal(output.label, 100), unit: literal(output.unit, 32, true), expression: result, ...(labels && {labels}) };
   });
-  return { kind: "calculator", inputs, outputs };
+  const result: Extract<ArtifactBlock, {kind: "calculator"}> = { kind: "calculator", inputs, outputs };
+  const outputIndices = (value: unknown, min: number, max: number) => {
+    const items = list(value, min, max, value => index(value, outputs.length));
+    if (new Set(items).size !== items.length) return invalid();
+    return items;
+  };
+  if (obj.explanation !== undefined) {
+    result.explanation = list(obj.explanation, 1, 32, value => {
+      if (typeof value === "string") return literal(value, 400, true);
+      if (value && typeof value === "object" && "input" in value) return {input: index(object(value, ["input"]).input, inputs.length)};
+      return {output: index(object(value, ["output"]).output, outputs.length)};
+    });
+  }
+  if (obj.presets !== undefined) {
+    result.presets = list(obj.presets, 1, 12, value => {
+      const preset = object(value, ["label", "values"]);
+      return { label: literal(preset.label, 80), values: list(preset.values, inputs.length, inputs.length, (v, i) =>
+        sliderSetting(v, inputs[i].min, inputs[i].max, inputs[i].step)) };
+    });
+  }
+  if (obj.chart !== undefined) {
+    const chart = object(obj.chart, ["input", "outputs", "dragInput", "settleOutput"]);
+    const input = index(chart.input, inputs.length), series = outputIndices(chart.outputs, 1, 3);
+    if (series.some(i => outputs[i].unit !== outputs[series[0]].unit)) return invalid();
+    const dragInput = chart.dragInput === undefined ? undefined : index(chart.dragInput, inputs.length);
+    if (dragInput === input) return invalid();
+    const settleOutput = chart.settleOutput === undefined ? undefined : index(chart.settleOutput, outputs.length);
+    if (settleOutput !== undefined && outputs[settleOutput].unit !== inputs[input].unit) return invalid();
+    result.chart = {input, outputs: series, ...(dragInput !== undefined && {dragInput}), ...(settleOutput !== undefined && {settleOutput})};
+  }
+  if (obj.recipe !== undefined) {
+    const recipe = object(obj.recipe, ["input", "ingredients"]);
+    result.recipe = {input: index(recipe.input, inputs.length), ingredients: outputIndices(recipe.ingredients, 1, 24)};
+  }
+  if (obj.counts !== undefined) {
+    const counts = object(obj.counts, ["outputs", "total"]);
+    const total = finite(counts.total, 1, 1000);
+    if (!Number.isInteger(total)) return invalid();
+    result.counts = {outputs: outputIndices(counts.outputs, 2, 6), total};
+  }
+  if (obj.flow !== undefined) result.flow = parseArtifactFlow(obj.flow, outputs);
+  return result;
 }
 
 function block(value: unknown): ArtifactBlock {
@@ -295,6 +378,7 @@ function block(value: unknown): ArtifactBlock {
         return { front: literal(card.front, 500), back: literal(card.back, 1200) };
       }) };
     }
+    case "illustration": return parseArtifactIllustration(value);
     case "scene": return scene(value);
     case "calculator": return calculator(value);
     default: return invalid();
@@ -302,7 +386,7 @@ function block(value: unknown): ArtifactBlock {
 }
 
 export function parseVisualArtifact(value: unknown): VisualArtifact {
-  const obj = object(value, ["version", "format", "title", "summary", "blocks"]);
+  const obj = object(value, ["version", "format", "title", "summary", "blocks", "evidence"]);
   if (obj.version !== 1) return invalid();
   const format = oneOf(obj.format, ARTIFACT_FORMATS);
   const blocks = list(obj.blocks, 1, 12, block);
@@ -311,13 +395,39 @@ export function parseVisualArtifact(value: unknown): VisualArtifact {
   if (requiredKind && !blocks.some(block => block.kind === requiredKind)) return invalid();
   const artifact: VisualArtifact = { version: 1, format, title: literal(obj.title, 160),
     ...(obj.summary === undefined ? {} : { summary: literal(obj.summary, 600) }), blocks };
+  if (obj.evidence !== undefined) {
+    const evidence = object(obj.evidence, ["passage", "claims"]);
+    artifact.evidence = {
+      passage: literal(evidence.passage, MAX_ARTIFACT_SOURCE),
+      claims: list(evidence.claims, 1, 48, value => {
+        const claim = object(value, ["label", "quotes", "target"]);
+        let target: EvidenceTarget | undefined;
+        if (claim.target !== undefined) {
+          const ref = object(claim.target, ["block", "field", "index"]);
+          const position = index(ref.block, blocks.length);
+          const field = oneOf(ref.field, ["input", "output", "step", "cell"] as const);
+          const item = blocks[position];
+          const count = item.kind === "calculator" && field === "input" ? item.inputs.length
+            : item.kind === "calculator" && field === "output" ? item.outputs.length
+            : item.kind === "steps" && field === "step" ? item.items.length
+            : item.kind === "table" && field === "cell" ? item.rows.length * item.columns.length : 0;
+          target = {block:position, field, index:index(ref.index, count)};
+        }
+        return { ...(target && {target}), label: literal(claim.label, 200), quotes: list(claim.quotes, 0, 4, quote => literal(quote, 500)) };
+      }),
+    };
+  }
   if (new TextEncoder().encode(JSON.stringify(artifact)).length > MAX_ARTIFACT_BYTES) return invalid();
   return artifact;
 }
 
 /** The provider receives only this projection, even if a caller supplies Chat context. */
 export function parseArtifactGenerationInput(value: unknown) {
-  const obj = object(value, ["source", "guidance", "format"]);
-  return { source: literal(obj.source, MAX_ARTIFACT_SOURCE), guidance: literal(obj.guidance, MAX_ARTIFACT_GUIDANCE, true),
+  const obj = object(value, ["source", "guidance", "format", "drawing", "correction", "readSelection"]);
+  if (obj.readSelection !== undefined && (obj.readSelection !== true || obj.drawing !== undefined || obj.correction !== undefined)) return invalid();
+  if (obj.drawing !== undefined && (obj.drawing !== true || obj.format !== "explainer")) return invalid();
+  if (obj.correction !== undefined && !obj.drawing) return invalid();
+  return { ...(obj.drawing === true && { drawing: true }), ...(obj.readSelection === true && { readSelection: true }),
+    ...(obj.correction !== undefined && { correction: literal(obj.correction, 300) }), source: literal(obj.source, MAX_ARTIFACT_SOURCE), guidance: literal(obj.guidance, MAX_ARTIFACT_GUIDANCE, true),
     format: obj.format === "auto" ? "auto" as const : oneOf(obj.format, ARTIFACT_FORMATS) };
 }

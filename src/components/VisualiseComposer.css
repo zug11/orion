@@ -43,3 +43,7 @@
   border: 1px solid var(--line); border-radius: 9px; background: var(--surface-raised); color: var(--text);
   font: 14px/1.5 var(--ui-font); box-shadow: 0 8px 28px #0002; }
 .visualise-location-error button { margin-left: 8px; }
+.visualise-composer .visualise-review { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 2px 7px; }
+.visualise-review input { margin: 0; accent-color: var(--periwinkle); }
+.visualise-review span { grid-column: 2; font-size: 12px; }
+.visualise-composer .visualise-model { color: var(--text-soft); font-size: 13px; }

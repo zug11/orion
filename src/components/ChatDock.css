@@ -68,3 +68,18 @@
 .chat-edit footer .button { font-size: 12px; padding: 6px 12px; min-height: 30px; }
 .chat-edit [role="alert"] { margin-top: 10px; color: var(--muted); }
 .chat-edit__status { padding: 12px 0; }
+
+.chat-visual-follow-up {
+  display: block;
+  max-width: 100%;
+  margin-block: .5rem;
+  padding: .35rem .65rem;
+  border: 1px solid var(--line);
+  border-radius: .75rem;
+  background: var(--surface-raised);
+  color: var(--text-soft);
+  text-align: start;
+  font: inherit;
+  cursor: pointer;
+}
+.chat-visual-follow-up:focus-visible { outline: 2px solid var(--periwinkle); }

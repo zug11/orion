@@ -36,24 +36,35 @@ export function captureReadingArtifactPassage(body: HTMLElement, selection: Sele
   if (selection.isCollapsed || !selection.rangeCount) return;
   const range = selection.getRangeAt(0);
   if (!body.contains(range.startContainer) || !body.contains(range.endContainer)) return;
-  const blocks = Array.from(body.children).filter(el => range.intersectsNode(el));
-  if (!blocks.length || blocks.some(el => !readingBlockType(el) || el.matches(excluded) || el.querySelector(excluded))) return;
-  const pieces: { element: Element; text: string }[] = [];
-  for (const element of blocks) {
-    const part = range.cloneRange();
-    if (!element.contains(part.startContainer)) part.setStart(element, 0);
-    if (!element.contains(part.endContainer)) part.setEnd(element, element.childNodes.length);
-    const text = part.toString();
-    if (text.trim()) pieces.push({ element, text });
+  const pieces: string[] = [];
+  let last: Element | undefined;
+  for (const element of body.children) {
+    if (!range.intersectsNode(element)) continue;
+    if (!readingBlockType(element) || element.matches(excluded) || element.querySelector(excluded)) return;
+    // Only the two selection boundaries need a DOM range. For a whole
+    // chapter, the intervening paragraphs are already included in full.
+    let text: string;
+    if (element.contains(range.startContainer) || element.contains(range.endContainer)) {
+      const part = range.cloneRange();
+      if (!element.contains(part.startContainer)) part.setStart(element, 0);
+      if (!element.contains(part.endContainer)) part.setEnd(element, element.childNodes.length);
+      text = part.toString();
+    } else {
+      text = element.textContent ?? "";
+    }
+    if (/\S/u.test(text)) { pieces.push(text); last = element; }
   }
-  if (!pieces.length) return;
-  const element = pieces[pieces.length - 1].element;
-  const type = readingBlockType(element);
-  const text = readingBlockText(element);
-  const matches = Array.from(body.children).filter(child => readingBlockType(child) === type && readingBlockText(child) === text);
+  if (!last) return;
+  const type = readingBlockType(last);
+  const text = readingBlockText(last);
+  let occurrence = 0, count = 0;
+  for (const child of body.children) {
+    if (readingBlockType(child) !== type || readingBlockText(child) !== text) continue;
+    if (child === last) occurrence = count;
+    count++;
+  }
   const { left, top, bottom } = range.getBoundingClientRect();
-  return { source: pieces.map(piece => piece.text).join("\n\n"), anchor: { left, top, bottom },
-    block: { type, text, occurrence: matches.indexOf(element), count: matches.length } };
+  return { source: pieces.join("\n\n"), anchor: { left, top, bottom }, block: { type, text, occurrence, count } };
 }
 
 /** Both views must agree about duplicate paragraphs before a position can be used. */

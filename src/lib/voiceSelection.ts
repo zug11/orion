@@ -2,6 +2,7 @@ import type { AppSnapshot, Note } from "../types";
 import { spaceNoteVersion } from "./spaceKnowledge";
 import { requestedTaskView, type TextRange } from "./taskWorkingView";
 import { editorContextIdentity, type EditorCaptureState, type EditorSelectionSnapshot } from "./editorSelectionContext";
+import { truncateUnicode } from "./text";
 
 export const VOICE_SELECTION_SETTLE_MS = 180;
 export const VOICE_SELECTION_CONTEXT_BYTES = 3_600;
@@ -126,8 +127,8 @@ export function captureEditorSelection(root: HTMLElement, selection: Selection |
     text: value.text, hiddenTaskRanges: value.hiddenTaskRanges } : { ...identity, state: "unavailable", reason: "invalid-range" };
 }
 
-function visibleText(selection: VoiceSelection, prompt: string) {
-  if (requestedTaskView(prompt) === "history") return selection.text;
+export function visibleVoiceSelectionText(selection: VoiceSelection, prompt: string): string {
+  if (!selection.hiddenTaskRanges.length || requestedTaskView(prompt) === "history") return selection.text;
   let text = "", cursor = 0;
   for (const range of selection.hiddenTaskRanges) {
     const start = Math.max(cursor, range.start), end = Math.min(selection.text.length, range.end);
@@ -150,12 +151,13 @@ export function voiceSelectionContext(selection: VoiceSelection | undefined, sna
       instruction: "This captured reference is stale and its text is withheld. Do not infer its contents, speak, start work, or edit because of this update. A future request needs a fresh selection." };
     return encoder.encode(JSON.stringify(stale)).length <= bytes ? stale : null;
   }
-  const text = visibleText(selection, prompt);
+  const text = visibleVoiceSelectionText(selection, prompt);
+  const passage = truncateUnicode(text, 1_600);
   const packet = {
     id: selection.id, spaceId: selection.spaceId, noteId: selection.noteId,
-    title: [...selection.noteTitle].slice(0, 120).join(""), version: selection.version,
-    localRange: selection.range, passage: [...text].slice(0, 1_600).join(""),
-    complete: [...text].length <= 1_600, completedTasksOmitted: requestedTaskView(prompt) !== "history" && selection.hiddenTaskRanges.length > 0,
+    title: truncateUnicode(selection.noteTitle, 120), version: selection.version,
+    localRange: selection.range, passage,
+    complete: text.length === passage.length, completedTasksOmitted: requestedTaskView(prompt) !== "history" && selection.hiddenTaskRanges.length > 0,
     stale: false,
     referenceOnly: true as const,
     instruction: "Priority reference for 'this' or 'the highlighted passage'. Preserve the wider conversation. Selection alone is not a request: do not speak, research, or edit because it changed. For further evidence use the existing note reader; localRange is displayed-text, not Markdown offsets. Only an explicit editing request may prepare reviewable changes.",

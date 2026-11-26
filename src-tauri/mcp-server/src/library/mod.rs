@@ -18,6 +18,7 @@ mod tests;
 pub(super) mod text;
 pub(crate) mod threads;
 mod visual_artifact;
+mod visual_artifact_illustration_schema;
 mod visual_artifact_schema;
 mod write;
 

@@ -1,3 +1,4 @@
+import { addReadingArtifactTasks } from "../lib/visualArtifactNoteTasks";
 import { TicketReferenceLink, useTicketNavigation } from './TicketNavigation';
 import { remarkTicketReferences, ticketIdFromUrl } from '../lib/ticketReferences';
 import { calendarDateFromUrl } from '../lib/calendarDate';
@@ -127,8 +128,14 @@ const RichNoteEditor = lazy(() =>
   })),
 );
 
+const ReadingArtifactTasks = createContext<((marker: string, index: number, tasks: string[]) => boolean) | undefined>(undefined);
+
 function ReadingVisualArtifact({ node }: { node?: MarkdownElement }) {
-  return <div data-narration-ignore="true"><SavedVisualArtifact marker={node?.properties["data-orion-artifact"]}/></div>;
+  const add = useContext(ReadingArtifactTasks);
+  const marker = node?.properties["data-orion-artifact"];
+  const index = Number(node?.properties["data-orion-artifact-index"]);
+  return <div data-narration-ignore="true"><SavedVisualArtifact marker={marker}
+    onAddTasks={add && typeof marker === "string" ? tasks => add(marker, index, tasks) : undefined}/></div>;
 }
 
 const ReadingVisualise = lazy(() => import("./ReadingVisualise").then(module => ({ default: module.ReadingVisualise })));
@@ -1470,13 +1477,21 @@ export function NoteView({
   // Playback ticks must not remount the reading text: its native ranges also
   // anchor Find, selection, excerpts and narration highlighting.
   const renderedMarkdown = useMemo(() => (
+    <ReadingArtifactTasks.Provider value={background ? undefined : (marker, index, tasks) => {
+      const current = currentNoteRef.current;
+      if (current.id !== note.id || current.body !== note.body || noteReviewState.current.editing || noteReviewState.current.chatEdit) return false;
+      const body = addReadingArtifactTasks(current.body, marker, index, tasks);
+      if (!body) return false;
+      update({body});
+      return true;
+    }}>
     <ReadingBoardContext.Provider value={{noteId:note.id,workspace:{work:readingWork,onChangeBoard,onPatch:onPatchTicket,onDelete:onDeleteTicket,onOpenNote,inference:ticketInference,
       onCreateTicket:onCreateWork ? (target,title,status,dueDate) => onCreateWork('ticket',title,target.noteId,target.id,status,dueDate) : undefined}}}>
     <ReactMarkdown remarkPlugins={[remarkGfm, ticketReferencePlugin, remarkVisualArtifacts, remarkNoteBoards, remarkNoteTableMetadata, remarkNoteBlocks, remarkNoteMargins, remarkNoteTextAlignment]} components={markdownComponents} urlTransform={safeUrl}>
       {visibleMarkdown}
     </ReactMarkdown>
-    </ReadingBoardContext.Provider>
-  ), [visibleMarkdown, note, notes, readingWork, concepts, sources, findQuery, selectedPassageId,
+    </ReadingBoardContext.Provider></ReadingArtifactTasks.Provider>
+  ), [background, visibleMarkdown, note, notes, readingWork, concepts, sources, findQuery, selectedPassageId,
     onOpenNote, onOpenConcept, onOpenSource, onUpdateNote, onPatchTicket, onDeleteTicket, onCreateWork, onChangeBoard, ticketInference, ticketReferencePlugin]);
 
   useLayoutEffect(() => {

@@ -1,3 +1,7 @@
+import { readVisualArtifactMarker } from "../lib/visualArtifactMarkdown";
+import { visualFollowUp } from "../lib/chatVisualIntent";
+import { VisualArtifactView } from "./VisualArtifactView";
+import type { ChatVisualPreview } from "../lib/chatVisual";
 import { resolveWebResearchProvider, webResearchUnavailableReason } from "../lib/webResearchProvider";
 import { isChatGPTModel, manageChatGPTUsage } from "../lib/chatgpt";
 import {
@@ -7,6 +11,7 @@ import {
   Bot,
   BookOpenText,
   Globe,
+  Layers3,
   MessageCircle,
   Plus,
   RefreshCw,
@@ -80,8 +85,9 @@ export interface ChatViewProps {
   snapshot: AppSnapshot;
   busy: boolean;
   progress?: string;
+  visualPreview?: ChatVisualPreview;
   onCancel?: () => void;
-  onSend: (prompt: string, focusNoteId?: string, selection?: VoiceSelection, webEnabled?: boolean) => Promise<ChatResult>;
+  onSend: (prompt: string, focusNoteId?: string, selection?: VoiceSelection, webEnabled?: boolean, visualRequested?: boolean) => Promise<ChatResult>;
   selection?: VoiceSelection;
   onCommentReply?: (messageId: string, selection?: VoiceSelection) => Promise<void>;
   onReviewEdit?: (proposal: ChatEditProposal) => Promise<boolean>;
@@ -136,6 +142,7 @@ export function ChatView({
   dockPanelRef,
   busy,
   progress,
+  visualPreview,
   onCancel,
   onSend,
   onReviewEdit,
@@ -152,6 +159,7 @@ export function ChatView({
   focusNoteId,
   selection,
 }: ChatViewProps) {
+  const [visualRequested, setVisualRequested] = useState(false);
   const [localDraft, setLocalDraft] = useState("");
   const draft = composerDraft?.value ?? localDraft;
   const setDraft = composerDraft?.onChange ?? setLocalDraft;
@@ -246,6 +254,11 @@ export function ChatView({
   const voiceScroll = useVoiceChatScroll({ enabled: scrollVoice, active: externalVoiceActive, visible,
     hasContent: hasThreadContent, panelRef: dockPanelRef, replyKey: `${latestReply}:${voiceContent?.revision ?? ""}`,
     contentKey: `${messages.length}:${messages[messages.length - 1]?.content.length ?? 0}:${isSending}:${!!pendingPrompt}:${editRevision}:${voiceContent?.revision ?? ""}` });
+  const latestMessage = messages[messages.length - 1];
+  const followUp = useMemo(() => {
+    const artifact = latestMessage?.role === "assistant" && latestMessage.visualArtifact && readVisualArtifactMarker(latestMessage.visualArtifact);
+    return artifact ? visualFollowUp(artifact) : undefined;
+  }, [latestMessage]);
   const lastVoiceRevealRequest = useRef<number | undefined>(0);
   useEffect(() => {
     if (lastVoiceRevealRequest.current === voiceRevealRequest) return;
@@ -294,9 +307,11 @@ export function ChatView({
     setPendingPrompt(normalized);
     setSubmitting(true);
     try {
-      const result = await (webEnabled ? onSend(normalized, sendNoteId, capturedSelection, true)
+      const result = await (visualRequested ? onSend(normalized, sendNoteId, capturedSelection, webEnabled, true)
+        : webEnabled ? onSend(normalized, sendNoteId, capturedSelection, true)
         : capturedSelection ? onSend(normalized, sendNoteId, capturedSelection)
         : sendNoteId ? onSend(normalized, sendNoteId) : onSend(normalized));
+      setVisualRequested(false);
       setEditProposal(result.editProposal);
       setEditRevision(revision => revision + 1);
       setSuggestedContext(undefined);
@@ -497,6 +512,12 @@ export function ChatView({
                   {message.role === "assistant" ? (
                     <>
                       <ChatReply snapshot={snapshot} message={message} onOpenNote={onOpenNote} onOpenSource={onOpenSource} />
+                      {followUp && latestMessage === message && !draft && <button type="button" className="chat-visual-follow-up"
+                        disabled={isSending} onClick={() => {
+                          setSuggestedContext(undefined);
+                          setDraft(followUp);
+                          composerRef.current?.focus();
+                        }}>{followUp}</button>}
                       {onCommentReply && (message.passage || selection) && <button type="button" className="button quiet" disabled={submitting} onClick={() => {
                         setSubmitting(true); setError(null);
                         void onCommentReply(message.id, selection).catch(error => setError(error instanceof Error ? error.message : String(error))).finally(() => setSubmitting(false));
@@ -530,6 +551,19 @@ export function ChatView({
             </article>
           )}
 
+          {isSending && visualPreview && <article className="chat-message chat-message--assistant" aria-label="Orion's reply">
+            <ChatReply snapshot={snapshot} message={{ ...visualPreview.answer, content: visualPreview.answer.reply, id: "visual-preview", role: "assistant", cardIds: [], contextCardIds: [], createdAt: "" }}
+              onOpenNote={onOpenNote} onOpenSource={onOpenSource} />
+            {visualPreview.model && <p className="chat-message__status" role="status">Drawing with {visualPreview.model}</p>}
+            {visualPreview.artifact ? <VisualArtifactView artifact={visualPreview.artifact} />
+              : visualPreview.heading && <section className="visual-artifact" aria-busy="true" aria-label={visualPreview.heading.title}>
+                <header className="visual-artifact__header">
+                  <span className="visual-artifact__format"><Layers3 size={14} />{visualPreview.heading.format}</span>
+                  <h3>{visualPreview.heading.title}</h3>
+                  {visualPreview.heading.summary && <p>{visualPreview.heading.summary}</p>}
+                </header>
+              </section>}
+          </article>}
           {isSending && (
             <article
               className="chat-message chat-message--assistant chat-message--thinking"
@@ -623,6 +657,10 @@ export function ChatView({
           </div>
           <div className="chat-composer__footer">
             {isChatGPTModel(snapshot.settings.model) && <button type="button" className="chat-web-toggle" onClick={() => void manageChatGPTUsage().catch(onOpenSettings)}>Using ChatGPT plan · Manage usage</button>}
+            <button type="button" className="chat-web-toggle" aria-pressed={visualRequested} disabled={isSending || !canSend}
+              title="Include an interactive visual with the next reply" onClick={() => setVisualRequested(value => !value)}>
+              <Layers3 size={13} aria-hidden="true" />Visualise
+            </button>
             <button type="button" className="chat-web-toggle" aria-pressed={webEnabled}
               disabled={isSending} title={webRoute ? `Include web research via ${webRoute.label} when useful for this conversation` : webResearchUnavailableReason(snapshot.settings)}
               onClick={() => {

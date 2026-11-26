@@ -12,6 +12,8 @@ import { reconcileConceptVocabulary } from "./concepts";
 import { normalizeStudio } from "./studio";
 import { withWritingOrigin } from "./writingOrigins";
 import { touchChatThread } from "./chatThreads";
+import { describedChatVisual } from "./chatVisualIntent";
+import { readVisualArtifactMarker } from "./visualArtifactMarkdown";
 import { truncateUnicode } from "./text";
 import { portableChatEvidence } from "./chatCitations";
 import { normalizeSourceEvidenceVersions } from "./evidenceVersions";
@@ -113,7 +115,10 @@ export function buildChatRequest(
   const studio = normalizeStudio(snapshot.studio);
   let historyBudget = 12_000;
   const history = studio.messages.slice(-12).reverse().map((message) => {
-    const content = truncateUnicode(message.content, Math.min(2_000, historyBudget));
+    const limit = Math.min(2_000, historyBudget);
+    const visual = message.visualArtifact && readVisualArtifactMarker(message.visualArtifact);
+    const attachment = visual ? truncateUnicode("\n\nAttached visual at its initial settings\n" + describedChatVisual(visual), Math.min(800, Math.floor(limit / 2))) : "";
+    const content = truncateUnicode(message.content, limit - [...attachment].length) + attachment;
     historyBudget -= [...content].length;
     return { role: message.role, content };
   }).filter((message) => message.content).reverse();
@@ -150,8 +155,9 @@ export function applyChatResult(
   const noteActions = chatPromptAllowsNoteCreation(prompt)
     ? normalizeChatNoteActions(result.noteActions)
     : [];
-  const createdNotes = noteActions.map((action) =>
-    attachChatSourceIds(chatNoteFromAction({ ...action, body: portableChatEvidence(action.body, evidence) }, now, noteIdFactory()), evidence, snapshot),
+  const visual = readVisualArtifactMarker(result.visualArtifact) ? result.visualArtifact : undefined;
+  const createdNotes = noteActions.map(action =>
+    attachChatSourceIds(chatNoteFromAction({ ...action, body: portableChatEvidence(visual && noteActions.length === 1 ? action.body + "\n\n" + visual : action.body, evidence) }, now, noteIdFactory()), evidence, snapshot),
   );
   const createdNoteIds = createdNotes.map((note) => note.id);
   const messages: StudioMessage[] = [
@@ -171,6 +177,8 @@ export function applyChatResult(
       ...(threadId ? { threadId } : {}),
       ...(passage ? { passage } : {}),
       content: result.reply.trim(),
+      ...(visual ? { visualArtifact: visual } : {}),
+      ...(result.visualError ? { visualError: result.visualError.slice(0, 400) } : {}),
       cardIds: [],
       contextCardIds: [],
       ...(createdNoteIds.length > 0 ? { createdNoteIds } : {}),
@@ -218,6 +226,7 @@ export function saveChatReplyAsNote(
 
   const action = chatActionFromReply(message.content);
   const evidence = normalizeSourceEvidenceVersions((message.evidence ?? []).filter(isChatEvidence).slice(0, MAX_CHAT_EVIDENCE), snapshot.sources);
+  if (message.visualArtifact && readVisualArtifactMarker(message.visualArtifact)) action.body += "\n\n" + message.visualArtifact;
   action.body = portableChatEvidence(action.body, evidence);
   const note = attachChatSourceIds(chatNoteFromAction(action, now, noteId), evidence, snapshot);
   const vocabulary = reconcileConceptVocabulary(

@@ -479,8 +479,16 @@ These product decisions are intentional:
   calculates equal end-of-period payments from principal, a fractional rate
   per period and a whole payment count. At zero interest it divides principal
   by the number of payments.
-  `visual-artifact` uses the selected saved text connection and sends only
-  the selected/entered source, format and optional guidance. Native and browser
+  Visualise accepts the full highlighted or entered passage without a fixed
+  character limit. Up to 12,000 UTF-16 units fit in a direct provider packet.
+  For longer passages, two readers on the selected connection work through
+  overlapping sections, keeping ordered, literal excerpts. If the excerpts
+  exceed a packet, reduce groups of whole excerpts until the final request
+  fits. Never take just the beginning of the selection or pass an unfinished
+  read to generation. Each read has a deadline and supports cancellation.
+  Separate disjoint excerpts with a visible omission; a citation must come
+  from one continuous source span. Opening the composer starts no requests.
+  Only the selected/entered source, format and optional guidance are used. Native and browser
   transports share `visualArtifactInstructions.txt`. Validate all provider
   output and saved payloads with `parseVisualArtifact`. Render text as text
   and graphics with Orion's own components. Interactions run locally.
@@ -499,6 +507,39 @@ These product decisions are intentional:
   artifact. Each embedded viewer reads its own validated data and keeps its
   controls local to that page. Print, script-disabled browsers and Word exports
   show the readable content for every stage and the initial calculator values.
+  Draw illustration uses the saved connection to compose new geometry in one
+  coordinate system. On OpenAI API and ChatGPT plan connections, use an
+  available Astra model for drawing and show its name in the composer.
+  Prefer high reasoning when supported. Use the connection's model catalog;
+  a key that only forbids listing can still request its selected or default
+  Astra model. When a mixed artifact needs a drawing, preserve its other
+  blocks and evidence references while the drawing model supplies the geometry. Keep
+  Anthropic drawings on the selected Anthropic connection. Resolve the model
+  when submitting, keep the Space's saved model preference intact and review
+  a drawing with the same model that drew it. Use the validated illustration block for layers,
+  selectable parts, stage changes and source quotes. The host owns paths,
+  styles, framing and numbered controls. Library glyphs are optional. Each
+  part's quote must occur in its passage. Each excerpt of a generated passage
+  must come from the selection. An explicit drawing gets at most one correction for invalid
+  output, including an all-symbol response to an explicit Draw request.
+  An optional visual review sends a local PNG of the first drawing and
+  its validated geometry to the same connection with the passage and guidance.
+  Accept only geometry revisions preserving the parts, stages and source text.
+  A failed review can keep the first drawing. Save SVG exports the current stage as inert, standalone geometry.
+  The note's part question opens a draft in that Space and conversation.
+  Optional evidence on any document associates claims with literal excerpts.
+  Indicate missing excerpts. Matching a quote establishes its location only.
+  A calculator derives its chart and working from its evaluated expression
+  trees. Live explanation tokens, conditional expressions, presets, population
+  counts, recipe quantities and proportional flow bands use the same input
+  values. Check presets, count totals and flow capacity before insertion.
+  Recipe shopping lists insert ordinary tasks only on the reader's explicit
+  action. Saved artifacts remain usable offline. Both the renderer and MCP
+  enforce the extended v1 contract before inserting a new document.
+  Space Chat can progressively display a title and complete validated blocks
+  through the saved connection. Persist the final validated marker with the
+  reply in its originating conversation. Keep as note includes the marker.
+  Renderer previews, partial JSON and slider state are transient.
 - AI is optional. Writing, local imports, on-device OCR and transcription,
   source provenance, links, search, Spaces, and web/Markdown export must remain
   useful without an OpenAI or Anthropic key.

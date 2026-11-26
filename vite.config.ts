@@ -30,13 +30,18 @@ function visualisationExport(): Plugin {
         minify: true,
         supported: { "inline-script": true },
         define: { "process.env.NODE_ENV": '"production"' },
-        loader: { ".css": "empty" }, // Exported HTML includes the viewer stylesheet inline.
+        outfile: "viewer.js", // esbuild collects every viewer stylesheet into viewer.css.
         metafile: true,
       });
       for (const input of Object.keys(bundle.metafile.inputs)) {
         if (input.startsWith("src/")) this.addWatchFile(resolve(root, input));
       }
-      return "export const viewerScript = " + JSON.stringify(bundle.outputFiles[0].text);
+      const asset = (suffix: string) => {
+        const output = bundle.outputFiles.find(file => file.path.endsWith(suffix));
+        if (!output) throw new Error("Missing standalone visualisation viewer " + suffix);
+        return JSON.stringify(output.text);
+      };
+      return "export const viewerScript = " + asset(".js") + "; export const viewerStyles = " + asset(".css");
     },
   };
 }

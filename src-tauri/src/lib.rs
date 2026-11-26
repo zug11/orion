@@ -3,6 +3,9 @@ mod chat_reading;
 mod chatgpt;
 #[cfg(any(target_os = "macos", test))]
 mod credential_store;
+#[path = "../shared/visual_input.rs"]
+mod visual_input;
+mod visual_review;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chat_reading::{ChatReadRequest, ChatReadingFinding, ChatVoicePresentation};
 use fs2::FileExt;
@@ -45,6 +48,7 @@ mod editor_actions_protocol;
 #[path = "../shared/editor_context_protocol.rs"]
 mod editor_context_protocol;
 mod elevenlabs_voices;
+mod illustration_svg;
 mod image_planning;
 mod knowledge_schemas;
 #[path = "../shared/note_version.rs"]
@@ -854,6 +858,10 @@ struct ChatHistoryItem {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ChatRequest {
+    #[serde(default)]
+    drawing_account_id: Option<String>,
+    #[serde(default)]
+    visual_review: Option<visual_review::Input>,
     #[serde(default)]
     mode: Option<String>,
     prompt: String,
@@ -3858,7 +3866,24 @@ fn visual_artifact_input(raw: &str) -> Result<Value, String> {
         .get("format")
         .and_then(Value::as_str)
         .ok_or_else(error)?;
-    if fields.len() != 3
+    if fields.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "source" | "format" | "guidance" | "drawing" | "correction" | "readSelection"
+        )
+    }) || fields.get("readSelection").is_some_and(|flag| {
+        flag.as_bool() != Some(true)
+            || fields.contains_key("drawing")
+            || fields.contains_key("correction")
+    }) || fields
+        .get("drawing")
+        .is_some_and(|flag| flag.as_bool() != Some(true) || format != "explainer")
+        || fields.get("correction").is_some_and(|v| {
+            fields.get("drawing").is_none()
+                || !v.as_str().is_some_and(|t| {
+                    !t.trim().is_empty() && t.encode_utf16().count() <= 300 && clean_text(t)
+                })
+        })
         || source.trim().is_empty()
         || source.encode_utf16().count() > 12_000
         || guidance.encode_utf16().count() > 800
@@ -3881,6 +3906,7 @@ async fn chat(
     editor_action_grant: Option<editor_actions_protocol::EditorActionGrant>,
     client: State<'_, OpenAiClient>,
     request: ChatRequest,
+    visual_deltas: Option<tauri::ipc::JavaScriptChannelId>,
 ) -> Result<ChatResult, String> {
     let external_model = request.model.clone();
     let external_effort = request.effort.clone();
@@ -3913,6 +3939,10 @@ async fn chat(
         return Err("Ask Orion a question first.".to_string());
     }
     let visual = request.mode.as_deref() == Some("visual-artifact");
+    let visual_deltas = visual_deltas.map(|id| id.channel_on(window.as_ref().clone()));
+    if visual_deltas.is_some() && !visual {
+        return Err("Streaming is available for visual generation.".into());
+    }
     let visual_input = if visual {
         Some(visual_artifact_input(&prompt)?)
     } else {
@@ -3968,8 +3998,41 @@ async fn chat(
     } else {
         None
     };
-    let mut provider_instructions = if visual {
-        include_str!("../../src/lib/visualArtifactInstructions.txt").to_owned()
+    if let Some(review) = &request.visual_review {
+        let packet = visual_input
+            .as_ref()
+            .ok_or("Draw a passage before reviewing it.")?;
+        if visual_deltas.is_some() || packet["drawing"] != true || !packet["correction"].is_null() {
+            return Err("Invalid visual review request.".into());
+        }
+        review.validate(packet["source"].as_str().unwrap_or_default())?;
+    }
+    let read_selection = visual_input
+        .as_ref()
+        .is_some_and(|packet| packet["readSelection"] == true);
+    if read_selection && visual_deltas.is_some() {
+        return Err("Only a generated visual can be streamed.".into());
+    }
+    let mut provider_instructions = if read_selection {
+        include_str!("../../src/lib/visualSelectionReaderInstructions.txt").to_owned()
+    } else if request.visual_review.is_some() {
+        include_str!("../../src/lib/visualReviewInstructions.txt").to_owned()
+    } else if visual {
+        [
+            include_str!("../../src/lib/visualArtifactInstructions.txt"),
+            include_str!("../../src/lib/artifactIllustrationInstructions.txt"),
+            include_str!("../../src/lib/visualArtifactCalculatorInstructions.txt"),
+            if visual_input
+                .as_ref()
+                .is_some_and(|packet| packet["drawing"] != true)
+                && !request.model.as_deref().is_some_and(is_anthropic_model)
+            {
+                include_str!("../../src/lib/deferredDrawingInstructions.txt")
+            } else {
+                ""
+            },
+        ]
+        .join("\n")
     } else if synthesis {
         voice_synthesis::protocol()["instructions"]
             .as_str()
@@ -4031,7 +4094,14 @@ async fn chat(
     let stored_key = if use_anthropic {
         stored_anthropic_api_key().await?
     } else {
-        chatgpt::model_key(&model).await?
+        if let Some(id) = request.drawing_account_id.as_deref() {
+            if !visual || !chatgpt::is_model(&model) {
+                return Err("Invalid drawing account.".into());
+            }
+            Some(chatgpt::credential_for_account(&client.0, Some(id)).await?)
+        } else {
+            chatgpt::model_key(&model).await?
+        }
     };
     let Some(api_key) = stored_key else {
         return Err(format!(
@@ -4090,7 +4160,10 @@ async fn chat(
             })
         })
         .collect::<Vec<_>>();
-    let chat_payload = if let Some(packet) = visual_input {
+    let chat_payload = if let Some(mut packet) = visual_input {
+        if let Some(review) = &request.visual_review {
+            packet["drawingToReview"] = review.drawing.clone();
+        }
         packet
     } else if let Some(context) = &synthesis_context {
         json!({ "synthesisContext": context })
@@ -4135,23 +4208,33 @@ async fn chat(
                 .expect("the Anthropic output config is an object")
                 .insert("effort".to_string(), json!(effort));
         }
-        let body = json!({
+        let mut body = json!({
             "model": model,
             "max_tokens": max_output_tokens,
             "system": provider_instructions,
             "messages": [{
                 "role": "user",
-                "content": chat_payload.to_string()
+                "content": request.visual_review.as_ref().map(|review| review.anthropic_content(&chat_payload)).unwrap_or_else(|| json!(chat_payload.to_string()))
             }],
             "output_config": output_config
         });
+        if visual_deltas.is_some() {
+            body["stream"] = json!(true);
+        }
         authorize()?;
         let response = client
             .0
             .post(ANTHROPIC_MESSAGES_URL)
             .header("x-api-key", api_key.as_str())
             .header("anthropic-version", "2023-06-01")
-            .header(reqwest::header::ACCEPT, "application/json")
+            .header(
+                reqwest::header::ACCEPT,
+                if visual_deltas.is_some() {
+                    "text/event-stream"
+                } else {
+                    "application/json"
+                },
+            )
             .json(&body)
             .send()
             .await
@@ -4160,10 +4243,14 @@ async fn chat(
         if !response.status().is_success() {
             return Err(anthropic_error(response, operation).await);
         }
-        let response = response
-            .json::<Value>()
-            .await
-            .map_err(|error| format!("Orion could not read Anthropic's response: {error}"))?;
+        let response = if let Some(channel) = &visual_deltas {
+            chatgpt::read_visual_stream(response, true, channel).await?
+        } else {
+            response
+                .json::<Value>()
+                .await
+                .map_err(|error| format!("Orion could not read Anthropic's response: {error}"))?
+        };
         authorize()?;
         let output_text = extract_anthropic_output_text(&response, operation)?;
         if let Some(context) = &synthesis_context {
@@ -4183,7 +4270,7 @@ async fn chat(
         "store": false,
         "max_output_tokens": max_output_tokens,
         "instructions": provider_instructions,
-        "input": chat_payload.to_string(),
+        "input": request.visual_review.as_ref().map(|review| review.openai_input(&chat_payload)).unwrap_or_else(|| json!(chat_payload.to_string())),
         "text": {
             "verbosity": "medium",
             "format": {
@@ -4200,6 +4287,9 @@ async fn chat(
             .insert("reasoning".to_string(), json!({ "effort": effort }));
     }
 
+    if visual_deltas.is_some() {
+        body["stream"] = json!(true);
+    }
     authorize()?;
     let response = chatgpt::text_request(
         client
@@ -4220,7 +4310,11 @@ async fn chat(
         });
     }
 
-    let response = chatgpt::read_for_model(response, &model).await?;
+    let response = if let Some(channel) = &visual_deltas {
+        chatgpt::read_visual_stream(response, false, channel).await?
+    } else {
+        chatgpt::read_for_model(response, &model).await?
+    };
     authorize()?;
     let output_text = extract_output_text(&response, operation)?;
     if let Some(context) = &synthesis_context {
@@ -5147,6 +5241,7 @@ pub fn run() {
             chatgpt::chatgpt_select_account,
             chatgpt::chatgpt_sign_out,
             chatgpt::chatgpt_models,
+            chatgpt::illustration_models,
             delete_api_key,
             test_openai_key,
             save_anthropic_api_key,
@@ -5191,6 +5286,7 @@ pub fn run() {
             local_transcription::transcription_setup_status,
             export_markdown,
             export_web_page,
+            illustration_svg::export_illustration_svg,
             portable_orion::export_orion_files,
             portable_orion::open_orion_file,
             portable_orion::pick_orion_file_for_library,
@@ -5289,6 +5385,23 @@ mod tests {
         .unwrap();
         assert_eq!(result.reply.len(), 8000);
         assert!(result.note_actions.is_empty());
+    }
+
+    #[test]
+    fn visual_reader_uses_an_exclusive_bounded_source_packet() {
+        let reader = json!({ "source": "A section", "guidance": "Show change", "format": "explainer", "readSelection": true });
+        assert_eq!(visual_artifact_input(&reader.to_string()).unwrap(), reader);
+        for (key, value) in [
+            ("drawing", json!(true)),
+            ("correction", json!("change")),
+            ("readSelection", json!(false)),
+            ("readSelection", Value::Null),
+            ("source", json!("x".repeat(12_001))),
+        ] {
+            let mut packet = reader.clone();
+            packet[key] = value;
+            assert!(visual_artifact_input(&packet.to_string()).is_err());
+        }
     }
 
     #[test]

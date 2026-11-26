@@ -13,9 +13,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zug11/orion/releases/download/v0.6.5/Orion-0.6.5.m-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/zug11/orion/releases/download/v0.6.6/Orion-0.6.6.m-Apple-Silicon.dmg"><strong>Download for Apple Silicon</strong></a>
   ·
-  <a href="https://github.com/zug11/orion/releases/tag/v0.6.5">Release notes · Whisper Medium edition</a>
+  <a href="https://github.com/zug11/orion/releases/tag/v0.6.6">Release notes · Whisper Medium edition</a>
   ·
   <a href="#the-orchestration-topology">How it works</a>
   ·
@@ -24,7 +24,13 @@
   <a href="#local-first-by-construction">Privacy</a>
 </p>
 
-> Orion 0.6.5 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
+> Orion 0.6.6 runs on Apple Silicon Macs with macOS 13.3 or later. AI is optional: writing, imports, OCR, transcription, links, search, tasks, Spaces, and export remain useful without an API key.
+
+## Visualise a passage
+
+Highlight text in a note and choose **Visualise**, or type `/visualise` and paste a passage. For a drawing with parts you can explore, choose **Draw illustration**. Click a numbered part to read about it or ask a follow-up in that Space’s Chat. **Save SVG** exports the drawing as it appears in the current stage. Orion reads long selections in sections and uses excerpts from across the passage to generate the visual.
+
+In Space Chat, ask for a visual and watch it appear in the reply. Choose **Keep as note** to save it with the answer. In a calculator, drag the chart or adjust an input to update its results, explanation and working. Saved visuals also work in a self-contained HTML export.
 
 ## ChatGPT plan access and voice choices
 
@@ -864,12 +870,12 @@ See [all 21 tools and their contracts](docs/mcp-library-tools.md).
 
 ## Download
 
-[**Download Orion 0.6.5 for Apple Silicon — Whisper Medium**](https://github.com/zug11/orion/releases/download/v0.6.5/Orion-0.6.5.m-Apple-Silicon.dmg)
+[**Download Orion 0.6.6 for Apple Silicon — Whisper Medium**](https://github.com/zug11/orion/releases/download/v0.6.6/Orion-0.6.6.m-Apple-Silicon.dmg)
 
 This release includes Whisper Medium and its persistent dictation worker, the
 Claude connector and the Codex plugin. It is Developer ID signed,
 Apple-notarized, stapled and Gatekeeper-accepted. Verify the installer with the
-[SHA-256 checksums](https://github.com/zug11/orion/releases/download/v0.6.5/Orion-0.6.5-SHA256SUMS.txt). Small edition builds are available
+[SHA-256 checksums](https://github.com/zug11/orion/releases/download/v0.6.6/Orion-0.6.6-SHA256SUMS.txt). Small edition builds are available
 in [earlier releases](https://github.com/zug11/orion/releases).
 
 Requirements:

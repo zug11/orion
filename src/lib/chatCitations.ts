@@ -79,7 +79,7 @@ export function savedChatEvidence(markdown: string): ChatEvidence[] {
   return evidence;
 }
 
-function literalMarkdown(value: string): string {
+export function literalMarkdown(value: string): string {
   // A saved quote is text, including any Markdown, HTML or image instructions.
   // Character references also prevent GFM from autolinking quoted URLs and
   // swallowing the backslash escapes around surrounding Markdown punctuation.

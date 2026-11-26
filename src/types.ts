@@ -415,6 +415,9 @@ export interface StudioCard {
 }
 
 export interface StudioMessage {
+  /** Validated portable visual marker kept separate from prose and provider history. */
+  visualArtifact?: string;
+  visualError?: string;
   /** Missing on older vaults; those messages belong to the legacy Space chat. */
   threadId?: EntityId;
   /** Captured when this answer was requested; later highlights cannot retarget it. */
@@ -698,6 +701,9 @@ export interface ChatHistoryItem {
 }
 
 export interface ChatRequest {
+  drawingAccountId?: string;
+  /** Host-rasterized drawing for an explicit visual review. Never persisted. */
+  visualReview?: import("./lib/visualReviewInput").VisualReviewInput;
   mode?: "chat" | "visual-artifact" | "inline-writing" | "chat-reading" | "chat-suggestions" | "voice-synthesis";
   prompt: string;
   workspaceName: string;
@@ -720,6 +726,11 @@ export interface ChatRequest {
 }
 
 export interface ChatResult {
+  /** Transient format recommendation from the final typed Chat turn. */
+  visualFormat?: import("./lib/visualArtifacts").ArtifactFormat | "auto";
+  /** Only local post-processing of a visual generation response populates these. */
+  visualArtifact?: string;
+  visualError?: string;
   reply: string;
   synthesis?: import("./lib/voiceSynthesisProtocol").VoiceSynthesisResult;
   /** Transient prompt ideas. They carry no note-write authority. */
