@@ -1,3 +1,12 @@
+const vec3 lumaWeights=vec3(.2126,.7152,.0722);
+
+// Set the lightness and keep as much pigment as the display can represent.
+// Fitting chroma to the gamut keeps pale yellow and deep blue equally legible.
+vec3 tintedGlass(vec3 pigment,float lightness,float saturation){
+ vec3 chroma=(pigment-dot(pigment,lumaWeights))*saturation;
+ vec3 limits=max(chroma/(1.-lightness),-chroma/lightness);
+ return vec3(lightness)+chroma/max(1.,max(limits.r,max(limits.g,limits.b)));
+}
 void main(){
  vec2 xy=vLocal;
  float radius=length(xy),aa=1.25/(uRadius*uDpr);
@@ -28,13 +37,14 @@ void main(){
  c*=1.+uLevel*.12;c+=uSecondary*uReceiving*.18*pow(1.-z,1.5);
  c=max(c,vec3(0.));c=c/(vec3(1.)+c*.32);c=pow(c,vec3(.89));
  if(uLight>.5){
-  // Paint every material, including its darkest cloud and rim, between
-  // a pastel accent and pearl. Preserve the material's moving detail as relief.
-  float relief=smoothstep(.02,.75,dot(c,vec3(.2126,.7152,.0722)));
-  float edge=pow(1.-z,1.4);
-  vec3 pastel=mix(vec3(1.),clamp(uPrimary,0.,1.),.20);
-  vec3 pearl=mix(vec3(1.),clamp(uSecondary,0.,1.),.025);
-  c=mix(pastel,pearl,clamp(.18+.76*relief+.13*z-.25*edge,0.,1.));
+  // Moving pigment supplies the cloud relief. The curved silhouette has its
+  // own lightness so a bright patch cannot erase the rim against paper.
+  float relief=smoothstep(.06,.72,dot(c,lumaWeights));
+  float rim=smoothstep(.79,.985,radius);
+  float glint=pow(max(0.,dot(n,normalize(vec3(-.43,.54,.72)))),46.);
+  float lightness=mix(.77+.18*relief,.739,rim)+.065*glint;
+  vec3 pigment=mix(uPrimary,uSecondary,.18*relief);
+  c=tintedGlass(pigment,min(.985,lightness),.96-.45*relief+.14*rim);
  }
  gl_FragColor=vec4(c,mask*uOpacity*opacity*(1.-.12*uLight));
 }

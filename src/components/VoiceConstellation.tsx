@@ -35,6 +35,12 @@ type RGB = readonly [number, number, number];
 const blend = (a: RGB, b: RGB, amount: number): RGB => a.map((value, index) => Math.round(value + (b[index] - value) * amount)) as unknown as RGB;
 const color = (rgb: RGB, alpha = 1) => `rgba(${rgb.join(",")},${alpha})`;
 const white: RGB = [255, 255, 255];
+function lightGlassTint(rgb: RGB, lightness: number, saturation: number): RGB {
+  const luma = .2126 * rgb[0] + .7152 * rgb[1] + .0722 * rgb[2];
+  const chroma = rgb.map(channel => (channel - luma) * saturation);
+  const scale = Math.max(1, ...chroma.map(channel => Math.max(channel / (255 - lightness), -channel / lightness)));
+  return chroma.map(channel => Math.round(lightness + channel / scale)) as unknown as RGB;
+}
 const workerTint: RGB[] = [[115, 211, 204], [223, 179, 132], [174, 156, 235], [218, 128, 147], [138, 176, 230], [195, 207, 133]];
 function workerLabel(job: VoiceWorkOrder) {
   if (job.state !== "running") return job.state === "completed" && job.result ? "Open worker conversation" : job.state;
@@ -154,8 +160,8 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
         if (shader && glassPalette && !contrast && shader.glass.draw(context, point, glassPalette,
           shaderTime, shader.rotation, main, stretch, main ? 1 : opacity, glow, angle, current.settings?.voiceOrbStyle)) return;
         const { radius } = point;
-        const pastel = mode === "light" ? blend(rgb, white, .80) : rgb;
-        context.save(); context.translate(point.x, point.y); context.rotate(angle); context.scale(1 / Math.sqrt(stretch), Math.sqrt(stretch)); context.globalAlpha = opacity;
+        const pastel = mode === "light" ? lightGlassTint(rgb, 194, .82) : rgb;
+        context.save(); context.translate(point.x, point.y); context.rotate(angle); context.scale(1 / Math.sqrt(stretch), Math.sqrt(stretch)); context.globalAlpha = main && mode === "light" ? .96 : opacity;
         // The approved gravity study has a softly illuminated volume even at
         // rest. Audio adds expression; it is not needed to reveal the material.
         if (!contrast) {
@@ -166,14 +172,19 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
         const body = context.createRadialGradient(-radius * .34, -radius * .42, radius * .03, radius * .26, radius * .38, radius * 1.42);
         if (mode === "light") {
           body.addColorStop(0, color(blend(pastel, white, .93)));
-          body.addColorStop(.34, color(blend(pastel, white, .64)));
-          body.addColorStop(.75, color(blend(pastel, white, .27)));
+          body.addColorStop(.34, color(lightGlassTint(rgb, 222, .66)));
+          body.addColorStop(.75, color(lightGlassTint(rgb, 207, .75)));
           body.addColorStop(1, color(pastel));
         } else {
           body.addColorStop(0, color(blend(rgb, palette.highlight, .82))); body.addColorStop(.24, color(blend(rgb, palette.highlight, .28)));
           body.addColorStop(.61, color(rgb)); body.addColorStop(.88, color(blend(rgb, palette.shadow, contrast ? .90 : .72))); body.addColorStop(1, color(palette.shadow));
         }
         context.fillStyle = body; context.beginPath(); context.arc(0, 0, radius, 0, Math.PI * 2); context.fill();
+        if (mode === "light" && radius >= 4) {
+          context.lineWidth = Math.max(1, radius * .045);
+          context.strokeStyle = color(pastel);
+          context.beginPath(); context.arc(0, 0, radius - context.lineWidth / 2, 0, Math.PI * 2); context.stroke();
+        }
         if (!small) {
           context.rotate(-.4);
           const shine = context.createRadialGradient(-radius * .15, -radius * .59, 0, -radius * .15, -radius * .59, radius * .65);
@@ -186,7 +197,7 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
       const tint = (slot: number) => blend(palette.body, workerTint[slot % workerTint.length], [.34, .52, .45, .36, .35, .35][slot % workerTint.length]);
       const ring = (point: OrbCircle, rgb: RGB, slot: number) => {
         const radius = point.radius + (sidebar ? 1 : small ? 2 : 4);
-        const ringColor = mode === "light" ? blend(rgb, white, .80) : rgb;
+        const ringColor = mode === "light" ? lightGlassTint(rgb, 194, .82) : rgb;
         const angle = reduced ? -.8 : scene.phase * 1.7 + slot * .65;
         context.save(); context.lineWidth = sidebar ? 1 : small ? 1.4 : 2; context.lineCap = "round";
         context.strokeStyle = color(ringColor, contrast ? .5 : .18);

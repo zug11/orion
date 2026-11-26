@@ -5449,8 +5449,9 @@ motion both materials mirror the shell's animated pitch and yaw through depth.
 Mirage's full pigment pattern moves in that same frame. These shaders live in
 `src/components/voiceShaders`. Resolve colours from existing Home
 shader settings and the current theme, including live system appearance changes.
-On light surfaces, map the whole material, including the cloud, rim, workers
-and halo, into a pearl-to-pastel range even for black custom pigments. Light
+On light surfaces keep the cloud and rim light, even with black custom pigments.
+Give the rim a consistent pastel tone against the page and retain enough variation
+in the moving material to distinguish its folds at the real Chat size. Light
 materials reduce alpha by 12%. Canvas2D and no-canvas fallbacks also follow the surface. Dark mode retains its material. Mouse
 hover drives pitch and yaw in view space, with bounded momentum that decays
 along the last axis of motion, including after pointer exit. Integrate opposite

@@ -16,6 +16,7 @@
 @media (prefers-contrast: more) { .voice-constellation[data-muted="true"] { opacity: .7; } }
 
 [data-theme="light"] .voice-constellation[data-rendering="fallback"]::before {
-  background: radial-gradient(ellipse at 35% 28%, white, color-mix(in srgb, var(--periwinkle) 8%, white) 50%, color-mix(in srgb, var(--periwinkle) 20%, white));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--periwinkle) 18%, white);
+  --orb-day-edge: color-mix(in srgb, #cbd1d3 94%, var(--periwinkle));
+  background: radial-gradient(ellipse at 32% 24%, #fff 2%, color-mix(in srgb, var(--periwinkle) 18%, white) 32%, var(--orb-day-edge) 83%, color-mix(in srgb, var(--periwinkle) 15%, #d8dce2));
+  box-shadow: inset 0 0 0 2px var(--orb-day-edge);
 }
