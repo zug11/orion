@@ -1,0 +1,83 @@
+{
+  "version": "0.6.6",
+  "source_commit": "cd3d4b716714f534a2663e4c3cad4cf4d5a9dfe1",
+  "bundle_id": "app.orion.knowledge",
+  "edition": "Whisper Medium",
+  "platform": "darwin-aarch64",
+  "artifacts": [
+    {
+      "artifact": "Orion-0.6.6.m-Apple-Silicon.dmg",
+      "bytes": 1509555810,
+      "sha256": "31cf4491994cc943a61d849b1bd6b6b46fe93d5fae85e9d5643d6ff1fd60bc29"
+    },
+    {
+      "artifact": "Orion-0.6.6-Apple-Silicon.app.tar.gz",
+      "bytes": 1507433923,
+      "sha256": "75ecb67f8ee2c5ff8d81883b17b3bc145a0bef7fe82015bd505aa919b6b88036"
+    },
+    {
+      "artifact": "Orion-0.6.6-Apple-Silicon.app.tar.gz.sig",
+      "bytes": 448,
+      "sha256": "7c2ee8562f31e01116b353ce7de66effc4eba44c5145d7dcaf6dbd979835e351"
+    },
+    {
+      "artifact": "latest.json",
+      "bytes": 2150,
+      "sha256": "a4f9e1fd97f257979f9767cb484b6ccd0b9941addf85867d6035a97ed75aa83f"
+    }
+  ],
+  "notarization": {
+    "app": {
+      "message": "Processing complete",
+      "id": "9d52e83a-a66d-4925-be42-6370acc5abb2",
+      "status": "Accepted"
+    },
+    "dmg": {
+      "status": "Accepted",
+      "id": "912bafc7-ccb9-4481-aede-317537745b67",
+      "message": "Processing complete"
+    }
+  },
+  "app_and_dmg_stapled": true,
+  "app_and_dmg_gatekeeper": "accepted",
+  "copied_app_deep_strict_signature": "passed",
+  "main_executable_sha256": "e3ff047af44912c1a3d5eb0a40e150eed81d7c42ce0a797bc7821f66d885d2bc",
+  "stamps": {
+    "orion-source.sha256": "a4fbca73aa3d0d5fc88c4426e32575515ecd6f0a00fb6f03a6f1867f36d60b48",
+    "orion-renderer.sha256": "87030aa48c40f18f857dfae00d8ca6a3e7c3d21a9d88e5f246b4bbb5bf9bc714"
+  },
+  "updater": {
+    "signature": "verified",
+    "signed_version": "0.6.6",
+    "extracted_archive_identity_signature_ticket_gatekeeper": "passed",
+    "installed_over_user_app": false,
+    "endpoint": "https://github.com/zug11/orion/releases/latest/download/latest.json"
+  },
+  "verification": {
+    "renderer_tests_passed": 4169,
+    "renderer_tests_skipped": 1,
+    "native_tests_passed": 375,
+    "native_tests_ignored": 8,
+    "mcp_tests_passed": 152,
+    "updater_signing_tests_passed": 8,
+    "copied_app_bundled_mcp_and_codex_protocol_harnesses": "passed",
+    "copied_app_local_ocr_fixture": "passed",
+    "copied_app_local_whisper_medium_fixture": "passed",
+    "production_renderer_visualise": {
+      "viewport_widths": [
+        740,
+        1360
+      ],
+      "note_reading": true,
+      "keyboard_calculator_input": true,
+      "calculator_preset": true,
+      "chart_pointer_changes_input": true,
+      "show_working": true,
+      "keyboard_explorable_illustration_part": true,
+      "keyboard_stage_change": true,
+      "source_excerpt_highlight": true,
+      "horizontal_overflow": false,
+      "runtime_or_console_errors": 0
+    }
+  }
+}
