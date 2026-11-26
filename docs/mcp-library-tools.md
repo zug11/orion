@@ -49,9 +49,17 @@ Successful receipts contain updated versions and exact Orion citations.
 
 ## Insert an interactive visualisation
 
+An `illustration` can include `handles` and an `animation` in the artifact JSON. A handle has a label, two endpoint labels in `ends`, a literal passage quote, a straight or pivoting track, optional normalized initial position, and effects on named parts. An animation has a label, quote, duration in playback seconds, optional loop, and tracks of increasing `[seconds, drive]` keyframes. Give a track either its own effects or the index of an existing handle to animate. A track driving a handle starts at its initial position and visits both endpoints. Dragging it scrubs the clock along the nearest matching part of its journey. Independent controls remain live during playback.
+
+Each effect translates, rotates, fills or fades its target parts. Independent translations add. Independent levels and opacities multiply. Each part has at most one rotation pivot. Looping tracks return to their starting pose. The published tool schema specifies bounds. The shared renderer and MCP fixtures include a two-output microphone and a pivoting bridge.
+
 Recipe calculators support an optional literal `recipe.cookingNote` of up to 500 characters for source-backed preparation details that stay fixed as servings change.
 
+For a passage-specific interface, use `format:"custom"` and supply `layout.controls` and `layout.rows`. Cells place existing blocks, expose choices, or show a reading for a choice. A cell can be conditional on multiple choices; a scene can follow multiple choices with `stageControls` (one frame per combination, last choice varying fastest). Place each block and control once and bind each control to an effect. The published input schema describes the limits.
+
 The artifact tool accepts cycle, linkedViews, argument, scaleZoom and deepTime document formats. Each requires a matching validated block. These blocks can also be combined in an explainer. Inspect the tool’s input schema for keyframe, premise dependency, length unit and clock event fields.
+
+An argument block can include a `reading` array with up to eight paragraphs. A string supplies fixed context. An adaptive paragraph supplies `variants` and a `fallback`, each containing complete prose. For example, `{"variants":[{"requires":["lateVisits"],"text":"People used the library after six."}],"fallback":"Attendance after six remains unknown."}` switches when the cited claim loses or regains support. Use an explicit null fallback to omit that paragraph when it loses support. All IDs in a variant must be supported. The longest matching list wins, with ties resolved in written order. A reading must include at least one adaptive paragraph.
 
 Call `orion_insert_visual_artifact` with an existing note's current version from
 `orion_get_notes`. For example, this calculator lets the reader vary the rate

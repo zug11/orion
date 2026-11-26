@@ -10,6 +10,45 @@ fn positive() -> Value {
 fn level() -> Value {
     json!({"type":"number","minimum":0,"maximum":1})
 }
+fn dynamics(id: &Value) -> (Value, Value) {
+    let point = array(coord(), 2, 2);
+    let angle = |max: i32| json!({"type":"number","minimum":-max,"maximum":max});
+    let track = json!({"oneOf":[
+        object(json!({"from":point,"to":point}),&["from","to"]),
+        object(json!({"from":point,"pivot":point,"turn":angle(330)}),&["from","pivot","turn"])
+    ]});
+    let mut targets = array(id.clone(), 1, 28);
+    targets["uniqueItems"] = json!(true);
+    let range = array(level(), 2, 2);
+    let effect = json!({"oneOf":[
+        object(json!({"parts":targets,"move":array(angle(640),2,2)}), &["parts","move"]),
+        object(json!({"parts":targets,"pivot":point,"turn":angle(720)}),&["parts","pivot","turn"]),
+        object(json!({"parts":targets,"opacity":range}),&["parts","opacity"]),
+        object(json!({"parts":targets,"level":range}),&["parts","level"])
+    ]});
+    let mut spec = object(
+        json!({"label":string(80),"ends":array(string(64),2,2),"quote":string(400),"track":track,
+        "initial":level(),"effects":array(effect.clone(),1,12)}),
+        &["label", "ends", "quote", "track", "effects"],
+    );
+    spec["description"] = json!("A draggable point on a straight or circular track. Normalized travel, initially 0 unless specified. Supply an exact source quote. Translations add after a single rotation per part. Opacity or fill level set by independent controls or animation tracks multiply. Levels act on responsive glyphs or level rectangles.");
+    let key = json!({"type":"array","minItems":2,"maxItems":2,"prefixItems":[{"type":"number","minimum":0,"maximum":60},level()]});
+    let driven = object(
+        json!({"keys":array(key.clone(),2,32),"handle":{"type":"integer","minimum":0,"maximum":3}}),
+        &["keys", "handle"],
+    );
+    let affected = object(
+        json!({"keys":array(key,2,32),"effects":array(effect,1,12)}),
+        &["keys", "effects"],
+    );
+    let animated = json!({"oneOf":[affected,driven]});
+    let mut animation = object(
+        json!({"label":string(80),"quote":string(400),"duration":{"type":"number","minimum":0.5,"maximum":60},"loop":{"type":"boolean"},"tracks":array(animated,1,8)}),
+        &["label", "quote", "duration", "tracks"],
+    );
+    animation["description"] = json!("An optional locally playable and scrubbable sequence. Keys are [seconds, normalized drive] with increasing times from zero to duration. Looping tracks return to their initial drive. Each track must change.");
+    (array(spec, 1, 4), animation)
+}
 
 pub(super) fn shape_definition() -> Value {
     let paint = json!({"type":"string","enum":PAINTS});
@@ -54,8 +93,9 @@ pub(super) fn definition() -> Value {
         json!({"label":string(80),"items":array(item,2,8)}),
         &["label", "items"],
     );
+    let (handles, animation) = dynamics(&id);
     let mut schema = object(
-        json!({"kind":{"const":"illustration"},"passage":string(12000),"view":{"type":"string","enum":["landscape","square","portrait"]},"parts":array(part,1,28),"states":states}),
+        json!({"kind":{"const":"illustration"},"passage":string(12000),"view":{"type":"string","enum":["landscape","square","portrait"]},"parts":array(part,1,28),"states":states,"handles":handles,"animation":animation}),
         &["kind", "passage", "view", "parts"],
     );
     schema["description"]=json!("One composition in shared canvas coordinates: landscape 640 x 400, square 480 x 480, portrait 400 x 560. At least one selectable part. Every part needs shapes or icon; selectable parts need about and an exact quote from passage. Stage changes name unique existing parts. At most 520 shapes total.");

@@ -81,12 +81,15 @@ pub(super) fn definitions() -> Value {
         json!({"passage":string(12000),"claims":array(object(json!({"label":string(200),"quotes":array(string(500),0,4),"target":target}),&["label","quotes"]),1,48)}),
         &["passage", "claims"],
     );
-    let document = object(
-        json!({"version":{"type":"integer","const":1},"title":string(160),"summary":string(600),"evidence":evidence,
-        "format":{"type":"string","enum":["timeline","explainer","quiz","comparison","flashcards","calculator","cycle","linkedViews","argument","scaleZoom","deepTime"]},
+    let mut document = object(
+        json!({"version":{"type":"integer","const":1},"title":string(160),"summary":string(600),"evidence":evidence, "layout":super::visual_artifact::composition::definition(),
+        "format":{"type":"string","enum":["timeline","explainer","quiz","comparison","flashcards","calculator","cycle","linkedViews","argument","scaleZoom","deepTime","custom"]},
         "blocks":array(json!({"$ref":"#/$defs/block"}),1,12)}),
         &["version", "format", "title", "blocks"],
     );
+    document["if"] = json!({"properties":{"format":{"const":"custom"}}});
+    document["then"] = json!({"required":["layout"]});
+    document["else"] = json!({"not":{"required":["layout"]}});
     let mut blocks = vec![
         tagged(
             "text",

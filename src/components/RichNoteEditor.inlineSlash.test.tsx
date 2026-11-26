@@ -69,6 +69,7 @@ describe("inline slash commands in the real note editor", () => {
       expect(generate).not.toHaveBeenCalled();
       act(() => { editor.commands.setTextSelection(1); });
       const dialog = await chooseWithKeyboard();
+      fireEvent.click(within(dialog).getByText("Choose a starting format"));
       fireEvent.change(within(dialog).getByLabelText("Format"), { target: { value: "explainer" } });
       const guidance = within(dialog).getByLabelText(/Guidance/);
       expect(guidance).toHaveFocus();

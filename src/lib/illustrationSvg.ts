@@ -58,7 +58,8 @@ export function standaloneIllustrationSvg(figure: SVGSVGElement, title: string):
     return hex;
   }
   function copy(element: Element): Element | undefined {
-    if (element.namespaceURI !== ns || !tags.has(element.localName) || element.hasAttribute("data-drawing-badge"))
+    if (element.namespaceURI !== ns || !tags.has(element.localName) ||
+        element.hasAttribute("data-drawing-badge") || element.hasAttribute("data-drawing-handle"))
       return;
     const result = doc.createElementNS(ns, element.localName);
     for (const key of attributes) {

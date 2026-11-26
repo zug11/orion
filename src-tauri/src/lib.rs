@@ -3869,7 +3869,13 @@ fn visual_artifact_input(raw: &str) -> Result<Value, String> {
     if fields.keys().any(|key| {
         !matches!(
             key.as_str(),
-            "source" | "format" | "guidance" | "drawing" | "correction" | "readSelection"
+            "source"
+                | "format"
+                | "guidance"
+                | "drawing"
+                | "interaction"
+                | "correction"
+                | "readSelection"
         )
     }) || fields.get("readSelection").is_some_and(|flag| {
         flag.as_bool() != Some(true)
@@ -3878,8 +3884,12 @@ fn visual_artifact_input(raw: &str) -> Result<Value, String> {
     }) || fields
         .get("drawing")
         .is_some_and(|flag| flag.as_bool() != Some(true) || format != "explainer")
+        || fields.get("interaction").is_some_and(|v| {
+            packet["drawing"] != true
+                || !matches!(v.as_str(), Some("drag" | "play" | "dragAndPlay"))
+        })
         || fields.get("correction").is_some_and(|v| {
-            fields.get("drawing").is_none()
+            (fields.get("drawing").is_none() && !matches!(format, "custom" | "argument"))
                 || !v.as_str().is_some_and(|t| {
                     !t.trim().is_empty() && t.encode_utf16().count() <= 300 && clean_text(t)
                 })
@@ -3892,6 +3902,7 @@ fn visual_artifact_input(raw: &str) -> Result<Value, String> {
         || !matches!(
             format,
             "auto"
+                | "custom"
                 | "timeline"
                 | "explainer"
                 | "quiz"
@@ -4036,7 +4047,6 @@ async fn chat(
             if visual_input
                 .as_ref()
                 .is_some_and(|packet| packet["drawing"] != true)
-                && !request.model.as_deref().is_some_and(is_anthropic_model)
             {
                 include_str!("../../src/lib/deferredDrawingInstructions.txt")
             } else {
@@ -5396,6 +5406,38 @@ mod tests {
         .unwrap();
         assert_eq!(result.reply.len(), 8000);
         assert!(result.note_actions.is_empty());
+    }
+
+    #[test]
+    fn layout_and_argument_retries_accept_only_bounded_feedback() {
+        let retry = json!({"source":"Two feeds.", "guidance":"", "format":"custom", "correction":"Place each control once."});
+        assert_eq!(visual_artifact_input(&retry.to_string()).unwrap(), retry);
+        let argument = json!({"source":"Two accounts.", "guidance":"", "format":"argument", "correction":"Supply a paragraph for the remaining evidence."});
+        assert_eq!(
+            visual_artifact_input(&argument.to_string()).unwrap(),
+            argument
+        );
+        for (key, value) in [
+            ("format", json!("auto")),
+            ("format", json!("quiz")),
+            ("correction", json!("x".repeat(301))),
+            ("readSelection", json!(true)),
+        ] {
+            let mut invalid = retry.clone();
+            invalid[key] = value;
+            assert!(visual_artifact_input(&invalid.to_string()).is_err());
+        }
+    }
+    #[test]
+    fn drawing_interaction_belongs_to_a_drawing_request() {
+        for interaction in ["drag", "play", "dragAndPlay"] {
+            let mut packet = json!({"source":"A fader moves.", "guidance":"", "format":"explainer", "drawing":true, "interaction":interaction});
+            assert_eq!(visual_artifact_input(&packet.to_string()).unwrap(), packet);
+            packet.as_object_mut().unwrap().remove("drawing");
+            assert!(visual_artifact_input(&packet.to_string()).is_err());
+        }
+        let unknown = json!({"source":"A fader moves.", "guidance":"", "format":"explainer","drawing":true,"interaction":"run"});
+        assert!(visual_artifact_input(&unknown.to_string()).is_err());
     }
 
     #[test]

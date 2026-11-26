@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import compositionFixtures from "./fixtures/mcpVisualCompositions.json";
 import motionFixtures from "./fixtures/mcpVisualMotion.json";
 import argumentFixtures from "./fixtures/mcpVisualArgument.json";
 import scaleTimeFixtures from "./fixtures/mcpVisualScaleTime.json";
 import mcpVisualArtifacts from "./fixtures/mcpVisualArtifacts.json";
+import drawingFixtures from "./fixtures/mcpVisualDrawingDynamics.json";
 import { validateGeneratedCalculatorRanges } from "./visualArtifactCalculatorRanges";
 import { evaluateArtifactExpression, parseVisualArtifact, type ArtifactBlock, type ArtifactExpression } from "./visualArtifacts";
 
@@ -30,7 +32,7 @@ const calculator = { kind: "calculator",
 const document = (block: unknown, format = "explainer") => ({ version: 1, format, title: "From the note", blocks: [block] });
 
 describe("versioned visual documents", () => {
-  it.each([...mcpVisualArtifacts, ...motionFixtures, ...argumentFixtures, ...scaleTimeFixtures])("agrees with the MCP insertion contract for $name", ({ artifact, valid }) => {
+  it.each([...mcpVisualArtifacts, ...motionFixtures, ...compositionFixtures, ...argumentFixtures, ...scaleTimeFixtures, ...drawingFixtures])("agrees with the MCP insertion contract for $name", ({ artifact, valid }) => {
     const validate = () => validateGeneratedCalculatorRanges(parseVisualArtifact(artifact));
     if (valid) expect(validate).not.toThrow();
     else expect(validate).toThrow();

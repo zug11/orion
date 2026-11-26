@@ -1,0 +1,19 @@
+.va-layout { display: grid; gap: 1.25rem; }
+.va-layout-row { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); align-items: start; gap: 1rem; }
+.va-layout-row[hidden], .va-layout-cell[hidden] { display: none; }
+.va-layout-cell, .va-layout-choice { min-width: 0; }
+.va-layout-choice { margin: 0; padding: 0; border: 0; }
+.va-layout-choice legend, .va-layout-select, .va-layout-reading > span { color: var(--text-soft); font-size: .9em; }
+.va-layout-choice legend { margin-bottom: .35rem; padding: 0; }
+.va-layout-choice > div { display: flex; flex-wrap: wrap; gap: .25rem; }
+.va-layout-choice label { position: relative; cursor: pointer; }
+.va-layout-choice input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.va-layout-choice span { display: block; padding: .25em .75em; border: 1px solid var(--line-strong); border-radius: .55em; }
+.va-layout-choice input:checked + span { border-color: var(--va-accent); background: var(--periwinkle-wash); font-weight: 600; }
+.va-layout-choice input:focus-visible + span { outline: 2px solid var(--va-accent); outline-offset: 2px; }
+.va-layout-select, .va-layout-reading { display: grid; gap: .25em; }
+.va-layout-select select { max-width: 100%; color: var(--text); background: var(--surface-1); font: inherit; }
+.va-layout-reading output { color: var(--text); font-weight: 600; }
+@container (max-width: 490px) {
+  .va-layout-row { grid-auto-flow: row; grid-template-columns: minmax(0, 1fr); }
+}

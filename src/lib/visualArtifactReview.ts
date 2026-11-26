@@ -10,6 +10,7 @@ function contentIdentity(drawing: ArtifactIllustration) {
     drawing.parts.map(p => [p.id, p.name, p.selectable, p.about, p.quote, p.level]).sort((a,b) => String(a[0]).localeCompare(String(b[0]))),
     drawing.states?.label,
     drawing.states?.items.map(item => [item.label, item.caption, item.changes.map(change => [change.part, change.hidden, change.emphasis, change.level])]),
+    drawing.handles, drawing.animation,
   ]);
 }
 
@@ -39,7 +40,7 @@ export async function reviewPassageIllustration(
     if (raw?.unchanged === true && Object.keys(raw).length === 1) return draft;
     const corrected = parseArtifactIllustration(raw);
     validateIllustrationSource(corrected, source);
-    if (contentIdentity(corrected) !== contentIdentity(drawing)) throw new Error("The proposed revision changed parts or text from the original drawing.");
+    if (contentIdentity(corrected) !== contentIdentity(drawing)) throw new Error("The proposed revision changed parts, controls, motion or text from the original drawing.");
     return parseVisualArtifact({ ...draft, blocks: draft.blocks.map(block => block === drawing ? corrected : block) });
   } finally {
     clearTimeout(timer);

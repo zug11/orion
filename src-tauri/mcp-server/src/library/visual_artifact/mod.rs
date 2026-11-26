@@ -9,6 +9,7 @@ pub(super) mod argument;
 mod calculator;
 #[path = "../../../../shared/visual_input.rs"]
 mod checks;
+pub(super) mod composition;
 pub(super) mod cycle_link;
 pub(super) mod scale_time;
 pub(super) use checks::illustration;
@@ -277,14 +278,14 @@ pub(super) fn validated_marker(value: &Value) -> Result<String, String> {
     fields(
         value,
         &[
-            "version", "format", "title", "summary", "blocks", "evidence",
+            "version", "format", "title", "summary", "blocks", "evidence", "layout",
         ],
     )?;
     if value["version"].as_f64() != Some(1.0) {
         return Err(invalid("expected version 1"));
     }
     let required = match value["format"].as_str() {
-        Some("explainer") => None,
+        Some("explainer" | "custom") => None,
         Some("timeline") => Some("steps"),
         Some("quiz") => Some("quiz"),
         Some("comparison") => Some("table"),
@@ -299,6 +300,11 @@ pub(super) fn validated_marker(value: &Value) -> Result<String, String> {
     let blocks = list(&value["blocks"], 1, 12)?;
     for (i, item) in blocks.iter().enumerate() {
         block(item).map_err(|error| format!("artifact.blocks[{i}]: {error}"))?;
+    }
+    if value["format"] == "custom" {
+        composition::validate(&value["layout"], blocks)?;
+    } else if value.get("layout").is_some() {
+        return Err(invalid("layout requires the custom format"));
     }
     if let Some(evidence) = value.get("evidence") {
         fields(evidence, &["passage", "claims"])?;
@@ -370,6 +376,8 @@ mod tests {
         for source in [
             include_str!("../../../../../src/lib/fixtures/mcpVisualArtifacts.json"),
             include_str!("../../../../../src/lib/fixtures/mcpVisualMotion.json"),
+            include_str!("../../../../../src/lib/fixtures/mcpVisualDrawingDynamics.json"),
+            include_str!("../../../../../src/lib/fixtures/mcpVisualCompositions.json"),
             include_str!("../../../../../src/lib/fixtures/mcpVisualArgument.json"),
             include_str!("../../../../../src/lib/fixtures/mcpVisualScaleTime.json"),
         ] {

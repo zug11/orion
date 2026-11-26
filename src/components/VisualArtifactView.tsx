@@ -1,7 +1,8 @@
+import { ArtifactCompositionView } from "./ArtifactCompositionView";
 import { ArtifactMotionView } from "./ArtifactMotionView";
 import { ArtifactScaleTimeView } from "./ArtifactScaleTimeView";
 import { ArtifactArgumentView } from "./ArtifactArgumentView";
-import { memo, useId, useMemo, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { memo, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import { ArrowLeft, ArrowRight, Check, Layers3 } from '../lib/icons';
 import {
   type ArtifactBlock,
@@ -14,6 +15,7 @@ import { VisualArtifactCalculator } from './VisualArtifactCalculator';
 import { ArtifactIllustrationView } from './ArtifactIllustrationView';
 import { ArtifactEvidenceView, EvidenceLinksContext, FactSource } from './ArtifactEvidenceView';
 import { VisualArtifactTable } from './VisualArtifactTable';
+import { useArtifactPlayback } from './useArtifactPlayback';
 import './VisualArtifactView.css';
 
 type Block<K extends ArtifactBlock['kind']> = Extract<ArtifactBlock, { kind: K }>;
@@ -113,7 +115,7 @@ function Cards({ block }: { block: Block<'cards'> }) {
   );
 }
 
-function DrawShape({ shape, level }: { shape: ArtifactShape; level: number | null }) {
+const DrawShape = memo(function DrawShape({ shape, level }: { shape: ArtifactShape; level: number | null }) {
   const paint = {
     fill: shape.fill === 'none' ? 'none' : `var(--va-${shape.fill})`,
     stroke: shape.stroke === 'none' ? 'none' : `var(--va-${shape.stroke})`,
@@ -128,12 +130,19 @@ function DrawShape({ shape, level }: { shape: ArtifactShape; level: number | nul
       return <rect x={shape.x} y={shape.y + shape.height - height} width={shape.width} height={height} {...paint} />;
     }
   }
-}
+});
 
-function Scene({ block }: { block: Block<'scene'> }) {
-  const [index, setIndex] = useState(0);
+function Scene({ block, stage, visible = true }: { block: Block<'scene'>; stage?: number; visible?: boolean }) {
+  const host = useRef<HTMLDivElement>(null);
+  const count = stage === undefined ? block.frames.length : 1;
+  // This is presentation time. The stage's quantities and caption stay as authored.
+  const playback = useArtifactPlayback(count, false, visible, host, count * 2.4);
+  const index = stage ?? Math.min(count - 1, Math.floor(playback.time));
+  const showTabs = count > 1;
   const id = useId();
   const frame = block.frames[index];
+  const progress = playback.time % 1;
+  const action = showTabs ? 'stages' : 'flow';
   const layout = useMemo(() => layoutVisualScene(block, index), [block, index]);
   function selectWithKeys(event: KeyboardEvent<HTMLButtonElement>, current: number) {
     let next: number;
@@ -146,19 +155,19 @@ function Scene({ block }: { block: Block<'scene'> }) {
     }
     event.preventDefault();
     event.stopPropagation();
-    setIndex(next);
+    playback.seek(next);
     document.getElementById(`${id}-stage-${next}`)?.focus();
   }
   return (
-    <div className="visual-artifact__scene">
-      {block.frames.length > 1 && <div className="visual-artifact__tabs" role="tablist" aria-label="Diagram stages">
+    <div className="visual-artifact__scene" ref={host}>
+      {showTabs && <div className="visual-artifact__tabs" role="tablist" aria-label="Diagram stages">
         {block.frames.map((stage, i) => <button key={i} id={`${id}-stage-${i}`} role="tab" type="button"
           aria-selected={index === i} tabIndex={index === i ? 0 : -1} aria-controls={`${id}-diagram`}
-          onKeyDown={event => selectWithKeys(event, i)} onClick={() => setIndex(i)}>{stage.label}</button>)}
+          onKeyDown={event => selectWithKeys(event, i)} onClick={() => playback.seek(i)}>{stage.label}</button>)}
       </div>}
-      <div id={`${id}-diagram`} role={block.frames.length > 1 ? 'tabpanel' : 'group'}
-        aria-labelledby={block.frames.length > 1 ? `${id}-stage-${index}` : undefined}
-        aria-label={block.frames.length === 1 ? frame.label : undefined}>
+      <div id={`${id}-diagram`} role={showTabs ? 'tabpanel' : 'group'}
+        aria-labelledby={showTabs ? `${id}-stage-${index}` : undefined}
+        aria-label={showTabs ? undefined : frame.label}>
         <div className="visual-artifact__plot" data-mode={layout.mode}
           style={{ '--va-aspect': `${layout.width} / ${layout.height}` } as CSSProperties}>
           {layout.connections.length > 0 && <svg className="visual-artifact__connections"
@@ -172,6 +181,9 @@ function Scene({ block }: { block: Block<'scene'> }) {
             {layout.connections.map(route => <path key={route.index} d={route.d} fill="none"
               stroke="var(--va-trace)" strokeWidth={1.75} strokeLinecap="round"
               markerEnd={`url(#${id}-tip)`} />)}
+            {progress > 0 && layout.connections.map(route => <path key={route.index} className="visual-artifact__transfer"
+              d={route.d} fill="none" stroke="var(--va-accent)" strokeWidth="4" strokeLinecap="round"
+              pathLength="100" strokeDasharray="1 100" strokeDashoffset={-99 * progress} />)}
             {layout.connections.map(route => frame.flows[route.index].label && (
               <text key={route.index} x={route.labelX} y={route.labelY} dy=".32em"
                 textAnchor="middle" className="visual-artifact__edge-label">
@@ -202,6 +214,8 @@ function Scene({ block }: { block: Block<'scene'> }) {
               role="img" aria-label="to" focusable="false">
               <path d="M1 6 H46 M40 1.5 L46 6 L40 10.5" fill="none" stroke="currentColor"
                 strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              {progress > 0 && <circle className="visual-artifact__transfer" cx={1 + 45 * progress}
+                cy="6" r="2.5" fill="var(--va-accent)" />}
             </svg>
             <span className="visual-artifact__flow-to">{block.nodes[flow.to].label}</span>
             {flow.label && <strong>{flow.label}</strong>}
@@ -215,6 +229,8 @@ function Scene({ block }: { block: Block<'scene'> }) {
           </div>)}
         </dl>}
         <p className="visual-artifact__caption">{frame.caption}</p>
+        {(showTabs || frame.flows.length > 0) && <button type="button" className="visual-artifact__minor-button"
+          onClick={playback.toggle}>{playback.playing ? 'Pause' : playback.time >= count ? 'Replay' : 'Play'} {action}</button>}
       </div>
     </div>
   );
@@ -222,18 +238,18 @@ function Scene({ block }: { block: Block<'scene'> }) {
 
 type AddTasks = (tasks: string[]) => boolean;
 
-function RenderBlock({ block, title, onAddTasks, onAskPart }: { block: ArtifactBlock; title: string; onAddTasks?: AddTasks; onAskPart?: (context: string) => void }) {
+function RenderBlock({ block, title, stage, visible, onAddTasks, onAskPart }: { block: ArtifactBlock; stage?: number; visible?: boolean; title: string; onAddTasks?: AddTasks; onAskPart?: (context: string) => void }) {
   switch (block.kind) {
     case "cycle":
-    case "linkedViews": return <ArtifactMotionView block={block} />;
+    case "linkedViews": return <ArtifactMotionView block={block} visible={visible} />;
     case "argument": return <ArtifactArgumentView block={block} />;
     case "scaleZoom":
     case "deepTime": return <ArtifactScaleTimeView block={block} />;
-    case 'scene': return <Scene block={block} />;
+    case 'scene': return <Scene key={stage ?? 'local'} block={block} stage={stage} visible={visible} />;
     case 'steps': return <Steps block={block} />;
     case 'quiz': return <Quiz block={block} />;
     case 'cards': return <Cards block={block} />;
-    case 'illustration': return <ArtifactIllustrationView block={block} title={title} onAskPart={onAskPart} />;
+    case 'illustration': return <ArtifactIllustrationView block={block} title={title} onAskPart={onAskPart} visible={visible} />;
     case 'calculator': return <VisualArtifactCalculator block={block} onAddTasks={onAddTasks} />;
     case 'table': return (
       <div className="visual-artifact__table" tabIndex={0} role="region" aria-label={`${title} table`}>
@@ -252,11 +268,15 @@ export const VisualArtifactView = memo(function VisualArtifactView({ artifact, o
   // A reparse of identical Markdown preserves a reader's place. A replaced
   // block resets just its own controls, including answers and slider values.
   const blocks = useMemo(() => {
-    const rendered = artifact.blocks.map((block, index) => (
-      <EvidenceLinksContext.Provider key={`${index}:${JSON.stringify(block)}`} value={artifact.evidence && {block:index, evidence:artifact.evidence, panelId:evidenceId}}>
-        <RenderBlock block={block} title={artifact.title} onAddTasks={onAddTasks} onAskPart={onAskPart} />
-      </EvidenceLinksContext.Provider>
-    ));
+    function renderBlock(index: number, stage?: number, visible = true) {
+      const block = artifact.blocks[index];
+      return <EvidenceLinksContext.Provider key={`${index}:${JSON.stringify(block)}`}
+        value={artifact.evidence && {block:index, evidence:artifact.evidence, panelId:evidenceId}}>
+        <RenderBlock block={block} stage={stage} visible={visible} title={artifact.title} onAddTasks={onAddTasks} onAskPart={onAskPart} />
+      </EvidenceLinksContext.Provider>;
+    }
+    if (artifact.layout) return <ArtifactCompositionView key={JSON.stringify(artifact)} layout={artifact.layout} renderBlock={renderBlock} />;
+    const rendered = artifact.blocks.map((_, i) => renderBlock(i));
     // Earlier generators sometimes put the entire cooking method before the
     // quantities. Keep that content reachable without pushing the stepper down.
     const recipeIndex = artifact.blocks.findIndex(block => block.kind === 'calculator' && block.recipe);
@@ -266,13 +286,13 @@ export const VisualArtifactView = memo(function VisualArtifactView({ artifact, o
       <details className="va-recipe-disclosure"><summary>Method</summary>
         <div className="va-recipe-details">{rendered.filter((_, index) => index !== recipeIndex)}</div>
       </details></>;
-  }, [artifact.blocks, artifact.title, artifact.evidence, evidenceId, onAddTasks, onAskPart]);
+  }, [artifact, evidenceId, onAddTasks, onAskPart]);
   return (
     <section className="visual-artifact" data-visual-artifact="" data-narration-ignore="true"
       aria-labelledby={titleId} contentEditable={false} draggable={false}
       onDragStart={event => event.preventDefault()} onDoubleClick={event => event.stopPropagation()}>
       <header className="visual-artifact__header">
-        <div className="visual-artifact__format"><Layers3 size={14} aria-hidden="true" />{artifactFormatNames[artifact.format]}</div>
+        {artifact.format !== "custom" && <div className="visual-artifact__format"><Layers3 size={14} aria-hidden="true" />{artifactFormatNames[artifact.format]}</div>}
         <h3 id={titleId}>{artifact.title}</h3>
         {artifact.summary && <p>{artifact.summary}</p>}
       </header>

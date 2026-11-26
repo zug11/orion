@@ -47,3 +47,6 @@
 .visualise-review input { margin: 0; accent-color: var(--periwinkle); }
 .visualise-review span { grid-column: 2; font-size: 12px; }
 .visualise-composer .visualise-model { color: var(--text-soft); font-size: 13px; }
+
+.visualise-formats summary { width: fit-content; color: var(--text-soft); cursor: pointer; }
+.visualise-formats[open] > label { margin-top: .5rem; }

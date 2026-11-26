@@ -4,7 +4,9 @@ import { createEmptySnapshot } from "../data/defaults";
 import { generatePassageIllustration } from "./visualArtifactGeneration";
 import { validatedVisualReview } from "./visualReviewInput";
 import { saveApiKey, saveAnthropicApiKey, deleteApiKey, deleteAnthropicApiKey } from "./storage";
-import type { ArtifactIllustration } from "./artifactIllustration";
+import { parseArtifactIllustration, type ArtifactIllustration } from "./artifactIllustration";
+import fixtures from "./fixtures/mcpVisualDrawingDynamics.json";
+import { reviewPassageIllustration } from "./visualArtifactReview";
 
 const raster = vi.hoisted(() => vi.fn());
 vi.mock("./rasteriseArtifactIllustration", () => ({ rasteriseArtifactIllustration: raster }));
@@ -33,6 +35,23 @@ function mockModel(revision: unknown, anthropic = false) {
 }
 
 describe("optional look-and-fix drawing pass", () => {
+  it("can improve contours after reviewing poses but preserves handles and the entire animation", async () => {
+    await saveApiKey("synthetic-test");
+    const original = parseArtifactIllustration(fixtures[1].artifact.blocks[0]);
+    raster.mockResolvedValue(png);
+    const review = (value: unknown) => {
+      vi.stubGlobal("fetch", vi.fn(async () => Response.json({status:"completed",output_text:JSON.stringify({reply:JSON.stringify(value)})})));
+      return reviewPassageIllustration({version:1,format:"explainer",title:"Bridge",blocks:[original]},original,original.passage,"",settings(),new AbortController().signal);
+    };
+    const changed = structuredClone(original);
+    changed.parts[0].layer = -3;
+    expect((await review(changed)).blocks[0]).toEqual(changed);
+    const modified = structuredClone(changed);
+    modified.handles![0].label = "Other control";
+    await expect(review(modified)).rejects.toThrow(/changed parts/);
+    delete changed.animation;
+    await expect(review(changed)).rejects.toThrow(/changed parts/);
+  });
   it.each([true, false])("sends the local PNG, selected passage and validated draft to the selected connection (Anthropic=%s)", async anthropic => {
     await saveApiKey("synthetic-test"); await saveAnthropicApiKey("synthetic-test");
     raster.mockResolvedValue(png);

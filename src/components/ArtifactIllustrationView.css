@@ -17,3 +17,17 @@
 .artifact-illustration__snapshot figure { break-inside: avoid; margin: 1em 0; }
 .artifact-illustration__snapshot svg { max-height: 420px; }
 .artifact-illustration__export { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
+.artifact-illustration [data-drawing-handle] { cursor: grab; touch-action: none; user-select: none; }
+.artifact-illustration [data-drawing-handle]:active { cursor: grabbing; }
+.artifact-illustration__rail { stroke: currentColor; stroke-opacity: .65; stroke-dasharray: 3 5; stroke-width: 1.5; }
+.artifact-illustration__grip { fill: var(--surface-1); stroke: currentColor; }
+.artifact-illustration__handles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: 12px 24px; }
+.artifact-illustration__handle label { display: grid; align-items: baseline; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 12px; color: var(--text); }
+.artifact-illustration__value, .artifact-illustration__ends { color: var(--text-soft); font-size: .88em; }
+.artifact-illustration__handle input { grid-column: 1 / -1; width: 100%; margin: 0; accent-color: var(--handle-color); }
+.artifact-illustration__ends { display: flex; justify-content: space-between; gap: 12px; }
+.artifact-illustration__ends span:last-child { text-align: end; }
+.artifact-illustration__playback { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+.artifact-illustration__playback label { display: flex; flex: 1 1 12rem; align-items: center; gap: 10px; }
+.artifact-illustration__playback input { flex: 1; min-width: 0; accent-color: var(--va-accent); }
+.artifact-illustration__playback label span { white-space: nowrap; font-size: .88em; font-variant-numeric: tabular-nums; color: var(--text-soft); }

@@ -1,5 +1,7 @@
 use super::{fields, invalid, js_space, list, literal, number, Value};
 use std::collections::HashSet;
+#[path = "visual_handles.rs"]
+mod handles;
 
 pub(crate) const GLYPHS: &[&str] = &[
     "tank",
@@ -41,7 +43,8 @@ pub(crate) const GLYPHS: &[&str] = &[
     "globe",
 ];
 pub(crate) const PAINTS: &[&str] = &[
-    "outline", "soft", "fill", "solid", "bold", "heavy", "thin", "dashed", "dotted", "level",
+    "outline", "soft", "fill", "solid", "surface", "bold", "heavy", "thin", "dashed", "dotted",
+    "level",
 ];
 pub(crate) const TONES: &[&str] = &["accent", "warm", "cool", "rose", "neutral", "ground"];
 
@@ -198,8 +201,25 @@ fn shapes(values: &Value, (w, h): Size, total: &mut usize) -> Result<(), String>
     Ok(())
 }
 
+fn paints_level(shapes: &Value) -> bool {
+    shapes
+        .as_array()
+        .is_some_and(|items| items.iter().any(|s| s["paint"] == "level"))
+}
+
 pub(crate) fn validate(value: &Value) -> Result<(), String> {
-    fields(value, &["kind", "view", "passage", "parts", "states"])?;
+    fields(
+        value,
+        &[
+            "kind",
+            "view",
+            "passage",
+            "parts",
+            "states",
+            "handles",
+            "animation",
+        ],
+    )?;
     if value["kind"] != "illustration" {
         return Err(invalid("expected an illustration block"));
     }
@@ -211,6 +231,7 @@ pub(crate) fn validate(value: &Value) -> Result<(), String> {
     };
     let passage = literal(&value["passage"], 12000, false)?;
     let mut ids = HashSet::new();
+    let mut level_parts = HashSet::new();
     let mut any_selectable = false;
     let mut total = 0;
     for part in list(&value["parts"], 1, 28)? {
@@ -263,6 +284,23 @@ pub(crate) fn validate(value: &Value) -> Result<(), String> {
         } else if part.get("shapes").is_none() {
             return Err(invalid("a part needs geometry or a library glyph"));
         }
+        if paints_level(&part["shapes"])
+            || part["icon"]["name"].as_str().is_some_and(|name| {
+                matches!(
+                    name,
+                    "tank"
+                        | "battery"
+                        | "thermometer"
+                        | "gauge"
+                        | "balance"
+                        | "bar"
+                        | "pie"
+                        | "coins"
+                )
+            })
+        {
+            level_parts.insert(id);
+        }
         if let Some(v) = part.get("layer") {
             if number(v, -3., 3.)?.fract() != 0. {
                 return Err(invalid("invalid drawing layer"));
@@ -291,6 +329,9 @@ pub(crate) fn validate(value: &Value) -> Result<(), String> {
                 }
                 if let Some(s) = c.get("shapes") {
                     shapes(s, dimensions, &mut total)?;
+                    if paints_level(s) {
+                        level_parts.insert(id);
+                    }
                 }
                 for key in ["hidden", "emphasis"] {
                     if let Some(b) = c.get(key) {
@@ -303,5 +344,6 @@ pub(crate) fn validate(value: &Value) -> Result<(), String> {
             }
         }
     }
+    handles::validate(value, dimensions, passage, &ids, &level_parts)?;
     Ok(())
 }

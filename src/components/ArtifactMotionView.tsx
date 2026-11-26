@@ -1,8 +1,9 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useId, useRef, type KeyboardEvent, type PointerEvent } from "react";
 import type { ArtifactMotion, MotionDrawing, MotionPhase } from "../lib/artifactMotion";
 import { phaseAt, sampleMotion } from "../lib/artifactMotion";
 import { formatArtifactQuantity } from "../lib/visualArtifactQuantity";
 import "./ArtifactMotionView.css";
+import { useArtifactPlayback } from "./useArtifactPlayback";
 
 function readout(position: number, unit: string) {
   const rounded = Number(position.toPrecision(5));
@@ -18,7 +19,7 @@ function Diagram({ view, position }: { view: MotionDrawing; position: number }) 
         const [px, py] = mark.pivot ?? [0, 0];
         return (
           <path key={i} d={mark.d} data-tone={mark.tone}
-            fill={mark.filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.8"
+            fill={mark.filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth={mark.strokeWidth ?? 1.8} fillOpacity={mark.fillOpacity}
             opacity={state?.opacity} strokeLinecap="round" strokeLinejoin="round"
             transform={state ? `translate(${state.x + px} ${state.y + py}) rotate(${state.angle}) scale(${state.scaleX} ${state.scaleY}) translate(${-px} ${-py})` : undefined}/>
         );
@@ -80,36 +81,19 @@ function Source({ passage, phase }: { passage: string; phase: MotionPhase }) {
   </details>;
 }
 
-export function ArtifactMotionView({ block }: { block: ArtifactMotion }) {
-  const [position, setPosition] = useState(0);
-  const [playing, setPlaying] = useState(false);
-  const current = useRef(0);
+export function ArtifactMotionView({ block, visible = true }: { block: ArtifactMotion; visible?: boolean }) {
+  const host = useRef<HTMLDivElement>(null);
   const drag = useRef<{ pointer: number; x: number; start: number } | null>(null);
   const slider = useId();
-  const fraction = position / block.period;
   const cycle = block.kind === "cycle";
+  // Twelve seconds of demonstration time is independent of the authored units.
+  const playback = useArtifactPlayback(block.period, cycle, visible, host, 12);
+  const position = playback.time;
+  const fraction = position / block.period;
   const phase = phaseAt(block.phases, cycle && position === block.period ? 0 : position);
-  const set = (next: number) => {
-    setPlaying(false);
-    current.current = Math.max(0, Math.min(block.period, next));
-    setPosition(current.current);
-  };
-  useEffect(() => {
-    if (!playing) return;
-    let frame = 0;
-    const initial = current.current / block.period;
-    const start = performance.now();
-    const tick = (now: number) => {
-      // Playback length is an interface choice, independent of the authored units.
-      current.current = ((initial + (now - start) / 12000) % 1) * block.period;
-      setPosition(current.current);
-      frame = requestAnimationFrame(tick);
-    };
-    const onVisibility = () => { if (document.hidden) setPlaying(false); };
-    document.addEventListener("visibilitychange", onVisibility);
-    frame = requestAnimationFrame(tick);
-    return () => { cancelAnimationFrame(frame); document.removeEventListener("visibilitychange", onVisibility); };
-  }, [playing, block.period]);
+  const set = playback.seek;
+  const play = <button type="button" className="visual-artifact__minor-button" aria-pressed={playback.playing}
+    onClick={playback.toggle}>{playback.playing ? "Pause" : !cycle && position === block.period ? "Replay" : "Play"} {cycle ? "cycle" : "linked views"}</button>;
 
   function keys(event: KeyboardEvent) {
     const increment = event.shiftKey ? .1 : .01;
@@ -140,7 +124,7 @@ export function ArtifactMotionView({ block }: { block: ArtifactMotion }) {
   function endDrag(event: PointerEvent<HTMLElement>) {
     if (drag.current?.pointer === event.pointerId) drag.current = null;
   }
-  return <div className="artifact-motion" data-mode={block.kind}>
+  return <div ref={host} className="artifact-motion" data-mode={block.kind}>
     <div className="artifact-motion__views">
       {block.views.map((view, i) => <figure key={i}
         onPointerDown={startDrag} onPointerMove={moveDrag}
@@ -150,15 +134,14 @@ export function ArtifactMotionView({ block }: { block: ArtifactMotion }) {
       </figure>)}
       {cycle && <div className="artifact-motion__dial-control">
         <CycleDial block={block} fraction={fraction} onChange={f => set(f * block.period)} onKeyDown={keys}/>
-        <button type="button" className="visual-artifact__minor-button" aria-pressed={playing}
-          onClick={() => setPlaying(!playing)}>{playing ? "Pause cycle" : "Play cycle"}</button>
+        {play}
       </div>}
     </div>
     <div className="artifact-motion__control">
       <div><label htmlFor={slider}>{block.label}</label><output htmlFor={slider}>{readout(position, block.unit)}</output></div>
       <input id={slider} type="range" min={0} max={block.period} step="any" value={position}
         aria-valuetext={readout(position, block.unit)} onKeyDown={keys} onChange={e => set(e.currentTarget.valueAsNumber)}/>
-      {!cycle && <small>Drag either view or adjust the slider.</small>}
+      {!cycle && <div>{play}<small>Drag either view or adjust the slider.</small></div>}
     </div>
     <div className="artifact-motion__phases" role="group" aria-label={cycle ? "Cycle phases" : "View positions"}>
       {block.phases.map(p => <button key={p.at} type="button" aria-pressed={p === phase}

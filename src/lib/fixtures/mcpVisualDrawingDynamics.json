@@ -1,0 +1,962 @@
+[
+  {
+    "name": "An animated pre-fader microphone with two live controls",
+    "valid": true,
+    "artifact": {
+      "version": 1,
+      "format": "explainer",
+      "title": "One mic, two mixes",
+      "summary": "Play the vocal signal, then move either fader. The two meters follow the same voice at independently set levels.",
+      "blocks": [
+        {
+          "kind": "illustration",
+          "view": "landscape",
+          "passage": "At a small gig, the singer’s microphone feeds two mixes. One goes to the audience through the main speakers. The other goes to the singer through a floor monitor. During soundcheck, the audience hears a clear vocal, but the singer can barely hear herself. The engineer raises only the monitor send. Now the singer hears more voice while the audience mix stays the same. During the chorus, the engineer raises only the main vocal fader. This time the audience hears the lift and the singer’s monitor stays where it was. The monitor send is taken before the main fader, which is what makes those two changes independent.",
+          "parts": [
+            {
+              "id": "wiring",
+              "name": "Signal routing",
+              "tone": "ground",
+              "selectable": false,
+              "shapes": [
+                {
+                  "type": "path",
+                  "d": "M 60.5 280.4 C 51 310 24 308 26 282 C 28 251 77 264 109 236 C 130 218 154 200 178 200 H 204",
+                  "paint": "outline"
+                },
+                {
+                  "type": "path",
+                  "d": "M 185 200 V 137 Q 185 132 191 132 H 212 M 185 200 V 251 Q 185 256 191 256 H 212",
+                  "paint": "thin"
+                },
+                {"type": "circle", "cx": 185, "cy": 200, "r": 3, "paint": "fill"},
+                {
+                  "type": "path",
+                  "d": "M 393 142 H 440 Q 445 142 450 136 L 465 122 M 393 246 H 429 Q 436 246 440 251 L 468.3 258",
+                  "paint": "thin"
+                }
+              ],
+              "layer": -2
+            },
+            {
+              "id": "microphone",
+              "name": "Vocal mic",
+              "tone": "neutral",
+              "selectable": true,
+              "shapes": [
+                {
+                  "type": "path",
+                  "d": "M 92.9 157.1 Q 94.4 149.4 102.7 144.9 L 137.2 161 Q 139.1 170.3 133.4 178.1 L 84.5 255.9 Q 79.6 262 69.3 257.2 Q 60.6 253.2 62.1 245.5 Z",
+                  "paint": "surface"
+                },
+                {
+                  "type": "path",
+                  "d": "M 93.8 159.6 Q 100 168.8 106.9 172 L 70.6 245.3 L 65.3 238.6 Z",
+                  "paint": "fill"
+                },
+                {
+                  "type": "path",
+                  "d": "M 66.3 241.1 Q 74.2 251.1 86.9 250.8 L 76.4 268.9 Q 65.4 270.1 59.2 260.9 Z",
+                  "paint": "surface"
+                },
+                {
+                  "type": "path",
+                  "d": "M 61.7 260 L 75.5 266.4 L 68.2 281.9 Q 58.9 283.8 54.5 275.5 Z",
+                  "paint": "fill"
+                },
+                {
+                  "type": "path",
+                  "d": "M 58.5 266.8 L 72.2 273.3 M 56.1 272 L 69.8 278.4 M 90.7 170.8 Q 103.9 187.4 126.9 187.6 M 104.8 189.9 L 82.1 229.6",
+                  "paint": "thin"
+                },
+                {
+                  "type": "path",
+                  "d": "M 101.4 156.9 Q 90.8 143.6 95.4 124.7 C 101.5 98.2 125.8 86.5 146.5 96.1 C 170.6 107.4 175.6 137 155.8 157.1 Q 145.9 169.3 128.1 171.4 Q 111.1 171.9 101.4 156.9 Z",
+                  "paint": "surface"
+                },
+                {
+                  "type": "path",
+                  "d": "M 105.5 109.7 L 151.6 101.5 M 101.2 116.8 L 156.8 107 M 98.7 123.5 L 160.2 112.7 M 97.5 130 L 162.3 118.6 M 97.5 136.4 L 163.3 124.8 M 98.5 142.5 L 163.2 131.1 M 100.6 148.5 L 162.1 137.6 M 104 154.2 L 159.6 144.4 M 109.2 159.6 L 155.3 151.5 M 139 95.7 L 162.4 136.2 M 131.5 95.2 L 159.8 144.1 M 124.9 96.2 L 156.2 150.3 M 119 98.4 L 151.9 155.4 M 113.7 101.6 L 147.1 159.5 M 108.9 105.8 L 141.8 162.7 M 104.6 110.8 L 135.9 164.9 M 101 117.1 L 129.3 166 M 98.4 124.9 L 121.8 165.5",
+                  "paint": "thin"
+                },
+                {
+                  "type": "path",
+                  "d": "M 96.9 117 Q 120.5 142.7 162.3 147.6 L 159.1 154.4 Q 120.8 151.2 93.7 123.9 Z",
+                  "paint": "surface"
+                },
+                {
+                  "type": "path",
+                  "d": "M 98.6 149.3 Q 112.7 168.5 136.5 167 L 132.5 175.6 Q 109.5 175.3 94.6 157.9 Z",
+                  "paint": "fill"
+                }
+              ],
+              "quote": "the singer’s microphone feeds two mixes",
+              "about": "One microphone supplies the signal for both mixes."
+            },
+            {
+              "id": "desk",
+              "name": "Mixer channel",
+              "tone": "neutral",
+              "selectable": true,
+              "shapes": [
+                {"type": "rect", "x": 207, "y": 74, "w": 188, "h": 249, "paint": "surface", "r": 10},
+                {"type": "rect", "x": 213, "y": 80, "w": 176, "h": 237, "paint": "thin", "r": 7},
+                {"type": "path", "d": "M 300 86 V 307 M 221 113 H 381 M 221 285 H 381", "paint": "thin"},
+                {"type": "circle", "cx": 217, "cy": 85, "r": 2.3, "paint": "soft"},
+                {"type": "circle", "cx": 217, "cy": 310, "r": 2.3, "paint": "soft"},
+                {"type": "circle", "cx": 384, "cy": 85, "r": 2.3, "paint": "soft"},
+                {"type": "circle", "cx": 384, "cy": 310, "r": 2.3, "paint": "soft"},
+                {"type": "rect", "x": 242, "y": 130, "w": 4, "h": 126, "paint": "fill", "r": 2},
+                {"type": "rect", "x": 332, "y": 130, "w": 4, "h": 126, "paint": "fill", "r": 2},
+                {
+                  "type": "path",
+                  "d": "M 253 132 H 265 M 253 144 H 259 M 253 156 H 265 M 253 168 H 259 M 253 180 H 265 M 253 192 H 259 M 253 204 H 265 M 253 216 H 259 M 253 228 H 265 M 253 240 H 259 M 253 252 H 265 M 343 132 H 355 M 343 144 H 349 M 343 156 H 355 M 343 168 H 349 M 343 180 H 355 M 343 192 H 349 M 343 204 H 355 M 343 216 H 349 M 343 228 H 355 M 343 240 H 349 M 343 252 H 355",
+                  "paint": "thin"
+                },
+                {"type": "rect", "x": 270, "y": 130, "w": 11, "h": 126, "paint": "thin", "r": 2},
+                {"type": "rect", "x": 360, "y": 130, "w": 11, "h": 126, "paint": "thin", "r": 2}
+              ],
+              "quote": "The monitor send is taken before the main fader",
+              "about": "The monitor branches off before the main fader. Each output has its own level setting.",
+              "layer": -1
+            },
+            {
+              "id": "monitor-cap",
+              "name": "Monitor fader cap",
+              "tone": "warm",
+              "selectable": false,
+              "shapes": [
+                {"type": "rect", "x": 231, "y": 245, "w": 26, "h": 16, "paint": "surface", "r": 3},
+                {"type": "rect", "x": 234, "y": 248, "w": 20, "h": 10, "paint": "soft", "r": 2},
+                {"type": "path", "d": "M 235 253 H 253", "paint": "thin"}
+              ]
+            },
+            {
+              "id": "monitor-meter",
+              "name": "Monitor meter",
+              "tone": "warm",
+              "selectable": false,
+              "shapes": [{"type": "rect", "x": 272, "y": 132, "w": 7, "h": 122, "paint": "level"}]
+            },
+            {
+              "id": "house-cap",
+              "name": "House fader cap",
+              "tone": "cool",
+              "selectable": false,
+              "shapes": [
+                {"type": "rect", "x": 321, "y": 245, "w": 26, "h": 16, "paint": "surface", "r": 3},
+                {"type": "rect", "x": 324, "y": 248, "w": 20, "h": 10, "paint": "soft", "r": 2},
+                {"type": "path", "d": "M 325 253 H 343", "paint": "thin"}
+              ]
+            },
+            {
+              "id": "house-meter",
+              "name": "House meter",
+              "tone": "cool",
+              "selectable": false,
+              "shapes": [{"type": "rect", "x": 362, "y": 132, "w": 7, "h": 122, "paint": "level"}]
+            },
+            {
+              "id": "monitor-speaker",
+              "name": "Floor monitor",
+              "tone": "neutral",
+              "selectable": true,
+              "shapes": [
+                {
+                  "type": "path",
+                  "d": "M 448.8 119.2 L 499.5 80.5 Q 502.1 78 504.7 79.2 L 559.3 100.5 L 534.6 134.2 L 511.2 144.2 L 451.4 129.2 Z",
+                  "paint": "surface"
+                },
+                {"type": "path", "d": "M 454 118 L 502.1 83 L 554.1 101.8 L 509.9 134.2 Z", "paint": "soft"},
+                {
+                  "type": "path",
+                  "d": "M 511.2 135.5 L 558 100.5 L 554.1 121.8 L 532 136.8 L 511.2 143 Z",
+                  "paint": "fill"
+                },
+                {"type": "path", "d": "M 529.4 129.2 L 542.4 119.2", "paint": "bold"},
+                {"type": "path", "d": "M 451.4 123 L 508.6 139.2", "paint": "thin"},
+                {"type": "path", "d": "M 458.8 114.5 L 514.3 131", "paint": "thin"},
+                {"type": "path", "d": "M 463.6 111 L 518.7 127.8", "paint": "thin"},
+                {"type": "path", "d": "M 468.4 107.5 L 523.2 124.5", "paint": "thin"},
+                {"type": "path", "d": "M 473.2 104 L 527.6 121.2", "paint": "thin"},
+                {"type": "path", "d": "M 478.1 100.5 L 532 118", "paint": "thin"},
+                {"type": "path", "d": "M 482.9 97 L 536.4 114.8", "paint": "thin"},
+                {"type": "path", "d": "M 487.7 93.5 L 540.8 111.5", "paint": "thin"},
+                {"type": "path", "d": "M 492.5 90 L 545.3 108.2", "paint": "thin"},
+                {"type": "path", "d": "M 497.3 86.5 L 549.7 105", "paint": "thin"}
+              ],
+              "quote": "to the singer through a floor monitor",
+              "about": "The floor wedge carries the singer’s mix."
+            },
+            {
+              "id": "house-speaker",
+              "name": "Main speaker",
+              "tone": "neutral",
+              "selectable": true,
+              "shapes": [
+                {
+                  "type": "path",
+                  "d": "M 468.3 199.7 L 484.5 190.2 Q 487.2 188.8 491.2 190.2 L 548 196.9 L 546.6 294.1 L 529 306.3 L 468.3 298.2 Z",
+                  "paint": "surface"
+                },
+                {"type": "path", "d": "M 527.7 206.4 L 548 196.9 L 546.6 294.1 L 529 306.3 Z", "paint": "fill"},
+                {
+                  "type": "path",
+                  "d": "M 468.3 199.7 L 527.7 206.4 L 548 196.9 M 527.7 206.4 L 527.7 305",
+                  "paint": "thin"
+                },
+                {"type": "path", "d": "M 473.7 207.8 L 522.3 213.2 L 522.3 296.9 L 473.7 291.4 Z", "paint": "soft"},
+                {"type": "path", "d": "M 481.8 218.6 L 514.2 222.6 L 506.1 233.4 L 488.6 232.1 Z", "paint": "fill"},
+                {"type": "path", "d": "M 535.8 237.4 L 541.2 234.8 L 541.2 249.6 L 535.8 252.3 Z", "paint": "fill"},
+                {"type": "ellipse", "cx": 498.0, "cy": 264.4, "rx": 19.6, "ry": 23.0, "paint": "surface"},
+                {"type": "ellipse", "cx": 498.0, "cy": 264.4, "rx": 14.9, "ry": 17.6, "paint": "thin"},
+                {"type": "ellipse", "cx": 498.0, "cy": 264.4, "rx": 7.2, "ry": 8.6, "paint": "fill"}
+              ],
+              "quote": "to the audience through the main speakers",
+              "about": "The main speakers carry the audience mix."
+            },
+            {
+              "id": "monitor-wave",
+              "name": "Monitor signal",
+              "tone": "warm",
+              "selectable": false,
+              "shapes": [
+                {
+                  "type": "path",
+                  "d": "M 534.6 68 Q 545 68 550.2 76.8 M 538.5 56.8 Q 558 58 563.2 73 M 542.4 45.5 Q 569.7 48 576.2 69.2",
+                  "paint": "outline"
+                }
+              ]
+            },
+            {
+              "id": "house-wave",
+              "name": "Audience signal",
+              "tone": "cool",
+              "selectable": false,
+              "shapes": [
+                {
+                  "type": "path",
+                  "d": "M 557.4 232.1 Q 572.2 248.2 558.8 265.8 M 566.9 223.9 Q 592.5 248.2 568.2 273.9 M 576.3 214.5 Q 612.8 246.9 577.6 282",
+                  "paint": "outline"
+                }
+              ]
+            }
+          ],
+          "handles": [
+            {
+              "label": "Monitor send",
+              "ends": ["Muted", "Full"],
+              "quote": "The engineer raises only the monitor send.",
+              "initial": 0.35,
+              "track": {"from": [244, 253], "to": [244, 133]},
+              "effects": [
+                {"parts": ["monitor-cap"], "move": [0, -120]},
+                {"parts": ["monitor-meter"], "level": [0, 1]},
+                {"parts": ["monitor-wave"], "opacity": [0, 1]}
+              ]
+            },
+            {
+              "label": "Main vocal fader",
+              "ends": ["Muted", "Full"],
+              "quote": "the engineer raises only the main vocal fader",
+              "initial": 0.75,
+              "track": {"from": [334, 253], "to": [334, 133]},
+              "effects": [
+                {"parts": ["house-cap"], "move": [0, -120]},
+                {"parts": ["house-meter"], "level": [0, 1]},
+                {"parts": ["house-wave"], "opacity": [0, 1]}
+              ]
+            }
+          ],
+          "animation": {
+            "label": "vocal signal",
+            "quote": "the singer’s microphone feeds two mixes",
+            "duration": 4,
+            "loop": true,
+            "tracks": [
+              {
+                "keys": [
+                  [0, 0.72],
+                  [0.3, 0.38],
+                  [0.62, 0.94],
+                  [0.92, 0.62],
+                  [1.32, 0.22],
+                  [1.75, 0.81],
+                  [2.14, 0.5],
+                  [2.4, 1],
+                  [2.95, 0.26],
+                  [3.32, 0.74],
+                  [3.67, 0.44],
+                  [4, 0.72]
+                ],
+                "effects": [
+                  {"parts": ["monitor-meter", "house-meter"], "level": [0, 1]},
+                  {"parts": ["monitor-wave", "house-wave"], "opacity": [0.12, 1]}
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "A playable bascule bridge with a held pose and a draggable pivoting leaf",
+    "valid": true,
+    "artifact": {
+      "version": 1,
+      "format": "explainer",
+      "title": "The bridge and its counterweight",
+      "summary": "Follow the railing as the span rises. On the other side of the axle, the counterweight drops into the pier.",
+      "blocks": [
+        {
+          "kind": "illustration",
+          "view": "landscape",
+          "passage": "The harbour bridge rests on a stone seat on the far bank. Its steel leaf and railings rise together around a fixed pivot. A counterweight behind the pivot swings down into the pier as the span lifts. The operator holds the channel open, then lowers the bridge onto its seat.",
+          "parts": [
+            {
+              "id": "water",
+              "name": "Harbour water",
+              "tone": "cool",
+              "selectable": false,
+              "shapes": [
+                {
+                  "type": "path",
+                  "d": "M 28 294 Q 51 288 79 294 Q 102 299 134 293 M 250 297 Q 275 289 298 293 Q 325 297 353 293 M 382 295 Q 406 291 431 294 Q 454 297 477 293",
+                  "paint": "thin"
+                },
+                {
+                  "type": "path",
+                  "d": "M 46 312 Q 64 309 87 311 M 266 312 Q 273 309 295 310 M 363 310 Q 395 305 424 309 M 462 308 L 484 307 M 302 328 Q 329 324 351 327",
+                  "paint": "thin"
+                }
+              ],
+              "layer": -2
+            },
+            {
+              "id": "quay",
+              "name": "Stone abutments",
+              "tone": "ground",
+              "selectable": true,
+              "shapes": [
+                {"type": "path", "d": "M 20 224 H 132 V 242 H 119 V 295 H 20 Z", "paint": "surface"},
+                {"type": "path", "d": "M 506 231 H 622 V 297 H 524 V 245 H 506 Z", "paint": "surface"},
+                {
+                  "type": "path",
+                  "d": "M 21 237 H 119 M 21 258 H 118 M 21 280 H 118 M 43 237 V 258 M 92 237 V 258 M 66 258 V 280 M 35 280 V 295 M 100 280 V 295 M 524 247 H 621 M 524 268 H 621 M 524 289 H 621 M 548 247 V 268 M 596 247 V 268 M 574 269 V 289",
+                  "paint": "thin"
+                },
+                {"type": "path", "d": "M 20 216 H 204 V 221 H 20 Z", "paint": "surface"},
+                {"type": "path", "d": "M 505 225 H 529 V 234 H 505 Z", "paint": "fill"}
+              ],
+              "quote": "a stone seat on the far bank",
+              "about": "The far end of the lowered bridge rests on this seat.",
+              "layer": -1
+            },
+            {
+              "id": "pier",
+              "name": "Pivot pier",
+              "tone": "neutral",
+              "selectable": false,
+              "shapes": [
+                {
+                  "type": "path",
+                  "d": "M 134 249 L 146 244 L 150 302 H 229 L 237 244 L 249 249 L 244 318 H 139 Z",
+                  "paint": "surface"
+                },
+                {"type": "path", "d": "M 148 260 L 152 301 M 164 315 H 219 M 227 299 L 232 261", "paint": "thin"},
+                {
+                  "type": "path",
+                  "d": "M 194 292 L 201 228 Q 204 213 216 212 Q 228 212 231 228 L 239 291 Z",
+                  "paint": "surface"
+                },
+                {
+                  "type": "path",
+                  "d": "M 201 281 L 207 239 M 229 281 L 224 239 M 190 291 H 245 V 299 H 190 Z",
+                  "paint": "fill"
+                }
+              ],
+              "layer": -1
+            },
+            {
+              "id": "counterweight",
+              "name": "Counterweight",
+              "tone": "warm",
+              "selectable": true,
+              "shapes": [
+                {"type": "path", "d": "M 137 203 L 149 198 L 184 208 L 180 232 L 143 226 Z", "paint": "surface"},
+                {"type": "path", "d": "M 137 203 L 172 214 L 184 208 M 172 214 L 169 231", "paint": "thin"},
+                {
+                  "type": "path",
+                  "d": "M 148 209 L 148 220 M 155 211 L 155 222 M 162 213 L 161 224",
+                  "paint": "thin"
+                },
+                {"type": "path", "d": "M 177 214 L 214 219 L 220 229 L 176 225 Z", "paint": "fill"}
+              ],
+              "quote": "A counterweight behind the pivot swings down into the pier",
+              "about": "It sits behind the pivot and drops as the deck rises."
+            },
+            {
+              "id": "leaf",
+              "name": "Steel bridge leaf",
+              "tone": "neutral",
+              "selectable": true,
+              "shapes": [
+                {
+                  "type": "path",
+                  "d": "M 201 216 H 526 V 225 L 416 230 L 288 238 L 216 238 L 201 232 Z",
+                  "paint": "surface"
+                },
+                {"type": "path", "d": "M 209 216 H 526 V 220 H 209 Z", "paint": "fill"},
+                {
+                  "type": "path",
+                  "d": "M 236 225 H 501 M 241 228 L 251 235 L 270 221 L 289 235 L 306 221 L 324 232 L 342 221 L 360 230 L 377 221 L 394 228 L 410 221 L 426 226 L 444 221 L 458 225",
+                  "paint": "thin"
+                },
+                {
+                  "type": "path",
+                  "d": "M 245 234 L 249 234 M 290 234 L 293 234 M 322 231 L 325 231 M 358 229 L 361 229",
+                  "paint": "thin"
+                }
+              ],
+              "quote": "Its steel leaf and railings rise together around a fixed pivot.",
+              "about": "The entire leaf turns around the axle at the left bank."
+            },
+            {
+              "id": "rail",
+              "name": "Deck railing",
+              "tone": "cool",
+              "selectable": false,
+              "shapes": [
+                {"type": "path", "d": "M 224 213 V 195 H 519 V 215 M 224 200 H 519", "paint": "outline"},
+                {
+                  "type": "path",
+                  "d": "M 246 196 V 215 M 272 196 V 215 M 298 196 V 215 M 324 196 V 215 M 350 196 V 215 M 376 196 V 215 M 402 196 V 215 M 428 196 V 215 M 454 196 V 215 M 480 196 V 215 M 506 196 V 215",
+                  "paint": "thin"
+                }
+              ]
+            },
+            {
+              "id": "axle",
+              "name": "Fixed pivot",
+              "tone": "neutral",
+              "selectable": true,
+              "shapes": [
+                {"type": "circle", "cx": 216, "cy": 224, "r": 11, "paint": "surface"},
+                {"type": "circle", "cx": 216, "cy": 224, "r": 7, "paint": "soft"},
+                {"type": "circle", "cx": 216, "cy": 224, "r": 2.5, "paint": "solid"}
+              ],
+              "quote": "a fixed pivot",
+              "about": "The axle stays in place as the span and counterweight rotate.",
+              "layer": 2
+            }
+          ],
+          "handles": [
+            {
+              "label": "Bridge position",
+              "ends": ["On its seat", "Channel open"],
+              "quote": "Its steel leaf and railings rise together around a fixed pivot.",
+              "track": {"from": [451, 207], "pivot": [216, 224], "turn": -37},
+              "effects": [{"parts": ["leaf", "rail", "counterweight"], "pivot": [216, 224], "turn": -37}]
+            }
+          ],
+          "animation": {
+            "label": "bridge opening",
+            "quote": "The operator holds the channel open, then lowers the bridge onto its seat.",
+            "duration": 8,
+            "tracks": [
+              {
+                "handle": 0,
+                "keys": [
+                  [0, 0],
+                  [0.5, 0],
+                  [1.25, 0.15],
+                  [3.25, 0.92],
+                  [3.75, 1],
+                  [5, 1],
+                  [5.5, 0.91],
+                  [7.25, 0.13],
+                  [8, 0]
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "An animation without handles can loop through a complete turn",
+    "valid": true,
+    "artifact": {
+      "version": 1,
+      "format": "explainer",
+      "title": "Drum",
+      "blocks": [
+        {
+          "kind": "illustration",
+          "view": "square",
+          "passage": "The drum turns.",
+          "parts": [
+            {
+              "id": "drum",
+              "name": "Drum",
+              "tone": "warm",
+              "selectable": true,
+              "shapes": [{"type": "circle", "cx": 100, "cy": 100, "r": 14, "paint": "outline"}],
+              "quote": "The drum",
+              "about": "It turns."
+            }
+          ],
+          "animation": {
+            "label": "drum motion",
+            "quote": "drum turns",
+            "duration": 2,
+            "loop": true,
+            "tracks": [{"keys": [[0, 0], [2, 1]], "effects": [{"parts": ["drum"], "pivot": [100, 100], "turn": 360}]}]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "Unknown target",
+    "valid": false,
+    "artifact": {
+      "version": 1,
+      "format": "explainer",
+      "title": "Drum",
+      "blocks": [
+        {
+          "kind": "illustration",
+          "view": "square",
+          "passage": "The drum turns.",
+          "parts": [
+            {
+              "id": "drum",
+              "name": "Drum",
+              "tone": "warm",
+              "selectable": true,
+              "shapes": [{"type": "circle", "cx": 100, "cy": 100, "r": 14, "paint": "outline"}],
+              "quote": "The drum",
+              "about": "It turns."
+            }
+          ],
+          "handles": [
+            {
+              "label": "Drum travel",
+              "ends": ["Left", "Right"],
+              "quote": "The drum",
+              "track": {"from": [100, 100], "to": [150, 100]},
+              "effects": [{"parts": ["missing"], "opacity": [0, 1]}]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "Angular handle sweeps outside the canvas",
+    "valid": false,
+    "artifact": {
+      "version": 1,
+      "format": "explainer",
+      "title": "Drum",
+      "blocks": [
+        {
+          "kind": "illustration",
+          "view": "square",
+          "passage": "The drum turns.",
+          "parts": [
+            {
+              "id": "drum",
+              "name": "Drum",
+              "tone": "warm",
+              "selectable": true,
+              "shapes": [{"type": "circle", "cx": 100, "cy": 100, "r": 14, "paint": "outline"}],
+              "quote": "The drum",
+              "about": "It turns."
+            }
+          ],
+          "handles": [
+            {
+              "label": "Drum travel",
+              "ends": ["Left", "Right"],
+              "quote": "The drum",
+              "track": {"from": [5, 90], "pivot": [5, 60], "turn": 180},
+              "effects": [{"parts": ["drum"], "move": [50, 0]}]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "Rotation has two owners",
+    "valid": false,
+    "artifact": {
+      "version": 1,
+      "format": "explainer",
+      "title": "Drum",
+      "blocks": [
+        {
+          "kind": "illustration",
+          "view": "square",
+          "passage": "The drum turns.",
+          "parts": [
+            {
+              "id": "drum",
+              "name": "Drum",
+              "tone": "warm",
+              "selectable": true,
+              "shapes": [{"type": "circle", "cx": 100, "cy": 100, "r": 14, "paint": "outline"}],
+              "quote": "The drum",
+              "about": "It turns."
+            }
+          ],
+          "handles": [
+            {
+              "label": "Drum travel",
+              "ends": ["Left", "Right"],
+              "quote": "The drum",
+              "track": {"from": [100, 100], "to": [150, 100]},
+              "effects": [{"parts": ["drum"], "pivot": [100, 100], "turn": 45}]
+            }
+          ],
+          "animation": {
+            "label": "drum motion",
+            "quote": "drum turns",
+            "duration": 2,
+            "loop": true,
+            "tracks": [{"keys": [[0, 0], [2, 1]], "effects": [{"parts": ["drum"], "pivot": [100, 100], "turn": 360}]}]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "Level on an ordinary circle",
+    "valid": false,
+    "artifact": {
+      "version": 1,
+      "format": "explainer",
+      "title": "Drum",
+      "blocks": [
+        {
+          "kind": "illustration",
+          "view": "square",
+          "passage": "The drum turns.",
+          "parts": [
+            {
+              "id": "drum",
+              "name": "Drum",
+              "tone": "warm",
+              "selectable": true,
+              "shapes": [{"type": "circle", "cx": 100, "cy": 100, "r": 14, "paint": "outline"}],
+              "quote": "The drum",
+              "about": "It turns."
+            }
+          ],
+          "handles": [
+            {
+              "label": "Drum travel",
+              "ends": ["Left", "Right"],
+              "quote": "The drum",
+              "track": {"from": [100, 100], "to": [150, 100]},
+              "effects": [{"parts": ["drum"], "level": [0, 1]}]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "Duplicate offsets on a single driver",
+    "valid": false,
+    "artifact": {
+      "version": 1,
+      "format": "explainer",
+      "title": "Drum",
+      "blocks": [
+        {
+          "kind": "illustration",
+          "view": "square",
+          "passage": "The drum turns.",
+          "parts": [
+            {
+              "id": "drum",
+              "name": "Drum",
+              "tone": "warm",
+              "selectable": true,
+              "shapes": [{"type": "circle", "cx": 100, "cy": 100, "r": 14, "paint": "outline"}],
+              "quote": "The drum",
+              "about": "It turns."
+            }
+          ],
+          "handles": [
+            {
+              "label": "Drum travel",
+              "ends": ["Left", "Right"],
+              "quote": "The drum",
+              "track": {"from": [100, 100], "to": [150, 100]},
+              "effects": [{"parts": ["drum"], "move": [4, 0]}, {"parts": ["drum"], "move": [-4, 0]}]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "An ungrounded animation",
+    "valid": false,
+    "artifact": {
+      "version": 1,
+      "format": "explainer",
+      "title": "Drum",
+      "blocks": [
+        {
+          "kind": "illustration",
+          "view": "square",
+          "passage": "The drum turns.",
+          "parts": [
+            {
+              "id": "drum",
+              "name": "Drum",
+              "tone": "warm",
+              "selectable": true,
+              "shapes": [{"type": "circle", "cx": 100, "cy": 100, "r": 14, "paint": "outline"}],
+              "quote": "The drum",
+              "about": "It turns."
+            }
+          ],
+          "animation": {
+            "label": "drum motion",
+            "quote": "missing",
+            "duration": 2,
+            "loop": true,
+            "tracks": [{"keys": [[0, 0], [2, 1]], "effects": [{"parts": ["drum"], "pivot": [100, 100], "turn": 360}]}]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "A loop with a visual jump",
+    "valid": false,
+    "artifact": {
+      "version": 1,
+      "format": "explainer",
+      "title": "Drum",
+      "blocks": [
+        {
+          "kind": "illustration",
+          "view": "square",
+          "passage": "The drum turns.",
+          "parts": [
+            {
+              "id": "drum",
+              "name": "Drum",
+              "tone": "warm",
+              "selectable": true,
+              "shapes": [{"type": "circle", "cx": 100, "cy": 100, "r": 14, "paint": "outline"}],
+              "quote": "The drum",
+              "about": "It turns."
+            }
+          ],
+          "animation": {
+            "label": "drum motion",
+            "quote": "drum turns",
+            "duration": 2,
+            "loop": true,
+            "tracks": [{"keys": [[0, 0], [2, 1]], "effects": [{"parts": ["drum"], "move": [20, 0]}]}]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "Out-of-order animation keys",
+    "valid": false,
+    "artifact": {
+      "version": 1,
+      "format": "explainer",
+      "title": "Drum",
+      "blocks": [
+        {
+          "kind": "illustration",
+          "view": "square",
+          "passage": "The drum turns.",
+          "parts": [
+            {
+              "id": "drum",
+              "name": "Drum",
+              "tone": "warm",
+              "selectable": true,
+              "shapes": [{"type": "circle", "cx": 100, "cy": 100, "r": 14, "paint": "outline"}],
+              "quote": "The drum",
+              "about": "It turns."
+            }
+          ],
+          "animation": {
+            "label": "drum motion",
+            "quote": "drum turns",
+            "duration": 2,
+            "loop": true,
+            "tracks": [
+              {
+                "keys": [[0, 0], [1.5, 0.9], [1, 0.4], [2, 1]],
+                "effects": [{"parts": ["drum"], "pivot": [100, 100], "turn": 360}]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "A missing middle pose",
+    "valid": false,
+    "artifact": {
+      "version": 1,
+      "format": "explainer",
+      "title": "Drum",
+      "blocks": [
+        {
+          "kind": "illustration",
+          "view": "square",
+          "passage": "The drum turns.",
+          "parts": [
+            {
+              "id": "drum",
+              "name": "Drum",
+              "tone": "warm",
+              "selectable": true,
+              "shapes": [{"type": "circle", "cx": 100, "cy": 100, "r": 14, "paint": "outline"}],
+              "quote": "The drum",
+              "about": "It turns."
+            }
+          ],
+          "animation": {
+            "label": "drum motion",
+            "quote": "drum turns",
+            "duration": 2,
+            "loop": true,
+            "tracks": [{"keys": [[0, 0.2], [2, 0.2]], "effects": [{"parts": ["drum"], "pivot": [100, 100], "turn": 360}]}]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "Handle-drive reference is absent",
+    "valid": false,
+    "artifact": {
+      "version": 1,
+      "format": "explainer",
+      "title": "Drum",
+      "blocks": [
+        {
+          "kind": "illustration",
+          "view": "square",
+          "passage": "The drum turns.",
+          "parts": [
+            {
+              "id": "drum",
+              "name": "Drum",
+              "tone": "warm",
+              "selectable": true,
+              "shapes": [{"type": "circle", "cx": 100, "cy": 100, "r": 14, "paint": "outline"}],
+              "quote": "The drum",
+              "about": "It turns."
+            }
+          ],
+          "animation": {
+            "label": "drum motion",
+            "quote": "drum turns",
+            "duration": 2,
+            "loop": true,
+            "tracks": [{"handle": 0, "keys": [[0, 0], [1, 1], [2, 0]]}]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "An unreachable handle endpoint",
+    "valid": false,
+    "artifact": {
+      "version": 1,
+      "format": "explainer",
+      "title": "Drum",
+      "blocks": [
+        {
+          "kind": "illustration",
+          "view": "square",
+          "passage": "The drum turns.",
+          "parts": [
+            {
+              "id": "drum",
+              "name": "Drum",
+              "tone": "warm",
+              "selectable": true,
+              "shapes": [{"type": "circle", "cx": 100, "cy": 100, "r": 14, "paint": "outline"}],
+              "quote": "The drum",
+              "about": "It turns."
+            }
+          ],
+          "handles": [
+            {
+              "label": "Drum travel",
+              "ends": ["Left", "Right"],
+              "quote": "The drum",
+              "track": {"from": [100, 100], "to": [150, 100]},
+              "effects": [{"parts": ["drum"], "move": [50, 0]}]
+            }
+          ],
+          "animation": {
+            "label": "drum motion",
+            "quote": "drum turns",
+            "duration": 2,
+            "loop": true,
+            "tracks": [{"handle": 0, "keys": [[0, 0], [1, 0.8], [2, 0]]}]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "Extra motion code is rejected",
+    "valid": false,
+    "artifact": {
+      "version": 1,
+      "format": "explainer",
+      "title": "Drum",
+      "blocks": [
+        {
+          "kind": "illustration",
+          "view": "square",
+          "passage": "The drum turns.",
+          "parts": [
+            {
+              "id": "drum",
+              "name": "Drum",
+              "tone": "warm",
+              "selectable": true,
+              "shapes": [{"type": "circle", "cx": 100, "cy": 100, "r": 14, "paint": "outline"}],
+              "quote": "The drum",
+              "about": "It turns."
+            }
+          ],
+          "animation": {
+            "label": "drum motion",
+            "quote": "drum turns",
+            "duration": 2,
+            "loop": true,
+            "tracks": [{"keys": [[0, 0], [2, 1]], "effects": [{"parts": ["drum"], "pivot": [100, 100], "turn": 360}]}],
+            "script": "ignore"
+          }
+        }
+      ]
+    }
+  }
+]

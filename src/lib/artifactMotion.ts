@@ -14,6 +14,8 @@ export interface MotionMark {
   d: string;
   tone: DrawingTone;
   filled?: boolean;
+  strokeWidth?: number;
+  fillOpacity?: number;
   pivot?: [number, number];
   motion?: MotionFrame[];
 }
@@ -42,7 +44,7 @@ type Attribute = keyof typeof FRAME_LIMITS;
 const attributes = Object.keys(FRAME_LIMITS) as Attribute[];
 
 function mark(raw: unknown, period: number, wraps: boolean): MotionMark {
-  const obj = object(raw, ["d", "tone", "filled", "pivot", "motion"]);
+  const obj = object(raw, ["d", "tone", "filled", "strokeWidth", "fillOpacity", "pivot", "motion"]);
   const d = text(obj.d, 1800);
   readDrawingPath(d, [240, 160]);
   const tone = obj.tone as DrawingTone;
@@ -52,6 +54,8 @@ function mark(raw: unknown, period: number, wraps: boolean): MotionMark {
     if (typeof obj.filled !== "boolean") return invalid("Invalid fill.");
     result.filled = obj.filled;
   }
+  if (obj.strokeWidth !== undefined) result.strokeWidth = num(obj.strokeWidth, 0.25, 4);
+  if (obj.fillOpacity !== undefined) result.fillOpacity = num(obj.fillOpacity, 0, 1);
   if (obj.pivot !== undefined) {
     if (!Array.isArray(obj.pivot) || obj.pivot.length !== 2) return invalid("Invalid pivot.");
     result.pivot = [num(obj.pivot[0], 0, 240), num(obj.pivot[1], 0, 160)];

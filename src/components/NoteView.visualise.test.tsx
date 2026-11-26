@@ -161,6 +161,7 @@ it("shows the drawing model before any call and the verified model during option
   });
   const { open, latest } = setup({ ...initial, body: longDrawingSource });
   await open(0);
+  fireEvent.click(screen.getByText("Choose a starting format"));
   fireEvent.change(screen.getByRole("combobox", { name: "Format" }), { target: { value: "illustration" } });
   expect(screen.getByText(/Drawing model · .*astra/i)).toBeVisible();
   expect(generatePassageIllustration).not.toHaveBeenCalled();

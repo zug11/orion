@@ -6,6 +6,7 @@ import {
   type DrawingPoint,
   type DrawingShape,
 } from "./artifactIllustration";
+import { handleTrackPoints, sweptPoints } from "./illustrationHandles";
 
 type Bounds = { left: number; top: number; right: number; bottom: number };
 const empty = (): Bounds => ({ left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity });
@@ -132,12 +133,44 @@ export function illustrationLayout(block: ArtifactIllustration) {
   }
   for (const stage of block.states?.items ?? [])
     for (const change of stage.changes) change.shapes?.forEach(record);
+  // The viewport stays still while a handle moves. Bound each part's entire
+  // angular sweep plus every independent translation, including native glyphs.
+  if (block.handles || block.animation) {
+    for (const handle of block.handles ?? []) for (const p of handleTrackPoints(handle.track)) include(box, ...p);
+    const drivers = [...(block.handles ?? []), ...(block.animation?.tracks ?? []).filter(track => "effects" in track)];
+    for (const part of block.parts) {
+      const effects = drivers.flatMap(h => h.effects.filter(effect => effect.parts.includes(part.id)));
+      if (!effects.length) continue;
+      const rest = empty();
+      for (const shape of part.shapes ?? []) union(rest, geometry.get(shape)!);
+      for (const stage of block.states?.items ?? []) for (const change of stage.changes)
+        if (change.part === part.id) for (const shape of change.shapes ?? []) union(rest, geometry.get(shape)!);
+      if (part.icon) {
+        include(rest, part.icon.x, part.icon.y);
+        include(rest, part.icon.x + part.icon.size, part.icon.y + part.icon.size);
+      }
+      const rotation = effects.find(e => "turn" in e);
+      const low: DrawingPoint = [0, 0], high: DrawingPoint = [0, 0];
+      for (const effect of effects) if ("move" in effect) for (const axis of [0, 1]) {
+        low[axis] += Math.min(0, effect.move[axis]);
+        high[axis] += Math.max(0, effect.move[axis]);
+      }
+      for (const x of [rest.left, rest.right]) for (const y of [rest.top, rest.bottom]) {
+        const corners: DrawingPoint[] = rotation ? sweptPoints([x, y], rotation.pivot, rotation.turn) : [[x, y]];
+        for (const [px, py] of corners) {
+          include(box, px + low[0], py + low[1]); include(box, px + high[0], py + high[1]);
+        }
+      }
+    }
+  }
   // Keep the shared frame across states, including badge space. Drawing outside
   // the declared canvas (e.g. arcs) is clipped consistently with the source view.
-  box.left = Math.max(0, box.left);
-  box.top = Math.max(0, box.top);
-  box.right = Math.min(size[0], box.right);
-  box.bottom = Math.min(size[1], box.bottom);
+  if (!block.handles && !block.animation) {
+    box.left = Math.max(0, box.left);
+    box.top = Math.max(0, box.top);
+    box.right = Math.min(size[0], box.right);
+    box.bottom = Math.min(size[1], box.bottom);
+  }
   const span = Math.max(40, box.right - box.left, box.bottom - box.top),
     pad = span * 0.065;
   const left = box.left - pad,

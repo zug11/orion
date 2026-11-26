@@ -20,6 +20,53 @@
     }
   },
   {
+    "name": "Which readers did late Thursdays reach?",
+    "valid": true,
+    "artifact": {
+      "version": 1, "format": "argument", "title": "Who did late Thursdays reach?",
+      "blocks": [{
+        "kind": "argument",
+        "passage": "The library tried staying open until eight on four Thursdays. Its door counter recorded visitors after six every week. Several readers wrote that work kept them from coming earlier. The branch argued that late Thursdays reached readers who would otherwise miss out.",
+        "premises": [
+          {"id":"counts","text":"The door counter recorded late visits every week.","quote":"Its door counter recorded visitors after six every week.","without":"The slips alone cannot establish attendance across the four Thursdays."},
+          {"id":"slips","text":"Several readers said work kept them from coming earlier.","quote":"Several readers wrote that work kept them from coming earlier.","without":"A count at the door gives no reason for a visit."}
+        ],
+        "conclusions": [
+          {"id":"used","text":"People used the later hours on every trial night.","quote":"visitors after six every week","supports":[["counts"]]},
+          {"id":"reach","text":"The later hours reached some readers who would otherwise miss out.","quote":"late Thursdays reached readers who would otherwise miss out","supports":[["used","slips"]]}
+        ],
+        "reading":[
+          "The library tried staying open until eight on four Thursdays.",
+          {"variants":[
+            {"requires":["used"],"text":"People came after six every week. The count leaves one question open. Could those visitors have come earlier?"},
+            {"requires":["slips"],"text":"Several readers said their working hours kept them from arriving earlier. Their comments explain whom later hours could help. Attendance across the four Thursdays remains unknown."},
+            {"requires":["reach","used"],"text":"People came after six on every trial night. Several readers said their working hours ruled out an earlier visit. Together the counts and the readers’ accounts support the branch’s case for late Thursdays."}
+          ],"fallback":"The trial tells us which hours the library offered. Who used them, and whether those readers could have come earlier, remain open questions."}
+        ]
+      }]
+    }
+  },
+  {
+    "name":"A paragraph can drop out when its evidence is withheld","valid":true,
+    "artifact":{"version":1,"format":"argument","title":"Test","blocks":[{"kind":"argument","passage":"A. B.","premises":[{"id":"a","text":"A.","quote":"A.","without":"A is withheld."}],"conclusions":[{"id":"b","text":"B.","quote":"B.","supports":[["a"]]}],"reading":[{"variants":[{"requires":["b"],"text":"B."}],"fallback":null}]}]}
+  },
+  {
+    "name":"An adaptive paragraph must change its wording","valid":false,
+    "artifact":{"version":1,"format":"argument","title":"Test","blocks":[{"kind":"argument","passage":"A. B.","premises":[{"id":"a","text":"A.","quote":"A.","without":"A is withheld."}],"conclusions":[{"id":"b","text":"B.","quote":"B.","supports":[["a"]]}],"reading":[{"variants":[{"requires":["b"],"text":"Same paragraph."}],"fallback":"Same paragraph."}]}]}
+  },
+  {
+    "name":"Unknown claim in a paragraph variant","valid":false,
+    "artifact":{"version":1,"format":"argument","title":"Test","blocks":[{"kind":"argument","passage":"A. B.","premises":[{"id":"a","text":"A.","quote":"A.","without":"A is withheld."}],"conclusions":[{"id":"b","text":"B.","quote":"B.","supports":[["a"]]}],"reading":[{"variants":[{"requires":["absent"],"text":"C."}],"fallback":"Open."}]}]}
+  },
+  {
+    "name":"Duplicate paragraph condition in a different order","valid":false,
+    "artifact":{"version":1,"format":"argument","title":"Test","blocks":[{"kind":"argument","passage":"A. B.","premises":[{"id":"a","text":"A.","quote":"A.","without":"A is withheld."}],"conclusions":[{"id":"b","text":"B.","quote":"B.","supports":[["a"]]}],"reading":[{"variants":[{"requires":["a","b"],"text":"First."},{"requires":["b","a"],"text":"Second."}],"fallback":"Open."}]}]}
+  },
+  {
+    "name":"Adaptive paragraph missing its fallback","valid":false,
+    "artifact":{"version":1,"format":"argument","title":"Test","blocks":[{"kind":"argument","passage":"A. B.","premises":[{"id":"a","text":"A.","quote":"A.","without":"A is withheld."}],"conclusions":[{"id":"b","text":"B.","quote":"B.","supports":[["a"]]}],"reading":[{"variants":[{"requires":["a"],"text":"A."}]}]}]}
+  },
+  {
     "name":"Circular argument support", "valid":false,
     "artifact":{"version":1,"format":"explainer","title":"Test","blocks":[{"kind":"argument","passage":"A. B.","premises":[{"id":"a","text":"A.","quote":"A.","without":"A is withheld."}],"conclusions":[{"id":"b","text":"B.","quote":"B.","supports":[["b"]]}]}]}
   },

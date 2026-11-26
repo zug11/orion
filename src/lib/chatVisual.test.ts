@@ -4,6 +4,7 @@ import { createEmptySnapshot } from "../data/defaults";
 import { runChatReading } from "./chatReading";
 import { applyChatResult, buildChatRequest, saveChatReplyAsNote } from "./chat";
 import { chatVisualSuggestion } from "./chatVisualIntent";
+import drawings from "./fixtures/mcpVisualDrawingDynamics.json";
 import { finishChatVisual } from "./chatVisual";
 import { readVisualProviderStream, streamedVisualPreview } from "./chatVisualStream";
 import { readVisualArtifactMarker } from "./visualArtifactMarkdown";
@@ -127,6 +128,26 @@ describe("Chat visual streaming", () => {
     expect(reply.visualArtifact).toBeUndefined();
     await expect(readVisualProviderStream(new Response(frame({ type: "message_stop" })), "anthropic", () => {})).rejects.toThrow();
   });
+
+  it.each(["Animate the bridge opening cycle", "Show me an animated drawing of the bridge"])(
+    "treats an explicit request as an animation even without the Chat visual toggle: %s", async prompt => {
+      const settings = createEmptySnapshot("Harbour", now, "harbour").settings;
+      settings.apiKeyConfigured = true;
+      await saveApiKey("synthetic-test-key");
+      const visual = drawings[1].artifact;
+      const passage = visual.blocks[0].passage;
+      const packets: unknown[] = [];
+      vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL, opts?: RequestInit) => {
+        if (String(url).endsWith("/models")) return Response.json({data:[{id:"gpt-6.2-astra"}]});
+        packets.push(JSON.parse(JSON.parse(opts!.body as string).input));
+        const reply = JSON.stringify({reply: JSON.stringify(visual)});
+        return new Response(frame({type: "response.completed", response: {status: "completed", output_text: reply}}));
+      }));
+      const result = await finishChatVisual({reply: "The bridge opens."}, prompt, passage, false,
+        settings, new AbortController().signal, () => {});
+      expect(packets).toEqual([expect.objectContaining({source: passage, drawing: true, interaction: "play"})]);
+      expect(readVisualArtifactMarker(result.visualArtifact)).toEqual(visual);
+    });
 
   it.each(["selection", "attached note"] as const)("reads the final section of a long %s and streams reading progress", async origin => {
     const settings = createEmptySnapshot("Garden", now, "garden").settings;

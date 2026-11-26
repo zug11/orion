@@ -22,7 +22,10 @@ fn source_quote(value: &Value, passage: &str) -> Result<(), String> {
 }
 
 pub(super) fn validate(block: &Value) -> Result<(), String> {
-    fields(block, &["kind", "passage", "premises", "conclusions"])?;
+    fields(
+        block,
+        &["kind", "passage", "premises", "conclusions", "reading"],
+    )?;
     if block["kind"] != "argument" {
         return Err(invalid("expected an argument"));
     }
@@ -68,6 +71,51 @@ pub(super) fn validate(block: &Value) -> Result<(), String> {
             return Err(invalid("argument claims need distinct identifiers"));
         }
     }
+    if let Some(reading) = block.get("reading") {
+        let mut has_variants = false;
+        for paragraph in list(reading, 1, 8)? {
+            if paragraph.is_string() {
+                literal(paragraph, 1200, false)?;
+                continue;
+            }
+            fields(paragraph, &["variants", "fallback"])?;
+            if paragraph.get("fallback") != Some(&Value::Null) {
+                literal(&paragraph["fallback"], 1200, false)?;
+            }
+            let mut conditions = HashSet::new();
+            let mut changes_text = false;
+            for variant in list(&paragraph["variants"], 1, 8)? {
+                fields(variant, &["requires", "text"])?;
+                literal(&variant["text"], 1200, false)?;
+                changes_text |= variant["text"] != paragraph["fallback"];
+                let mut ids = Vec::new();
+                for reference in list(&variant["requires"], 1, 8)? {
+                    let id = claim_id(reference)?;
+                    if !available.contains(id) || ids.contains(&id) {
+                        return Err(invalid(
+                            "paragraph variants need distinct references to existing claims",
+                        ));
+                    }
+                    ids.push(id);
+                }
+                ids.sort_unstable();
+                if !conditions.insert(ids) {
+                    return Err(invalid(
+                        "duplicate support condition in an argument paragraph",
+                    ));
+                }
+            }
+            if !changes_text {
+                return Err(invalid("a paragraph variant must change the reading"));
+            }
+            has_variants = true;
+        }
+        if !has_variants {
+            return Err(invalid(
+                "a reading needs at least one paragraph with variants",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -84,13 +132,21 @@ pub(crate) fn definition() -> Value {
     let mut group = array(id.clone(), 1, 8);
     group["uniqueItems"] = json!(true);
     let conclusion = object(
-        json!({"id":id,"text":string(500),"quote":string(400),"supports":array(group,1,4)}),
+        json!({"id":id,"text":string(500),"quote":string(400),"supports":array(group.clone(),1,4)}),
         &["id", "text", "quote", "supports"],
     );
+    let variant = object(
+        json!({"requires":group,"text":string(1200)}),
+        &["requires", "text"],
+    );
+    let paragraph = object(
+        json!({"variants":array(variant,1,8),"fallback":{"anyOf":[string(1200),{"type":"null"}]}}),
+        &["variants", "fallback"],
+    );
     let mut block = object(
-        json!({"kind":{"const":"argument"},"passage":string(12000),"premises":array(json!({"oneOf":[stated,unstated]}),1,8),"conclusions":array(conclusion,1,6)}),
+        json!({"kind":{"const":"argument"},"passage":string(12000),"premises":array(json!({"oneOf":[stated,unstated]}),1,8),"conclusions":array(conclusion,1,6),"reading":array(json!({"oneOf":[string(1200),paragraph]}),1,8)}),
         &["kind", "passage", "premises", "conclusions"],
     );
-    block["description"] = json!("Use unique IDs and at least one stated premise. Stated premises and conclusions quote the passage exactly. Each support group requires all its named premises or earlier conclusions. Any complete group supports the conclusion. 'without' explains the effect of withholding a premise.");
+    block["description"] = json!("Use unique IDs and at least one stated premise. Stated premises and conclusions quote the passage exactly. Any complete support group establishes its conclusion. For an adaptive reading, write complete paragraph variants with requires referencing premises or conclusions. All listed claims must hold. The longest matching list wins, with ties in written order. Fallback is the reading when no variant applies. Use a null fallback to omit the whole paragraph. A string is a fixed paragraph.");
     block
 }

@@ -161,6 +161,10 @@
   content: '';
 }
 .visual-artifact__connections { display: none; }
+.visual-artifact__transfer { pointer-events: none; }
+@media (prefers-reduced-motion: reduce) {
+  .visual-artifact__transfer { display: none; }
+}
 .visual-artifact__edge-label {
   fill: var(--text-soft);
   stroke: var(--surface-1);

@@ -8,6 +8,10 @@ import type { Note } from "../types";
 import { serializeNoteImageTitle } from "./noteImageLayout";
 import { buildWordExportDocument } from "./wordExport";
 import { docxHtmlToMarkdown } from "./docxImport";
+import compositions from "./fixtures/mcpVisualCompositions.json";
+import argumentFixtures from "./fixtures/mcpVisualArgument.json";
+import drawingFixtures from "./fixtures/mcpVisualDrawingDynamics.json";
+import { parseVisualArtifact } from "./visualArtifacts";
 import { visualArtifactMarker } from "./visualArtifactMarkdown";
 
 const NOW = "2026-10-01T10:00:00Z";
@@ -63,6 +67,41 @@ async function unpack(bytes: Uint8Array) {
 }
 
 describe("Word export", () => {
+  it("keeps a playable drawing’s control endpoints, representative poses and source as readable text", async () => {
+    const snapshot = fixture();
+    const artifact = parseVisualArtifact(drawingFixtures[1].artifact);
+    snapshot.notes[0].body = visualArtifactMarker(artifact);
+    const {xml} = await unpack((await buildWordExportDocument(snapshot,"note","origin")).bytes);
+    expect(xml).toContain("Bridge position");
+    expect(xml).toContain("On its seat");
+    expect(xml).toContain("Channel open");
+    expect(xml).toContain("The operator holds the channel open, then lowers the bridge onto its seat.");
+  });
+  it("keeps the supported reading and the alternatives available on paper", async () => {
+    const snapshot = fixture();
+    const library = parseVisualArtifact(argumentFixtures[1].artifact);
+    snapshot.notes[0].body = visualArtifactMarker(library);
+    const { xml } = await unpack((await buildWordExportDocument(snapshot, "note", "origin")).bytes);
+    const block = library.blocks[0];
+    if (block.kind !== "argument") throw new Error("Expected an argument.");
+    for (const p of block.reading!) {
+      if (typeof p === "string") expect(xml).toContain(p);
+      else {
+        expect(xml).toContain(p.fallback);
+        for (const variant of p.variants) expect(xml).toContain(variant.text);
+      }
+    }
+    expect(xml).toContain("Conclusion 2 + Conclusion 1");
+  });
+  it("preserves a custom layout’s choice-dependent inferences in Word", async () => {
+    const snapshot = fixture();
+    snapshot.notes[0].body = visualArtifactMarker(parseVisualArtifact(compositions[1].artifact));
+    const { document } = await unpack((await buildWordExportDocument(snapshot, "note", "origin")).bytes);
+    const paragraphs = [...document.getElementsByTagNameNS(W, "p")].map(p => p.textContent);
+    expect(paragraphs).toContain("Public notice = Consult · Projectionist’s log = Consult");
+    expect(paragraphs.filter(text => text === "Supported together")).toHaveLength(1);
+  });
+
   it("prints the written recipe yield, ingredients and fixed cooking conditions once", async () => {
     const snapshot = fixture();
     snapshot.notes[0].body = visualArtifactMarker({

@@ -6,12 +6,19 @@ export type ArgumentPremise = Claim & { without: string } & (
   | { unstated: true; quote?: never }
 );
 export type ArgumentConclusion = Claim & { quote: string; supports: string[][] };
+export type ArgumentParagraph = string | {
+  variants: { requires: string[]; text: string }[];
+  fallback: string | null;
+};
 export interface ArtifactArgument {
   kind: "argument";
   passage: string;
   premises: ArgumentPremise[];
   conclusions: ArgumentConclusion[];
+  reading?: ArgumentParagraph[];
 }
+
+export class ArgumentReadingError extends Error {}
 
 function claimId(value: unknown): string {
   if (typeof value !== "string" || !/^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(value))
@@ -19,8 +26,33 @@ function claimId(value: unknown): string {
   return value;
 }
 
+function parseReading(raw: unknown, available: ReadonlySet<string>) {
+  const reading = list<ArgumentParagraph>(raw, 1, 8, paragraph => {
+    if (typeof paragraph === "string") return literal(paragraph, 1200);
+    const value = object(paragraph, ["variants", "fallback"]);
+    const conditions = new Set<string>();
+    const variants = list(value.variants, 1, 8, item => {
+      const variant = object(item, ["requires", "text"]);
+      const requires = list(variant.requires, 1, 8, claimId);
+      if (new Set(requires).size !== requires.length || requires.some(id => !available.has(id)))
+        throw new ArgumentReadingError("A paragraph variant must name distinct premises or conclusions in this argument.");
+      const condition = [...requires].sort().join(" ");
+      if (conditions.has(condition)) throw new ArgumentReadingError("Use each combination of claims only once per paragraph.");
+      conditions.add(condition);
+      return { requires, text: literal(variant.text, 1200) };
+    });
+    const fallback = value.fallback === null ? null : literal(value.fallback, 1200);
+    if (variants.every(variant => variant.text === fallback))
+      throw new ArgumentReadingError("Write a different paragraph for a change in support, or keep fixed prose as a string.");
+    return { variants, fallback };
+  });
+  if (reading.every(paragraph => typeof paragraph === "string"))
+    throw new ArgumentReadingError("The argument reading needs at least one paragraph that changes with support.");
+  return reading;
+}
+
 export function parseArtifactArgument(raw: unknown): ArtifactArgument {
-  const block = object(raw, ["kind", "passage", "premises", "conclusions"]);
+  const block = object(raw, ["kind", "passage", "premises", "conclusions", "reading"]);
   if (block.kind !== "argument") throw new Error("Expected an argument.");
   const passage = literal(block.passage, 12000);
   const available = new Set<string>();
@@ -61,7 +93,16 @@ export function parseArtifactArgument(raw: unknown): ArtifactArgument {
     available.add(base.id);
     return { ...base, quote: source(value.quote), supports };
   });
-  return { kind: "argument", passage, premises, conclusions };
+  const result: ArtifactArgument = { kind: "argument", passage, premises, conclusions };
+  if (block.reading !== undefined) {
+    try {
+      result.reading = parseReading(block.reading, available);
+    } catch (error) {
+      if (error instanceof ArgumentReadingError) throw error;
+      throw new ArgumentReadingError("Each adaptive paragraph needs variants with requires and text, and a fallback paragraph.");
+    }
+  }
+  return result;
 }
 
 export function evaluateArgument(block: ArtifactArgument, withheld: ReadonlySet<string>): Set<string> {
@@ -71,4 +112,28 @@ export function evaluateArgument(block: ArtifactArgument, withheld: ReadonlySet<
       supported.add(conclusion.id);
   }
   return supported;
+}
+
+/** A more specific reading wins even if a model writes the broad case first.
+ * Equal-length matches keep the author's order. Each paragraph resolves on its own. */
+export function readArgumentParagraph(paragraph: ArgumentParagraph, supported: ReadonlySet<string>): string | null {
+  if (typeof paragraph === "string") return paragraph;
+  let mostRequired = 0;
+  let reading = paragraph.fallback;
+  for (const variant of paragraph.variants) {
+    if (variant.requires.length > mostRequired && variant.requires.every(id => supported.has(id))) {
+      mostRequired = variant.requires.length;
+      reading = variant.text;
+    }
+  }
+  return reading;
+}
+
+export function currentArgumentReading(block: ArtifactArgument, supported: ReadonlySet<string>): (string | null)[] {
+  if (block.reading) return block.reading.map(paragraph => readArgumentParagraph(paragraph, supported));
+  // Earlier v1 artifacts already carry the claims in the author's words. Only
+  // put observations from stated premises and still-supported inferences in the reading.
+  const conclusions = block.conclusions.filter(c => supported.has(c.id)).map(c => c.text);
+  const evidence = block.premises.filter(p => !p.unstated && supported.has(p.id) && !conclusions.includes(p.text));
+  return [evidence.map(p => p.text).join(" ") || null, conclusions.join(" ") || null];
 }

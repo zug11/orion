@@ -27,7 +27,18 @@ fn positions(items: &[Value], period: f64) -> Result<(), String> {
 }
 
 fn mark(raw: &Value, period: f64, wraps: bool) -> Result<bool, String> {
-    fields(raw, &["d", "tone", "filled", "pivot", "motion"])?;
+    fields(
+        raw,
+        &[
+            "d",
+            "tone",
+            "filled",
+            "strokeWidth",
+            "fillOpacity",
+            "pivot",
+            "motion",
+        ],
+    )?;
     literal(&raw["d"], 1800, false)?;
     illustration::path(&raw["d"], (240., 160.))?;
     if !raw["tone"]
@@ -38,6 +49,12 @@ fn mark(raw: &Value, period: f64, wraps: bool) -> Result<bool, String> {
     }
     if raw.get("filled").is_some_and(|v| !v.is_boolean()) {
         return Err(invalid("expected a boolean fill"));
+    }
+    if let Some(width) = raw.get("strokeWidth") {
+        number(width, 0.25, 4.)?;
+    }
+    if let Some(opacity) = raw.get("fillOpacity") {
+        number(opacity, 0., 1.)?;
     }
     if let Some(pivot) = raw.get("pivot") {
         let xy = list(pivot, 2, 2)?;
@@ -145,7 +162,7 @@ pub(crate) fn definitions() -> Vec<Value> {
     let drawing = object(
         json!({
             "d": string(1800), "tone": {"type":"string","enum":illustration::TONES},
-            "filled":{"type":"boolean"},
+            "filled":{"type":"boolean"}, "strokeWidth":bounded(0.25,4.), "fillOpacity":bounded(0.,1.),
             "pivot":{"type":"array","minItems":2,"maxItems":2,"prefixItems":[bounded(0.,240.),bounded(0.,160.)]},
             "motion":array(object(pose,&["at"]),2,24)
         }),

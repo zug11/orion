@@ -3435,7 +3435,7 @@ function chatProviderInstructions(request: ChatRequest): string {
   if (request.mode === "visual-artifact") {
     const packet = parseArtifactGenerationInput(JSON.parse(request.prompt));
     if (packet.readSelection) return visualSelectionReaderInstructions;
-    const plan = !request.model?.startsWith("claude-") && !packet.drawing;
+    const plan = !packet.drawing;
     return [artifactBaseInstructions, illustrationInstructions, calculatorInstructions, ...(plan ? [deferredDrawingInstructions] : [])].join("\n");
   }
   if (request.mode === "voice-synthesis") return VOICE_SYNTHESIS_INSTRUCTIONS;

@@ -1,3 +1,5 @@
+import { parseDrawingDynamics, type DrawingHandle, type DrawingAnimation } from "./illustrationHandles";
+
 /** An explorable drawing, in a single coordinate system. All styling and all
  * geometry tags are supplied by Orion. State changes replace only named parts. */
 export const ILLUSTRATION_VIEWS = { landscape: [640, 400], square: [480, 480], portrait: [400, 560] } as const;
@@ -7,6 +9,7 @@ export const DRAWING_PAINTS = [
   "soft",
   "fill",
   "solid",
+  "surface",
   "bold",
   "heavy",
   "thin",
@@ -96,6 +99,8 @@ export interface ArtifactIllustration {
   view: DrawingView;
   parts: DrawingPart[];
   states?: { label: string; items: DrawingStage[] };
+  handles?: DrawingHandle[];
+  animation?: DrawingAnimation;
 }
 
 function invalid(message: string): never {
@@ -258,7 +263,7 @@ function drawingShape(raw: unknown, size: readonly [number, number]): DrawingSha
 }
 
 export function parseArtifactIllustration(raw: unknown): ArtifactIllustration {
-  const obj = record(raw, ["kind", "passage", "view", "parts", "states"]);
+  const obj = record(raw, ["kind", "passage", "view", "parts", "states", "handles", "animation"]);
   if (obj.kind !== "illustration") return invalid("Expected an illustration.");
   const view = oneOf(obj.view, ["landscape", "square", "portrait"] as const),
     size = ILLUSTRATION_VIEWS[view];
@@ -341,6 +346,13 @@ export function parseArtifactIllustration(raw: unknown): ArtifactIllustration {
         return { label: text(state.label, 80), caption: text(state.caption, 600), changes };
       }),
     };
+  }
+  if (obj.handles !== undefined || obj.animation !== undefined) {
+    const levelParts = new Set(parts.filter(part => part.shapes?.some(s => s.paint === "level") ||
+      LEVEL_GLYPHS.some(name => part.icon?.name === name)).map(part => part.id));
+    for (const stage of result.states?.items ?? [])
+      for (const change of stage.changes) if (change.shapes?.some(s => s.paint === "level")) levelParts.add(change.part);
+    Object.assign(result, parseDrawingDynamics(obj.handles, obj.animation, parts, size, passage, levelParts));
   }
   return result;
 }

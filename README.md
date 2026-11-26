@@ -28,9 +28,13 @@
 
 ## Visualise a passage
 
+With **Generate for me**, Orion can design a layout for the selected passage. One choice can change several readings, reveal other blocks, or advance a diagram. **Choose a starting format** opens the format picker when you have a particular interaction in mind. New Argument Explorer visuals can change whole paragraphs when you withhold or restore evidence.
+
 Highlight text in a note and choose **Visualise**, or type `/visualise` and paste a passage. For a drawing with parts you can explore, choose **Draw illustration**. Click a numbered part to read about it or ask a follow-up in that Space’s Chat. **Save SVG** exports the drawing as it appears in the current stage. Orion reads long selections in sections and uses excerpts from across the passage to generate the visual.
 
 Use **Cycle** to turn through a repeating process, or **Linked views** to move two illustrations with the same control. **Argument explorer** lets you withhold a premise and see which conclusions still have support. **Zoom across sizes** compares lengths on a logarithmic scale. **Deep time as one day** maps a passage’s timespan onto a 24-hour clock.
+
+A generated drawing can include handles directly on its parts and a playback control. Drag a handle or use its labelled slider. Play the animation, pause on a detail, or scrub to a particular moment. Independent controls stay live during playback. Saved stage drawings and linked views also offer playback. In flow diagrams, a moving mark traces each transfer from its source to its destination. These interactions work in the note and in an exported HTML file.
 
 In Space Chat, ask for a visual and watch it appear in the reply. Choose **Keep as note** to save it with the answer. In a calculator, drag the chart or adjust an input to update its results, explanation and working. For a recipe, change the servings to see the original and scaled ingredients side by side. Use **Add shopping list as to-dos** in a note to keep the new quantities. Saved visuals also work in a self-contained HTML export.
 

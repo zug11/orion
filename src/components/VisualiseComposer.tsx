@@ -3,7 +3,7 @@ import type { Settings } from "../types";
 import { isSelectedAIConfigured, selectedAIProviderName } from "../lib/ai";
 import { drawingModelPolicyLabel } from "../lib/illustrationModel";
 import { X } from "../lib/icons";
-import { artifactFormatNames, ARTIFACT_FORMATS, MAX_ARTIFACT_GUIDANCE, type ArtifactFormat, type VisualArtifact } from "../lib/visualArtifacts";
+import { artifactFormatNames, ARTIFACT_PRESETS, MAX_ARTIFACT_GUIDANCE, type ArtifactFormat, type VisualArtifact } from "../lib/visualArtifacts";
 import { asksForIllustration, generatePassageIllustration, generateVisualArtifact } from "../lib/visualArtifactGeneration";
 import { ArtworkReviewNoticeContext } from "./ArtifactPartChatContext";
 import "./VisualiseComposer.css";
@@ -131,15 +131,18 @@ export function VisualiseComposer({ source, settings, anchor, onInsert, onClose 
       {source ? <blockquote aria-label="Selected passage">{preview}</blockquote> : <label>Passage
         <textarea data-initial-focus value={typedSource} rows={3} readOnly={busy || stale}
           onChange={e => setTypedSource(e.target.value)} placeholder="Enter the text to visualise…" /></label>}
-      <label>Format
-        <select value={format} data-initial-focus={source ? true : undefined} disabled={busy || stale} onChange={e => { setFormat(e.target.value as typeof format); guidanceInput.current?.focus(); }}>
-          <option value="auto">Let Orion choose</option>
-          <option value="illustration">Draw illustration</option>
-          {ARTIFACT_FORMATS.map(value => <option key={value} value={value}>{artifactFormatNames[value]}</option>)}
-        </select>
-      </label>
+      <details className="visualise-formats">
+        <summary>{format === "auto" ? "Choose a starting format" : format === "illustration" ? "Draw illustration" : artifactFormatNames[format]}</summary>
+        <label>Format
+          <select value={format} disabled={busy || stale} onChange={e => { setFormat(e.target.value as typeof format); guidanceInput.current?.focus(); }}>
+            <option value="auto">Design for this passage</option>
+            <option value="illustration">Draw illustration</option>
+            {ARTIFACT_PRESETS.map(value => <option key={value} value={value}>{artifactFormatNames[value]}</option>)}
+          </select>
+        </label>
+      </details>
       <label>Guidance <span>(optional)</span>
-        <textarea ref={guidanceInput} value={guidance} rows={2} readOnly={busy || stale} maxLength={MAX_ARTIFACT_GUIDANCE}
+        <textarea ref={guidanceInput} data-initial-focus={source ? true : undefined} value={guidance} rows={2} readOnly={busy || stale} maxLength={MAX_ARTIFACT_GUIDANCE}
           placeholder="What should the visual help you see?" onChange={e => setGuidance(e.target.value)} />
       </label>
       {(wantsDrawing || (busy && drawingModel)) && <p className="visualise-model" role="status">Drawing model · {busy && drawingModel ? drawingModel : drawingModelPolicyLabel(settings)}</p>}

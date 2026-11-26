@@ -56,6 +56,19 @@ fn element(e: &BytesStart<'_>, root: bool) -> Result<(), String> {
                     || b"eE.,-+MmLlCcHhVvQqTtSsAaZz".contains(&c)
             }) => {}
             b"transform"
+                if value
+                    .strip_prefix("matrix(")
+                    .and_then(|s| s.strip_suffix(')'))
+                    .is_some_and(|s| {
+                        let mut values = s.split_ascii_whitespace();
+                        (0..6).all(|_| {
+                            values.next().is_some_and(|v| {
+                                v.parse::<f64>()
+                                    .is_ok_and(|n| n.is_finite() && n.abs() <= 1_000_000.)
+                            })
+                        }) && values.next().is_none()
+                    }) => {}
+            b"transform"
                 if value.starts_with("translate(")
                     && value.ends_with(')')
                     && value[10..value.len() - 1].bytes().all(|c| {
@@ -154,6 +167,20 @@ mod tests {
     #[test]
     fn accepts_illustration_geometry_and_escaped_titles() {
         assert!(validate(r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><title>A &amp; B</title><g transform="translate(0 1)"><path d="M1 2 L4 5" fill="none" stroke="#ff00eeff"/></g></svg>"##).is_ok());
+    }
+    #[test]
+    fn accepts_only_one_finite_six_number_pose_matrix() {
+        let element = |t: &str| format!(r#"<svg xmlns="{SVG_NS}"><g transform="{t}"/></svg>"#);
+        assert!(validate(&element("matrix(.8 -.6 .6 .8 -40 109.75)")).is_ok());
+        for transform in [
+            "matrix(1 0 0 1 0)",
+            "matrix(1 0 0 1 0 0 0)",
+            "matrix(NaN 0 0 1 0 0)",
+            "matrix(1 0 0 1 0 url(x))",
+            "matrix(1 0 0 1 0 1e99)",
+        ] {
+            assert!(validate(&element(transform)).is_err());
+        }
     }
     #[test]
     fn refuses_active_content_and_non_drawing_documents() {

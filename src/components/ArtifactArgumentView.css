@@ -98,6 +98,14 @@
   display: grid;
   gap: 6px;
 }
+.va-arg-reading {
+  border-inline-start: 2px solid var(--va-accent);
+  padding-inline-start: 14px;
+}
+.visual-artifact .va-arg-reading h4 { margin: 0 0 8px; }
+.visual-artifact .va-arg-reading p { max-width: 68ch; line-height: 1.6; }
+.va-arg-reasoning summary { color: var(--text-soft); cursor: pointer; }
+.va-arg-reasoning[open] summary { margin-bottom: 8px; }
 .va-arg-conclusion {
   border-inline-start: 3px solid var(--va-cool);
 }

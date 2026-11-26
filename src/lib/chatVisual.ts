@@ -21,8 +21,8 @@ export async function finishChatVisual(
   const { reply, visualFormat: format } = result;
   const answer = result;
   const command = prompt.trim().replace(/^(?:(?:please|can you|could you|would you)\s+)*/iu, "");
-  const explicit = /^(?:draw|sketch|illustrate|visuali[sz]e|diagram)\b/iu.test(command)
-    || /^(?:show|make|create|generate|build|give)\s+(?:me\s+)?(?:an?\s+)?(?:interactive\s+)?(?:artifact|visual|diagram|svg|illustration|picture|drawing|calculator|timeline|quiz|chart|cycle|linked views|argument explorer|scale zoom|deep time)\b/iu.test(command);
+  const explicit = /^(?:draw|sketch|illustrate|visuali[sz]e|diagram|animate)\b/iu.test(command)
+    || /^(?:show|make|create|generate|build|give)\s+(?:me\s+)?(?:an?\s+)?(?:(?:interactive|animated|draggable)\s+)*(?:artifact|visual|diagram|svg|illustration|picture|drawing|animation|calculator|timeline|quiz|chart|cycle|linked views|argument explorer|scale zoom|deep time)\b/iu.test(command);
   if (result.editProposal || (!requested && !format && !explicit) || !reply.trim()) return answer;
   onPreview({ answer });
   // Preserve verbatim selections/citations as source material. An answer being

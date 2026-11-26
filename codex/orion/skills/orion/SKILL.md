@@ -51,6 +51,7 @@ Use the `orion` MCP server to work directly with the user's local Orion library.
 
 - When asked to save a calculator, timeline, explainer, comparison, quiz, flashcards, interactive cycle, linked views, argument explorer, scale zoom or deep-time clock in a note, use `orion_insert_visual_artifact` with the exact `space_id`, `note_id`, current `expected_version` from `orion_get_notes`, and the `artifact` JSON object. The tool appends one interactive illustration. For a new note, create the requested note first and read its version.
 - Supply `{version:1, format, title, blocks}` with an optional summary. Use the tool's block schema for steps, scenes, tables, quizzes, cards, calculators and text. Calculator formulas use the bounded expression tree. Ground input ranges in the source and check that the results are defined across those ranges. Pass JSON directly. Orion handles marker encoding, validation and persistence, with no provider call.
+- Use `format: "custom"` with a validated layout to connect choices across blocks. An illustration can define draggable handles and animation tracks on its named parts. An argument can supply complete paragraph variants for changes in support. Use the schema returned by the tool and quote the source passage for each interaction that requires evidence.
 - On a version conflict, reread the note and check whether the artifact is already there before retrying. On success, use the returned note citation.
 
 ## Use writing blocks and editor commands

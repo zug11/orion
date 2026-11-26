@@ -1,4 +1,5 @@
 import { invalid, object, list, literal, oneOf, finite } from "./artifactValidation";
+import { parseArtifactComposition, type ArtifactComposition } from "./artifactComposition";
 import { parseArtifactMotion, type ArtifactMotion } from "./artifactMotion";
 import { parseArtifactArgument, type ArtifactArgument } from "./artifactArgument";
 import { parseArtifactDeepTime, parseArtifactScaleZoom, type ArtifactDeepTime, type ArtifactScaleZoom } from "./artifactScaleTime";
@@ -7,11 +8,12 @@ import { parseArtifactFlow, type ArtifactFlow } from "./visualArtifactFlow";
 
 /** Versioned data shared by generated and saved note artifacts. All drawing and
  * interaction are rendered by Orion; the document contains no executable code. */
-export const ARTIFACT_FORMATS = ["timeline", "explainer", "quiz", "comparison", "flashcards", "calculator", "cycle", "linkedViews", "argument", "scaleZoom", "deepTime"] as const;
+export const ARTIFACT_PRESETS = ["timeline", "explainer", "quiz", "comparison", "flashcards", "calculator", "cycle", "linkedViews", "argument", "scaleZoom", "deepTime"] as const;
+export const ARTIFACT_FORMATS = [...ARTIFACT_PRESETS, "custom"] as const;
 export type ArtifactFormat = typeof ARTIFACT_FORMATS[number];
 export const artifactFormatNames: Record<ArtifactFormat, string> = {
   timeline: "Timeline", explainer: "Explainer", quiz: "Quiz", comparison: "Comparison", flashcards: "Flashcards",
-  calculator: "Calculator", cycle: "Cycle", linkedViews: "Linked views", argument: "Argument explorer",
+  calculator: "Calculator", custom: "Interactive visual", cycle: "Cycle", linkedViews: "Linked views", argument: "Argument explorer",
   scaleZoom: "Zoom across sizes", deepTime: "Deep time as one day",
 };
 export const MAX_ARTIFACT_BYTES = 48_000;
@@ -76,6 +78,7 @@ export interface ArtifactEvidence {
 }
 
 export interface VisualArtifact {
+  layout?: ArtifactComposition;
   evidence?: ArtifactEvidence;
   version: 1;
   format: ArtifactFormat;
@@ -373,16 +376,18 @@ function block(value: unknown): ArtifactBlock {
 }
 
 export function parseVisualArtifact(value: unknown): VisualArtifact {
-  const obj = object(value, ["version", "format", "title", "summary", "blocks", "evidence"]);
+  const obj = object(value, ["version", "format", "title", "summary", "blocks", "evidence", "layout"]);
   if (obj.version !== 1) return invalid();
   const format = oneOf(obj.format, ARTIFACT_FORMATS);
   const blocks = list(obj.blocks, 1, 12, block);
-  const requiredKind = { timeline: "steps", explainer: undefined, quiz: "quiz",
+  const requiredKind = { custom: undefined, timeline: "steps", explainer: undefined, quiz: "quiz",
     comparison: "table", flashcards: "cards", calculator: "calculator",
     cycle: "cycle", linkedViews: "linkedViews", argument: "argument", scaleZoom: "scaleZoom", deepTime: "deepTime" }[format];
   if (requiredKind && !blocks.some(block => block.kind === requiredKind)) return invalid();
   const artifact: VisualArtifact = { version: 1, format, title: literal(obj.title, 160),
     ...(obj.summary === undefined ? {} : { summary: literal(obj.summary, 600) }), blocks };
+  if (format === "custom") artifact.layout = parseArtifactComposition(obj.layout, blocks);
+  else if (obj.layout !== undefined) return invalid();
   if (obj.evidence !== undefined) {
     const evidence = object(obj.evidence, ["passage", "claims"]);
     artifact.evidence = {
@@ -410,12 +415,15 @@ export function parseVisualArtifact(value: unknown): VisualArtifact {
 }
 
 /** The provider receives only this projection, even if a caller supplies Chat context. */
+export type DrawingInteraction = "drag" | "play" | "dragAndPlay";
 export function parseArtifactGenerationInput(value: unknown) {
-  const obj = object(value, ["source", "guidance", "format", "drawing", "correction", "readSelection"]);
+  const obj = object(value, ["source", "guidance", "format", "drawing", "interaction", "correction", "readSelection"]);
   if (obj.readSelection !== undefined && (obj.readSelection !== true || obj.drawing !== undefined || obj.correction !== undefined)) return invalid();
   if (obj.drawing !== undefined && (obj.drawing !== true || obj.format !== "explainer")) return invalid();
-  if (obj.correction !== undefined && !obj.drawing) return invalid();
+  if (obj.interaction !== undefined && obj.drawing !== true) return invalid();
+  if (obj.correction !== undefined && !obj.drawing && obj.format !== "custom" && obj.format !== "argument") return invalid();
   return { ...(obj.drawing === true && { drawing: true }), ...(obj.readSelection === true && { readSelection: true }),
+    ...(obj.interaction !== undefined && {interaction: oneOf(obj.interaction, ["drag","play","dragAndPlay"] as const)}),
     ...(obj.correction !== undefined && { correction: literal(obj.correction, 300) }), source: literal(obj.source, MAX_ARTIFACT_SOURCE), guidance: literal(obj.guidance, MAX_ARTIFACT_GUIDANCE, true),
     format: obj.format === "auto" ? "auto" as const : oneOf(obj.format, ARTIFACT_FORMATS) };
 }

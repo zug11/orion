@@ -456,6 +456,13 @@ These product decisions are intentional:
   for me. A chosen format or typed guidance changes it to Generate. Enter
   in the guidance field submits; Shift+Enter adds a line. Cmd/Ctrl+Enter
   submits from the form. Opening the composer spends no provider call.
+  Generate for me can design a passage-specific interactive layout. Named formats are optional
+  starting points behind Choose a starting format. A custom v1 document arranges ordinary
+  blocks, local choice controls and live readings in responsive rows. Multiple choices
+  can govern one reveal, and one choice can drive multiple readings or scene frames.
+  Every control and block is placed once; validate all bindings in Orion and MCP.
+  A malformed generated custom layout gets at most one bounded correction on the same connection.
+  Print and Word expose conditional content and the readings for each choice.
   The picker offers Timeline, Explainer, Quiz, Comparison, Flashcards, Calculator, Cycle, Linked views, Argument explorer, Zoom across sizes and Deep time as one day. Their blocks can be combined. A scene can draw new subjects from
   bounded paths, rectangles and circles, with frame-specific values, fills and
   directed connections. The renderer lays out each stage around the objects
@@ -521,10 +528,27 @@ These product decisions are intentional:
   part's quote must occur in its passage. Each excerpt of a generated passage
   must come from the selection. An explicit drawing gets at most one correction for invalid
   output, including an all-symbol response to an explicit Draw request.
-  An optional visual review sends a local PNG of the first drawing and
-  its validated geometry to the same connection with the passage and guidance.
-  Accept only geometry revisions preserving the parts, stages and source text.
-  A failed review can keep the first drawing. Save SVG exports the current stage as inert, standalone geometry.
+  Optional handles bind source-quoted straight or turning gestures to groups of original parts.
+  Optional animation has 1–8 locally interpolated tracks on a single 0.5–60 second
+  playback clock. Dragging a handle that the clock drives pauses on the nearest
+  matching part of the journey, including the return trip or a hold. Other
+  handles remain adjustable during playback. Translations add,
+  rotations share one owner per part, and independent level/opacity effects multiply.
+  Every track changes, covers the full duration and closes its seam if looping.
+  Start paused. Stop when hidden, detached or offscreen. Reduced motion plays at
+  most one pass on request. Scrubbing freezes the pose. Previously saved stages
+  and linked views have local playback. A saved scene plays through its stage
+  quantities and traces authored flows along their arrows, including the narrow
+  list layout. A scene bound to a custom control plays only the selected stage.
+  A planner may request drag, play or both
+  on its existing connection; validate that promise before insertion or streaming
+  a drawing and allow at most one drawing correction. Check source quotes in one
+  continuous excerpt. The optional review sends up to four labelled representative
+  poses in one bounded local PNG, validated geometry, passage and guidance to
+  the same connection. Preserve authored parts, stages, controls, motion and
+  source text in geometry revisions. A failed review can keep the first drawing. Save SVG exports
+  the current pose as inert geometry, excluding control handles. Print preserves
+  individual endpoints and representative animation poses with readable captions.
   The note's part question opens a draft in that Space and conversation.
   Optional evidence on any document associates claims with literal excerpts.
   Indicate missing excerpts. Matching a quote establishes its location only.
@@ -539,10 +563,20 @@ These product decisions are intentional:
   Recipe shopping lists insert ordinary tasks only on the reader's explicit
   action. Saved artifacts remain usable offline. Both the renderer and MCP
   enforce the extended v1 contract before inserting a new document.
+  Motion paths support optional strokeWidth (0.25–4) and fillOpacity (0–1) for line hierarchy and translucent layers.
   Cycle and linkedViews share one local position for every animated mark and phase.
   Cyclic keyframes return to the initial pose. Argument dependencies point only
   backward to distinct premises or prior conclusions; withholding a premise affects
-  dependent support, and does not establish that a conclusion is false. Scale zoom
+  dependent support. An argument's optional reading mixes fixed paragraphs with
+  whole-paragraph variants keyed to supported premise or conclusion IDs. Choose
+  the matching variant with the most required claims, breaking ties in authored
+  order, or use that paragraph's fallback. A null fallback omits that paragraph.
+  Generate this reading for new Argument
+  Explorers. Toggling premises recomputes the reading locally, including indirect
+  and alternative support. Preserve the original passage and source quotations.
+  Static exports include the variants and their conditions. Older arguments
+  assemble the reading from their granted stated premises and supported
+  conclusions. Withdrawing a premise updates their reading offline. Scale zoom
   compares positive lengths in compatible units. Deep time maps a stated duration
   onto 24 hours and distinguishes its start from its end. Use the same validators
   and readable snapshots across MCP, Chat, note rendering and export. Match quoted

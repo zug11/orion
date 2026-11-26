@@ -5,6 +5,11 @@ import { providerCallScheduler } from "./providerScheduler";
 import { chatWithOrion, deleteApiKey, deleteAnthropicApiKey, saveApiKey, saveAnthropicApiKey } from "./storage";
 import { generatePassageIllustration, generateVisualArtifact } from "./visualArtifactGeneration";
 import { readVisualArtifactMarker, visualArtifactMarker } from "./visualArtifactMarkdown";
+import compositions from "./fixtures/mcpVisualCompositions.json";
+import argumentsFixture from "./fixtures/mcpVisualArgument.json";
+import drawings from "./fixtures/mcpVisualDrawingDynamics.json";
+import { parseArtifactArgument } from "./artifactArgument";
+import { parseArtifactIllustration } from "./artifactIllustration";
 import { type VisualArtifact } from "./visualArtifacts";
 
 const invoke = vi.hoisted(() => vi.fn());
@@ -37,6 +42,90 @@ afterEach(async () => {
 });
 
 describe("Visualise through the saved connection", () => {
+  it.each([model, "claude-sonnet-5"])("fulfils an auto planner's drag-and-play brief on %s, repairing a static draft once", async selectedModel => {
+    const visual = drawings[0].artifact, drawing = parseArtifactIllustration(visual.blocks[0]), passage = drawing.passage;
+    const plan = {...visual, blocks: [{kind: "drawingRequest", description: "Show the microphone routing.", interaction:"dragAndPlay"}]};
+    const {animation: _animation, ...still} = drawing;
+    const packets: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url, opts) => {
+      if (String(url).endsWith("/models")) return Response.json({data:[{id:"gpt-6.2-astra"}]});
+      const body = JSON.parse(opts.body);
+      const packet = JSON.parse(body.input ?? body.messages[0].content);
+      packets.push(packet);
+      if (packet.drawing) expect(body.model).toBe(selectedModel === model ? "gpt-6.2-astra" : selectedModel);
+      const candidate = !packet.drawing ? plan : packet.correction ? visual : {...visual,blocks:[still]};
+      const text = JSON.stringify({reply:JSON.stringify(candidate)});
+      return Response.json(selectedModel === model ? {status:"completed",output_text:text} : {stop_reason:"end_turn",content:[{type:"text",text}]});
+    }));
+    const result = await generateVisualArtifact(passage,"auto","",{...selected, model: selectedModel},freshSignal());
+    expect(readVisualArtifactMarker(visualArtifactMarker(result))).toEqual(visual);
+    expect(packets).toHaveLength(3);
+    expect(packets[1]).toMatchObject({source:passage,interaction:"dragAndPlay",drawing:true});
+    expect(packets[2]).toMatchObject({source:passage,interaction:"dragAndPlay",correction:expect.stringContaining("animation")});
+  });
+  it("routes a direct animation request to the drawing engine and refuses a still substitute after one repair", async () => {
+    const visual = drawings[1].artifact, {animation: _animation, ...still} = parseArtifactIllustration(visual.blocks[0]);
+    const calls = mockReply(JSON.stringify({...visual,blocks:[still]}));
+    await expect(generateVisualArtifact(still.passage,"auto","Animate the bridge",{...selected,model:"claude-sonnet-5"},freshSignal())).rejects.toThrow("time-keyed");
+    expect(calls).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(JSON.parse(calls.mock.calls[0][1]!.body as string).messages[0].content).interaction).toBe("play");
+  });
+  it.each(compositions.slice(0, 2))("accepts a bespoke provider design through unguided Generate for me: $name", async ({ artifact: designed, source: passage }) => {
+    const fetch = mockReply(JSON.stringify(designed));
+    const result = await generateVisualArtifact(passage!, "auto", "", selected, freshSignal());
+    expect(readVisualArtifactMarker(visualArtifactMarker(result))).toEqual(designed);
+    const body = JSON.parse(fetch.mock.calls[0][1]!.body as string);
+    expect(JSON.parse(body.input)).toMatchObject({ source: passage, format: "auto", guidance: "" });
+    expect(body.instructions).toContain('format "custom"');
+  });
+  it("repairs an invalid custom binding once on the same connection and keeps explicit presets authoritative", async () => {
+    const { artifact: designed, source: passage } = compositions[0];
+    const invalid = { ...designed, layout: { ...designed.layout, rows: [[{ block: 99 }]] } };
+    const transport = mockReply(JSON.stringify(designed));
+    const badReply = () => Response.json({ status: "completed", output_text: JSON.stringify({ reply: JSON.stringify(invalid) }) });
+    transport.mockResolvedValueOnce(badReply());
+    const run = () => generateVisualArtifact(passage!, "auto", "", selected, freshSignal());
+    expect(await run()).toEqual(designed);
+    const retry = JSON.parse(transport.mock.calls[1][1]!.body as string);
+    expect(JSON.parse(retry.input)).toMatchObject({ format: "custom", source: passage, guidance: "", correction: expect.stringContaining("index") });
+    transport.mockClear().mockImplementation(async () => badReply());
+    await expect(run()).rejects.toThrow(/custom layout/);
+    expect(transport).toHaveBeenCalledTimes(2);
+    transport.mockClear();
+    await expect(generateVisualArtifact(passage!, "timeline", "", selected, freshSignal())).rejects.toThrow();
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+  it("gives an unguided prose-only or inert custom design one chance to supply a passage-specific interaction", async () => {
+    const {artifact: designed,source: passage} = compositions[1];
+    const plain = {version:1,format:"explainer",title:"A reading",blocks:[{kind:"text",text:"Both records remain."}]};
+    for (const first of [plain, {...plain,format:"custom",layout:{controls:[{label:"Read",options:["A","B"]}],
+      rows:[[{control:0}],[{readout:0,label:"Finding",values:["Identical","Identical"]}],[{block:0}]]}}]) {
+      const transport = mockReply(JSON.stringify(designed));
+      transport.mockResolvedValueOnce(Response.json({status:"completed",output_text:JSON.stringify({reply:JSON.stringify(first)})}));
+      expect(await generateVisualArtifact(passage!,"auto","",selected,freshSignal())).toEqual(designed);
+      expect(transport).toHaveBeenCalledTimes(2);
+      const retry = JSON.parse(JSON.parse(transport.mock.calls[1][1]!.body as string).input);
+      expect(retry.correction).toContain("visible consequence");
+    }
+    const explicit = mockReply(JSON.stringify(plain));
+    expect(await generateVisualArtifact(passage!,"explainer","Keep it a short reading",selected,freshSignal())).toEqual(plain);
+    expect(explicit).toHaveBeenCalledTimes(1);
+  });
+  it("asks once for missing adaptive prose in a new argument and round-trips the resulting reading", async () => {
+    const { artifact: library } = argumentsFixture[1];
+    const { reading: _reading, ...legacy } = parseArtifactArgument(library.blocks[0]);
+    const transport = mockReply(JSON.stringify(library));
+    const withoutReading = () => Response.json({ status: "completed", output_text: JSON.stringify({ reply: JSON.stringify({ ...library, blocks: [legacy] }) }) });
+    transport.mockResolvedValueOnce(withoutReading());
+    const generate = () => generateVisualArtifact(legacy.passage, "auto", "", selected, freshSignal());
+    const result = await generate();
+    expect(readVisualArtifactMarker(visualArtifactMarker(result))).toEqual(library);
+    const retry = JSON.parse(transport.mock.calls[1][1]!.body as string);
+    expect(JSON.parse(retry.input)).toMatchObject({ format: "argument", source: legacy.passage, correction: expect.stringContaining("paragraph") });
+    transport.mockClear().mockImplementation(async () => withoutReading());
+    await expect(generate()).rejects.toThrow("paragraph");
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
   it.each([model, "claude-sonnet-5"])("uses one scheduled %s call for the actual selection, format and guidance", async model => {
     const transport = mockReply(JSON.stringify(artifact));
     const scheduler = vi.spyOn(providerCallScheduler, "run");
