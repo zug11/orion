@@ -1,0 +1,39 @@
+.artifact-motion { display: grid; gap: 14px; }
+.artifact-motion__views { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: stretch; }
+.artifact-motion[data-mode="cycle"] .artifact-motion__views { grid-template-columns: minmax(0, 1fr) minmax(84px, 24%); }
+.artifact-motion__views figure {
+  margin: 0;
+  padding: 10px;
+  background: var(--surface-2);
+  border-radius: 10px;
+  display: grid;
+  align-content: center;
+  min-width: 0;
+}
+.artifact-motion__diagram { display: block; width: 100%; height: auto; max-height: 240px; }
+.artifact-motion__diagram [data-tone="accent"] { color: var(--va-accent, #7464ac); }
+.artifact-motion__diagram [data-tone="cool"] { color: var(--va-cool, #357961); }
+.artifact-motion__diagram [data-tone="warm"] { color: var(--va-warm, #936924); }
+.artifact-motion__diagram [data-tone="rose"] { color: var(--rose, #aa5b70); }
+.artifact-motion__diagram [data-tone="neutral"] { color: var(--text-soft, #576174); }
+.artifact-motion__diagram [data-tone="ground"] { color: var(--muted, #76818b); }
+.artifact-motion__views figcaption { text-align: center; color: var(--text-soft); font-size: .85em; }
+.artifact-motion[data-mode="linkedViews"] figure { touch-action: pan-y; cursor: ew-resize; user-select: none; }
+.artifact-motion__dial-control { align-self: center; display: grid; gap: 6px; justify-items: center; }
+.artifact-motion__dial { width: min(100%, 100px); aspect-ratio: 1; cursor: grab; touch-action: none; }
+.artifact-motion__dial:active { cursor: grabbing; }
+.artifact-motion__control { min-width: 0; display: grid; gap: 5px; }
+.artifact-motion__control > div { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; }
+.artifact-motion__control output { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text-soft); }
+.artifact-motion__control input { width: 100%; accent-color: var(--va-accent); margin: 0; }
+.artifact-motion__control small { color: var(--muted); }
+.artifact-motion__phases { display: flex; flex-wrap: wrap; gap: 4px; }
+.artifact-motion__phases button { padding: 3px 9px; background: var(--surface-2); text-align: start; }
+.artifact-motion__phases button[aria-pressed="true"] { box-shadow: inset 0 0 0 1px var(--va-accent); color: var(--va-accent); }
+.artifact-motion .artifact-motion__caption { margin: 0; }
+.artifact-motion__source summary { color: var(--text-soft); font-size: .9em; cursor: pointer; }
+.artifact-motion__source blockquote { white-space: pre-line; color: var(--text-soft); margin: 6px 0 0; padding: 4px 10px; border-inline-start: 2px solid var(--line-strong); }
+.artifact-motion__source mark { background: color-mix(in srgb, var(--va-warm) 28%, transparent); color: var(--text); }
+@container (max-width: 370px) {
+  .artifact-motion[data-mode="linkedViews"] .artifact-motion__views { grid-template-columns: 1fr; }
+}

@@ -49,6 +49,8 @@ Successful receipts contain updated versions and exact Orion citations.
 
 ## Insert an interactive visualisation
 
+The artifact tool accepts cycle, linkedViews, argument, scaleZoom and deepTime document formats. Each requires a matching validated block. These blocks can also be combined in an explainer. Inspect the tool’s input schema for keyframe, premise dependency, length unit and clock event fields.
+
 Call `orion_insert_visual_artifact` with an existing note's current version from
 `orion_get_notes`. For example, this calculator lets the reader vary the rate
 at which water fills a 20-litre container.

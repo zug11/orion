@@ -5,7 +5,9 @@ void main(){
  if(radius>1.+aa){
   // Research motion carries activity; no circling progress outline.
   float glow=exp(-(radius-1.)*24.)*.035*(1.-smoothstep(1.08,1.22,radius));
-  gl_FragColor=vec4(dye(.4),glow*uOpacity);return;
+  vec3 halo=dye(.4);
+  if(uLight>.5)halo=mix(vec3(1.),halo,.15);
+  gl_FragColor=vec4(halo,glow*uOpacity);return;
  }
  float z=sqrt(max(0.,1.-dot(xy,xy)));
  vec3 p=vec3(xy,z),n=normalize(p);
@@ -25,5 +27,14 @@ void main(){
  else c=material9(p,n,t);
  c*=1.+uLevel*.12;c+=uSecondary*uReceiving*.18*pow(1.-z,1.5);
  c=max(c,vec3(0.));c=c/(vec3(1.)+c*.32);c=pow(c,vec3(.89));
- gl_FragColor=vec4(mix(c,vec3(1.),.07*uLight),mask*uOpacity*opacity*(1.-.12*uLight));
+ if(uLight>.5){
+  // Paint every material, including its darkest cloud and rim, between
+  // a pastel accent and pearl. Preserve the material's moving detail as relief.
+  float relief=smoothstep(.02,.75,dot(c,vec3(.2126,.7152,.0722)));
+  float edge=pow(1.-z,1.4);
+  vec3 pastel=mix(vec3(1.),clamp(uPrimary,0.,1.),.20);
+  vec3 pearl=mix(vec3(1.),clamp(uSecondary,0.,1.),.025);
+  c=mix(pastel,pearl,clamp(.18+.76*relief+.13*z-.25*edge,0.,1.));
+ }
+ gl_FragColor=vec4(c,mask*uOpacity*opacity*(1.-.12*uLight));
 }

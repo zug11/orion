@@ -3,7 +3,7 @@ import { ARTIFACT_FORMATS, type ArtifactFormat, type VisualArtifact } from "./vi
 
 type Format = ArtifactFormat | "auto";
 export function chatVisualSuggestion(reply: string): { reply: string; format?: Format } {
-  const match = /(?:^|\n)\s*\[\[visualise:([a-z]+)\]\]\s*$/u.exec(reply);
+  const match = /(?:^|\n)\s*\[\[visualise:([a-zA-Z]+)\]\]\s*$/u.exec(reply);
   if (!match) return { reply };
   const clean = reply.slice(0, match.index).trimEnd();
   const format = match[1] as Format;
@@ -20,6 +20,11 @@ export function describedChatVisual(visual: VisualArtifact): string {
         ...block.inputs.map(input => input.label + " " + input.initial + input.unit + " (" + input.min + " to " + input.max + ")"),
         ...block.outputs.map(output => output.label + " = " + JSON.stringify(output.expression)),
       ].join("; ");
+      case "argument": return block.conclusions.map(item => item.text).join("; ");
+      case "cycle":
+      case "linkedViews": return block.phases.map(phase => phase.label + " · " + phase.caption).join("; ");
+      case "scaleZoom": return block.items.map(item => item.label + " · " + item.size + " " + item.unit).join("; ");
+      case "deepTime": return block.events.map(event => event.label).join("; ");
       case "illustration": return block.parts.filter(part => part.selectable).map(part => part.name).join(", ");
       case "scene": return block.frames.map(frame => frame.label + " · " + frame.caption).join("; ");
       case "steps": return block.items.map(item => item.label + " · " + item.heading).join("; ");

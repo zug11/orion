@@ -83,21 +83,38 @@ pub(super) fn definitions() -> Value {
     );
     let document = object(
         json!({"version":{"type":"integer","const":1},"title":string(160),"summary":string(600),"evidence":evidence,
-        "format":{"type":"string","enum":["timeline","explainer","quiz","comparison","flashcards","calculator"]},
+        "format":{"type":"string","enum":["timeline","explainer","quiz","comparison","flashcards","calculator","cycle","linkedViews","argument","scaleZoom","deepTime"]},
         "blocks":array(json!({"$ref":"#/$defs/block"}),1,12)}),
         &["version", "format", "title", "blocks"],
     );
+    let mut blocks = vec![
+        tagged(
+            "text",
+            json!({"heading":string(160),"text":string(2000)}),
+            &["text"],
+        ),
+        tagged("steps", json!({"items":array(step,1,24)}), &["items"]),
+        tagged(
+            "table",
+            json!({"columns":array(blank_text(100),2,6),"rows":array(array(blank_text(400),2,6),1,24)}),
+            &["columns", "rows"],
+        ),
+        tagged("quiz", json!({"items":array(question,1,20)}), &["items"]),
+        tagged("cards", json!({"items":array(card,1,32)}), &["items"]),
+        calculator,
+        super::visual_artifact_illustration_schema::definition(),
+        tagged(
+            "scene",
+            json!({"nodes":array(node,1,8),"frames":array(frame,1,12)}),
+            &["nodes", "frames"],
+        ),
+    ];
+    blocks.extend(super::visual_artifact::cycle_link::definitions());
+    blocks.push(super::visual_artifact::argument::definition());
+    blocks.extend(super::visual_artifact::scale_time::definitions());
     json!({
         "visualArtifact":document,
-        "block":{"oneOf":[
-            tagged("text",json!({"heading":string(160),"text":string(2000)}),&["text"]),
-            tagged("steps",json!({"items":array(step,1,24)}),&["items"]),
-            tagged("table",json!({"columns":array(blank_text(100),2,6),"rows":array(array(blank_text(400),2,6),1,24)}),&["columns","rows"]),
-            tagged("quiz",json!({"items":array(question,1,20)}),&["items"]),
-            tagged("cards",json!({"items":array(card,1,32)}),&["items"]),
-            calculator, super::visual_artifact_illustration_schema::definition(),
-            tagged("scene",json!({"nodes":array(node,1,8),"frames":array(frame,1,12)}),&["nodes","frames"])
-        ]},
+        "block":{"oneOf":blocks},
         "illustrationShape":super::visual_artifact_illustration_schema::shape_definition(),
         "shape":{"oneOf":[
             tagged("path",json!({"d":string(1200),"fill":paint,"stroke":paint}),&["d","fill","stroke"]),

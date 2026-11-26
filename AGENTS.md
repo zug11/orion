@@ -456,8 +456,7 @@ These product decisions are intentional:
   for me. A chosen format or typed guidance changes it to Generate. Enter
   in the guidance field submits; Shift+Enter adds a line. Cmd/Ctrl+Enter
   submits from the form. Opening the composer spends no provider call.
-  The six formats are Timeline, Explainer, Quiz, Comparison, Flashcards and
-  Calculator. Their blocks can be combined. A scene can draw new subjects from
+  The picker offers Timeline, Explainer, Quiz, Comparison, Flashcards, Calculator, Cycle, Linked views, Argument explorer, Zoom across sizes and Deep time as one day. Their blocks can be combined. A scene can draw new subjects from
   bounded paths, rectangles and circles, with frame-specific values, fills and
   directed connections. The renderer lays out each stage around the objects
   participating in its flows. Place sources to the left of their destinations,
@@ -536,6 +535,14 @@ These product decisions are intentional:
   Recipe shopping lists insert ordinary tasks only on the reader's explicit
   action. Saved artifacts remain usable offline. Both the renderer and MCP
   enforce the extended v1 contract before inserting a new document.
+  Cycle and linkedViews share one local position for every animated mark and phase.
+  Cyclic keyframes return to the initial pose. Argument dependencies point only
+  backward to distinct premises or prior conclusions; withholding a premise affects
+  dependent support, and does not establish that a conclusion is false. Scale zoom
+  compares positive lengths in compatible units. Deep time maps a stated duration
+  onto 24 hours and distinguishes its start from its end. Use the same validators
+  and readable snapshots across MCP, Chat, note rendering and export. Match quoted
+  argument and phase evidence against continuous spans of the selected source.
   Space Chat can progressively display a title and complete validated blocks
   through the saved connection. Persist the final validated marker with the
   reply in its originating conversation. Keep as note includes the marker.
@@ -5441,8 +5448,10 @@ inner frame that turns against the pointer-driven outer frame. During ambient
 motion both materials mirror the shell's animated pitch and yaw through depth.
 Mirage's full pigment pattern moves in that same frame. These shaders live in
 `src/components/voiceShaders`. Resolve colours from existing Home
-shader settings and the current theme. Light mode lifts colour 7% toward white
-and reduces material alpha 12%; dark mode retains the original material. Mouse
+shader settings and the current theme, including live system appearance changes.
+On light surfaces, map the whole material, including the cloud, rim, workers
+and halo, into a pearl-to-pastel range even for black custom pigments. Light
+materials reduce alpha by 12%. Canvas2D and no-canvas fallbacks also follow the surface. Dark mode retains its material. Mouse
 hover drives pitch and yaw in view space, with bounded momentum that decays
 along the last axis of motion, including after pointer exit. Integrate opposite
 increments for the shell and the slower interior. Apply the two rotations only

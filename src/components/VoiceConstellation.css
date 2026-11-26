@@ -14,3 +14,8 @@
 .voice-constellation--expanded[data-rendering="fallback"]::before { width: var(--voice-fallback-diameter); height: auto; aspect-ratio: 1; inset: auto; left: 50%; top: 48%; transform: translate(-50%, -50%); }
 .voice-constellation[data-status="disconnected"] { filter: saturate(.25); }
 @media (prefers-contrast: more) { .voice-constellation[data-muted="true"] { opacity: .7; } }
+
+[data-theme="light"] .voice-constellation[data-rendering="fallback"]::before {
+  background: radial-gradient(ellipse at 35% 28%, white, color-mix(in srgb, var(--periwinkle) 8%, white) 50%, color-mix(in srgb, var(--periwinkle) 20%, white));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--periwinkle) 18%, white);
+}

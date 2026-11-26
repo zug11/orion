@@ -1,3 +1,4 @@
+import { artifactFormatNames } from "../lib/visualArtifacts";
 import { readVisualArtifactMarker } from "../lib/visualArtifactMarkdown";
 import { visualFollowUp } from "../lib/chatVisualIntent";
 import { VisualArtifactView } from "./VisualArtifactView";
@@ -558,7 +559,7 @@ export function ChatView({
             {visualPreview.artifact ? <VisualArtifactView artifact={visualPreview.artifact} />
               : visualPreview.heading && <section className="visual-artifact" aria-busy="true" aria-label={visualPreview.heading.title}>
                 <header className="visual-artifact__header">
-                  <span className="visual-artifact__format"><Layers3 size={14} />{visualPreview.heading.format}</span>
+                  <span className="visual-artifact__format"><Layers3 size={14} />{artifactFormatNames[visualPreview.heading.format]}</span>
                   <h3>{visualPreview.heading.title}</h3>
                   {visualPreview.heading.summary && <p>{visualPreview.heading.summary}</p>}
                 </header>

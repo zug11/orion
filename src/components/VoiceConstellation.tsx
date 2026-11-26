@@ -34,6 +34,7 @@ export interface VoiceConstellationProps {
 type RGB = readonly [number, number, number];
 const blend = (a: RGB, b: RGB, amount: number): RGB => a.map((value, index) => Math.round(value + (b[index] - value) * amount)) as unknown as RGB;
 const color = (rgb: RGB, alpha = 1) => `rgba(${rgb.join(",")},${alpha})`;
+const white: RGB = [255, 255, 255];
 const workerTint: RGB[] = [[115, 211, 204], [223, 179, 132], [174, 156, 235], [218, 128, 147], [138, 176, 230], [195, 207, 133]];
 function workerLabel(job: VoiceWorkOrder) {
   if (job.state !== "running") return job.state === "completed" && job.result ? "Open worker conversation" : job.state;
@@ -85,6 +86,7 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
     let shaderTime = 0, shaderAt = 0;
     let paletteSettings: Settings | undefined, paletteMode = "";
     let glassPalette: ReturnType<typeof resolveAtmospherePalette> | null = null;
+    const systemLight = matchMedia("(prefers-color-scheme: light)");
     const motionPreference = matchMedia("(prefers-reduced-motion: reduce)"), contrastPreference = matchMedia("(prefers-contrast: more)");
     let reduced = motionPreference.matches, contrast = contrastPreference.matches, visible = true;
     let animation = 0, paintedAt = 0, paletteAt = -Infinity, palette = cssPalette(element);
@@ -120,7 +122,8 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
       shaderAt = now;
       if (!reduced && !current.ambientPaused) shaderTime += dt;
       const settings=current.settings;
-      const mode=settings ? resolveThemeMode(settings.theme,matchMedia('(prefers-color-scheme: light)').matches) : 'dark';
+      const appearance = settings?.theme ?? element.closest<HTMLElement>("[data-theme]")?.dataset.theme;
+      const mode = resolveThemeMode(appearance === "dark" || appearance === "light" ? appearance : "system", systemLight.matches);
       if(settings && (settings!==paletteSettings || mode!==paletteMode)){
         glassPalette=resolveAtmospherePalette(settings.homeAtmosphere,settings.homeAtmosphereTone,resolveThemePalette(settings,mode),settings.homeAtmosphereCustomColor,settings.homeAtmosphereCustomSecondaryColor);
         paletteSettings=settings;paletteMode=mode;
@@ -151,22 +154,31 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
         if (shader && glassPalette && !contrast && shader.glass.draw(context, point, glassPalette,
           shaderTime, shader.rotation, main, stretch, main ? 1 : opacity, glow, angle, current.settings?.voiceOrbStyle)) return;
         const { radius } = point;
+        const pastel = mode === "light" ? blend(rgb, white, .80) : rgb;
         context.save(); context.translate(point.x, point.y); context.rotate(angle); context.scale(1 / Math.sqrt(stretch), Math.sqrt(stretch)); context.globalAlpha = opacity;
         // The approved gravity study has a softly illuminated volume even at
         // rest. Audio adds expression; it is not needed to reveal the material.
         if (!contrast) {
           const halo = context.createRadialGradient(0, 0, radius * .55, 0, 0, radius * 2.2);
-          halo.addColorStop(0, color(rgb, (focused ? .33 : .10) + glow * .3)); halo.addColorStop(1, color(rgb, 0));
+          halo.addColorStop(0, color(pastel, (focused ? .33 : .10) + glow * .3)); halo.addColorStop(1, color(pastel, 0));
           context.fillStyle = halo; context.beginPath(); context.arc(0, 0, radius * 2.2, 0, Math.PI * 2); context.fill();
         }
         const body = context.createRadialGradient(-radius * .34, -radius * .42, radius * .03, radius * .26, radius * .38, radius * 1.42);
-        body.addColorStop(0, color(blend(rgb, palette.highlight, .82))); body.addColorStop(.24, color(blend(rgb, palette.highlight, .28)));
-        body.addColorStop(.61, color(rgb)); body.addColorStop(.88, color(blend(rgb, palette.shadow, contrast ? .90 : .72))); body.addColorStop(1, color(palette.shadow));
+        if (mode === "light") {
+          body.addColorStop(0, color(blend(pastel, white, .93)));
+          body.addColorStop(.34, color(blend(pastel, white, .64)));
+          body.addColorStop(.75, color(blend(pastel, white, .27)));
+          body.addColorStop(1, color(pastel));
+        } else {
+          body.addColorStop(0, color(blend(rgb, palette.highlight, .82))); body.addColorStop(.24, color(blend(rgb, palette.highlight, .28)));
+          body.addColorStop(.61, color(rgb)); body.addColorStop(.88, color(blend(rgb, palette.shadow, contrast ? .90 : .72))); body.addColorStop(1, color(palette.shadow));
+        }
         context.fillStyle = body; context.beginPath(); context.arc(0, 0, radius, 0, Math.PI * 2); context.fill();
         if (!small) {
           context.rotate(-.4);
           const shine = context.createRadialGradient(-radius * .15, -radius * .59, 0, -radius * .15, -radius * .59, radius * .65);
-          shine.addColorStop(0, color(palette.highlight, .42)); shine.addColorStop(1, color(palette.highlight, 0));
+          const shineColor = mode === "light" ? white : palette.highlight;
+          shine.addColorStop(0, color(shineColor, .42)); shine.addColorStop(1, color(shineColor, 0));
           context.fillStyle = shine; context.beginPath(); context.ellipse(-radius * .12, -radius * .57, radius * .65, radius * .22, 0, 0, Math.PI * 2); context.fill();
         }
         context.restore();
@@ -174,11 +186,12 @@ export function VoiceConstellation(props: VoiceConstellationProps) {
       const tint = (slot: number) => blend(palette.body, workerTint[slot % workerTint.length], [.34, .52, .45, .36, .35, .35][slot % workerTint.length]);
       const ring = (point: OrbCircle, rgb: RGB, slot: number) => {
         const radius = point.radius + (sidebar ? 1 : small ? 2 : 4);
+        const ringColor = mode === "light" ? blend(rgb, white, .80) : rgb;
         const angle = reduced ? -.8 : scene.phase * 1.7 + slot * .65;
         context.save(); context.lineWidth = sidebar ? 1 : small ? 1.4 : 2; context.lineCap = "round";
-        context.strokeStyle = color(rgb, contrast ? .5 : .18);
+        context.strokeStyle = color(ringColor, contrast ? .5 : .18);
         context.beginPath(); context.arc(point.x, point.y, radius, 0, Math.PI * 2); context.stroke();
-        context.strokeStyle = color(blend(rgb, palette.highlight, .4), contrast ? 1 : .88);
+        context.strokeStyle = color(blend(ringColor, mode === "light" ? white : palette.highlight, .4), contrast ? 1 : .88);
         context.beginPath(); context.arc(point.x, point.y, radius, angle, angle + Math.PI * 1.2); context.stroke(); context.restore();
       };
       const working = new Set(current.jobs.filter(job => job.state === "running" && job.phase !== "queued" && job.phase !== "clarifying").map(job => job.id));

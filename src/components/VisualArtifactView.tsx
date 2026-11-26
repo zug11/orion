@@ -1,8 +1,11 @@
+import { ArtifactMotionView } from "./ArtifactMotionView";
+import { ArtifactScaleTimeView } from "./ArtifactScaleTimeView";
+import { ArtifactArgumentView } from "./ArtifactArgumentView";
 import { memo, useId, useMemo, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import { ArrowLeft, ArrowRight, Check, Layers3 } from '../lib/icons';
 import {
   type ArtifactBlock,
-  type ArtifactFormat,
+  artifactFormatNames,
   type ArtifactShape,
   type VisualArtifact,
 } from '../lib/visualArtifacts';
@@ -14,11 +17,6 @@ import { VisualArtifactTable } from './VisualArtifactTable';
 import './VisualArtifactView.css';
 
 type Block<K extends ArtifactBlock['kind']> = Extract<ArtifactBlock, { kind: K }>;
-
-const formatNames: Record<ArtifactFormat, string> = {
-  timeline: 'Timeline', explainer: 'Explainer', comparison: 'Comparison',
-  quiz: 'Quiz', flashcards: 'Flashcards', calculator: 'Calculator',
-};
 
 function Navigation({ index, count, noun, onChange }: {
   index: number; count: number; noun: string; onChange: (index: number) => void;
@@ -226,6 +224,11 @@ type AddTasks = (tasks: string[]) => boolean;
 
 function RenderBlock({ block, title, onAddTasks, onAskPart }: { block: ArtifactBlock; title: string; onAddTasks?: AddTasks; onAskPart?: (context: string) => void }) {
   switch (block.kind) {
+    case "cycle":
+    case "linkedViews": return <ArtifactMotionView block={block} />;
+    case "argument": return <ArtifactArgumentView block={block} />;
+    case "scaleZoom":
+    case "deepTime": return <ArtifactScaleTimeView block={block} />;
     case 'scene': return <Scene block={block} />;
     case 'steps': return <Steps block={block} />;
     case 'quiz': return <Quiz block={block} />;
@@ -258,7 +261,7 @@ export const VisualArtifactView = memo(function VisualArtifactView({ artifact, o
       aria-labelledby={titleId} contentEditable={false} draggable={false}
       onDragStart={event => event.preventDefault()} onDoubleClick={event => event.stopPropagation()}>
       <header className="visual-artifact__header">
-        <div className="visual-artifact__format"><Layers3 size={14} aria-hidden="true" />{formatNames[artifact.format]}</div>
+        <div className="visual-artifact__format"><Layers3 size={14} aria-hidden="true" />{artifactFormatNames[artifact.format]}</div>
         <h3 id={titleId}>{artifact.title}</h3>
         {artifact.summary && <p>{artifact.summary}</p>}
       </header>

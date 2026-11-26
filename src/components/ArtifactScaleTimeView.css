@@ -1,0 +1,62 @@
+.va-scale-zoom, .va-deep-time { display: grid; gap: 12px; min-width: 0; }
+.va-zoom-window {
+  position: relative;
+  overflow: hidden;
+  border-radius: 9px;
+  background-color: var(--va-surface);
+  background-image: radial-gradient(color-mix(in srgb, var(--va-muted) 24%, transparent) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+.va-zoom-window > svg { width: 100%; height: auto; display: block; }
+.va-zoom-distance, .va-zoom-scale {
+  position: absolute;
+  inset-inline: 14px;
+  color: var(--va-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.va-zoom-distance { top: 10px; text-align: end; }
+.va-zoom-scale { bottom: 9px; left: 0; right: 0; text-align: center; }
+.va-zoom-scale span {
+  display: block; height: 5px; margin: 0 auto 2px; border: solid currentColor; border-width: 0 1px 1px;
+}
+.va-zoom-silhouette { fill: color-mix(in srgb, currentColor 28%, var(--va-surface)); stroke: currentColor; stroke-width: 1.7px; stroke-linejoin: round; }
+.va-zoom-measure { stroke-width: 3px; fill: none; stroke-linecap: round; }
+.va-scale-options { display: flex; flex-wrap: wrap; gap: 5px; }
+.visual-artifact .va-scale-options button, .visual-artifact .va-time-events button {
+  background: transparent; border: 1px solid var(--line); color: var(--va-ink); padding: 5px 9px; text-align: start;
+}
+.visual-artifact .va-scale-options button[aria-pressed=true], .visual-artifact .va-time-events button[aria-pressed=true] {
+  background: color-mix(in srgb, var(--va-accent) 11%, transparent); border-color: var(--va-trace);
+}
+.va-scale-swatch { display: inline-block; width: 7px; height: 7px; margin-inline-end: 6px; border-radius: 50%; vertical-align: middle; }
+.va-scale-reading, .va-time-detail { padding: 10px 12px; border-radius: 6px; background: var(--va-surface); }
+.va-scale-reading p, .visual-artifact p.va-time-detail, .visual-artifact p.va-time-units { margin: 0; }
+.va-scale-reading div, .va-time-readout span, .va-time-units { color: var(--va-muted); }
+.va-scale-range, .va-time-range { display: grid; gap: 4px; }
+.va-scale-range input, .va-time-range input { display: block; width: 100%; min-width: 0; margin: 0; accent-color: var(--va-accent); cursor: pointer; }
+.va-time-grid { display: grid; grid-template-columns: minmax(150px, 0.95fr) minmax(160px, 1.2fr); align-items: center; gap: 14px; }
+.va-time-grid > div { min-width: 0; }
+.va-time-dial { display: block; width: min(100%, 270px); height: auto; margin: auto; touch-action: none; cursor: crosshair; }
+.va-time-rim { fill: var(--va-surface); stroke: var(--line-strong); }
+.va-time-tick { stroke: var(--va-muted); }
+.va-time-dial text { fill: var(--va-muted); font: 9px var(--ui-font); }
+.va-time-hand { stroke: var(--va-trace); stroke-width: 2.5; }
+.va-time-pin { fill: var(--va-trace); }
+.va-time-readout { display: grid; text-align: center; font-variant-numeric: tabular-nums; }
+.va-time-readout strong { font-size: 21px; }
+.va-time-readout span, .va-time-units, .va-time-range-labels { font-size: 12px; }
+.va-time-events { display: grid; gap: 4px; }
+.visual-artifact .va-time-events button { display: grid; grid-template-columns: 8px minmax(0,1fr) auto; gap: 7px; align-items: center; }
+.va-time-events time { white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 12px; color: var(--va-muted); }
+.va-time-range-control { position: relative; display: block; padding-bottom: 9px; }
+.va-time-range-marks { position: absolute; height: 6px; left: 7px; right: 7px; bottom: 0; pointer-events: none; }
+.va-time-range-marks i { position: absolute; width: 2px; height: 5px; }
+.va-time-range-labels { display: flex; justify-content: space-between; color: var(--va-muted); font-variant-numeric: tabular-nums; }
+@container (max-width: 395px) {
+  .va-time-grid { grid-template-columns: 1fr; gap: 8px; }
+  .va-time-dial { width: min(100%, 220px); }
+}
+.va-time-range input[data-outside=true]:not(:focus-visible)::-webkit-slider-thumb { opacity: 0; }
+.va-time-range input[data-outside=true]:not(:focus-visible)::-moz-range-thumb { opacity: 0; }

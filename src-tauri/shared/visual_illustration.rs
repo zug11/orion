@@ -65,7 +65,7 @@ fn boolean(v: &Value) -> Result<bool, String> {
         .ok_or_else(|| invalid("expected a boolean drawing option"))
 }
 
-fn path(value: &Value, (width, height): Size) -> Result<(), String> {
+pub(crate) fn path(value: &Value, (width, height): Size) -> Result<(), String> {
     let error =
         || invalid("invalid illustration path; use explicit absolute commands within the canvas");
     let mut input = literal(value, 4000, false)?.trim_matches(js_space);

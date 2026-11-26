@@ -1,3 +1,6 @@
+import { ArtifactMotionSnapshot } from "../components/ArtifactMotionView";
+import { ArtifactScaleTimeSnapshot } from "../components/ArtifactScaleTimeView";
+import { ArtifactArgumentSnapshot } from "../components/ArtifactArgumentView";
 import { ArtifactIllustrationSnapshot } from "../components/ArtifactIllustrationView";
 import { outputText, calculatorExplanationText, expressionWorking } from "./visualArtifactCalculator";
 import { VisualArtifactTable } from "../components/VisualArtifactTable";
@@ -7,6 +10,11 @@ import { formatArtifactQuantity } from "./visualArtifactQuantity";
 
 function StaticBlock({ block }: { block: ArtifactBlock }) {
   switch (block.kind) {
+    case "cycle":
+    case "linkedViews": return <ArtifactMotionSnapshot block={block} />;
+    case "argument": return <ArtifactArgumentSnapshot block={block} />;
+    case "scaleZoom":
+    case "deepTime": return <ArtifactScaleTimeSnapshot block={block} />;
     case "text": return <div>{block.heading && <h4>{block.heading}</h4>}<p>{block.text}</p></div>;
     case "steps": return <ol>{block.items.map((step, i) =>
       <li key={i}><strong>{step.label} · {step.heading}</strong><p>{step.text}</p></li>)}</ol>;

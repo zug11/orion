@@ -58,7 +58,7 @@ export async function generateVisualArtifact(
 }
 
 export function asksForIllustration(guidance: string): boolean {
-  if (/\b(?:chart|graph|calculator|quiz|flashcards?|timeline|flowchart|comparison table)\b/iu.test(guidance)) return false;
+  if (/\b(?:chart|graph|calculator|quiz|flashcards?|timeline|flowchart|comparison table|cycle|linked views|argument explorer|zoom across sizes|deep time)\b/iu.test(guidance)) return false;
   return /\b(?:draw|sketch|illustrate|svg|illustration|picture|drawing|cutaway|cross[- ]section)\b/iu.test(guidance)
     && !/\b(?:don['’]t|do not|without|avoid|no)\s+(?:an?\s+)?(?:draw(?:ing)?|sketch|illustrat(?:e|ion)|svg|picture)\b/iu.test(guidance);
 }
@@ -78,8 +78,15 @@ function checkSource(artifact: VisualArtifact, selection: VisualSelection) {
     }
   };
   for (const block of artifact.blocks) {
+    if ("passage" in block && !matchesSelectionPassage(selection, block.passage)) {
+      throw new Error("The visual’s passage differs from the selected text.");
+    }
+    if (block.kind === "cycle" || block.kind === "linkedViews") block.phases.forEach(phase => checkQuote(phase.quote));
+    if (block.kind === "argument") {
+      block.premises.forEach(item => { if ("quote" in item && item.quote) checkQuote(item.quote); });
+      block.conclusions.forEach(item => checkQuote(item.quote));
+    }
     if (block.kind === "illustration") {
-      if (!matchesSelectionPassage(selection, block.passage)) throw new Error("The illustration's passage differs from the selected text.");
       for (const part of block.parts) if (part.quote) checkQuote(part.quote);
     }
   }

@@ -5,9 +5,12 @@ use serde::Serialize;
 use serde_json::Value;
 use std::{collections::HashSet, io};
 
+pub(super) mod argument;
 mod calculator;
 #[path = "../../../../shared/visual_input.rs"]
 mod checks;
+pub(super) mod cycle_link;
+pub(super) mod scale_time;
 pub(super) use checks::illustration;
 use checks::{fields, invalid, js_space, list, literal, number};
 
@@ -250,6 +253,9 @@ fn block(value: &Value) -> Result<(), String> {
                 text_field(item, "back", 1200)?;
             }
         }
+        Some("cycle" | "linkedViews") => cycle_link::validate(value)?,
+        Some("argument") => argument::validate(value)?,
+        Some("scaleZoom" | "deepTime") => scale_time::validate(value)?,
         Some("illustration") => illustration::validate(value)?,
         Some("scene") => scene(value)?,
         Some("calculator") => calculator::validate(value)?,
@@ -283,7 +289,9 @@ pub(super) fn validated_marker(value: &Value) -> Result<String, String> {
         Some("quiz") => Some("quiz"),
         Some("comparison") => Some("table"),
         Some("flashcards") => Some("cards"),
-        Some("calculator") => Some("calculator"),
+        Some(
+            kind @ ("calculator" | "cycle" | "linkedViews" | "argument" | "scaleZoom" | "deepTime"),
+        ) => Some(kind),
         _ => return Err(invalid("unknown format")),
     };
     text_field(value, "title", 160)?;
@@ -359,19 +367,23 @@ mod tests {
 
     #[test]
     fn accepts_and_rejects_the_same_documents_as_the_renderer() {
-        let cases: Value = serde_json::from_str(include_str!(
-            "../../../../../src/lib/fixtures/mcpVisualArtifacts.json"
-        ))
-        .unwrap();
-        for case in cases.as_array().unwrap() {
-            let result = validated_marker(&case["artifact"]);
-            assert_eq!(
-                result.is_ok(),
-                case["valid"].as_bool().unwrap(),
-                "{}: {:?}",
-                case["name"],
-                result.err()
-            );
+        for source in [
+            include_str!("../../../../../src/lib/fixtures/mcpVisualArtifacts.json"),
+            include_str!("../../../../../src/lib/fixtures/mcpVisualMotion.json"),
+            include_str!("../../../../../src/lib/fixtures/mcpVisualArgument.json"),
+            include_str!("../../../../../src/lib/fixtures/mcpVisualScaleTime.json"),
+        ] {
+            let cases: Vec<Value> = serde_json::from_str(source).unwrap();
+            for case in cases {
+                let result = validated_marker(&case["artifact"]);
+                assert_eq!(
+                    result.is_ok(),
+                    case["valid"].as_bool().unwrap(),
+                    "{}: {:?}",
+                    case["name"],
+                    result.err()
+                );
+            }
         }
     }
 

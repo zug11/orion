@@ -1,10 +1,19 @@
+import { invalid, object, list, literal, oneOf, finite } from "./artifactValidation";
+import { parseArtifactMotion, type ArtifactMotion } from "./artifactMotion";
+import { parseArtifactArgument, type ArtifactArgument } from "./artifactArgument";
+import { parseArtifactDeepTime, parseArtifactScaleZoom, type ArtifactDeepTime, type ArtifactScaleZoom } from "./artifactScaleTime";
 import { parseArtifactIllustration, type ArtifactIllustration } from "./artifactIllustration";
 import { parseArtifactFlow, type ArtifactFlow } from "./visualArtifactFlow";
 
 /** Versioned data shared by generated and saved note artifacts. All drawing and
  * interaction are rendered by Orion; the document contains no executable code. */
-export const ARTIFACT_FORMATS = ["timeline", "explainer", "quiz", "comparison", "flashcards", "calculator"] as const;
+export const ARTIFACT_FORMATS = ["timeline", "explainer", "quiz", "comparison", "flashcards", "calculator", "cycle", "linkedViews", "argument", "scaleZoom", "deepTime"] as const;
 export type ArtifactFormat = typeof ARTIFACT_FORMATS[number];
+export const artifactFormatNames: Record<ArtifactFormat, string> = {
+  timeline: "Timeline", explainer: "Explainer", quiz: "Quiz", comparison: "Comparison", flashcards: "Flashcards",
+  calculator: "Calculator", cycle: "Cycle", linkedViews: "Linked views", argument: "Argument explorer",
+  scaleZoom: "Zoom across sizes", deepTime: "Deep time as one day",
+};
 export const MAX_ARTIFACT_BYTES = 48_000;
 export const MAX_ARTIFACT_SOURCE = 12_000;
 export const MAX_ARTIFACT_GUIDANCE = 800;
@@ -33,6 +42,7 @@ export type ArtifactShape = Paint & (
   | { kind: "circle"; cx: number; cy: number; r: number }
 );
 export type ArtifactBlock =
+  | ArtifactMotion | ArtifactArgument | ArtifactScaleZoom | ArtifactDeepTime
   | ArtifactIllustration
   | { kind: "text"; heading?: string; text: string }
   | { kind: "steps"; items: { label: string; heading: string; text: string }[] }
@@ -72,37 +82,6 @@ export interface VisualArtifact {
   title: string;
   summary?: string;
   blocks: ArtifactBlock[];
-}
-
-function invalid(): never {
-  throw new Error("Orion could not read this visual. Try generating it again.");
-}
-
-function object(value: unknown, keys: string[]): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value) ||
-      Object.keys(value).some(key => !keys.includes(key))) return invalid();
-  return value as Record<string, unknown>;
-}
-
-function list<T>(value: unknown, min: number, max: number, read: (item: unknown, index: number) => T): T[] {
-  if (!Array.isArray(value) || value.length < min || value.length > max) return invalid();
-  return Array.from(value, read);
-}
-
-function literal(value: unknown, max: number, allowEmpty = false): string {
-  if (typeof value !== "string" || value.length > max || (!allowEmpty && !value.trim()) ||
-      /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u.test(value)) return invalid();
-  return value;
-}
-
-function oneOf<T extends string>(value: unknown, choices: readonly T[]): T {
-  if (typeof value !== "string" || !(choices as readonly string[]).includes(value)) return invalid();
-  return value as T;
-}
-
-function finite(value: unknown, min: number, max: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max) return invalid();
-  return value;
 }
 
 function index(value: unknown, count: number): number {
@@ -378,6 +357,11 @@ function block(value: unknown): ArtifactBlock {
         return { front: literal(card.front, 500), back: literal(card.back, 1200) };
       }) };
     }
+    case "cycle":
+    case "linkedViews": return parseArtifactMotion(value);
+    case "scaleZoom": return parseArtifactScaleZoom(value);
+    case "deepTime": return parseArtifactDeepTime(value);
+    case "argument": return parseArtifactArgument(value);
     case "illustration": return parseArtifactIllustration(value);
     case "scene": return scene(value);
     case "calculator": return calculator(value);
@@ -391,7 +375,8 @@ export function parseVisualArtifact(value: unknown): VisualArtifact {
   const format = oneOf(obj.format, ARTIFACT_FORMATS);
   const blocks = list(obj.blocks, 1, 12, block);
   const requiredKind = { timeline: "steps", explainer: undefined, quiz: "quiz",
-    comparison: "table", flashcards: "cards", calculator: "calculator" }[format];
+    comparison: "table", flashcards: "cards", calculator: "calculator",
+    cycle: "cycle", linkedViews: "linkedViews", argument: "argument", scaleZoom: "scaleZoom", deepTime: "deepTime" }[format];
   if (requiredKind && !blocks.some(block => block.kind === requiredKind)) return invalid();
   const artifact: VisualArtifact = { version: 1, format, title: literal(obj.title, 160),
     ...(obj.summary === undefined ? {} : { summary: literal(obj.summary, 600) }), blocks };

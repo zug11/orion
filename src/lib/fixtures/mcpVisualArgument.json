@@ -1,0 +1,34 @@
+[
+  {
+    "name": "Alternative routes to the meeting",
+    "valid": true,
+    "artifact": {
+      "version": 1, "format": "argument", "title": "Can visitors take part in the meeting?",
+      "blocks": [{
+        "kind": "argument",
+        "passage": "The hall has a ramp. The side entrance has a lift. Either route gets visitors inside. The meeting is therefore accessible.",
+        "premises": [
+          {"id":"ramp","text":"The hall has a ramp.","quote":"The hall has a ramp.","without":"Losing the ramp leaves the lift as the other way inside."},
+          {"id":"lift","text":"The side entrance has a lift.","quote":"The side entrance has a lift.","without":"Visitors would need to use the ramp."},
+          {"id":"participate","text":"Once inside, visitors can participate in the meeting.","unstated":true,"without":"Getting through the door alone does not establish that visitors can participate."}
+        ],
+        "conclusions": [
+          {"id":"inside","text":"Visitors can get inside.","quote":"Either route gets visitors inside.","supports":[["ramp"],["lift"]]},
+          {"id":"accessible","text":"The meeting is accessible.","quote":"The meeting is therefore accessible.","supports":[["inside","participate"]]}
+        ]
+      }]
+    }
+  },
+  {
+    "name":"Circular argument support", "valid":false,
+    "artifact":{"version":1,"format":"explainer","title":"Test","blocks":[{"kind":"argument","passage":"A. B.","premises":[{"id":"a","text":"A.","quote":"A.","without":"A is withheld."}],"conclusions":[{"id":"b","text":"B.","quote":"B.","supports":[["b"]]}]}]}
+  },
+  {
+    "name":"Invented argument quotation", "valid":false,
+    "artifact":{"version":1,"format":"explainer","title":"Test","blocks":[{"kind":"argument","passage":"A. B.","premises":[{"id":"a","text":"A.","quote":"C.","without":"A is withheld."}],"conclusions":[{"id":"b","text":"B.","quote":"B.","supports":[["a"]]}]}]}
+  },
+  {
+    "name":"Unstated premise with spurious quotation", "valid":false,
+    "artifact":{"version":1,"format":"explainer","title":"Test","blocks":[{"kind":"argument","passage":"A. B.","premises":[{"id":"a","text":"A.","quote":"A.","without":"A is withheld."},{"id":"c","text":"C.","unstated":true,"quote":"A.","without":"C is withheld."}],"conclusions":[{"id":"b","text":"B.","quote":"B.","supports":[["a","c"]]}]}]}
+  }
+]

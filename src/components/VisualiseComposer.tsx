@@ -3,7 +3,7 @@ import type { Settings } from "../types";
 import { isSelectedAIConfigured, selectedAIProviderName } from "../lib/ai";
 import { drawingModelPolicyLabel } from "../lib/illustrationModel";
 import { X } from "../lib/icons";
-import { ARTIFACT_FORMATS, MAX_ARTIFACT_GUIDANCE, type ArtifactFormat, type VisualArtifact } from "../lib/visualArtifacts";
+import { artifactFormatNames, ARTIFACT_FORMATS, MAX_ARTIFACT_GUIDANCE, type ArtifactFormat, type VisualArtifact } from "../lib/visualArtifacts";
 import { asksForIllustration, generatePassageIllustration, generateVisualArtifact } from "../lib/visualArtifactGeneration";
 import { ArtworkReviewNoticeContext } from "./ArtifactPartChatContext";
 import "./VisualiseComposer.css";
@@ -135,7 +135,7 @@ export function VisualiseComposer({ source, settings, anchor, onInsert, onClose 
         <select value={format} data-initial-focus={source ? true : undefined} disabled={busy || stale} onChange={e => { setFormat(e.target.value as typeof format); guidanceInput.current?.focus(); }}>
           <option value="auto">Let Orion choose</option>
           <option value="illustration">Draw illustration</option>
-          {ARTIFACT_FORMATS.map(value => <option key={value} value={value}>{value.charAt(0).toUpperCase() + value.slice(1)}</option>)}
+          {ARTIFACT_FORMATS.map(value => <option key={value} value={value}>{artifactFormatNames[value]}</option>)}
         </select>
       </label>
       <label>Guidance <span>(optional)</span>

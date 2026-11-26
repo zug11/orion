@@ -3891,7 +3891,18 @@ fn visual_artifact_input(raw: &str) -> Result<Value, String> {
         || !clean_text(guidance)
         || !matches!(
             format,
-            "auto" | "timeline" | "explainer" | "quiz" | "comparison" | "flashcards" | "calculator"
+            "auto"
+                | "timeline"
+                | "explainer"
+                | "quiz"
+                | "comparison"
+                | "flashcards"
+                | "calculator"
+                | "cycle"
+                | "linkedViews"
+                | "scaleZoom"
+                | "deepTime"
+                | "argument"
         )
     {
         return Err(error());
