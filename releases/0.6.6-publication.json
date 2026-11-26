@@ -1,0 +1,89 @@
+{
+  "version": "0.6.6",
+  "release_id": 458966562,
+  "release_url": "https://github.com/zug11/orion/releases/tag/v0.6.6",
+  "published_at": "2026-11-26T04:58:11Z",
+  "release_tag_commit": "cd3d4b716714f534a2663e4c3cad4cf4d5a9dfe1",
+  "assets": [
+    {
+      "name": "Orion-0.6.6.m-Apple-Silicon.dmg",
+      "bytes": 1509555810,
+      "sha256": "31cf4491994cc943a61d849b1bd6b6b46fe93d5fae85e9d5643d6ff1fd60bc29",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.6/Orion-0.6.6.m-Apple-Silicon.dmg"
+    },
+    {
+      "name": "Orion-0.6.6-Apple-Silicon.app.tar.gz",
+      "bytes": 1507433923,
+      "sha256": "75ecb67f8ee2c5ff8d81883b17b3bc145a0bef7fe82015bd505aa919b6b88036",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.6/Orion-0.6.6-Apple-Silicon.app.tar.gz"
+    },
+    {
+      "name": "Orion-0.6.6-Apple-Silicon.app.tar.gz.sig",
+      "bytes": 448,
+      "sha256": "7c2ee8562f31e01116b353ce7de66effc4eba44c5145d7dcaf6dbd979835e351",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.6/Orion-0.6.6-Apple-Silicon.app.tar.gz.sig"
+    },
+    {
+      "name": "latest.json",
+      "bytes": 2150,
+      "sha256": "a4f9e1fd97f257979f9767cb484b6ccd0b9941addf85867d6035a97ed75aa83f",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.6/latest.json"
+    },
+    {
+      "name": "Orion-0.6.6-SHA256SUMS.txt",
+      "bytes": 386,
+      "sha256": "9d08ba884a3d9e84a1d5f0b299b5bc7c10bb8f1a69fd18dbe311da8f53c3a4c0",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.6/Orion-0.6.6-SHA256SUMS.txt"
+    }
+  ],
+  "all_github_asset_digests_match": true,
+  "previous_release_key_commit": "9c2669fae9e1f96ac48dc27e177ae701a0984d09",
+  "anonymous_installer_download_verified": true,
+  "all_anonymous_asset_bytes_match": true,
+  "public_updater": {
+    "endpoint": "https://github.com/zug11/orion/releases/latest/download/latest.json",
+    "version": "0.6.6",
+    "platform": "darwin-aarch64",
+    "url": "https://github.com/zug11/orion/releases/download/v0.6.6/Orion-0.6.6-Apple-Silicon.app.tar.gz",
+    "exact_manifest_match": true,
+    "public_archive_and_signed_version_verified": true,
+    "public_detached_signature_matches_manifest": true,
+    "verified_with_previous_release_key": true,
+    "installed_over_user_app": false
+  },
+  "verified_at": "2026-11-26T05:02:24.581Z",
+  "website": {
+    "url": "https://www.itsorion.app",
+    "deployment_id": "dpl_EqcRcBRWXnaYPbx8jBahjPQouMvp",
+    "deployment_url": "https://orion-kf3ypcm18-zug11s-projects.vercel.app",
+    "status": "READY",
+    "environment": "production",
+    "source_commit": "3e81894333be0a0fa525fb847032e504c6eadf0b",
+    "project_id": "prj_EAGIeKVJxm4RZzZ1Ckm55viqgiQ6",
+    "aliases": [
+      "itsorion.app",
+      "orion-xi-three.vercel.app",
+      "orion-zug11s-projects.vercel.app",
+      "www.itsorion.app"
+    ],
+    "build_ready_at": "2026-11-26T05:03:28.766000Z",
+    "verified_at": "2026-11-26T05:04:51.426138Z",
+    "live_checks": {
+      "release_download_checksum_links_and_structured_metadata": true,
+      "apex_redirects_to_www": true,
+      "installer_http_status": 200,
+      "checksum_http_status": 200,
+      "release_notes_http_status": 200,
+      "llms_release_bytes_sha256_and_links_match": true,
+      "desktop_width": 1340,
+      "mobile_width": 390,
+      "verified_example_histories": 3,
+      "automatic_import_and_voice_demos_advance": true,
+      "keyboard_can_pause_and_resume_both_demos": true,
+      "reduced_motion_pauses_demos": true,
+      "vercel_runtime_error_records_in_post_deploy_scan": 0
+    },
+    "staged_response_verified_before_promotion": true,
+    "temporary_staging_access_revoked": true
+  }
+}
