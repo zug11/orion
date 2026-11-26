@@ -1,0 +1,446 @@
+{
+  "version": "0.6.7",
+  "source_commit": "603a9e2e3bb1a4883d7925ed2af8d66992ec9a53",
+  "bundle_id": "app.orion.knowledge",
+  "edition": "Whisper Medium",
+  "platform": "darwin-aarch64",
+  "artifacts": [
+    {
+      "artifact": "Orion-0.6.7.m-Apple-Silicon.dmg",
+      "bytes": 1510070962,
+      "sha256": "1959f7333921e554fb46efdd17cc1230f25d0837817e0912fee0faca4bf9c279"
+    },
+    {
+      "artifact": "Orion-0.6.7-Apple-Silicon.app.tar.gz",
+      "bytes": 1507483410,
+      "sha256": "ae16b0625062b2af31cf44ad8acdcb13dcb4491f5a59c9b3ee4bcd9a645090a6"
+    },
+    {
+      "artifact": "Orion-0.6.7-Apple-Silicon.app.tar.gz.sig",
+      "bytes": 448,
+      "sha256": "d4825637bcff74311a1200e1e2db508a36fe5b54d66a4b0bb24ab34553bc0428"
+    },
+    {
+      "artifact": "latest.json",
+      "bytes": 2193,
+      "sha256": "2211a1c4ef63a66f517e0b369b5aff09d45c7f305f53f50436a483d14f8c0828"
+    }
+  ],
+  "notarization": {
+    "app": {
+      "id": "f61fbacd-21eb-4864-93fb-d2a812d118f7",
+      "status": "Accepted"
+    },
+    "dmg": {
+      "id": "4c7d9964-4fef-4b0b-8933-c939958ecf59",
+      "status": "Accepted"
+    }
+  },
+  "app_and_dmg_stapled": true,
+  "app_and_dmg_gatekeeper": "accepted",
+  "copied_app_deep_strict_signature": "passed",
+  "main_executable_sha256": "d6c0522293752cc1330b23275d01e8669b6036a48ae55a6090440f17160a791b",
+  "stamps": {
+    "orion-source.sha256": "0d415fb5dc3c253a1491323414a11a6836436b66a7d19d830c8e41beca2dbd99",
+    "orion-renderer.sha256": "ef80249e3e0d10966d18f1420c5d39471a19307c84a35f7566f1b9f4ffb704e4"
+  },
+  "updater": {
+    "signature": "verified",
+    "signed_version": "0.6.7",
+    "extracted_archive_identity_signature_ticket_gatekeeper": "passed",
+    "installed_over_user_app": false,
+    "endpoint": "https://github.com/zug11/orion/releases/latest/download/latest.json"
+  },
+  "verification": {
+    "renderer_tests_passed": 4221,
+    "renderer_tests_skipped": 1,
+    "native_tests_passed": 375,
+    "native_tests_ignored": 8,
+    "mcp_tests_passed": 152,
+    "mcp_tests_ignored": 0,
+    "updater_signing_tests_passed": 8,
+    "copied_app_bundled_mcp_and_codex_protocol_harnesses": "passed",
+    "production_renderer": {
+      "viewports": [
+        740,
+        1360
+      ],
+      "interaction_checks": [
+        "note_reading",
+        "cycle_pointer_keyboard_play_pause",
+        "linked_both_drags_both_views",
+        "independent_and_chained_premises",
+        "argument_quote",
+        "zoom_jump_and_keyboard",
+        "deep_time_dial_event_last_minute_keyboard"
+      ],
+      "runtime_errors": 0,
+      "horizontal_overflow": false
+    },
+    "offline_html_export": {
+      "viewports": [
+        740,
+        1360
+      ],
+      "interaction_checks": [
+        "note_reading",
+        "cycle_pointer_keyboard_play_pause",
+        "linked_both_drags_both_views",
+        "independent_and_chained_premises",
+        "argument_quote",
+        "zoom_jump_and_keyboard",
+        "deep_time_dial_event_last_minute_keyboard"
+      ],
+      "runtime_errors": 0,
+      "horizontal_overflow": false
+    },
+    "saved_connection": {
+      "model": "gpt-5.6-sol",
+      "effort": "low",
+      "provider_calls": 6,
+      "formats": [
+        "cycle",
+        "linkedViews",
+        "argument",
+        "scaleZoom",
+        "deepTime"
+      ],
+      "verified_source_quantities": true,
+      "verified_markdown_roundtrip": true
+    },
+    "voice_orb": {
+      "pipelines": [
+        "WebGL Jelly",
+        "WebGL Mirage Clear",
+        "Canvas2D",
+        "CSS"
+      ],
+      "rendered_theme_captures": 24,
+      "light_configurations": 8,
+      "included_near_black_accent": true,
+      "whole_frame_minimum_luma_0_to_255": 184.0,
+      "pixels_at_or_below_195_diagnostic": 2767,
+      "light_measurement": "Composited PNGs. Positive angular luma differences measure contrast between the rim at 94% radius and the nearby background at 112% radius.",
+      "dark_previous_build_max_channel_difference": 1,
+      "dark_previous_build_p99_channel_difference": 0.0,
+      "dark_webgl_detail_verified": true,
+      "dark_appearance_restored_after_theme_switch": true,
+      "light_cases": [
+        {
+          "pipeline": "webgl",
+          "material": "jelly",
+          "accent": "#478A55",
+          "minimumEvenOutsideDisk": 194.56,
+          "medianDiskRGB": [
+            173,
+            224,
+            182
+          ],
+          "medianAdjacentBackgroundRGB": [
+            246,
+            244,
+            240
+          ],
+          "medianDisk": 209.91,
+          "medianAdjacentBackground": 244.14,
+          "edgeLinearContrastP50": 1.52,
+          "outerRim98PercentLumaDeltaP50": 45.72,
+          "innerP95MinusP05": 32.77
+        },
+        {
+          "pipeline": "webgl",
+          "material": "mirage-clear",
+          "accent": "#478A55",
+          "minimumEvenOutsideDisk": 194.83,
+          "medianDiskRGB": [
+            181,
+            228,
+            190
+          ],
+          "medianAdjacentBackgroundRGB": [
+            246,
+            244,
+            240
+          ],
+          "medianDisk": 215.26,
+          "medianAdjacentBackground": 244.14,
+          "edgeLinearContrastP50": 1.51,
+          "outerRim98PercentLumaDeltaP50": 45.73,
+          "innerP95MinusP05": 26.55
+        },
+        {
+          "pipeline": "webgl",
+          "material": "jelly",
+          "accent": "#010101",
+          "minimumEvenOutsideDisk": 194.93,
+          "medianDiskRGB": [
+            203,
+            203,
+            202
+          ],
+          "medianAdjacentBackgroundRGB": [
+            246,
+            244,
+            240
+          ],
+          "medianDisk": 202.93,
+          "medianAdjacentBackground": 244.14,
+          "edgeLinearContrastP50": 1.57,
+          "outerRim98PercentLumaDeltaP50": 45.92,
+          "innerP95MinusP05": 6.0
+        },
+        {
+          "pipeline": "webgl",
+          "material": "mirage-clear",
+          "accent": "#010101",
+          "minimumEvenOutsideDisk": 195.0,
+          "medianDiskRGB": [
+            210,
+            210,
+            209
+          ],
+          "medianAdjacentBackgroundRGB": [
+            246,
+            244,
+            240
+          ],
+          "medianDisk": 209.93,
+          "medianAdjacentBackground": 244.14,
+          "edgeLinearContrastP50": 1.55,
+          "outerRim98PercentLumaDeltaP50": 45.92,
+          "innerP95MinusP05": 24.0
+        },
+        {
+          "pipeline": "canvas",
+          "material": "jelly",
+          "accent": "#478A55",
+          "minimumEvenOutsideDisk": 193.76,
+          "medianDiskRGB": [
+            194,
+            226,
+            202
+          ],
+          "medianAdjacentBackgroundRGB": [
+            230,
+            236,
+            226
+          ],
+          "medianDisk": 217.39,
+          "medianAdjacentBackground": 233.93,
+          "edgeLinearContrastP50": 1.26,
+          "outerRim98PercentLumaDeltaP50": 39.25,
+          "innerP95MinusP05": 27.62
+        },
+        {
+          "pipeline": "canvas",
+          "material": "jelly",
+          "accent": "#010101",
+          "minimumEvenOutsideDisk": 184.0,
+          "medianDiskRGB": [
+            207,
+            207,
+            207
+          ],
+          "medianAdjacentBackgroundRGB": [
+            233,
+            232,
+            228
+          ],
+          "medianDisk": 207.0,
+          "medianAdjacentBackground": 232.0,
+          "edgeLinearContrastP50": 1.32,
+          "outerRim98PercentLumaDeltaP50": 47.0,
+          "innerP95MinusP05": 31.0
+        },
+        {
+          "pipeline": "css",
+          "material": "jelly",
+          "accent": "#478A55",
+          "minimumEvenOutsideDisk": 202.01,
+          "medianDiskRGB": [
+            215,
+            225,
+            219
+          ],
+          "medianAdjacentBackgroundRGB": [
+            246,
+            244,
+            240
+          ],
+          "medianDisk": 222.44,
+          "medianAdjacentBackground": 244.14,
+          "edgeLinearContrastP50": 1.29,
+          "outerRim98PercentLumaDeltaP50": 41.91,
+          "innerP95MinusP05": 36.63
+        },
+        {
+          "pipeline": "css",
+          "material": "jelly",
+          "accent": "#010101",
+          "minimumEvenOutsideDisk": 184.0,
+          "medianDiskRGB": [
+            205,
+            205,
+            205
+          ],
+          "medianAdjacentBackgroundRGB": [
+            246,
+            244,
+            240
+          ],
+          "medianDisk": 205.0,
+          "medianAdjacentBackground": 244.14,
+          "edgeLinearContrastP50": 1.47,
+          "outerRim98PercentLumaDeltaP50": 59.21,
+          "innerP95MinusP05": 47.0
+        }
+      ],
+      "duotone": {
+        "light_pairs": [
+          {
+            "pipeline": "webgl",
+            "material": "jelly",
+            "primary": "#478A55",
+            "secondary": "#9152BB",
+            "minCompositedLuma": 194.56,
+            "fraction_primary": 0.4452,
+            "fraction_secondary": 0.5099,
+            "secondaryFractionInnerDisk": 0.7292,
+            "primaryFractionNearRim": 0.8911
+          },
+          {
+            "pipeline": "webgl",
+            "material": "mirage-clear",
+            "primary": "#478A55",
+            "secondary": "#9152BB",
+            "minCompositedLuma": 194.83,
+            "fraction_primary": 0.131,
+            "fraction_secondary": 0.7811,
+            "secondaryFractionInnerDisk": 0.9743,
+            "primaryFractionNearRim": 0.5006
+          },
+          {
+            "pipeline": "webgl",
+            "material": "jelly",
+            "primary": "#42A5A3",
+            "secondary": "#E59740",
+            "minCompositedLuma": 194.83,
+            "fraction_primary": 0.4551,
+            "fraction_secondary": 0.5363,
+            "secondaryFractionInnerDisk": 0.7526,
+            "primaryFractionNearRim": 0.9019
+          },
+          {
+            "pipeline": "webgl",
+            "material": "mirage-clear",
+            "primary": "#42A5A3",
+            "secondary": "#E59740",
+            "minCompositedLuma": 195.02,
+            "fraction_primary": 0.1508,
+            "fraction_secondary": 0.83,
+            "secondaryFractionInnerDisk": 0.9925,
+            "primaryFractionNearRim": 0.5589
+          },
+          {
+            "pipeline": "canvas",
+            "material": "jelly",
+            "primary": "#478A55",
+            "secondary": "#9152BB",
+            "minCompositedLuma": 183.85,
+            "fraction_primary": 0.5793,
+            "fraction_secondary": 0.2703,
+            "secondaryFractionInnerDisk": 0.4335,
+            "primaryFractionNearRim": 1.0
+          },
+          {
+            "pipeline": "canvas",
+            "material": "jelly",
+            "primary": "#42A5A3",
+            "secondary": "#E59740",
+            "minCompositedLuma": 184.2,
+            "fraction_primary": 0.5609,
+            "fraction_secondary": 0.4133,
+            "secondaryFractionInnerDisk": 0.6496,
+            "primaryFractionNearRim": 1.0
+          },
+          {
+            "pipeline": "css",
+            "material": "jelly",
+            "primary": "#478A55",
+            "secondary": "#9152BB",
+            "minCompositedLuma": 183.85,
+            "fraction_primary": 0.5655,
+            "fraction_secondary": 0.2742,
+            "secondaryFractionInnerDisk": 0.4398,
+            "primaryFractionNearRim": 1.0
+          },
+          {
+            "pipeline": "css",
+            "material": "jelly",
+            "primary": "#42A5A3",
+            "secondary": "#E59740",
+            "minCompositedLuma": 184.2,
+            "fraction_primary": 0.5548,
+            "fraction_secondary": 0.4085,
+            "secondaryFractionInnerDisk": 0.6366,
+            "primaryFractionNearRim": 1.0
+          }
+        ],
+        "dark_webgl_composited_p99_channel_difference": 0.0,
+        "measurement": "Primary and secondary color-family fractions within 95% of the radius. Fractions can sum to less than one because neutral or mixed hues can fit neither family."
+      }
+    },
+    "copied_app_local_ocr_fixture": "passed",
+    "copied_app_local_whisper_medium_fixture": "passed",
+    "recipe": {
+      "fixture": "Supplied slow-roasted lamb passage, reconstructed as a six-ingredient artifact.",
+      "production_renderer": {
+        "viewports": [
+          740,
+          1360
+        ],
+        "themes": [
+          "dark",
+          "light"
+        ],
+        "checks": [
+          "keyboardStep",
+          "fixedCookingInstructions",
+          "baseAndScaledQuantities",
+          "recipeChartOmitted",
+          "otherCalculatorChartInput",
+          "sourceQuoteHighlighted",
+          "allSourceQuotesChecked",
+          "ingredientCalculationChecked"
+        ],
+        "console_errors": 0,
+        "horizontal_overflow": false
+      },
+      "offline_html": {
+        "viewports": [
+          390,
+          740,
+          1360
+        ],
+        "themes": [
+          "dark",
+          "light"
+        ],
+        "checks": [
+          "keyboardStep",
+          "fixedCookingInstructions",
+          "baseAndScaledQuantities",
+          "recipeChartOmitted",
+          "otherCalculatorChartInput",
+          "sourceQuoteHighlighted",
+          "allSourceQuotesChecked",
+          "ingredientCalculationChecked"
+        ],
+        "console_errors": 0,
+        "horizontal_overflow": false
+      },
+      "shopping_list_tasks_verified_in_note": 6,
+      "note_write_controls_omitted_in_export": true
+    }
+  }
+}
