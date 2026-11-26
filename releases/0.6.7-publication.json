@@ -1,0 +1,97 @@
+{
+  "version": "0.6.7",
+  "release_id": 459021045,
+  "release_url": "https://github.com/zug11/orion/releases/tag/v0.6.7",
+  "published_at": "2026-11-26T06:14:04Z",
+  "release_tag_commit": "603a9e2e3bb1a4883d7925ed2af8d66992ec9a53",
+  "assets": [
+    {
+      "name": "Orion-0.6.7.m-Apple-Silicon.dmg",
+      "bytes": 1510070962,
+      "sha256": "1959f7333921e554fb46efdd17cc1230f25d0837817e0912fee0faca4bf9c279",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.7/Orion-0.6.7.m-Apple-Silicon.dmg"
+    },
+    {
+      "name": "Orion-0.6.7-Apple-Silicon.app.tar.gz",
+      "bytes": 1507483410,
+      "sha256": "ae16b0625062b2af31cf44ad8acdcb13dcb4491f5a59c9b3ee4bcd9a645090a6",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.7/Orion-0.6.7-Apple-Silicon.app.tar.gz"
+    },
+    {
+      "name": "Orion-0.6.7-Apple-Silicon.app.tar.gz.sig",
+      "bytes": 448,
+      "sha256": "d4825637bcff74311a1200e1e2db508a36fe5b54d66a4b0bb24ab34553bc0428",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.7/Orion-0.6.7-Apple-Silicon.app.tar.gz.sig"
+    },
+    {
+      "name": "latest.json",
+      "bytes": 2193,
+      "sha256": "2211a1c4ef63a66f517e0b369b5aff09d45c7f305f53f50436a483d14f8c0828",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.7/latest.json"
+    },
+    {
+      "name": "Orion-0.6.7-SHA256SUMS.txt",
+      "bytes": 386,
+      "sha256": "de1f3b184505e0126bf9839496331dd74e0fc9d2cd1965fc9dede83b2a805b09",
+      "url": "https://github.com/zug11/orion/releases/download/v0.6.7/Orion-0.6.7-SHA256SUMS.txt"
+    }
+  ],
+  "all_github_asset_digests_match": true,
+  "previous_release_key_commit": "cd3d4b716714f534a2663e4c3cad4cf4d5a9dfe1",
+  "anonymous_installer_download_verified": true,
+  "all_anonymous_asset_bytes_match": true,
+  "public_updater": {
+    "endpoint": "https://github.com/zug11/orion/releases/latest/download/latest.json",
+    "version": "0.6.7",
+    "platform": "darwin-aarch64",
+    "url": "https://github.com/zug11/orion/releases/download/v0.6.7/Orion-0.6.7-Apple-Silicon.app.tar.gz",
+    "exact_manifest_match": true,
+    "public_archive_and_signed_version_verified": true,
+    "public_detached_signature_matches_manifest": true,
+    "verified_with_previous_release_key": true,
+    "installed_over_user_app": false
+  },
+  "verified_at": "2026-11-26T06:22:15.902Z",
+  "website": {
+    "url": "https://www.itsorion.app",
+    "deployment_id": "dpl_5Axshjq6hHJ6AJ7TfQSncdhhyy7p",
+    "deployment_url": "https://orion-goqd1mx44-zug11s-projects.vercel.app",
+    "status": "READY",
+    "environment": "production",
+    "source_commit": "0e429b682c451b7f76c8d58ed11035014bd190a5",
+    "project_id": "prj_EAGIeKVJxm4RZzZ1Ckm55viqgiQ6",
+    "aliases": [
+      "itsorion.app",
+      "orion-xi-three.vercel.app",
+      "orion-zug11s-projects.vercel.app",
+      "www.itsorion.app"
+    ],
+    "verified_at": "2026-11-26T06:24:51.232582Z",
+    "live_checks": {
+      "release_download_checksum_links_and_structured_metadata": true,
+      "apex_redirects_to_www": true,
+      "installer_http_status": 200,
+      "checksum_http_status": 200,
+      "release_notes_http_status": 200,
+      "llms_release_bytes_sha256_and_links_match": true,
+      "desktop_width": 1340,
+      "mobile_width": 390,
+      "verified_example_histories": 3,
+      "automatic_import_and_voice_demos_advance": true,
+      "keyboard_can_pause_and_resume_both_demos": true,
+      "reduced_motion_pauses_demos": true,
+      "vercel_runtime_error_records_in_post_deploy_scan": 0
+    },
+    "orb_source_parity": {
+      "source_commit": "603a9e2e3bb1a4883d7925ed2af8d66992ec9a53",
+      "light_shader_renderer_and_css_sha256": {
+        "src/components/VoiceConstellation.tsx": "80e011354692636aed6563ae8f71173e8c9438474d7031e41a7f54355cf04563",
+        "src/components/VoiceConstellation.css": "ecf2f46da6e9d44b6109a79b19a800f9e176b42af5474d858aa07afaf61834c5",
+        "src/components/voiceShaders/main.glsl": "e303ada83b288e3410ce6dafc979326605dcfa14e80df6c5f8ba73109c2b603b"
+      },
+      "all_synced_source_and_output_hashes_verified": true
+    },
+    "staged_response_verified_before_promotion": true,
+    "temporary_staging_access_revoked": true
+  }
+}
