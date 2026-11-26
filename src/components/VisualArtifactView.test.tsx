@@ -174,7 +174,10 @@ describe('VisualArtifactView', () => {
     expect(slider).toHaveAttribute('aria-valuetext', '5 L/s');
     expect(screen.getByText('4 s')).toBeVisible();
     fireEvent.change(slider, { target: { value: '0' } });
-    expect(screen.getByText('Undefined')).toBeVisible();
+    expect(screen.getByText('No result at these settings')).toBeVisible();
+    expect(screen.queryByText('4 s')).toBeNull();
+    fireEvent.change(slider, { target: { value: '4' } });
+    expect(screen.getByText('5 s')).toBeVisible();
   });
 
   it('renders readable table headers and treats generated prose as literal text', () => {

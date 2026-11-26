@@ -8,6 +8,7 @@ import type { Note } from "../types";
 import { serializeNoteImageTitle } from "./noteImageLayout";
 import { buildWordExportDocument } from "./wordExport";
 import { docxHtmlToMarkdown } from "./docxImport";
+import { visualArtifactMarker } from "./visualArtifactMarkdown";
 
 const NOW = "2026-10-01T10:00:00Z";
 const PIXEL = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+k3ioAAAAASUVORK5CYII="), (character) => character.charCodeAt(0));
@@ -62,6 +63,23 @@ async function unpack(bytes: Uint8Array) {
 }
 
 describe("Word export", () => {
+  it("writes each flashcard and its answer once as readable paragraphs", async () => {
+    const snapshot = fixture();
+    snapshot.notes[0].body = visualArtifactMarker({
+      version: 1, format: "flashcards", title: "Reading the sky",
+      blocks: [{ kind: "cards", items: [
+        { front: "Where does the sun rise?", back: "Toward the east." },
+        { front: "Where does the sun set?", back: "Toward the west." },
+      ] }],
+    });
+    const { document } = await unpack((await buildWordExportDocument(snapshot, "note", "origin")).bytes);
+    const paragraphs = [...document.getElementsByTagNameNS(W, "p")].map(p => p.textContent);
+    for (const line of ["Reading the sky", "Where does the sun rise?", "Toward the east.", "Where does the sun set?", "Toward the west."]) {
+      expect(paragraphs.filter(text => text === line)).toHaveLength(1);
+    }
+    expect(paragraphs.join("\n")).not.toMatch(/Open visualisation|Show answer|orion-artifact:v1/i);
+  });
+
   it("writes body and paragraph margins as scoped Word indents while preserving lists and quotes", async () => {
     const snapshot = fixture();
     const margins = "<!-- orion-paragraph-margins:v1 10 5 -->";

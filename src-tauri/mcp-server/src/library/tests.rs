@@ -52,6 +52,104 @@ fn version(server: &Server, id: &str) -> String {
 }
 
 #[test]
+fn direct_visual_insert_is_versioned_atomic_and_attributed() {
+    let mut vault = fixture();
+    let original = "An existing paragraph.\n\n- [x] Archived task\n";
+    vault["spaces"][0]["notes"][0]["body"] = json!(original);
+    vault["spaces"][0]["notes"][0]["writingOrigins"] = json!(["orion-ai"]);
+    let (_dir, server) = server(&vault);
+    let artifact = json!({"version":1,"format":"flashcards","title":"Énergie ☀️",
+        "blocks":[{"kind":"cards","items":[{"front":"What charges?","back":"The battery."}]}]});
+    let args = json!({"space_id":"a","note_id":"n1","expected_version":version(&server,"n1"),"artifact":artifact});
+    let receipt = run(&server, "orion_insert_visual_artifact", args.clone());
+    let saved = fs::read(&server.vault_path).unwrap();
+    let data: Value = serde_json::from_slice(&saved).unwrap();
+    let note = &data["spaces"][0]["notes"][0];
+    let stored_marker = visual_artifact::validated_marker(&artifact).unwrap();
+    assert_eq!(note["body"], format!("{original}\n{stored_marker}"));
+    assert_eq!(note["writingOrigins"], json!(["orion-ai", "mcp"]));
+    assert_eq!(data["spaces"][1], vault["spaces"][1]);
+    assert_eq!(receipt["atomic"], true);
+    assert_eq!(receipt["notes"][0]["version"], version(&server, "n1"));
+    let error = server
+        .call_tool("orion_insert_visual_artifact", args.as_object().unwrap())
+        .unwrap_err();
+    assert_eq!(error.error_code, Some("version_conflict"));
+    assert_eq!(saved, fs::read(&server.vault_path).unwrap());
+}
+
+#[test]
+fn visual_insert_requires_a_standalone_markdown_block() {
+    for (body, tail) in [
+        ("", Some("")),
+        ("Énergie.", Some("\n\n")),
+        ("Énergie.\n", Some("\n")),
+        ("Énergie.\n\n", Some("")),
+        (
+            "---\ntitle: Example\n---\n\n```md\n<!-- example -->\n```",
+            Some("\n\n"),
+        ),
+        ("<!-- unfinished", None),
+        ("<pre>\nexample", None),
+    ] {
+        let mut vault = fixture();
+        vault["spaces"][0]["notes"][0]["body"] = json!(body);
+        let (_dir, server) = server(&vault);
+        let artifact = json!({"version":1,"format":"explainer","title":"Example","blocks":[{"kind":"text","text":"Body"}]});
+        let args = json!({"space_id":"a","note_id":"n1","expected_version":version(&server,"n1"),"artifact":artifact});
+        let before = fs::read(&server.vault_path).unwrap();
+        let result = server.call_tool("orion_insert_visual_artifact", args.as_object().unwrap());
+        if let Some(separator) = tail {
+            result.unwrap();
+            let after = read_vault(&server.vault_path).unwrap();
+            let marker = visual_artifact::validated_marker(&artifact).unwrap();
+            assert_eq!(
+                after.spaces[0].notes[0].body,
+                format!("{body}{separator}{marker}")
+            );
+        } else {
+            assert!(result.unwrap_err().message.contains("Close the open block"));
+            assert_eq!(fs::read(&server.vault_path).unwrap(), before);
+        }
+    }
+}
+
+#[test]
+fn rejected_visuals_preserve_the_complete_vault() {
+    let mut vault = fixture();
+    vault["spaces"][0]["notes"][0]["body"] = json!("An unfinished example.\n\n```md\n");
+    let (_dir, server) = server(&vault);
+    let saved = fs::read(&server.vault_path).unwrap();
+    let artifact = json!({"version":1,"format":"explainer","title":"Example","blocks":[{"kind":"text","text":"Body"}]});
+    let args = json!({"space_id":"a","note_id":"n1","expected_version":version(&server,"n1"),"artifact":artifact});
+    for (key, value) in [
+        ("artifact", artifact.clone()),
+        ("artifact", Value::String(artifact.to_string())),
+        (
+            "artifact",
+            json!({"version":1,"format":"calculator","title":"Sizing","blocks":[{
+            "kind":"calculator","inputs":[{"label":"Volatility","unit":"%","min":0,"max":10,"step":1,"initial":2}],
+            "outputs":[{"label":"Exposure","unit":"%","expression":{"op":"divide","left":10,"right":{"input":0}}}]}]}),
+        ),
+        (
+            "artifact",
+            json!({"version":1,"format":"explainer","title":"Example","blocks":[{"kind":"text","text":"Body","extra":true}]}),
+        ),
+        ("space_id", json!("b")),
+    ] {
+        let mut request = args.clone();
+        request[key] = value;
+        let error = server
+            .call_tool("orion_insert_visual_artifact", request.as_object().unwrap())
+            .unwrap_err();
+        if key == "artifact" && request[key] == artifact {
+            assert!(error.message.contains("Close the open block"));
+        }
+        assert_eq!(saved, fs::read(&server.vault_path).unwrap());
+    }
+}
+
+#[test]
 fn external_writing_origins_follow_saved_prose_and_survive_other_edits() {
     let mut vault = fixture();
     vault["spaces"][0]["notes"][0]["body"] = json!("Compare both drafts.\n\n- [ ] Read the letter");
@@ -675,13 +773,13 @@ fn read_cases() -> Vec<(&'static str, Value)> {
 fn all_library_tools_have_distinct_validated_contracts_and_read_calls_preserve_the_vault() {
     let (_dir, server) = server(&fixture());
     let before = fs::read(&server.vault_path).unwrap();
-    assert_eq!(definitions().len(), 31);
-    assert_eq!(tool_definitions().len(), 66);
+    assert_eq!(definitions().len(), 32);
+    assert_eq!(tool_definitions().len(), 67);
     let unique: BTreeSet<_> = definitions()
         .iter()
         .map(|def| def["name"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(unique.len(), 31);
+    assert_eq!(unique.len(), 32);
     for (name, args) in read_cases() {
         let value = run(&server, name, args.clone());
         assert_eq!(value["spaceId"], "a", "{name}");

@@ -92,6 +92,8 @@ citationCases.forEach(({ id, body }) => space.notes.push({ ...makeNote(id, id, b
 space.sources.push({ id: "citation-source", title: "Evidence [one] \\ café", kind: "text", text: "Exact original evidence.", importedAt: timestamp, noteIds: [], future: { preserved: true } });
 space.sources.push({ id: "citation-second", title: "Second evidence", kind: "text", text: "Another exact source.", importedAt: timestamp, noteIds: [], future: { preserved: [1, 2] } });
 space.sources.push({ id: "citation-証拠", title: "\uFEFFUnicode evidence\u0085\uFEFF", kind: "text", text: "Unicode evidence.", importedAt: timestamp, noteIds: [] });
+const visualNote = { ...makeNote("visual-note", "Visualisations", "Original prose."), tags: [] };
+space.notes.push(visualNote);
 const original = structuredClone(vault);
 await writeFile(vaultPath, JSON.stringify(vault));
 let sequence = 0, output = "", stderr = "";
@@ -133,8 +135,8 @@ try {
   await request("initialize", { protocolVersion: "2025-06-18", clientInfo: { name: "isolated-library-harness", version: "1" }, capabilities: {} });
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   definitions = (await request("tools/list")).result.tools;
-  assert.equal(definitions.length, 66);
-  assert.equal(new Set(definitions.map((tool) => tool.name)).size, 66);
+  assert.equal(definitions.length, 67);
+  assert.equal(new Set(definitions.map((tool) => tool.name)).size, 67);
   const sources = await tool("orion_list_sources", { query: "Contract evidence" }); assert.equal(sources.sources[0].id, "knowledge-source");
   const evidence = await tool("orion_search_sources", { query: "evidence", source_ids: ["knowledge-source"] }); assert.equal(evidence.matches[0].matchStart, 3);
   const passage = await tool("orion_get_source_passage", { source_id: "knowledge-source", start: 1, max_chars: 2 }); assert.equal(passage.text, "😀 ");
@@ -482,11 +484,40 @@ try {
     gap: 18, caption: "A preserved café 🪐 caption", showCaption: true, title: "Existing diagram",
   });
 
+  // The renderer exercises this same v1 document corpus against its generation validators.
+  const visualCases = JSON.parse(await readFile(new URL("../src/lib/fixtures/mcpVisualArtifacts.json", import.meta.url), "utf8"));
+  const visualTool = "orion_insert_visual_artifact";
+  const currentBody = async () => {
+    const saved = JSON.parse(await readFile(vaultPath, "utf8"));
+    return saved.spaces.find(item => item.workspace.id === scope).notes.find(item => item.id === visualNote.id).body;
+  };
+  for (const { name, valid, artifact } of visualCases) {
+    const args = { space_id: scope, note_id: visualNote.id, expected_version: await version(visualNote.id), artifact };
+    const before = await readFile(vaultPath, "utf8");
+    if (!valid) {
+      await tool(visualTool, args, true);
+      assert.equal(await readFile(vaultPath, "utf8"), before, `Rejected "${name}" changed the vault.`);
+      continue;
+    }
+    const previousBody = await currentBody();
+    const result = await tool(visualTool, args);
+    const savedBody = await currentBody();
+    assert(savedBody.startsWith(previousBody));
+    const match = /^<!-- orion-artifact:v1 ([A-Za-z0-9+/]+={0,2}) -->$/.exec(savedBody.slice(previousBody.length).trim());
+    assert(match, `"${name}" did not produce a single standalone marker.`);
+    assert.deepEqual(JSON.parse(Buffer.from(match[1], "base64").toString("utf8")), artifact);
+    assert.deepEqual(result.notes[0].writingOrigins, ["mcp"]);
+    assert.equal(await version(visualNote.id), result.notes[0].version);
+    const after = await readFile(vaultPath, "utf8");
+    await tool(visualTool, args, true);
+    assert.equal(await readFile(vaultPath, "utf8"), after, `A stale retry duplicated "${name}".`);
+  }
+
   if (process.env.ORION_EDITOR_FIXTURE_OUT) {
     await writeFile(resolve(process.env.ORION_EDITOR_FIXTURE_OUT), JSON.stringify({ spaceId: scope, note: editorNote, sourceNote: updated.notes.find((note) => note.id === b.id), tableStates, inlineStates, citationStates, citationSources: updated.sources.filter(source => source.id.startsWith("citation-")) }, null, 2) + "\n");
   }
-  assert.equal(exercised.size, 31, "Not every new tool was exercised against the packaged executable.");
-  console.log("All 31 library tools verified against the exact executable: note-backed boards/tickets, guarded moves and inference evidence, working/history visibility, fresh completion reads, original versions/scalar offsets/line indices, unchanged Markdown, guarded edits, pending passage comments without prose changes, safe external links, portable paragraph/document/image/table layout, structured table edits, inline marks/unlink, source citations and atomic attachments, rejected semantic hazards, atomicity, citations, and Space isolation.");
+  assert.equal(exercised.size, 32, "Not every new tool was exercised against the packaged executable.");
+  console.log("All 32 library tools verified against the exact executable: note-backed boards/tickets, guarded moves and inference evidence, working/history visibility, fresh completion reads, original versions/scalar offsets/line indices, unchanged Markdown, guarded edits, pending passage comments without prose changes, safe external links, portable paragraph/document/image/table layout, structured table edits, inline marks/unlink, source citations and atomic attachments, rejected semantic hazards, atomicity, citations, and Space isolation.");
 } finally {
   child.kill();
   await rm(directory, { recursive: true, force: true });

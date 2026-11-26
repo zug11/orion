@@ -1,7 +1,7 @@
 import { boardMarker, ticketMarker } from './tickets';
 // @vitest-environment jsdom
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createEmptySnapshot } from "../data/defaults";
 import type { AppSnapshot, Concept, Note, Source } from "../types";
 import {
@@ -13,6 +13,7 @@ import { resolveThemePalette, type ThemePalette } from "./theme";
 import { serializeNoteImageTitle } from "./noteImageLayout";
 import { createNoteExcerptSelection, encodeNoteExcerptTitle } from "./noteExcerpts";
 import { NOTE_BLOCK_CLOSE, NOTE_BLOCK_OPEN } from "./noteBlocks";
+import { unavailableVisualArtifact, visualArtifactMarker } from "./visualArtifactMarkdown";
 
 const NOW = "2026-08-07T05:00:00.000Z";
 
@@ -137,6 +138,100 @@ describe("web export scope", () => {
 });
 
 describe("self-contained web article", () => {
+  it("exports a viewer for each valid visualisation in the selected note and keeps examples literal", () => {
+    const snapshot = fixture();
+    const marker = (title: string, text: string) => visualArtifactMarker({
+      version: 1, format: "explainer", title, blocks: [{ kind: "text", text }],
+    });
+    const literalText = 'Use </script> & <b id="literal-artifact-example"> as literal text.';
+    const included = marker("Symbols in prose", literalText);
+    const example = marker("A code example", "Never mount the example.");
+    const linkedMarker = marker("Linked diagram", "Only in the linked note.");
+    snapshot.notes[0].body = [
+      included, "<!-- orion-artifact:v1 invalid -->", ["~~~text", example, "~~~"].join("\n"),
+      "[See the linked diagram](orion-note://note-comte)",
+    ].join("\n\n");
+    snapshot.notes[1].body = linkedMarker;
+
+    const { html } = buildWebExportDocument(snapshot, "note", "note-origin");
+    const page = new DOMParser().parseFromString(html, "text/html");
+    const viewers = [...page.querySelectorAll("[data-orion-artifact-viewer]")];
+    expect(viewers.map(viewer => viewer.getAttribute("data-orion-artifact-viewer"))).toEqual([included]);
+    expect(page.querySelector(".export-artifact-fallback")?.textContent).toContain(literalText);
+    expect(page.querySelector("#literal-artifact-example")).toBeNull();
+    expect(page.querySelector(".export-prose code")?.textContent?.trimEnd()).toBe(example);
+    expect(page.querySelector(".export-prose")?.textContent).toContain(unavailableVisualArtifact);
+    expect(page.querySelector("script[src], link[rel=stylesheet][href]")).toBeNull();
+    const linkedHtml = buildWebExportDocument(snapshot, "linked", "note-origin").html;
+    const linkedPage = new DOMParser().parseFromString(linkedHtml, "text/html");
+    const linkedViewers = [...linkedPage.querySelectorAll("[data-orion-artifact-viewer]")];
+    expect(linkedViewers.map(viewer => viewer.getAttribute("data-orion-artifact-viewer"))).toEqual([included, linkedMarker]);
+    snapshot.notes[1].body = "";
+    expect(buildWebExportDocument(snapshot, "note", "note-origin").html === html).toBe(true);
+  });
+
+  it("opens the saved HTML and reveals an answer through its embedded viewer", async () => {
+    const snapshot = fixture();
+    snapshot.notes[0].body = visualArtifactMarker({
+      version: 1, format: "flashcards", title: "Water cycle",
+      blocks: [{ kind: "cards", items: [{ front: "Where does runoff collect?", back: "In the reservoir." }] }],
+    });
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    try {
+      const page = frame.contentDocument!;
+      Object.assign(frame.contentWindow!, { TextEncoder, TextDecoder, scrollTo: () => {} });
+      page.open();
+      page.write(buildWebExportDocument(snapshot, "note", "note-origin").html);
+      page.close();
+      const viewer = page.querySelector("[data-orion-artifact-viewer]")!;
+      await vi.waitFor(() => expect(viewer.hasAttribute("data-orion-artifact-ready")).toBe(true));
+      const reveal = viewer.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+      expect(reveal.getAttribute("aria-expanded")).toBe("false");
+      reveal.click();
+      await vi.waitFor(() => expect(viewer.textContent).toContain("In the reservoir."));
+    } finally {
+      frame.remove();
+    }
+  });
+
+  it("omits viewer assets when the scope contains only a malformed visualisation or a code example", () => {
+    const snapshot = fixture();
+    const marker = visualArtifactMarker({
+      version: 1, format: "explainer", title: "Example", blocks: [{ kind: "text", text: "Literal example." }],
+    });
+    snapshot.notes[0].body = ["<!-- orion-artifact:v1 invalid -->", "", "~~~text", marker, "~~~"].join("\n");
+    snapshot.notes[1].body = marker;
+    const ordinaryAssets = () => {
+      const page = new DOMParser().parseFromString(buildWebExportDocument(snapshot, "note", "note-origin").html, "text/html");
+      expect(page.querySelector("[data-orion-artifact-viewer]")).toBeNull();
+      return [...page.querySelectorAll("script, style")].map(element => element.textContent);
+    };
+    const exampleAssets = ordinaryAssets();
+    snapshot.notes[0].body = "Plain text.";
+    expect(ordinaryAssets()).toEqual(exampleAssets);
+  });
+
+  it("retains every step as readable content in both the standalone fallback and the static export", () => {
+    const snapshot = fixture();
+    snapshot.notes[0].body = visualArtifactMarker({
+      version: 1, format: "timeline", title: "A two-stage trial",
+      blocks: [{ kind: "steps", items: [
+        { label: "One", heading: "Set up", text: "Record the baseline." },
+        { label: "Two", heading: "Compare", text: "Measure the change." },
+      ] }],
+    });
+    for (const mode of ["interactive", "static"] as const) {
+      const { html } = buildWebExportDocument(snapshot, "note", "note-origin", mode);
+      const page = new DOMParser().parseFromString(html, "text/html");
+      const fallback = page.querySelector(mode === "interactive" ? ".export-artifact-fallback" : ".export-prose");
+      expect(fallback?.closest("[hidden]")).toBeNull();
+      expect(fallback?.textContent).toContain("Record the baseline.");
+      expect(fallback?.textContent).toContain("Measure the change.");
+      expect(page.querySelectorAll("[data-orion-artifact-viewer]")).toHaveLength(mode === "interactive" ? 1 : 0);
+    }
+  });
+
   it("keeps document and selected paragraph margins scoped to each exported note", () => {
     const snapshot = fixture();
     const margin = "<!-- orion-paragraph-margins:v1 10 5 -->";

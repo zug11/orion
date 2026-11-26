@@ -470,6 +470,11 @@ These product decisions are intentional:
   preserve those row and column headings. Calculator inputs, results, accessible
   slider values and readable exports share currency formatting. Round money
   only for display and retain the unit's period or basis (such as $/month).
+  Attach the percent sign directly to the number and keep displayed slider
+  readings and results together on one line. Before insertion, check every
+  output across small discrete slider grids. For larger grids, test combinations
+  of the defaults and reachable endpoints, plus each reachable zero with the
+  other inputs at their defaults. Keep previously saved v1 calculators readable.
   Arithmetic uses a bounded expression tree. Its periodicPayment operation
   calculates equal end-of-period payments from principal, a fractional rate
   per period and a whole payment count. At zero interest it divides principal
@@ -488,9 +493,12 @@ These product decisions are intentional:
   the source, reject stale captures and keep insertion in one Undo group.
   An artifact-only save skips the whole-note wiki refresh. Store validated
   v1 JSON as UTF-8 base64 in a standalone `<!-- orion-artifact:v1 … -->`
-  Markdown comment. The editor and reading view render it interactively,
-  portable Orion exports retain it, and readable web exports include static
-  content for each stage. Selections and interaction state stay window-local.
+  Markdown comment. Portable Orion exports retain it. The editor, reading
+  view and standalone HTML exports share the interactive renderer. Include its
+  bundled script and stylesheet once per HTML file containing a valid saved
+  artifact. Each embedded viewer reads its own validated data and keeps its
+  controls local to that page. Print, script-disabled browsers and Word exports
+  show the readable content for every stage and the initial calculator values.
 - AI is optional. Writing, local imports, on-device OCR and transcription,
   source provenance, links, search, Spaces, and web/Markdown export must remain
   useful without an OpenAI or Anthropic key.
@@ -1004,7 +1012,7 @@ Preserve these trust boundaries:
 
 ### Additional local library tools
 
-The independent MCP crate also exposes 31 tools from `src/library`:
+The independent MCP crate also exposes 32 tools from `src/library`:
 `orion_list_sources`, `orion_search_sources`, `orion_get_source_passage`,
 `orion_get_note_section`, `orion_get_notes`, `orion_list_concepts`,
 `orion_get_concept`, `orion_resolve_link`, `orion_get_related_notes`,
@@ -1015,7 +1023,7 @@ The independent MCP crate also exposes 31 tools from `src/library`:
 `orion_get_link_path`, `orion_apply_note_command`, `orion_propose_passage_comment`,
 `orion_get_passage_threads`, `orion_list_boards`, `orion_get_board`,
 `orion_list_tickets`, `orion_get_ticket`, `orion_create_board`, `orion_update_board`,
-`orion_create_tickets`, and `orion_update_ticket`. They work with Orion closed, without credentials or
+`orion_create_tickets`, and `orion_update_ticket`, plus `orion_insert_visual_artifact`. They work with Orion closed, without credentials or
 provider calls, under the existing direct local-library access contract.
 
 - Reads default only to the active Space. Every write requires an explicit
@@ -1023,6 +1031,11 @@ provider calls, under the existing direct local-library access contract.
   Batch metadata updates validate every member before any mutation. Preserve
   unrelated raw fields and settings; content edits stale the overview, pin-only
   edits do not. A stale retry must never duplicate an append or erase new text.
+- `orion_insert_visual_artifact` appends one standalone Visualise marker to
+  an existing note. Its `artifact` argument is a v1 JSON object. Match the
+  renderer's structural, UTF-8 byte, drawing and calculator range checks before
+  writing. Preserve surrounding Markdown, use the shared note version guard
+  and record MCP writing provenance. Both clients can use it with Orion closed.
 - `orion_apply_note_command` is a direct local version-guarded writer for portable
   editor content. Its finite command set covers writing blocks, text/headings,
   tasks/lists, dividers, quotes/code, tables, web links, same-Space note links and excerpts,
@@ -1110,7 +1123,7 @@ provider calls, under the existing direct local-library access contract.
   version history. Integrity tooling never silently repairs or deletes data.
 - Run `script/test_mcp_library.mjs` against each exact extracted package binary
   and include this harness in release fingerprints. The harness uses only
-  isolated fixtures and exercises all 31 local additions, including real atomic edits.
+  isolated fixtures and exercises all 32 local additions, including real atomic edits.
   Its completed-task contract checks default and explicit working reads, scoped
   history, cached derivative suppression, completion followed by a fresh read in
   the same process, original versions/Unicode-scalar ranges/CRLF line positions,
@@ -1121,7 +1134,7 @@ provider calls, under the existing direct local-library access contract.
 
 ### Optional native desktop workflows
 
-The shared connector now exposes 66 tools: 40 local library tools, 15 desktop
+The shared connector now exposes 67 tools: 41 local library tools, 15 desktop
 workflow/capability/job tools, three native edit-review tools and one read-only
 active-editor-context tool, plus three finite voice work-order tools and four
 captured-editor-generation tools. The optional workflows are
@@ -2540,8 +2553,8 @@ capturing Orion's live DOM. Preserve these rules:
   import guidance, Chat, settings, provider keys, import-draft state, dormant
   Studio data, another Space, or the vault schema itself.
 - Do not execute raw HTML from a note or interpolate user text into scripts or
-  styles. Keep all CSS and fixed navigation JavaScript inside the file, load no
-  remote assets, and retain the restrictive export CSP. The browser file must
+  styles. Embed the CSS, navigation script and any required visualisation
+  viewer script in the file. Retain the restrictive export CSP. The browser file must
   have no dependency on Orion, a server, or the network.
 - The native `export_web_page` command revalidates a non-empty HTML doctype,
   enforces a 16 MiB document-shell bound before managed images and a 128 MiB

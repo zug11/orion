@@ -1,6 +1,7 @@
 import type { Settings } from "../types";
 import { isSelectedAIConfigured } from "./ai";
 import { chatWithOrion } from "./storage";
+import { validateGeneratedCalculatorRanges } from "./visualArtifactCalculatorRanges";
 import { ARTIFACT_FORMATS, MAX_ARTIFACT_BYTES, MAX_ARTIFACT_GUIDANCE, MAX_ARTIFACT_SOURCE, parseArtifactGenerationInput, parseVisualArtifact,
   type ArtifactFormat, type VisualArtifact } from "./visualArtifacts";
 
@@ -38,6 +39,7 @@ export async function generateVisualArtifact(
     }
     const artifact = parseVisualArtifact(document);
     if (format !== "auto" && artifact.format !== format) throw new Error("The AI returned a different visual format. Try generating it again.");
+    validateGeneratedCalculatorRanges(artifact);
     return artifact;
   } finally {
     clearTimeout(timer);

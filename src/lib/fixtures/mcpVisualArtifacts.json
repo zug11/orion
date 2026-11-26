@@ -1,0 +1,74 @@
+[
+  {
+    "name": "Timeline", "valid": true,
+    "artifact": {"version":1,"format":"timeline","title":"Timeline","blocks":[{"kind":"steps","items":[{"label":"1","heading":"Étude","text":"🌱 Plant the seed."}]}]}
+  },
+  {
+    "name": "Quiz", "valid": true,
+    "artifact": {"version":1,"format":"quiz","title":"Quiz","blocks":[{"kind":"quiz","items":[{"question":"How many?","choices":["One","Two"],"answer":1,"explanation":"The note names two."}]}]}
+  },
+  {
+    "name": "Flashcards", "valid": true,
+    "artifact": {"version":1,"format":"flashcards","title":"Flashcards","blocks":[{"kind":"cards","items":[{"front":"Prompt","back":"Answer"}]}]}
+  },
+  {
+    "name": "Comparison", "valid": true,
+    "artifact": {"version":1,"format":"comparison","title":"Comparison","blocks":[{"kind":"table","columns":["","East","West"],"rows":[["Temperature","Cool","Warm"]]}]}
+  },
+  {
+    "name": "Daylight", "valid": true,
+    "artifact": {"version":1,"format":"explainer","title":"Daylight","blocks":[{"kind":"text","heading":"Power","text":"Text with literal <strong> markup."},{"kind":"scene","nodes":[{"label":"Cell","alt":"Rounded cell","x":20,"y":50,"shapes":[{"kind":"circle","cx":50,"cy":50,"r":40,"fill":"warm","stroke":"ink"},{"kind":"path","d":"M5 5 L95 95","fill":"none","stroke":"ink"}]},{"label":"House","alt":"Home","x":75,"y":50,"shapes":[{"kind":"rect","x":12,"y":12,"width":70,"height":70,"fill":"accent","stroke":"none","level":true}]}],"frames":[{"label":"Daylight","caption":"Home draws power.","values":["8 kW","6 kW"],"levels":[null,0.5],"flows":[{"from":0,"to":1,"label":"6 kW"}]}]}]}
+  },
+  {
+    "name": "Pair trade", "valid": true,
+    "artifact": {"version":1,"format":"calculator","title":"Pair trade","blocks":[{"kind":"calculator","inputs":[{"label":"North","unit":"%","min":-5,"max":5,"step":0.1,"initial":3},{"label":"South","unit":"%","min":-5,"max":5,"step":0.1,"initial":1}],"outputs":[{"label":"Result","unit":"","expression":{"op":"subtract","left":{"op":"multiply","left":1000,"right":{"op":"subtract","left":{"input":0},"right":{"input":1}}},"right":400}}]}]}
+  },
+  {
+    "name": "Unicode whitespace in duplicate choices", "valid": false,
+    "artifact": {"version":1,"format":"quiz","title":"Unicode whitespace in duplicate choices","blocks":[{"kind":"quiz","items":[{"question":"Choose","choices":["A","﻿A"],"answer":1,"explanation":"One answer."}]}]}
+  },
+  {
+    "name": "Mismatched format", "valid": false,
+    "artifact": {"version":1,"format":"timeline","title":"Mismatched format","blocks":[{"kind":"text","text":"Missing steps"}]}
+  },
+  {
+    "name": "Unknown block field", "valid": false,
+    "artifact": {"version":1,"format":"explainer","title":"Unknown block field","blocks":[{"kind":"text","text":"Literal prose","other":"Unexpected"}]}
+  },
+  {
+    "name": "Invalid diagram reference", "valid": false,
+    "artifact": {"version":1,"format":"explainer","title":"Invalid diagram reference","blocks":[{"kind":"scene","nodes":[{"label":"Cell","alt":"Rounded cell","x":20,"y":50,"shapes":[{"kind":"circle","cx":50,"cy":50,"r":40,"fill":"warm","stroke":"ink"},{"kind":"path","d":"M5 5 L95 95","fill":"none","stroke":"ink"}]},{"label":"House","alt":"Home","x":75,"y":50,"shapes":[{"kind":"rect","x":12,"y":12,"width":70,"height":70,"fill":"accent","stroke":"none","level":true}]}],"frames":[{"label":"Daylight","caption":"Home draws power.","values":["8 kW","6 kW"],"levels":[null,0.5],"flows":[{"from":0,"to":2,"label":""}]}]}]}
+  },
+  {
+    "name": "Unsupported path command", "valid": false,
+    "artifact": {"version":1,"format":"explainer","title":"Unsupported path command","blocks":[{"kind":"scene","nodes":[{"label":"Cell","alt":"Rounded cell","x":20,"y":50,"shapes":[{"kind":"path","d":"M5 5 l5 5","fill":"none","stroke":"ink"}]},{"label":"House","alt":"Home","x":75,"y":50,"shapes":[{"kind":"rect","x":12,"y":12,"width":70,"height":70,"fill":"accent","stroke":"none","level":true}]}],"frames":[{"label":"Daylight","caption":"Home draws power.","values":["8 kW","6 kW"],"levels":[null,0.5],"flows":[{"from":0,"to":1,"label":"6 kW"}]}]}]}
+  },
+  {
+    "name": "Mortgage with zero rate", "valid": true,
+    "artifact": {"version":1,"format":"calculator","title":"Mortgage with zero rate","blocks":[{"kind":"calculator","inputs":[{"label":"Annual rate","unit":"%","min":0,"max":8,"step":0.2,"initial":6},{"label":"Years","unit":"%","min":1,"max":30,"step":1,"initial":30}],"outputs":[{"label":"Result","unit":"","expression":{"op":"periodicPayment","principal":200000,"ratePerPeriod":{"op":"divide","left":{"input":0},"right":1200},"periods":{"op":"multiply","left":{"input":1},"right":12}}}]}]}
+  },
+  {
+    "name": "Endpoint divides by zero", "valid": false,
+    "artifact": {"version":1,"format":"calculator","title":"Endpoint divides by zero","blocks":[{"kind":"calculator","inputs":[{"label":"Volatility","unit":"%","min":0,"max":100,"step":0.1,"initial":5}],"outputs":[{"label":"Result","unit":"","expression":{"op":"divide","left":10,"right":{"input":0}}}]}]}
+  },
+  {
+    "name": "Interior tick divides by zero", "valid": false,
+    "artifact": {"version":1,"format":"calculator","title":"Interior tick divides by zero","blocks":[{"kind":"calculator","inputs":[{"label":"Tick","unit":"%","min":0,"max":4,"step":1,"initial":1}],"outputs":[{"label":"Result","unit":"","expression":{"op":"divide","left":1,"right":{"op":"subtract","left":{"input":0},"right":2}}}]}]}
+  },
+  {
+    "name": "Decimal maximum between ticks", "valid": true,
+    "artifact": {"version":1,"format":"calculator","title":"Decimal maximum between ticks","blocks":[{"kind":"calculator","inputs":[{"label":"Rate","unit":"%","min":0.1,"max":0.35,"step":0.1,"initial":0.2}],"outputs":[{"label":"Result","unit":"","expression":{"op":"divide","left":1,"right":{"op":"subtract","left":{"input":0},"right":0.35}}}]}]}
+  },
+  {
+    "name": "Reachable upper tick", "valid": false,
+    "artifact": {"version":1,"format":"calculator","title":"Reachable upper tick","blocks":[{"kind":"calculator","inputs":[{"label":"Rate","unit":"%","min":0.1,"max":0.35,"step":0.1,"initial":0.2}],"outputs":[{"label":"Result","unit":"","expression":{"op":"divide","left":1,"right":{"op":"subtract","left":{"input":0},"right":0.3}}}]}]}
+  },
+  {
+    "name": "Reachable interior zero on large grid", "valid": false,
+    "artifact": {"version":1,"format":"calculator","title":"Reachable interior zero on large grid","blocks":[{"kind":"calculator","inputs":[{"label":"Rate","unit":"%","min":-1e-05,"max":1e-05,"step":1e-08,"initial":1e-05}],"outputs":[{"label":"Result","unit":"","expression":{"op":"divide","left":1,"right":{"input":0}}}]}]}
+  },
+  {
+    "name": "Extremes combined", "valid": false,
+    "artifact": {"version":1,"format":"calculator","title":"Extremes combined","blocks":[{"kind":"calculator","inputs":[{"label":"A","unit":"%","min":0,"max":1000,"step":1,"initial":500},{"label":"B","unit":"%","min":0,"max":1000,"step":1,"initial":500}],"outputs":[{"label":"Result","unit":"","expression":{"op":"divide","left":1,"right":{"op":"add","left":{"input":0},"right":{"op":"subtract","left":1000,"right":{"input":1}}}}}]}]}
+  }
+]

@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import mcpVisualArtifacts from "./fixtures/mcpVisualArtifacts.json";
+import { validateGeneratedCalculatorRanges } from "./visualArtifactCalculatorRanges";
 import { evaluateArtifactExpression, parseVisualArtifact, type ArtifactBlock, type ArtifactExpression } from "./visualArtifacts";
 
 const mark = { kind: "path", d: "M 10,80 L 50 10 90 80 Z", fill: "cool", stroke: "ink" };
@@ -25,6 +27,12 @@ const calculator = { kind: "calculator",
 const document = (block: unknown, format = "explainer") => ({ version: 1, format, title: "From the note", blocks: [block] });
 
 describe("versioned visual documents", () => {
+  it.each(mcpVisualArtifacts)("agrees with the MCP insertion contract for $name", ({ artifact, valid }) => {
+    const validate = () => validateGeneratedCalculatorRanges(parseVisualArtifact(artifact));
+    if (valid) expect(validate).not.toThrow();
+    else expect(validate).toThrow();
+  });
+
   it("round-trips original solar illustrations and changing flows", () => {
     const saved = document(scene);
     expect(parseVisualArtifact(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
@@ -55,6 +63,30 @@ describe("versioned visual documents", () => {
     expect(evaluateArtifactExpression(block.outputs[0].expression, [3])).toBe(1350);
     expect(evaluateArtifactExpression({ op: "divide", left: 3, right: { input: 0 } }, [0])).toBeNull();
   });
+  it("tests reachable ticks, including decimal endpoints and interior zeroes", () => {
+    function check(min: number, max: number, step: number, initial: number, singularAt: number) {
+      const block = { ...calculator, inputs: [{ label: "Rate", unit: "%", min, max, step, initial }],
+        outputs: [{ label: "Result", unit: "", expression: {
+          op: "divide", left: 1, right: { op: "subtract", left: { input: 0 }, right: singularAt },
+        } }] };
+      validateGeneratedCalculatorRanges(parseVisualArtifact(document(block)));
+    }
+    expect(() => check(0.1, 0.35, 0.1, 0.1, 0.3)).toThrow(/Rate = 0.3/);
+    expect(() => check(0.1, 0.35, 0.1, 0.1, 0.35)).not.toThrow();
+    expect(() => check(1, 9, 1, 5, 7)).toThrow(/Rate = 7/);
+    expect(() => check(-1e-5, 1e-5, 1e-8, 1e-5, 0)).toThrow(/Rate = 0/);
+    expect(() => check(-999, 999, 2, 1, 0)).not.toThrow();
+  });
+  it("checks combined endpoints with other sliders at their defaults on a large grid", () => {
+    const inputs = ["A", "B", "C"].map(label => ({ label, unit: "", min: 0, max: 1000, step: 1, initial: 500 }));
+    const expression = { op: "divide", left: 1, right: { op: "add",
+      left: { op: "add", left: { input: 0 }, right: { op: "subtract", left: 1000, right: { input: 1 } } },
+      right: { op: "multiply", left: { op: "subtract", left: { input: 2 }, right: 500 },
+        right: { op: "subtract", left: { input: 2 }, right: 500 } },
+    } };
+    const art = parseVisualArtifact(document({ kind: "calculator", inputs, outputs: [{ label: "Ratio", unit: "", expression }] }));
+    expect(() => validateGeneratedCalculatorRanges(art)).toThrow(/A = 0, B = 1000, C = 500/);
+  });
   it("round-trips a fixed-payment calculator and recomputes from the chosen rate and term", () => {
     const payment: ArtifactExpression = {
       op: "periodicPayment",
@@ -67,7 +99,9 @@ describe("versioned visual documents", () => {
       { label: "Annual rate", unit: "%", min: 0, max: 12, step: 0.25, initial: 6 },
       { label: "Term", unit: "years", min: 1, max: 30, step: 1, initial: 30 },
     ], outputs: [{ label: "Monthly payment", unit: "$/month", expression: payment }] }, "calculator");
-    expect(parseVisualArtifact(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
+    const mortgage = parseVisualArtifact(JSON.parse(JSON.stringify(saved)));
+    expect(mortgage).toEqual(saved);
+    expect(() => validateGeneratedCalculatorRanges(mortgage)).not.toThrow();
     expect(evaluateArtifactExpression(payment, [400000, 6, 30])).toBeCloseTo(2398.202100611010, 9);
     expect(evaluateArtifactExpression(payment, [400000, 6, 15])).toBeCloseTo(3375.427312193805, 9);
     expect(evaluateArtifactExpression(payment, [400000, 3, 30])).toBeCloseTo(1686.416134917802, 9);

@@ -19,7 +19,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { slugifyTitle } from "../data/defaults";
-import type { AppSnapshot, Concept, Note, ThemeMode } from "../types";
+import type { AppSnapshot, Note, ThemeMode } from "../types";
 import {
   expandOrionWikiLinks,
   splitMarkdownFrontmatter,
@@ -37,9 +37,14 @@ import {
   type ThemePalette,
   type ThemePreferences,
 } from "./theme";
-import { decorateAutoLinks, resolveConceptDestination } from "./wiki";
+import { decorateAutoLinks } from "./wiki";
+import { conceptDestinationIds, linkedNoteIdsForExport, notesForExportScope, type ExportScope } from "./exportScope";
+import viewerStyles from "../components/VisualArtifactView.css?inline";
+import { viewerScript } from "virtual:orion-visualisation-export";
 
-export type ExportScope = "note" | "linked" | "space";
+export { linkedNoteIdsForExport, notesForExportScope, type ExportScope } from "./exportScope";
+
+type ArtifactExportMode = "interactive" | "static";
 
 export interface WebExportDocument {
   fileName: string;
@@ -49,6 +54,7 @@ export interface WebExportDocument {
 }
 
 interface ExportSiteProps {
+  artifacts: ArtifactExportMode;
   snapshot: AppSnapshot;
   notes: readonly Note[];
   scope: ExportScope;
@@ -56,15 +62,13 @@ interface ExportSiteProps {
 }
 
 interface ExportNoteProps {
+  artifacts: ArtifactExportMode;
   snapshot: AppSnapshot;
   note: Note;
   includedNoteIds: ReadonlySet<string>;
 }
 
 type ExportThemePreferences = ThemePreferences & { theme: ThemeMode };
-
-const ORION_LINK_PATTERN =
-  /\[[^\]\n]*\]\(orion-(note|concept):\/\/([^) \t\r\n]+)(?:[ \t]+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'))?\)/g;
 
 const EXPORT_STYLES = String.raw`
 :root {
@@ -301,6 +305,22 @@ a { color: inherit; }
 }
 `;
 
+const EXPORT_ARTIFACT_STYLES = `
+[data-orion-artifact-viewer] {
+  --ui-font: var(--sans);
+  --mono-font: var(--mono);
+  --surface-1: var(--surface-solid);
+  --periwinkle: var(--accent);
+  --periwinkle-strong: var(--accent-strong);
+}
+@media screen {
+  [data-orion-artifact-ready] + .export-artifact-fallback { display: none; }
+}
+@media print {
+  [data-orion-artifact-viewer] { display: none; }
+}
+`;
+
 const EXPORT_SCRIPT = String.raw`(() => {
   const pages = Array.from(document.querySelectorAll('[data-export-page]'));
   const navLinks = Array.from(document.querySelectorAll('[data-note-nav]'));
@@ -435,70 +455,6 @@ function safeExternalUrl(value: string | undefined): string | null {
   return value;
 }
 
-function conceptDestinationIds(
-  concept: Concept,
-  notes: readonly Note[],
-): string[] {
-  const destination = resolveConceptDestination(concept, notes);
-  return destination.kind === "note"
-    ? [destination.noteId]
-    : destination.kind === "connections"
-      ? destination.noteIds
-      : [];
-}
-
-export function linkedNoteIdsForExport(
-  note: Note,
-  snapshot: AppSnapshot,
-): string[] {
-  const expanded = expandOrionWikiLinks(
-    splitMarkdownFrontmatter(stripOrionNoteMarkers(note.body)).content,
-    snapshot.notes,
-    snapshot.concepts,
-  );
-  const ids = new Set<string>();
-  let match: RegExpExecArray | null;
-  ORION_LINK_PATTERN.lastIndex = 0;
-  while ((match = ORION_LINK_PATTERN.exec(expanded)) !== null) {
-    if (match[1] === "note") {
-      ids.add(match[2]);
-      continue;
-    }
-    const concept = snapshot.concepts.find((item) => item.id === match?.[2]);
-    if (concept) {
-      conceptDestinationIds(concept, snapshot.notes).forEach((id) => ids.add(id));
-    }
-  }
-
-  for (const segment of decorateAutoLinks(expanded, snapshot.concepts, {
-    excludeNoteIdFromTargets: note.id,
-  })) {
-    if (segment.type !== "concept") continue;
-    const concept = snapshot.concepts.find(
-      (candidate) => candidate.id === segment.conceptId,
-    );
-    if (concept) {
-      conceptDestinationIds(concept, snapshot.notes).forEach((id) => ids.add(id));
-    }
-  }
-
-  ids.delete(note.id);
-  return snapshot.notes.filter((candidate) => ids.has(candidate.id)).map(({ id }) => id);
-}
-
-export function notesForExportScope(
-  snapshot: AppSnapshot,
-  scope: ExportScope,
-  originNoteId: string | null,
-): Note[] {
-  if (scope === "space") return [...snapshot.notes];
-  const origin = snapshot.notes.find((note) => note.id === originNoteId);
-  if (!origin) return [];
-  if (scope === "note") return [origin];
-  const linkedIds = new Set(linkedNoteIdsForExport(origin, snapshot));
-  return [origin, ...snapshot.notes.filter((note) => linkedIds.has(note.id))];
-}
-
 function ExportLink({
   children,
   noteIds,
@@ -532,7 +488,7 @@ function exportParagraphMargins(properties?: Record<string, unknown>) {
   return noteMarginsStyle({ left, right });
 }
 
-function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
+function ExportNote({ snapshot, note, includedNoteIds, artifacts }: ExportNoteProps) {
   const { body, margins } = splitDocumentMargins(note.body);
   const document = splitMarkdownFrontmatter(body);
   const expanded = expandOrionWikiLinks(
@@ -601,7 +557,7 @@ function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
   }
 
   const components: Components = {
-    aside: ({ node }) => <ExportVisualArtifact marker={node?.properties["data-orion-artifact"]}/>,
+    aside: ({ node }) => <ExportVisualArtifact marker={node?.properties["data-orion-artifact"]} interactive={artifacts === "interactive"} />,
     section: ({ children, node }) => {
       const work = collectWork(includedNotes);
       const board = work.boards.find(board => board.id === node?.properties?.['data-orion-board'] && board.noteId === note.id);
@@ -751,7 +707,6 @@ function ExportNote({ snapshot, note, includedNoteIds }: ExportNoteProps) {
       id={noteAnchor(note)}
       data-export-page
       data-page-title={note.title}
-      hidden
     >
       <div className="export-note-layout">
         <div className="export-note-document">
@@ -881,7 +836,7 @@ function ExportCover({ snapshot, notes }: { snapshot: AppSnapshot; notes: readon
   );
 }
 
-function ExportSite({ snapshot, notes, scope, originNoteId }: ExportSiteProps) {
+function ExportSite({ snapshot, notes, scope, originNoteId, artifacts }: ExportSiteProps) {
   const includedNoteIds = new Set(notes.map((note) => note.id));
   const origin = notes.find((note) => note.id === originNoteId) ?? notes[0];
   const defaultPage = scope === "space" ? "space-home" : origin ? noteAnchor(origin) : "space-home";
@@ -928,6 +883,7 @@ function ExportSite({ snapshot, notes, scope, originNoteId }: ExportSiteProps) {
             snapshot={snapshot}
             note={note}
             includedNoteIds={includedNoteIds}
+            artifacts={artifacts}
             key={note.id}
           />
         ))}
@@ -964,6 +920,7 @@ export function buildWebExportDocument(
   snapshot: AppSnapshot,
   scope: ExportScope,
   originNoteId: string | null,
+  artifacts: ArtifactExportMode = "interactive",
 ): WebExportDocument {
   const notes = notesForExportScope(snapshot, scope, originNoteId);
   if (notes.length === 0) {
@@ -972,10 +929,14 @@ export function buildWebExportDocument(
   const origin = notes.find((note) => note.id === originNoteId) ?? notes[0];
   const title = scope === "space" ? snapshot.workspace.name : origin.title;
   const body = renderToStaticMarkup(
-    <ExportSite snapshot={snapshot} notes={notes} scope={scope} originNoteId={originNoteId} />,
+    <ExportSite snapshot={snapshot} notes={notes} scope={scope} originNoteId={originNoteId} artifacts={artifacts} />,
   );
   const defaultPage = scope === "space" ? "space-home" : noteAnchor(origin);
-  const html = `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n${exportThemeMetadata(snapshot.settings)}\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none'">\n<title>${escapeHtml(title)} · Orion</title>\n<style>${exportThemeStyles(snapshot.settings)}\n${EXPORT_STYLES}</style>\n</head>\n<body data-default-page="${escapeHtml(defaultPage)}" data-export-title="${escapeHtml(snapshot.workspace.name)}">\n${body}\n<script>${EXPORT_SCRIPT}</script>\n</body>\n</html>\n`;
+  // Only the renderer emits this element. Literal examples in prose are HTML-escaped.
+  const hasViewer = body.includes("<div data-orion-artifact-viewer=");
+  const artifactStyles = hasViewer ? viewerStyles + "\n" + EXPORT_ARTIFACT_STYLES : "";
+  const artifactScript = hasViewer ? `\n<script>${viewerScript}</script>` : "";
+  const html = `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n${exportThemeMetadata(snapshot.settings)}\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none'">\n<title>${escapeHtml(title)} · Orion</title>\n<style>${exportThemeStyles(snapshot.settings)}\n${EXPORT_STYLES}\n${artifactStyles}</style>\n</head>\n<body data-default-page="${escapeHtml(defaultPage)}" data-export-title="${escapeHtml(snapshot.workspace.name)}">\n${body}\n<script>${EXPORT_SCRIPT}</script>${artifactScript}\n</body>\n</html>\n`;
   return {
     fileName: `${slugifyTitle(title) || "orion-export"}.html`,
     html,

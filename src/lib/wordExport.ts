@@ -348,7 +348,7 @@ export async function buildWordExportDocument(
   const notes = notesForExportScope(snapshot, scope, originNoteId);
   const inputSize = notes.reduce((bytes, note) => bytes + new TextEncoder().encode(note.body + note.title + note.summary).length, 0);
   if (inputSize > MAX_TEXT_BYTES || notes.length > 2000) throw new Error("Choose fewer notes for this Word export (up to 16 MB of text and 2,000 notes).");
-  const web = buildWebExportDocument(snapshot, scope, originNoteId);
+  const web = buildWebExportDocument(snapshot, scope, originNoteId, "static");
   if (new TextEncoder().encode(web.html).length > MAX_TEXT_BYTES) throw new Error("This selection contains too much text or citation metadata for one Word document.");
   const parsed = new DOMParser().parseFromString(web.html, "text/html");
   const articles = [...parsed.querySelectorAll("article.export-note")];

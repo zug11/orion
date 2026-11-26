@@ -4,6 +4,8 @@ import type { ChatRequest, Settings } from "../types";
 import { providerCallScheduler } from "./providerScheduler";
 import { chatWithOrion, deleteApiKey, deleteAnthropicApiKey, saveApiKey, saveAnthropicApiKey } from "./storage";
 import { generateVisualArtifact } from "./visualArtifactGeneration";
+import { readVisualArtifactMarker, visualArtifactMarker } from "./visualArtifactMarkdown";
+import { type VisualArtifact } from "./visualArtifacts";
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
@@ -47,6 +49,18 @@ describe("Visualise through the saved connection", () => {
     expect(body.instructions ?? body.system).toContain("Draw the actual things");
     expect(body.text?.format.schema.required ?? body.output_config.format.schema.required).toEqual(["reply"]);
     expect(JSON.parse(body.input ?? body.messages[0].content)).toEqual({ source, format: "auto", guidance: "Show the weekend." });
+  });
+  it("rejects an undefined volatility endpoint before insertion and still opens the saved v1 calculator", async () => {
+    const calculator: VisualArtifact = { version: 1, format: "calculator", title: "Volatility sizing", blocks: [{
+      kind: "calculator",
+      inputs: [{ label: "Volatility", unit: "%", min: 0, max: 100, step: 0.1, initial: 5 }],
+      outputs: [{ label: "Exposure", unit: "%", expression: { op: "divide", left: 10, right: { input: 0 } } }],
+    }] };
+    const transport = mockReply(JSON.stringify(calculator));
+    await expect(generateVisualArtifact("Divide the target by volatility.", "calculator", "", selected, freshSignal()))
+      .rejects.toThrow(/Exposure.*Volatility = 0/);
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(readVisualArtifactMarker(visualArtifactMarker(calculator))).toEqual(calculator);
   });
   it("uses the existing desktop ChatGPT connection with a full-length selection, without requesting an API key", async () => {
     const transport = mockReply("");

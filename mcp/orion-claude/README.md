@@ -20,8 +20,8 @@ This local Claude Desktop extension gives Claude direct access to Orion.
 
 ## Additional local tools
 
-The connector also exposes 31 additional local library tools (66 tools total:
-40 local library tools, 15 desktop workflows, three edit-review tools, one
+The connector also exposes 32 additional local library tools (67 tools total:
+41 local library tools, 15 desktop workflows, three edit-review tools, one
 active-editor-context reader, three voice work-order tools and four selected-editor-action tools):
 exact source passages and note sections, batch reads, concepts, link resolution
 and paths, provenance, tags, Markdown tasks, duplicate detection, integrity,
@@ -78,6 +78,10 @@ desktop access; retry/steer additionally needs AI permission and always runs as
 read-only research. No tool starts a call, microphone, focus change or note save.
 Working views withhold history-derived prose. Reuse the same control request ID
 and input after uncertain delivery; a control receipt is not completed research.
+
+Use `orion_insert_visual_artifact` to append an interactive visualisation to an
+existing note. Pass the v1 document as the `artifact` JSON object together with
+the Space, note ID and current note version. See the [example call](../../docs/mcp-library-tools.md#insert-an-interactive-visualisation).
 
 `orion_apply_note_command` adds version-guarded editor structures: movable
 blocks, headings, tasks, lists, dividers, quotes, code, tables, web/note links,

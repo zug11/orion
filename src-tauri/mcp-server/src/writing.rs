@@ -61,6 +61,10 @@ pub(super) fn added_markdown(before: &str, after: &str) -> bool {
 }
 
 pub(super) fn wrote_body(tool: &str, args: &Map<String, Value>, before: &str, after: &str) -> bool {
+    if tool == "orion_insert_visual_artifact" {
+        // The validated visual is authored content stored entirely in a Markdown comment.
+        return before != after;
+    }
     let authored = match tool {
         "orion_append_to_note" | "orion_create_tickets" => true,
         "orion_edit_note_text" => args

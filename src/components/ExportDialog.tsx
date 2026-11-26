@@ -11,7 +11,7 @@ import {
   X,
 } from "../lib/icons";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { notesForExportScope, type ExportScope } from "../lib/webExport";
+import { notesForExportScope, type ExportScope } from "../lib/exportScope";
 import type { AppSnapshot, Note } from "../types";
 import { displayNoteTitle } from "../lib/noteMetadata";
 import './PortableOrion.css';

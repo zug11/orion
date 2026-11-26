@@ -1,8 +1,7 @@
 # Orion local library tools
 
-The shared Codex and Claude Desktop server now has **44 tools**: 30 local
-library tools, including these 21 additions, plus 14 native workflow and job
-tools. These additions work with Orion closed and never call an AI provider.
+These local tools are available to Claude Desktop and Codex while Orion is
+closed. They operate on the local vault without a provider call.
 
 | Tool | Capability |
 | --- | --- |
@@ -21,6 +20,7 @@ tools. These additions work with Orion closed and never call an AI provider.
 | `orion_set_task_completion` | Change one exact checkbox without changing surrounding prose. |
 | `orion_edit_note_text` | Replace one unique selection while preserving the rest of the note. |
 | `orion_apply_note_command` | Insert portable writing blocks and slash-command content with a version guard. |
+| `orion_insert_visual_artifact` | Append an interactive Visualise document supplied as structured JSON. |
 | `orion_append_to_note` | Append exact text with a version guard against duplicate retries. |
 | `orion_batch_update_metadata` | Atomically set tags and/or pinned state on up to 20 notes. |
 | `orion_find_duplicate_notes` | Identify exact body duplicates or normalized title matches. |
@@ -46,6 +46,40 @@ Metadata batches validate every note before applying any changes. Tags affect
 overview freshness; pin-only updates do not. Writes preserve unrelated fields,
 all other Spaces, existing provenance, and ordinary permanent-note behavior.
 Successful receipts contain updated versions and exact Orion citations.
+
+## Insert an interactive visualisation
+
+Call `orion_insert_visual_artifact` with an existing note's current version from
+`orion_get_notes`. For example, this calculator lets the reader vary the rate
+at which water fills a 20-litre container.
+
+```json
+{
+  "space_id": "<exact Space ID>",
+  "note_id": "<exact note ID>",
+  "expected_version": "<current note version>",
+  "artifact": {
+    "version": 1,
+    "format": "calculator",
+    "title": "Time to fill a 20-litre container",
+    "blocks": [{
+      "kind": "calculator",
+      "inputs": [{ "label": "Inflow", "unit": "L/s", "min": 1, "max": 10, "step": 1, "initial": 2 }],
+      "outputs": [{ "label": "Time to fill", "unit": "s", "expression": { "op": "divide", "left": 20, "right": { "input": 0 } } }]
+    }]
+  }
+}
+```
+
+The tool appends one illustration after the note's existing content. It checks
+the v1 document, its 48,000-byte limit and the range of each calculator before
+encoding the portable marker. Small slider grids (up to 256 combinations) are
+checked in full. Larger grids are checked at combinations of defaults and
+reachable endpoints, plus each reachable zero with the other inputs at default.
+The example above starts at 10 seconds. An input minimum of zero would make the
+calculation undefined and the write would fail. A stale note version also
+rejects the write. The success receipt includes the updated note version and
+citation. Creating the artifact uses no provider connection.
 
 ## Writing blocks and slash-command content
 

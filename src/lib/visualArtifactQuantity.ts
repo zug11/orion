@@ -12,8 +12,9 @@ const symbolCurrencies = new Map(Object.entries({
 const moneyFormats = new Map<string, Intl.NumberFormat>();
 
 export function formatArtifactQuantity(value: number | null, unit: string): string {
-  if (value === null) return "Undefined";
+  if (value === null) return "No result at these settings";
   const trimmed = unit.trim();
+  if (trimmed.startsWith("%")) return numbers.format(value) + trimmed;
   const parts = trimmed.match(/^(\S+?)(?:\s*\/\s*|\s+per\s+)(.+)$/i);
   const numerator = parts ? parts[1] : trimmed;
   const suffix = parts ? "/" + parts[2] : "";

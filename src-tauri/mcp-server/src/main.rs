@@ -3296,7 +3296,7 @@ mod tests {
                 "params": {}
             }))
             .expect("response");
-        assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(66));
+        assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(67));
         let definitions = tools["result"]["tools"].as_array().expect("tools");
         let browse = definitions
             .iter()

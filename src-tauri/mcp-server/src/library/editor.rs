@@ -173,7 +173,7 @@ fn literal_indentation(text: &str) -> Result<(), ToolFailure> {
     Ok(())
 }
 
-fn join_blocks(left: &str, right: &str) -> String {
+pub(super) fn join_blocks(left: &str, right: &str) -> String {
     if left.is_empty() {
         return right.into();
     }

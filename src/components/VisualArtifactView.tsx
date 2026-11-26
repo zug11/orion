@@ -138,7 +138,7 @@ function Calculator({ block }: { block: Block<'calculator'> }) {
           const result = evaluateArtifactExpression(output.expression, values);
           return <div key={index}>
             <dt>{output.label}</dt>
-            <dd>{formatArtifactQuantity(result, output.unit)}</dd>
+            <dd data-unavailable={result === null || undefined}>{formatArtifactQuantity(result, output.unit)}</dd>
           </div>;
         })}
       </dl>

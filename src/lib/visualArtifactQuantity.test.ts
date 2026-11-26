@@ -6,6 +6,15 @@ const unspecifiedDollar = (amount: number) => new Intl.NumberFormat(undefined, {
 }).formatToParts(amount).map(part => part.type === "currency" ? "$" : part.value).join("");
 
 describe("artifact calculator quantities", () => {
+  it("attaches the percent sign to its displayed value and retains the stated basis", () => {
+    const number = new Intl.NumberFormat(undefined, { maximumSignificantDigits: 10 });
+    expect(formatArtifactQuantity(-1.7, "%")).toBe(number.format(-1.7) + "%");
+    expect(formatArtifactQuantity(0, "%")).toBe(number.format(0) + "%");
+    for (const unit of ["%", "%/year", "% per annum", "% of capital"]) {
+      expect(formatArtifactQuantity(5, unit)).toBe(number.format(5) + unit);
+    }
+  });
+
   it("formats old monetary units and their rate qualifiers without assuming a dollar currency", () => {
     for (const unit of ["$/month", "$ per month", "dollars / month"]) {
       expect(formatArtifactQuantity(2398.2021006112, unit)).toBe(unspecifiedDollar(2398.20) + "/month");
@@ -27,6 +36,6 @@ describe("artifact calculator quantities", () => {
     expect(formatArtifactQuantity(12.3, "cents/share")).toBe(number.format(12.3) + " cents/share");
     expect(formatArtifactQuantity(0.00000012, "L/s")).toBe(number.format(0.00000012) + " L/s");
     expect(formatArtifactQuantity(120, "BPM")).toBe(number.format(120) + " BPM");
-    expect(formatArtifactQuantity(null, "$/month")).toBe("Undefined");
+    expect(formatArtifactQuantity(null, "$/month")).toBe("No result at these settings");
   });
 });

@@ -274,10 +274,7 @@ import { useResolvedTheme } from "./lib/useResolvedTheme";
 import { useThemeIcon } from "./lib/useThemeIcon";
 import { resolveIconPalette } from "./lib/themeIcon";
 import { normalizeWindowGlass } from "./lib/windowGlass";
-import {
-  buildWebExportDocument,
-  notesForExportScope,
-} from "./lib/webExport";
+import { notesForExportScope } from "./lib/exportScope";
 import {
   isSelectedAIConfigured,
   selectedAIProviderName,
@@ -4250,6 +4247,7 @@ function App() {
         return true;
       }
       if (request.format === "web") {
+        const { buildWebExportDocument } = await import("./lib/webExport");
         const document = buildWebExportDocument(
           snapshot,
           request.scope,

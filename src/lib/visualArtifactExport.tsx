@@ -1,6 +1,6 @@
 import { VisualArtifactTable } from "../components/VisualArtifactTable";
 import { evaluateArtifactExpression, type ArtifactBlock } from "./visualArtifacts";
-import { readVisualArtifactMarker, unavailableVisualArtifact } from "./visualArtifactMarkdown";
+import { readVisualArtifactMarker, unavailableVisualArtifact, visualArtifactMarker } from "./visualArtifactMarkdown";
 import { formatArtifactQuantity } from "./visualArtifactQuantity";
 
 function StaticBlock({ block }: { block: ArtifactBlock }) {
@@ -28,9 +28,19 @@ function StaticBlock({ block }: { block: ArtifactBlock }) {
 }
 
 /** Printable snapshots include every step, quiz answer and the calculator's initial values. */
-export function ExportVisualArtifact({ marker }: { marker: unknown }) {
+export function ExportVisualArtifact({ marker, interactive = false }: { marker: unknown; interactive?: boolean }) {
   const artifact = readVisualArtifactMarker(marker);
-  return artifact ? <section><h3>{artifact.title}</h3>{artifact.summary && <p>{artifact.summary}</p>}
-    {artifact.blocks.map((block, i) => <StaticBlock key={i} block={block}/>)}</section>
-    : <p>{unavailableVisualArtifact}</p>;
+  if (!artifact) return <p>{unavailableVisualArtifact}</p>;
+  const snapshot = (
+    <section className={interactive ? "export-artifact-fallback" : undefined}>
+      <h3>{artifact.title}</h3>
+      {artifact.summary && <p>{artifact.summary}</p>}
+      {artifact.blocks.map((block, i) => <StaticBlock key={i} block={block} />)}
+    </section>
+  );
+  if (!interactive) return snapshot;
+  return <>
+    <div data-orion-artifact-viewer={visualArtifactMarker(artifact)} />
+    {snapshot}
+  </>;
 }

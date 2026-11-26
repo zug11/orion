@@ -1,7 +1,7 @@
 import { runSpaceSearch } from "../spaceSearch";
 import { withWritingOrigin } from "../writingOrigins";
 import { assistantSearchResult } from "./search";
-import { notesForExportScope } from "../webExport";
+import { notesForExportScope } from "../exportScope";
 import { nanoid } from "nanoid";
 import type { AppSnapshot, Note, ParsedImport, Source } from "../../types";
 import type { ImportItem, ImportStudioApplyPayload, OrganizedSource } from "../../components/ImportStudio";

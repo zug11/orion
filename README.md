@@ -615,7 +615,7 @@ They pause when hidden and respect reduced motion.
 
 Export the open note, one visible link hop, or an entire Space as:
 
-- a self-contained, responsive HTML article that works offline;
+- a self-contained HTML article with interactive visualisations that work offline;
 - an editable Word `.docx` with headings, lists, tasks, tables, links, local images, and citations; or
 - portable Markdown files with adjacent image assets.
 
@@ -788,7 +788,7 @@ Enable **Settings → Connections → Orion workflows**, select allowed Spaces,
 and independently allow API use and workflow writes. Older libraries start with
 these workflows disabled. The existing direct read/write tools keep their access.
 
-The expanded MCP surface has **66 tools**: 40 local library tools, fifteen
+The expanded MCP surface has **67 tools**: 41 local library tools, fifteen
 workflow/capability/job tools, three edit-review tools, one active-editor-context
 reader, three existing voice work-order tools and four selected-editor-action tools. It can build local evidence packets; research,
 compare, review, find gaps, or prepare briefs using Orion's configured AI;
@@ -847,6 +847,9 @@ headings, tasks, lists, tables, code, web/note links, excerpts, and existing ima
 through `orion_apply_note_command`. The result uses the same portable format as
 the editor and remains editable when reopened. Every command checks the current
 note version and exact Space before saving.
+Claude and Codex can also append interactive visualisations to a note by passing
+an artifact JSON object to `orion_insert_visual_artifact`. The connector validates
+the document and its calculator ranges locally before saving.
 Structured layout commands also support paragraph justification/indents,
 document margins, existing managed-image placement/captions and table geometry.
 Tables have structured cell, row, column and dimension operations with exact

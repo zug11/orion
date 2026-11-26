@@ -5,7 +5,7 @@
   "display_name": "Orion",
   "version": "0.6.5",
   "description": "Search, edit, research, import, and generate in your local Orion Spaces.",
-  "long_description": "Connect Claude Desktop to Orion's local library and optional native AI workflows. Read and edit notes without an API key, or enable scoped research, source import/reprocessing, generation, concept development, enrichment, and overview refresh while Orion is open. The app retains credentials, provider settings, and atomic writes. Jobs report evidence, coverage, freshness, and cancellation. Includes exact source passages, note sections, concept and link-path navigation, provenance, tasks, guarded text edits, atomic metadata batches, duplicate detection, and integrity checks. All 40 local library tools work while Orion is closed. Includes guarded writing blocks and slash-command formatting. The 66-tool surface also includes exact open-editor context, in-note edit review, and finite inspection/cancellation/read-only continuation of existing voice workers, and capture/start/status/cancel for real inline Write, Rewrite and image previews; it never automates microphone or call controls. Passage comments and optional additions/rewrites stay pending in the note until the user reviews them. Note-backed boards and tickets support local discovery, creation, renaming, and guarded moves. Read a board source note for caller-side inference, then save authorized tickets with exact evidence and the current note version. Resolve stable ticket codes, inspect checklists and source context, record implementation summaries, and require reported passing verification before completion. Curated .orion collection export uses a native folder picker and excludes unselected private content.",
+  "long_description": "Connect Claude Desktop to Orion's local library and optional native AI workflows. Read and edit notes without an API key, or enable scoped research, source import/reprocessing, generation, concept development, enrichment, and overview refresh while Orion is open. The app retains credentials, provider settings, and atomic writes. Jobs report evidence, coverage, freshness, and cancellation. Includes exact source passages, note sections, concept and link-path navigation, provenance, tasks, guarded text edits, atomic metadata batches, duplicate detection, and integrity checks. All 41 local library tools work while Orion is closed. Includes guarded writing blocks and slash-command formatting. The 67-tool surface also includes exact open-editor context, in-note edit review, and finite inspection/cancellation/read-only continuation of existing voice workers, and capture/start/status/cancel for real inline Write, Rewrite and image previews; it never automates microphone or call controls. Passage comments and optional additions/rewrites stay pending in the note until the user reviews them. Note-backed boards and tickets support local discovery, creation, renaming, and guarded moves. Read a board source note for caller-side inference, then save authorized tickets with exact evidence and the current note version. Resolve stable ticket codes, inspect checklists and source context, record implementation summaries, and require reported passing verification before completion. Curated .orion collection export uses a native folder picker and excludes unselected private content.",
   "author": {
     "name": "Orion"
   },
@@ -178,6 +178,10 @@
     {
       "name": "orion_edit_note_text",
       "description": "Replace one unique exact substring in a note, guarded by the current note version. Rejects missing or ambiguous selections; preserves all other text and metadata."
+    },
+    {
+      "name": "orion_insert_visual_artifact",
+      "description": "Append an interactive Orion visualisation from a v1 JSON object to an existing note. Validates all blocks and calculator ranges, then saves against the current note version."
     },
     {
       "name": "orion_append_to_note",

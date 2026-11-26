@@ -17,9 +17,11 @@ mod read;
 mod tests;
 pub(super) mod text;
 pub(crate) mod threads;
+mod visual_artifact;
+mod visual_artifact_schema;
 mod write;
 
-pub const NAMES: [&str; 31] = [
+pub const NAMES: [&str; 32] = [
     "orion_list_sources",
     "orion_search_sources",
     "orion_get_source_passage",
@@ -51,8 +53,9 @@ pub const NAMES: [&str; 31] = [
     "orion_create_tickets",
     "orion_update_ticket",
     "orion_get_ticket",
+    "orion_insert_visual_artifact",
 ];
-const WRITES: [&str; 10] = [
+const WRITES: [&str; 11] = [
     "orion_set_task_completion",
     "orion_edit_note_text",
     "orion_append_to_note",
@@ -63,6 +66,7 @@ const WRITES: [&str; 10] = [
     "orion_update_board",
     "orion_create_tickets",
     "orion_update_ticket",
+    "orion_insert_visual_artifact",
 ];
 const MAX_SCAN_NOTES: usize = 2_000;
 const MAX_SCAN_BYTES: usize = 8 * 1024 * 1024;
@@ -72,8 +76,11 @@ pub fn recognizes(name: &str) -> bool {
 }
 
 pub fn call(path: &Path, name: &str, args: &Map<String, Value>) -> ToolResult {
-    let definition = definitions()
-        .into_iter()
+    // Share the discovery schemas across local calls, including the recursive artifact vocabulary.
+    static DEFINITIONS: std::sync::OnceLock<Vec<Value>> = std::sync::OnceLock::new();
+    let definition = DEFINITIONS
+        .get_or_init(definitions)
+        .iter()
         .find(|tool| tool["name"] == name)
         .ok_or_else(|| ToolFailure::new("Unknown local knowledge tool."))?;
     validate_arguments(args, &definition["inputSchema"])?;
@@ -140,6 +147,11 @@ fn validate_arguments(args: &Map<String, Value>, schema: &Value) -> Result<(), T
 }
 fn validate_value(value: &Value, schema: &Value, field: &str) -> Result<(), ToolFailure> {
     let invalid = || ToolFailure::new(format!("Invalid {field}; follow the tool's input schema."));
+    if schema["$ref"] == visual_artifact_schema::DOCUMENT_REF {
+        // The write prepares this recursive document with the full v1 parser
+        // before entering the vault lock, including the numeric range checks.
+        return value.as_object().map(|_| ()).ok_or_else(invalid);
+    }
     if let Some(variants) = schema.get("anyOf").and_then(Value::as_array) {
         return if variants
             .iter()
@@ -283,13 +295,18 @@ pub fn definitions() -> Vec<Value> {
         (NAMES[28], "Atomically create up to 12 literal tickets in one note, optionally assigned to an existing board in this same Space. For inferred tickets, read the board source note first and supply exact supporting evidence from its working text. This tool does not call AI or infer facts. It saves only the caller's user-authorized titles. Omit status for To do. Each ticket may have an all-day due_date (YYYY-MM-DD) and optional urgency (urgent/high/medium/low). By default skip titles already in this note; deduplicate:false permits deliberate recurring work. Returns created IDs and the new note version; stale retries fail without duplication.", json!({"note_id":id,"expected_version":version,"board_id":json!({"type":"string","maxLength":96}),"status":json!({"type":"string","pattern":"^(todo|progress|column-[a-zA-Z0-9_-]{1,80})$","default":"todo"}),"deduplicate":json!({"type":"boolean","default":true}),"tickets":array(object(json!({"title":string(140),"description":string(6000),"checklist":array(object(json!({"title":string(1000),"evidence":string(400)}), &["title"]),0,100),"due_date":json!({"type":"string","maxLength":10}),"urgency":choice(&["","urgent","high","medium","low"],""),"evidence":json!({"type":"string","minLength":3,"maxLength":400})}),&["title"]),1,12)}), vec!["note_id","expected_version","tickets"], false),
         (NAMES[29], "Update one unique ticket by exactly one ticket_id or ticket_code in this Space, guarded by its source note version. Change status, board, date, urgency or checklist completion with exact line_index and expected_title. Record implementation_summary and verification checks inside the original task. Marking an open ticket Done requires a nonempty summary, passing evidence for every supplied check, and no remaining open checklist items. Orion records caller-reported verification and never executes commands. Read history for completed checklist context. Omitted fields stay unchanged.", json!({"note_id":id,"expected_version":version,"ticket_id":string(96),"ticket_code":string(32),"due_date":json!({"type":"string","maxLength":10}),"urgency":choice(&["","urgent","high","medium","low"],""),"board_id":json!({"type":"string","maxLength":96}),"status":json!({"type":"string","pattern":"^(todo|progress|done|column-[a-zA-Z0-9_-]{1,80})$","default":"todo"}),"implementation_summary":string(6000),"verification":array(object(json!({"label":string(200),"outcome":choice(&["passed","failed"],"passed"),"evidence":string(4000)}), &["label","outcome","evidence"]),1,20),"checklist":array(object(json!({"line_index":integer(0,0,500000),"expected_title":string(1000),"completed":json!({"type":"boolean"})}), &["line_index","expected_title","completed"]),1,100)}), vec!["note_id","expected_version"], false),
         (NAMES[30], "Read one unique ticket by exactly one ticket_id or ticket_code, its checklist, source note/version, related note links and stable ticket URL. Everything stays Space-scoped. Default working view omits completed material; use task_view history when reviewing completion evidence. Reads are bounded and make no writes or provider calls.", json!({"ticket_id":string(96),"ticket_code":string(32),"max_chars":integer(6000,1,20000)}), vec![], false),
+        (NAMES[31], "Append an interactive Orion visualisation to an existing note. Pass the v1 artifact JSON object directly, up to 48,000 UTF-8 bytes. Use steps for timeline, table for comparison, quiz for quiz, cards for flashcards and calculator for calculator. An explainer may combine any blocks. Indices are zero-based. All slider outputs must be defined at the checked settings. Read the note via orion_get_notes for its current expected_version. Saves locally and returns the note citation and new version. No provider call.", json!({"note_id":id,"expected_version":version,"artifact":{"$ref":visual_artifact_schema::DOCUMENT_REF,"type":"object"}}), vec!["note_id","expected_version","artifact"], false),
     ];
     specs.into_iter().map(|(name, description, mut fields, mut required, paged)| {
         let writes = WRITES.contains(&name);
         fields["space_id"] = json!({"type":"string","minLength":1,"maxLength":200,"description":if writes {"Exact explicit Space ID; required for edits."} else {"Exact Space ID; omission reads only the active Space."}});
         if writes { required.push("space_id"); } else { fields["task_view"] = working_view::schema(); }
         if paged { fields.as_object_mut().unwrap().extend(page.as_object().unwrap().clone()); }
-        json!({"name":name,"description":description,"inputSchema":object(fields,&required),
+        let mut input_schema = object(fields,&required);
+        if name == "orion_insert_visual_artifact" {
+            input_schema["$defs"] = visual_artifact_schema::definitions();
+        }
+        json!({"name":name,"description":description,"inputSchema":input_schema,
             "outputSchema":output_schema(name),
             "annotations":{"readOnlyHint":!writes,"destructiveHint":writes,"idempotentHint":true,"openWorldHint":false}})
     }).collect()

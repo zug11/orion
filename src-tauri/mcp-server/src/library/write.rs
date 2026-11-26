@@ -1,4 +1,26 @@
 use super::*;
+use pulldown_cmark::{Event, Options, Parser, Tag};
+
+// An unclosed Markdown fence or HTML comment can absorb everything appended
+// after it. Check the exact new range is its own top-level block before saving.
+fn append_visual_artifact(body: &str, marker: &str) -> Result<String, ToolFailure> {
+    let joined = editor::join_blocks(body, marker);
+    let start = joined.len() - marker.len();
+    let mut depth = 0;
+    for (event, range) in
+        Parser::new_ext(&joined, Options::ENABLE_YAML_STYLE_METADATA_BLOCKS).into_offset_iter()
+    {
+        match event {
+            Event::Start(Tag::HtmlBlock) if depth == 0 && range == (start..joined.len()) => {
+                return Ok(joined)
+            }
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth -= 1,
+            _ => {}
+        }
+    }
+    Err(ToolFailure::new("The end of the note is inside a Markdown block. Close the open block and try inserting the visualisation again."))
+}
 
 pub(super) fn call(path: &Path, name: &str, args: &Map<String, Value>) -> ToolResult {
     let space_id = required_write_space_id(args)?;
@@ -8,6 +30,11 @@ pub(super) fn call(path: &Path, name: &str, args: &Map<String, Value>) -> ToolRe
     {
         return Err(ToolFailure::new("Provide tags, pinned, or both."));
     }
+    let artifact_marker = args
+        .get("artifact")
+        .map(visual_artifact::validated_marker)
+        .transpose()
+        .map_err(ToolFailure::new)?;
     mutate_vault(path, |raw| {
         let vault = validate_vault_value(raw.clone())?;
         let scope = require_space(&vault, &space_id)?;
@@ -94,6 +121,12 @@ pub(super) fn call(path: &Path, name: &str, args: &Map<String, Value>) -> ToolRe
                         }
                         prepared.body
                     }
+                    "orion_insert_visual_artifact" => append_visual_artifact(
+                        &current.body,
+                        artifact_marker.as_deref().ok_or_else(|| {
+                            ToolFailure::new("Provide a visual artifact JSON object.")
+                        })?,
+                    )?,
                     "orion_append_to_note" => format!("{}{}", current.body, arg(args, "text")),
                     "orion_edit_note_text" => {
                         let old = arg(args, "old_text");

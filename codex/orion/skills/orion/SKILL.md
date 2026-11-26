@@ -30,7 +30,7 @@ Use the `orion` MCP server to work directly with the user's local Orion library.
 
 ## Inspect and edit precise library content
 
-- The 31 additional library tools work while Orion is closed. They make no provider calls and retain the installed connector's existing local access.
+- The 32 additional library tools work while Orion is closed. They make no provider calls and retain the installed connector's existing local access.
 - `orion_get_ticket` takes exactly one `ticket_id` or `ticket_code` in the chosen Space and returns bounded source/checklist context with its current note version. Codes are stable and Space-local. `orion_list_tickets` also accepts a literal code/title query. Follow coverage flags.
 - `orion_update_ticket` can check off exact child lines and save an `implementation_summary` with `verification` entries (`label`, `outcome`, `evidence`) inside the original task. To finish existing work, supply a summary, complete the ordinary checklist and report only passing checks you actually performed. Evidence is caller-reported; never imply Orion independently verified it. Generic note edits cannot bypass the completion guard. Create new tickets in `todo` or `progress`, then use verified completion. Read the schema for bounds and exact child-line guards.
 - For boards, use `orion_list_boards`, `orion_get_board`, and `orion_list_tickets`. Reads default to the active Space and open work; use history only when requested. Respect coverage, pagination and truncation rather than assuming an exhaustive result.
@@ -46,6 +46,12 @@ Use the `orion` MCP server to work directly with the user's local Orion library.
 - `orion_batch_update_metadata` atomically changes tags/pinned state for up to 20 versioned notes. Every target must pass validation. None of these write tools authorizes changes to other Spaces or settings.
 - Use `orion_find_duplicate_notes` and `orion_check_space_integrity` for read-only diagnostics. Matching titles are candidates, not proof of duplication. `orion_get_recent_changes` reports current note timestamps, not a history of deleted notes or previous text.
 - Follow `nextOffset`; carry `vaultRevision` as `expected_revision` to reject changed pagination. Inspect coverage/truncation flags before claiming exhaustive results. A bounded search returning no path or no matches does not prove none exist outside its coverage.
+
+## Insert interactive visualisations
+
+- When asked to save a calculator, timeline, explainer, comparison, quiz or flashcards in a note, use `orion_insert_visual_artifact` with the exact `space_id`, `note_id`, current `expected_version` from `orion_get_notes`, and the `artifact` JSON object. The tool appends one interactive illustration. For a new note, create the requested note first and read its version.
+- Supply `{version:1, format, title, blocks}` with an optional summary. Use the tool's block schema for steps, scenes, tables, quizzes, cards, calculators and text. Calculator formulas use the bounded expression tree. Ground input ranges in the source and check that the results are defined across those ranges. Pass JSON directly. Orion handles marker encoding, validation and persistence, with no provider call.
+- On a version conflict, reread the note and check whether the artifact is already there before retrying. On success, use the returned note citation.
 
 ## Use writing blocks and editor commands
 
